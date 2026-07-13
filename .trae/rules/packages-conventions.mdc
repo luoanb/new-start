@@ -1,0 +1,76 @@
+---
+description: packages 包内约定：接口先行、类导向、静态侧类型校验、点分二级后缀命名
+globs: packages/**/*
+alwaysApply: false
+---
+
+# `packages/` 包内编码约定
+
+适用于 `packages/` 下各子项目中的业务与库代码（配置包、纯 JSON 等可豁免）。
+
+## 1. 先约定接口，后实现内容
+
+- **契约先行**：在写具体逻辑前，先明确对外边界——类型、函数签名、公开 API、错误形态与调用约定。
+- **推荐顺序**：类型/接口（见下文命名）→ 最小可编译骨架（空实现或抛 `NotImplemented`）→ 再填充实现与测试。
+- **禁止**：在未固化契约的情况下大面积铺开实现，避免后续整条链路返工。
+- **契约接口注释**：契约的声明应该提供明确简洁的注释
+
+## 2. 尽可能用类编程
+
+- **默认可复用逻辑**：用 **class**（实例或带静态方法的类型）封装状态与行为，便于注入、测试与演进；避免用大量松散顶层函数拼成模块 API。
+- **例外**：纯类型与类型守卫、常量、`interface`/`type` 声明、极薄的框架胶水（如单行 re-export）可不用类。
+- **与仓库一致**：与根规则中 `core` / 工具层「以类为主」的取向对齐。
+
+## 3. 静态工具类：静态侧接口与 `staticImplements`
+
+对「仅暴露 `static` 方法、不打算实例化」的工具类：**先写描述构造函数静态成员的接口**（静态侧契约），再写 `class`；用 **`staticImplements<契约>()(类)`** 做编译期校验——漏方法或签名不匹配即报错。
+
+```typescript
+interface MathUtilsStatic {
+  add(a: number, b: number): number;
+  sub(a: number, b: number): number;
+}
+
+class MathUtils {
+  static add(a: number, b: number) {
+    return a + b;
+  }
+  static sub(a: number, b: number) {
+    return a - b;
+  }
+}
+
+function staticImplements<T>() {
+  return <U extends T>(ctor: U) => ctor;
+}
+
+staticImplements<MathUtilsStatic>()(MathUtils);
+```
+
+- **`staticImplements`**：可在包内抽一处公共工具，避免每个文件重复声明。
+- **契约文件**：静态侧接口可与实例侧类型一并放在 `*.interfaces.ts`（或包内统一的类型文件中）。
+
+## 4. 文件命名：点分二级后缀区分语义
+
+在**保留最终扩展名**（`.ts` / `.mts` / `.tsx` / `.svelte` 等）的前提下，用 **`.` + 二级后缀** 标明文件角色，一眼可读、便于检索。
+
+**约定要点：**
+
+- 形式：`basename.<role>.<ext>`（二级后缀紧邻最终扩展名）。
+- **契约 / 类型**：`*.interfaces.ts`（仅类型与对外契约，无运行时代码或极少）。
+- **实现**：`*.impl.ts`（对应契约的具体实现；或与角色结合，如 `*.service.ts`）。
+- **测试**：`*.test.ts`、`*.spec.ts`。
+- **入口 / 聚合**：`index.ts` 可用无前缀；若需区分可写作 `index.public.ts` 等。
+
+**示例：**
+
+```text
+user.interfaces.ts          # 契约与类型
+user.impl.ts           # 实现类 / 模块主体
+user.service.ts        # 服务类（若单独成文件）
+api.types.ts
+api.impl.ts
+widget.ui.svelte       # UI 组件（Svelte 仍保留 .svelte，二级后缀在其前）
+```
+
+**注意**：二级后缀是**语义标签**，不是强制枚举表；新增后缀时团队内保持一致即可。构建工具需识别双扩展名时，以各包现有配置为准。

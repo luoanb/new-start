@@ -1,0 +1,13 @@
+{
+  "name": "mini-claw-workspace",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Mini-Claw workspace root",
+  "type": "module",
+  "scripts": {
+    "dev": "cd packages/mini-claw && pnpm exec tsx src/index.ts",
+    "dev:watch": "cd packages/mini-claw && pnpm exec tsx watch --exclude '.mini-claw' src/index.ts",
+    "build": "cd packages/mini-claw && pnpm exec tsc",
+    "start": "cd packages/mini-claw && pnpm exec node dist/index.js"
+  }
+}
