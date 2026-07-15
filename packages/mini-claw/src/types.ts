@@ -14,6 +14,7 @@ export interface Conversation {
 export interface Skill {
   name: string;
   description: string;
+  parameters?: Record<string, unknown>;
   execute: (params: any) => Promise<any>;
 }
 

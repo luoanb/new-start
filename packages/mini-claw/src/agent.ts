@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
-import { AgentConfig, Message, Skill, LLMProvider } from './types.js';
+import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions.js';
+import { AgentConfig, Message, LLMProvider } from './types.js';
 import { SkillManager } from './skills.js';
 
 // 预设的服务商配置
@@ -30,10 +31,10 @@ export class Agent {
   constructor(config: AgentConfig, skillManager: SkillManager) {
     this.config = config;
     this.skillManager = skillManager;
-    
+
     // 根据服务商配置初始化 OpenAI 客户端
     const providerConfig = PROVIDER_CONFIGS[config.provider];
-    
+
     this.client = new OpenAI({
       apiKey: config.apiKey || process.env.OPENAI_API_KEY || 'dummy-key',
       baseURL: config.baseURL || providerConfig.baseURL,
@@ -49,82 +50,71 @@ export class Agent {
 
 ${skillsDesc}
 
-请根据用户的请求，决定是否需要使用技能。如果需要使用技能，请以 JSON 格式返回：
-{
-  "action": "use_skill",
-  "skill": "技能名称",
-  "params": { ... }
-}
-
-如果不需要使用技能，请直接回答用户的问题。`
+请根据用户的请求，决定是否需要使用技能。`
     );
   }
 
-  private async generateResponse(messages: Message[]): Promise<string> {
-    const systemMessage: Message = {
-      role: 'system',
-      content: this.buildSystemPrompt(),
-      timestamp: Date.now(),
-    };
-
-    const allMessages = [
+  private toApiMessages(messages: Message[]): ChatCompletionMessageParam[] {
+    const systemMessage = { role: 'system' as const, content: this.buildSystemPrompt() };
+    return [
       systemMessage,
       ...messages.map((m) => ({
-        role: m.role,
+        role: m.role as 'user' | 'assistant',
         content: m.content,
       })),
     ];
-
-    const response = await this.client.chat.completions.create({
-      model: this.config.model,
-      messages: allMessages as any,
-      max_tokens: this.config.maxTokens || 1000,
-      temperature: this.config.temperature || 0.7,
-    });
-
-    return response.choices[0].message.content || '';
-  }
-
-  private parseSkillCall(content: string): { skill: string; params: any } | null {
-    try {
-      const match = content.match(/\{[\s\S]*\}/);
-      if (match) {
-        const parsed = JSON.parse(match[0]);
-        if (parsed.action === 'use_skill' && parsed.skill) {
-          return { skill: parsed.skill, params: parsed.params || {} };
-        }
-      }
-    } catch {
-      // Not a valid JSON skill call
-    }
-    return null;
   }
 
   async process(messages: Message[]): Promise<string> {
     try {
-      let response = await this.generateResponse(messages);
-      const skillCall = this.parseSkillCall(response);
+      const apiMessages = this.toApiMessages(messages);
+      const tools = this.skillManager.toTools();
 
-      if (skillCall) {
-        const skillResult = await this.skillManager.executeSkill(
-          skillCall.skill,
-          skillCall.params
-        );
+      // 第一次调用，带上 tools 让模型决定是否调用
+      const response = await this.client.chat.completions.create({
+        model: this.config.model,
+        messages: apiMessages,
+        tools: tools.length > 0 ? tools : undefined,
+        tool_choice: tools.length > 0 ? 'auto' : undefined,
+        max_tokens: this.config.maxTokens || 1000,
+        temperature: this.config.temperature || 0.7,
+      });
 
-        const followUpMessages = [
-          ...messages,
-          { role: 'assistant' as const, content: response, timestamp: Date.now() },
-          {
-            role: 'user' as const,
-            content: `技能执行结果：\n${JSON.stringify(skillResult, null, 2)}\n\n请根据结果给用户一个友好的回答。`,
-            timestamp: Date.now(),
-          },
-        ];
+      const msg = response.choices[0].message;
 
-        response = await this.generateResponse(followUpMessages);
+      // 模型没有调用工具，直接返回文本
+      if (!msg.tool_calls || msg.tool_calls.length === 0) {
+        return msg.content || '';
       }
 
-      return response;
+      // 模型调用了工具 — 并行执行所有 tool_calls
+      const toolResults = await Promise.all(
+        msg.tool_calls.map(async (tc) => {
+          const args = JSON.parse(tc.function.arguments);
+          const result = await this.skillManager.executeSkill(tc.function.name, args);
+          return {
+            role: 'tool' as const,
+            tool_call_id: tc.id,
+            content: JSON.stringify(result),
+          };
+        })
+      );
+
+      // 把原始消息、assistant 的 tool_calls、tool 结果一并送回模型
+      const followUpMessages: ChatCompletionMessageParam[] = [
+        ...apiMessages,
+        msg as ChatCompletionMessageParam,
+        ...toolResults,
+      ];
+
+      const finalResponse = await this.client.chat.completions.create({
+        model: this.config.model,
+        messages: followUpMessages,
+        max_tokens: this.config.maxTokens || 1000,
+        temperature: this.config.temperature || 0.7,
+      });
+
+      return finalResponse.choices[0].message.content || '';
     } catch (error) {
       console.error('Agent error:', error);
       return `抱歉，处理请求时出错了：${error instanceof Error ? error.message : '未知错误'}`;

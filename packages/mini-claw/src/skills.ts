@@ -1,4 +1,5 @@
 import { Skill } from './types.js';
+import type { ChatCompletionTool } from 'openai/resources/chat/completions.js';
 
 export class SkillManager {
   private skills: Map<string, Skill> = new Map();
@@ -30,6 +31,17 @@ export class SkillManager {
     }
     return skills.map(skill => `- ${skill.name}: ${skill.description}`).join('\n');
   }
+
+  toTools(): ChatCompletionTool[] {
+    return this.getAllSkills().map(skill => ({
+      type: 'function' as const,
+      function: {
+        name: skill.name,
+        description: skill.description,
+        parameters: skill.parameters || { type: 'object', properties: {} },
+      },
+    }));
+  }
 }
 
 export const createTimeSkill: Skill = {
@@ -49,6 +61,13 @@ export const createTimeSkill: Skill = {
 export const createCalculatorSkill: Skill = {
   name: 'calculate',
   description: '执行数学计算',
+  parameters: {
+    type: 'object',
+    properties: {
+      expression: { type: 'string', description: '数学表达式，例如 25 * 4 + 10' },
+    },
+    required: ['expression'],
+  },
   execute: async (params: { expression: string }) => {
     try {
       const result = Function('"use strict"; return (' + params.expression + ')')();
@@ -62,6 +81,13 @@ export const createCalculatorSkill: Skill = {
 export const createEchoSkill: Skill = {
   name: 'echo',
   description: '回显消息',
+  parameters: {
+    type: 'object',
+    properties: {
+      message: { type: 'string', description: '要回显的消息' },
+    },
+    required: ['message'],
+  },
   execute: async (params: { message: string }) => {
     return { echo: params.message };
   },
