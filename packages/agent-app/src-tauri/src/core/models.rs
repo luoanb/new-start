@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use serde_json;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum MessageRole {
@@ -73,11 +75,17 @@ pub struct ProviderInfo {
     pub kind: ProviderKind,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ModelCapabilities {
     pub chat: bool,
     pub tools: bool,
     pub streaming: bool,
+    #[serde(default)]
+    pub structured_output: bool,
+    pub vision: Option<bool>,
+    pub audio: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl Default for ModelCapabilities {
@@ -86,16 +94,26 @@ impl Default for ModelCapabilities {
             chat: true,
             tools: false,
             streaming: false,
+            structured_output: false,
+            vision: None,
+            audio: None,
+            extras: None,
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ModelInfo {
     pub id: String,
     pub provider_id: String,
     pub display_name: String,
     pub capabilities: ModelCapabilities,
+    pub context_window: Option<u32>,
+    pub max_output_tokens: Option<u32>,
+    pub pricing_input: Option<f64>,
+    pub pricing_output: Option<f64>,
+    pub pricing_cache_input: Option<f64>,
+    pub knowledge_cutoff: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

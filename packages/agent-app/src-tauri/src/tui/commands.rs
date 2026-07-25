@@ -108,17 +108,62 @@ pub fn cmd_models_text(models: &[ModelInfo]) -> String {
     models
         .iter()
         .map(|m| {
-            format!(
-                "  {} (provider: {}, chat: {}, tools: {}, streaming: {})",
-                m.id,
-                m.provider_id,
-                m.capabilities.chat,
-                m.capabilities.tools,
-                m.capabilities.streaming
-            )
+            let mut out = format!("  {}", m.id);
+
+            let ctx = m
+                .context_window
+                .map_or("-".to_string(), |v| format!("{v} ctx"));
+            let max_out = m
+                .max_output_tokens
+                .map_or("-".to_string(), |v| format!("{v} max out"));
+            out.push_str(&format!("\n    capacity: {ctx} | {max_out}"));
+
+            if let (Some(i), Some(o)) = (m.pricing_input, m.pricing_output) {
+                out.push_str(&format!("\n    pricing : ${i:.2}/M in, ${o:.2}/M out"));
+            } else if let Some(i) = m.pricing_input {
+                out.push_str(&format!("\n    pricing : ${i:.2}/M in"));
+            } else if let Some(o) = m.pricing_output {
+                out.push_str(&format!("\n    pricing : ${o:.2}/M out"));
+            }
+
+            let caps = {
+                let mut parts = vec![];
+                if m.capabilities.chat {
+                    parts.push("chat");
+                }
+                if m.capabilities.tools {
+                    parts.push("tools");
+                }
+                if m.capabilities.streaming {
+                    parts.push("streaming");
+                }
+                if m.capabilities.structured_output {
+                    parts.push("json");
+                }
+                if m.capabilities.vision.unwrap_or(false) {
+                    parts.push("vision");
+                }
+                parts
+            };
+            if !caps.is_empty() {
+                out.push_str(&format!("\n    features: {}", caps.join(" \u{2713} ")));
+                out.push_str(" \u{2713}");
+            }
+
+            if let Some(extras) = &m.capabilities.extras {
+                if !extras.is_empty() {
+                    let items: Vec<String> = extras
+                        .iter()
+                        .map(|(k, v)| format!("{k}: {v}"))
+                        .collect();
+                    out.push_str(&format!("\n    extras  : {}", items.join(", ")));
+                }
+            }
+
+            out
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n\n")
 }
 
 pub fn cmd_sessions_text(conversations: &[Conversation]) -> String {

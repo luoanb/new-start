@@ -58,6 +58,12 @@ struct ConfiguredModel {
     display_name: Option<String>,
     #[serde(default)]
     capabilities: ModelCapabilities,
+    context_window: Option<u32>,
+    max_output_tokens: Option<u32>,
+    pricing_input: Option<f64>,
+    pricing_output: Option<f64>,
+    pricing_cache_input: Option<f64>,
+    knowledge_cutoff: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -372,6 +378,12 @@ fn configured_models(
                         .clone()
                         .unwrap_or_else(|| model.id.clone()),
                     capabilities: model.capabilities.clone(),
+                    context_window: model.context_window,
+                    max_output_tokens: model.max_output_tokens,
+                    pricing_input: model.pricing_input,
+                    pricing_output: model.pricing_output,
+                    pricing_cache_input: model.pricing_cache_input,
+                    knowledge_cutoff: model.knowledge_cutoff.clone(),
                 })
                 .collect()
         })

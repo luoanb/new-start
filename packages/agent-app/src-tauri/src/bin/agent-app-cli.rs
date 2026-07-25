@@ -182,13 +182,26 @@ fn print_providers(providers: Vec<ProviderInfo>) {
 
 fn print_models(models: Vec<ModelInfo>) {
     for model in models {
+        let ctx = model
+            .context_window
+            .map_or("-".to_string(), |v| format!("{v} ctx"));
+        let price = match (model.pricing_input, model.pricing_output) {
+            (Some(i), Some(o)) => format!("${i}/M in | ${o}/M out"),
+            (Some(i), None) => format!("${i}/M in"),
+            (None, Some(o)) => format!("${o}/M out"),
+            (None, None) => String::new(),
+        };
+        let caps = {
+            let mut parts = vec![];
+            if model.capabilities.chat { parts.push("chat"); }
+            if model.capabilities.tools { parts.push("tools"); }
+            if model.capabilities.streaming { parts.push("streaming"); }
+            if model.capabilities.structured_output { parts.push("json"); }
+            parts.join(" ")
+        };
         println!(
-            "{} | provider={} | chat={} tools={} streaming={}",
-            model.id,
-            model.provider_id,
-            model.capabilities.chat,
-            model.capabilities.tools,
-            model.capabilities.streaming
+            "{} | {} | {} | {} | {}",
+            model.id, model.provider_id, ctx, price, caps
         );
     }
 }
