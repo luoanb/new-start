@@ -69,52 +69,47 @@ ${skillsDesc}
     try {
       const apiMessages = this.toApiMessages(messages);
       const tools = this.skillManager.toTools();
+      const toolEnabled = tools.length > 0;
 
-      // 第一次调用，带上 tools 让模型决定是否调用
-      const response = await this.client.chat.completions.create({
-        model: this.config.model,
-        messages: apiMessages,
-        tools: tools.length > 0 ? tools : undefined,
-        tool_choice: tools.length > 0 ? 'auto' : undefined,
-        max_tokens: this.config.maxTokens || 1000,
-        temperature: this.config.temperature || 0.7,
-      });
+      // runningMessages 不断累积，支持多轮 tool_calls 循环
+      const runningMessages: ChatCompletionMessageParam[] = [...apiMessages];
 
-      const msg = response.choices[0].message;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const response = await this.client.chat.completions.create({
+          model: this.config.model,
+          messages: runningMessages,
+          tools: toolEnabled ? tools : undefined,
+          tool_choice: toolEnabled ? 'auto' : undefined,
+          max_tokens: this.config.maxTokens || 1000,
+          temperature: this.config.temperature || 0.7,
+        });
 
-      // 模型没有调用工具，直接返回文本
-      if (!msg.tool_calls || msg.tool_calls.length === 0) {
-        return msg.content || '';
+        const msg = response.choices[0].message;
+
+        // 模型没调工具 → 本轮结束
+        if (!msg.tool_calls || msg.tool_calls.length === 0) {
+          return msg.content || '';
+        }
+
+        // 模型调了工具 → 并行执行
+        runningMessages.push(msg as ChatCompletionMessageParam);
+
+        const toolResults = await Promise.all(
+          msg.tool_calls.map(async (tc) => {
+            const args = JSON.parse(tc.function.arguments);
+            const result = await this.skillManager.executeSkill(tc.function.name, args);
+            return {
+              role: 'tool' as const,
+              tool_call_id: tc.id,
+              content: JSON.stringify(result),
+            };
+          })
+        );
+
+        runningMessages.push(...toolResults);
+        // 继续循环，直到模型返回纯文本
       }
-
-      // 模型调用了工具 — 并行执行所有 tool_calls
-      const toolResults = await Promise.all(
-        msg.tool_calls.map(async (tc) => {
-          const args = JSON.parse(tc.function.arguments);
-          const result = await this.skillManager.executeSkill(tc.function.name, args);
-          return {
-            role: 'tool' as const,
-            tool_call_id: tc.id,
-            content: JSON.stringify(result),
-          };
-        })
-      );
-
-      // 把原始消息、assistant 的 tool_calls、tool 结果一并送回模型
-      const followUpMessages: ChatCompletionMessageParam[] = [
-        ...apiMessages,
-        msg as ChatCompletionMessageParam,
-        ...toolResults,
-      ];
-
-      const finalResponse = await this.client.chat.completions.create({
-        model: this.config.model,
-        messages: followUpMessages,
-        max_tokens: this.config.maxTokens || 1000,
-        temperature: this.config.temperature || 0.7,
-      });
-
-      return finalResponse.choices[0].message.content || '';
     } catch (error) {
       console.error('Agent error:', error);
       return `抱歉，处理请求时出错了：${error instanceof Error ? error.message : '未知错误'}`;
