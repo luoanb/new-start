@@ -4,3 +4,5 @@ dist
 .mini-claw
 .DS_Store
 *.log
+packages/agent-app/.agent-app/sessions/*
+packages/agent-app/.agent-app/config.json

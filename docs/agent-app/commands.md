@@ -10,9 +10,10 @@ Commands are shared conceptually by CLI, TUI, and GUI. CLI uses explicit subcomm
 
 Send a user message to the current or selected conversation.
 
-- Input: message text, optional conversation id.
+- Input: message text, optional conversation id, selected provider/model.
 - Output: assistant response and conversation id.
-- Core API: `Gateway::send_message`.
+- Core API: `Gateway::send_model_message`.
+- TUI requires an active provider/model before ordinary input can be treated as chat.
 
 ### `skills`
 
@@ -70,6 +71,16 @@ List available models.
 - Output: model id, provider id, display name, capabilities.
 - Core API: `Gateway::list_models`.
 
+### `use-model`
+
+Select the provider/model used by session chat.
+
+- Input: provider id and model id.
+- Output: selected provider/model.
+- Core API: `Gateway::require_model`.
+- TUI command: `/use <provider> <model>`.
+- This affects ordinary TUI input only. Stateless model calls still pass provider/model explicitly.
+
 ### `call-model`
 
 Call a model without reading or writing local sessions.
@@ -86,15 +97,20 @@ Call a model without reading or writing local sessions.
 - Default output is human-readable text.
 - `--json` is reserved for future structured output and should not be faked before the response schema is specified.
 - `call-model --provider <id> --model <id> <message>` performs a stateless model call.
+- CLI `chat` may require explicit provider/model flags or configured defaults once provider-backed session chat is enabled.
 
 ## TUI Behavior
 
-The first TUI is a compact interactive shell:
+The TUI is a compact interactive shell:
 
 - Shows status on startup.
 - Accepts `/help`, `/skills`, `/sessions`, `/history`, `/clear`, `/status`, and `/exit`.
-- Accepts `/providers`, `/models [provider]`, and `/call <provider> <model> <message>`.
-- Treats any non-command input as `chat`.
+- Accepts `/providers`, `/models [provider]`, `/use <provider> <model>`, and `/call <provider> <model> <message>`.
+- Loads the active provider/model from configured defaults when possible.
+- Treats any non-command input as session chat only after a provider/model is selected.
+- Keeps `/call` stateless: it does not read or write conversation history.
+- Prints recoverable command/provider/model errors and returns to the prompt instead of exiting.
 - Reuses the same core gateway as CLI and Tauri.
+- Displays the selected provider/model in the prompt.
 
 Full-screen terminal layout can be added later once the command model is stable.

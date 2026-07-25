@@ -36,6 +36,19 @@ pub struct ChatResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChatModelSelection {
+    pub provider_id: String,
+    pub model_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChatOptions {
+    pub provider_id: String,
+    pub model_id: String,
+    pub conversation_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimeStatus {
     pub app_name: String,
     pub storage_path: String,
@@ -65,6 +78,16 @@ pub struct ModelCapabilities {
     pub chat: bool,
     pub tools: bool,
     pub streaming: bool,
+}
+
+impl Default for ModelCapabilities {
+    fn default() -> Self {
+        Self {
+            chat: true,
+            tools: false,
+            streaming: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

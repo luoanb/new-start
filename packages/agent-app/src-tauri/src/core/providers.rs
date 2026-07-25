@@ -1,8 +1,8 @@
 use super::{
     error::{AppError, AppResult},
     models::{
-        ModelCallRequest, ModelCallResponse, ModelCapabilities, ModelInfo, ModelMessage,
-        ModelMessageRole, ProviderInfo, ProviderKind,
+        ChatModelSelection, ModelCallRequest, ModelCallResponse, ModelCapabilities, ModelInfo,
+        ModelMessage, ModelMessageRole, ProviderInfo, ProviderKind,
     },
 };
 use async_openai::{
@@ -21,7 +21,6 @@ use std::{collections::HashMap, fs, path::PathBuf};
 pub struct ProviderRegistry {
     storage_root: PathBuf,
     providers: Vec<ProviderDefinition>,
-    models: Vec<ModelInfo>,
 }
 
 #[derive(Debug, Clone)]
@@ -34,14 +33,31 @@ struct ProviderDefinition {
 
 #[derive(Debug, Deserialize, Default)]
 struct AppConfig {
+    defaults: Option<ConfigDefaults>,
     #[serde(default)]
     providers: HashMap<String, ProviderConfig>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ConfigDefaults {
+    provider: Option<String>,
+    model: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
 struct ProviderConfig {
     api_key: Option<String>,
     api_base: Option<String>,
+    #[serde(default)]
+    models: Vec<ConfiguredModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConfiguredModel {
+    id: String,
+    display_name: Option<String>,
+    #[serde(default)]
+    capabilities: ModelCapabilities,
 }
 
 #[derive(Debug, Clone)]
@@ -55,7 +71,6 @@ impl ProviderRegistry {
         Self {
             storage_root,
             providers: default_providers(),
-            models: default_models(),
         }
     }
 
@@ -67,24 +82,57 @@ impl ProviderRegistry {
     }
 
     pub fn list_models(&self, provider_id: Option<&str>) -> AppResult<Vec<ModelInfo>> {
+        let file_config = self.read_config()?;
         if let Some(provider_id) = provider_id {
-            self.require_provider(provider_id)?;
-            Ok(self
-                .models
-                .iter()
-                .filter(|model| model.provider_id == provider_id)
-                .cloned()
-                .collect())
+            let provider = self.require_provider(provider_id)?;
+            Ok(configured_models(
+                provider,
+                file_config.providers.get(provider_id),
+            ))
         } else {
-            Ok(self.models.clone())
+            let mut models = Vec::new();
+            for provider in &self.providers {
+                models.extend(configured_models(
+                    provider,
+                    file_config.providers.get(&provider.info.id),
+                ));
+            }
+            Ok(models)
         }
+    }
+
+    pub fn default_model_selection(&self) -> AppResult<Option<ChatModelSelection>> {
+        let file_config = self.read_config()?;
+        let Some(defaults) = file_config.defaults else {
+            return Ok(None);
+        };
+
+        match (defaults.provider, defaults.model) {
+            (Some(provider_id), Some(model_id)) => {
+                self.require_model(&provider_id, &model_id)?;
+                Ok(Some(ChatModelSelection {
+                    provider_id,
+                    model_id,
+                }))
+            }
+            (None, None) => Ok(None),
+            _ => Err(AppError::InvalidInput(
+                "`defaults.provider` and `defaults.model` must be configured together".into(),
+            )),
+        }
+    }
+
+    pub fn require_model(&self, provider_id: &str, model_id: &str) -> AppResult<()> {
+        let provider = self.require_provider(provider_id)?;
+        let file_config = self.read_config()?;
+        self.require_model_definition(provider, file_config.providers.get(provider_id), model_id)
     }
 
     pub async fn call_model(&self, request: ModelCallRequest) -> AppResult<ModelCallResponse> {
         self.validate_request(&request)?;
 
+        self.require_model(&request.provider_id, &request.model_id)?;
         let provider = self.require_provider(&request.provider_id)?;
-        self.require_model(provider, &request.model_id)?;
         let config = self.resolve_provider_config(provider)?;
         let client = Client::with_config(build_openai_config(config));
         let messages = request
@@ -149,15 +197,19 @@ impl ProviderRegistry {
             .ok_or_else(|| AppError::ProviderNotFound(provider_id.to_string()))
     }
 
-    fn require_model(&self, provider: &ProviderDefinition, model_id: &str) -> AppResult<()> {
+    fn require_model_definition(
+        &self,
+        provider: &ProviderDefinition,
+        provider_config: Option<&ProviderConfig>,
+        model_id: &str,
+    ) -> AppResult<()> {
         if provider.allow_unlisted_models {
             return Ok(());
         }
 
-        if self
-            .models
+        if configured_models(provider, provider_config)
             .iter()
-            .any(|model| model.provider_id == provider.info.id && model.id == model_id)
+            .any(|model| model.id == model_id)
         {
             Ok(())
         } else {
@@ -302,56 +354,94 @@ fn provider(
     }
 }
 
-fn default_models() -> Vec<ModelInfo> {
-    vec![
-        model("openai", "gpt-4o-mini", "GPT-4o mini", true, true),
-        model("openai", "gpt-4.1-mini", "GPT-4.1 mini", true, true),
-        model("deepseek", "deepseek-chat", "DeepSeek Chat", true, false),
-        model(
-            "deepseek",
-            "deepseek-reasoner",
-            "DeepSeek Reasoner",
-            true,
-            false,
-        ),
-        model("ollama", "llama3.1", "Llama 3.1", true, false),
-        model("ollama", "qwen2.5", "Qwen 2.5", true, false),
-    ]
-}
-
-fn model(
-    provider_id: &str,
-    id: &str,
-    display_name: &str,
-    tools: bool,
-    streaming: bool,
-) -> ModelInfo {
-    ModelInfo {
-        id: id.to_string(),
-        provider_id: provider_id.to_string(),
-        display_name: display_name.to_string(),
-        capabilities: ModelCapabilities {
-            chat: true,
-            tools,
-            streaming,
-        },
-    }
+fn configured_models(
+    provider: &ProviderDefinition,
+    provider_config: Option<&ProviderConfig>,
+) -> Vec<ModelInfo> {
+    provider_config
+        .map(|config| {
+            config
+                .models
+                .iter()
+                .filter(|model| !model.id.trim().is_empty())
+                .map(|model| ModelInfo {
+                    id: model.id.clone(),
+                    provider_id: provider.info.id.clone(),
+                    display_name: model
+                        .display_name
+                        .clone()
+                        .unwrap_or_else(|| model.id.clone()),
+                    capabilities: model.capabilities.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{fs, path::PathBuf};
 
     #[test]
     fn list_models_filters_by_provider() {
-        let registry = ProviderRegistry::new(std::env::temp_dir());
+        let root = test_root("list_models_filters_by_provider");
+        write_config(
+            &root,
+            r#"{
+              "providers": {
+                "deepseek": {
+                  "models": [
+                    {
+                      "id": "deepseek-v4-flash",
+                      "display_name": "DeepSeek V4 Flash"
+                    }
+                  ]
+                }
+              }
+            }"#,
+        );
+        let registry = ProviderRegistry::new(root);
 
         let models = registry
             .list_models(Some("deepseek"))
             .expect("provider should exist");
 
         assert!(models.iter().all(|model| model.provider_id == "deepseek"));
-        assert!(models.iter().any(|model| model.id == "deepseek-chat"));
+        assert!(models.iter().any(|model| model.id == "deepseek-v4-flash"));
+    }
+
+    #[test]
+    fn default_model_selection_reads_config() {
+        let root = test_root("default_model_selection_reads_config");
+        write_config(
+            &root,
+            r#"{
+              "defaults": {
+                "provider": "deepseek",
+                "model": "deepseek-v4-flash"
+              },
+              "providers": {
+                "deepseek": {
+                  "models": [
+                    {
+                      "id": "deepseek-v4-flash",
+                      "display_name": "DeepSeek V4 Flash"
+                    }
+                  ]
+                }
+              }
+            }"#,
+        );
+        let registry = ProviderRegistry::new(root);
+
+        let selection = registry
+            .default_model_selection()
+            .expect("defaults should load")
+            .expect("defaults should be configured");
+
+        assert_eq!(selection.provider_id, "deepseek");
+        assert_eq!(selection.model_id, "deepseek-v4-flash");
     }
 
     #[test]
@@ -383,5 +473,17 @@ mod tests {
             .expect_err("unknown model should be rejected");
 
         assert_eq!(error.code(), "model_not_found");
+    }
+
+    fn test_root(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "agent-app-providers-{name}-{}",
+            crate::core::storage::now_ms()
+        ))
+    }
+
+    fn write_config(root: &PathBuf, config: &str) {
+        fs::create_dir_all(root).expect("test config root should be created");
+        fs::write(root.join("config.json"), config).expect("test config should be written");
     }
 }

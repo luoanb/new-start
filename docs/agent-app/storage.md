@@ -47,18 +47,45 @@ Each message stores:
 
 Model provider configuration may be read from environment variables and `.agent-app/config.json`.
 
-Environment variables have priority over file values. API keys must not be committed.
+Environment variables have priority over file values for secrets and API bases. API keys must not be committed.
+Model lists and chat defaults are configured in `.agent-app/config.json` so provider model name changes do not require Rust code changes.
 
 ```json
 {
+  "defaults": {
+    "provider": "deepseek",
+    "model": "deepseek-v4-flash"
+  },
   "providers": {
     "openai": {
       "api_key": "sk-...",
-      "api_base": "https://api.openai.com/v1"
+      "api_base": "https://api.openai.com/v1",
+      "models": [
+        {
+          "id": "gpt-4o-mini",
+          "display_name": "GPT-4o mini",
+          "capabilities": {
+            "chat": true,
+            "tools": true,
+            "streaming": true
+          }
+        }
+      ]
     },
     "deepseek": {
       "api_key": "...",
-      "api_base": "https://api.deepseek.com/v1"
+      "api_base": "https://api.deepseek.com/v1",
+      "models": [
+        {
+          "id": "deepseek-v4-flash",
+          "display_name": "DeepSeek V4 Flash",
+          "capabilities": {
+            "chat": true,
+            "tools": false,
+            "streaming": false
+          }
+        }
+      ]
     },
     "custom": {
       "api_key": "...",
@@ -67,6 +94,14 @@ Environment variables have priority over file values. API keys must not be commi
   }
 }
 ```
+
+Configuration fields:
+
+- `defaults.provider`: provider selected by TUI session chat on startup.
+- `defaults.model`: model selected by TUI session chat on startup.
+- `providers.<id>.api_key`: provider API key. Environment variables override this value.
+- `providers.<id>.api_base`: provider API base. Environment variables override this value.
+- `providers.<id>.models`: provider model list shown by `/models` and accepted by `/use`.
 
 Known provider environment variables:
 

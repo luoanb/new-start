@@ -16,6 +16,7 @@ pub enum AppError {
     SkillNotFound(String),
     ProviderNotFound(String),
     ModelNotFound(String),
+    ModelNotSelected,
     ProviderAuthMissing(String),
     LlmRequestFailed(String),
     StorageError(String),
@@ -30,6 +31,7 @@ impl AppError {
             AppError::SkillNotFound(_) => "skill_not_found",
             AppError::ProviderNotFound(_) => "provider_not_found",
             AppError::ModelNotFound(_) => "model_not_found",
+            AppError::ModelNotSelected => "model_not_selected",
             AppError::ProviderAuthMissing(_) => "provider_auth_missing",
             AppError::LlmRequestFailed(_) => "llm_request_failed",
             AppError::StorageError(_) => "storage_error",
@@ -51,6 +53,7 @@ impl AppError {
             | AppError::SkillNotFound(_)
             | AppError::ProviderNotFound(_)
             | AppError::ModelNotFound(_)
+            | AppError::ModelNotSelected
             | AppError::ProviderAuthMissing(_) => 2,
             AppError::LlmRequestFailed(_)
             | AppError::StorageError(_)
@@ -71,6 +74,9 @@ impl fmt::Display for AppError {
             AppError::SkillNotFound(name) => write!(f, "Skill not found: {name}"),
             AppError::ProviderNotFound(id) => write!(f, "Provider not found: {id}"),
             AppError::ModelNotFound(id) => write!(f, "Model not found: {id}"),
+            AppError::ModelNotSelected => {
+                write!(f, "No active provider/model selected for session chat")
+            }
         }
     }
 }

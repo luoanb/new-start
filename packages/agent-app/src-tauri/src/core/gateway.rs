@@ -1,8 +1,9 @@
 use super::{
     error::{AppError, AppResult},
     models::{
-        ChatResponse, Conversation, Message, MessageRole, ModelCallRequest, ModelCallResponse,
-        ModelInfo, ProviderInfo, RuntimeStatus, SkillInfo,
+        ChatModelSelection, ChatOptions, ChatResponse, Conversation, Message, MessageRole,
+        ModelCallRequest, ModelCallResponse, ModelInfo, ModelMessage, ModelMessageRole,
+        ProviderInfo, RuntimeStatus, SkillInfo,
     },
     providers::ProviderRegistry,
     runtime::AgentRuntime,
@@ -84,8 +85,72 @@ impl Gateway {
         self.providers.list_models(provider_id.as_deref())
     }
 
+    pub fn default_model_selection(&self) -> AppResult<Option<ChatModelSelection>> {
+        self.providers.default_model_selection()
+    }
+
+    pub fn require_model(&self, provider_id: &str, model_id: &str) -> AppResult<()> {
+        self.providers.require_model(provider_id, model_id)
+    }
+
     pub async fn call_model(&self, request: ModelCallRequest) -> AppResult<ModelCallResponse> {
         self.providers.call_model(request).await
+    }
+
+    pub async fn send_model_message(
+        &mut self,
+        input: impl AsRef<str>,
+        options: ChatOptions,
+    ) -> AppResult<ChatResponse> {
+        let input = input.as_ref().trim();
+        if input.is_empty() {
+            return Err(AppError::InvalidInput("Message cannot be empty".into()));
+        }
+
+        self.providers
+            .require_model(&options.provider_id, &options.model_id)?;
+
+        let conversation_id = self.resolve_conversation_id(options.conversation_id)?;
+        let conversation = self.storage.require_conversation(&conversation_id)?;
+        let mut messages = conversation
+            .messages
+            .iter()
+            .map(message_to_model_message)
+            .collect::<Vec<_>>();
+        messages.push(ModelMessage {
+            role: ModelMessageRole::User,
+            content: input.to_string(),
+        });
+
+        let model_response = self
+            .providers
+            .call_model(ModelCallRequest {
+                provider_id: options.provider_id,
+                model_id: options.model_id,
+                messages,
+            })
+            .await?;
+
+        let user_message = Message {
+            role: MessageRole::User,
+            content: input.to_string(),
+            timestamp: now_ms(),
+        };
+        let assistant_message = Message {
+            role: MessageRole::Assistant,
+            content: model_response.output.clone(),
+            timestamp: now_ms(),
+        };
+
+        self.storage.add_message(&conversation_id, user_message)?;
+        self.storage
+            .add_message(&conversation_id, assistant_message)?;
+        self.current_conversation_id = conversation_id.clone();
+
+        Ok(ChatResponse {
+            conversation_id,
+            response: model_response.output,
+        })
     }
 
     pub fn list_conversations(&self) -> AppResult<Vec<Conversation>> {
@@ -152,6 +217,19 @@ impl Gateway {
     }
 }
 
+fn message_to_model_message(message: &Message) -> ModelMessage {
+    let role = match message.role {
+        MessageRole::System => ModelMessageRole::System,
+        MessageRole::User => ModelMessageRole::User,
+        MessageRole::Assistant => ModelMessageRole::Assistant,
+    };
+
+    ModelMessage {
+        role,
+        content: message.content.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,6 +277,31 @@ mod tests {
 
         assert_eq!(cleared, response.conversation_id);
         assert!(gateway.history(Some(cleared)).is_err());
+    }
+
+    #[tokio::test]
+    async fn send_model_message_rejects_missing_model_without_history_write() {
+        let mut gateway =
+            test_gateway("send_model_message_rejects_missing_model_without_history_write");
+        let conversation_id = gateway.current_conversation_id.clone();
+
+        let error = gateway
+            .send_model_message(
+                "hello",
+                ChatOptions {
+                    provider_id: "deepseek".to_string(),
+                    model_id: "missing-model".to_string(),
+                    conversation_id: None,
+                },
+            )
+            .await
+            .expect_err("missing model should be rejected");
+        let history = gateway
+            .history(Some(conversation_id))
+            .expect("history should still load");
+
+        assert_eq!(error.code(), "model_not_found");
+        assert!(history.is_empty());
     }
 
     fn test_gateway(name: &str) -> Gateway {
