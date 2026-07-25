@@ -1,0 +1,17 @@
+{
+  "id": "conv_1784967398182",
+  "messages": [
+    {
+      "role": "user",
+      "content": "hello",
+      "timestamp": 1784967433349
+    },
+    {
+      "role": "assistant",
+      "content": "Agent App 收到：hello",
+      "timestamp": 1784967433350
+    }
+  ],
+  "created_at": 1784967398182,
+  "updated_at": 1784967433350
+}
