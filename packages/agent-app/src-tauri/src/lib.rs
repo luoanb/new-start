@@ -1,4 +1,5 @@
 pub mod core;
+pub mod tui;
 
 use crate::core::{
     error::AppErrorPayload, AppError, ChatResponse, Conversation, Gateway, Message,

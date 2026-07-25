@@ -176,6 +176,13 @@ impl Gateway {
         Ok(conversation_id)
     }
 
+    /// Create a new blank conversation and return its id.
+    /// The current conversation is left unchanged.
+    pub fn create_new_conversation(&mut self) -> AppResult<String> {
+        let conv = self.storage.create_conversation(None)?;
+        Ok(conv.id)
+    }
+
     pub fn status(&self) -> AppResult<RuntimeStatus> {
         Ok(RuntimeStatus {
             app_name: "agent-app".to_string(),
