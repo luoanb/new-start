@@ -1,6 +1,10 @@
 use super::{
     error::{AppError, AppResult},
-    models::{ChatResponse, Conversation, Message, MessageRole, RuntimeStatus, SkillInfo},
+    models::{
+        ChatResponse, Conversation, Message, MessageRole, ModelCallRequest, ModelCallResponse,
+        ModelInfo, ProviderInfo, RuntimeStatus, SkillInfo,
+    },
+    providers::ProviderRegistry,
     runtime::AgentRuntime,
     skills::SkillRegistry,
     storage::{now_ms, Storage},
@@ -11,6 +15,7 @@ pub struct Gateway {
     storage: Storage,
     skills: SkillRegistry,
     runtime: AgentRuntime,
+    providers: ProviderRegistry,
     current_conversation_id: String,
 }
 
@@ -22,6 +27,7 @@ impl Gateway {
     pub fn new(storage: Storage) -> AppResult<Self> {
         let skills = SkillRegistry::with_defaults();
         let runtime = AgentRuntime::new(skills.clone());
+        let providers = ProviderRegistry::new(storage.root().to_path_buf());
         let current_conversation_id = match storage.list_conversations()?.first() {
             Some(conversation) => conversation.id.clone(),
             None => storage.create_conversation(None)?.id,
@@ -31,6 +37,7 @@ impl Gateway {
             storage,
             skills,
             runtime,
+            providers,
             current_conversation_id,
         })
     }
@@ -67,6 +74,18 @@ impl Gateway {
 
     pub fn list_skills(&self) -> Vec<SkillInfo> {
         self.skills.list()
+    }
+
+    pub fn list_providers(&self) -> Vec<ProviderInfo> {
+        self.providers.list_providers()
+    }
+
+    pub fn list_models(&self, provider_id: Option<String>) -> AppResult<Vec<ModelInfo>> {
+        self.providers.list_models(provider_id.as_deref())
+    }
+
+    pub async fn call_model(&self, request: ModelCallRequest) -> AppResult<ModelCallResponse> {
+        self.providers.call_model(request).await
     }
 
     pub fn list_conversations(&self) -> AppResult<Vec<Conversation>> {

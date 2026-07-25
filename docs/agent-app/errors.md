@@ -9,6 +9,10 @@ Core errors have a stable code and user-facing message. Entry layers may add pre
 - `invalid_input`: user input is empty or malformed.
 - `conversation_not_found`: a requested conversation id does not exist.
 - `skill_not_found`: a requested skill name does not exist.
+- `provider_not_found`: a requested provider id does not exist.
+- `model_not_found`: a requested model id does not exist for the provider.
+- `provider_auth_missing`: provider credentials were not found in env or config.
+- `llm_request_failed`: the provider request failed.
 - `storage_error`: reading, writing, or deleting persisted data failed.
 - `runtime_error`: the agent runtime failed after input validation succeeded.
 

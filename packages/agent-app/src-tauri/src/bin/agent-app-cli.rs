@@ -1,16 +1,18 @@
 use agent_app_lib::core::{
-    AppError, AppResult, Conversation, Gateway, Message, MessageRole, RuntimeStatus, SkillInfo,
+    AppError, AppResult, Conversation, Gateway, Message, MessageRole, ModelCallRequest, ModelInfo,
+    ModelMessage, ModelMessageRole, ProviderInfo, RuntimeStatus, SkillInfo,
 };
 use std::{env, process};
 
-fn main() {
-    if let Err(error) = run() {
+#[tokio::main]
+async fn main() {
+    if let Err(error) = run().await {
         eprintln!("error [{}]: {}", error.code(), error);
         process::exit(error.exit_code());
     }
 }
 
-fn run() -> AppResult<()> {
+async fn run() -> AppResult<()> {
     let mut args = env::args().skip(1).collect::<Vec<_>>();
     let Some(command) = args.first().cloned() else {
         print_help();
@@ -29,6 +31,27 @@ fn run() -> AppResult<()> {
             println!("{}", response.response);
         }
         "skills" => print_skills(gateway.list_skills()),
+        "providers" => print_providers(gateway.list_providers()),
+        "models" => {
+            let provider_id = args.first().cloned();
+            print_models(gateway.list_models(provider_id)?);
+        }
+        "call-model" => {
+            let (provider_id, model_id, message) = take_model_call_args(args)?;
+            let response = gateway
+                .call_model(ModelCallRequest {
+                    provider_id,
+                    model_id,
+                    messages: vec![ModelMessage {
+                        role: ModelMessageRole::User,
+                        content: message,
+                    }],
+                })
+                .await?;
+            println!("provider: {}", response.provider_id);
+            println!("model: {}", response.model_id);
+            println!("{}", response.output);
+        }
         "sessions" => print_conversations(gateway.list_conversations()?),
         "history" => {
             let conversation_id = args.first().cloned();
@@ -83,16 +106,91 @@ fn take_conversation_arg(args: Vec<String>) -> AppResult<(Option<String>, Vec<St
     Ok((conversation_id, message_parts))
 }
 
+fn take_model_call_args(args: Vec<String>) -> AppResult<(String, String, String)> {
+    let mut provider_id = None;
+    let mut model_id = None;
+    let mut message_parts = Vec::new();
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--provider" | "-p" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err(AppError::InvalidInput(
+                        "`--provider` requires a provider id".into(),
+                    ));
+                };
+                provider_id = Some(value.clone());
+                index += 2;
+            }
+            "--model" | "-m" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err(AppError::InvalidInput(
+                        "`--model` requires a model id".into(),
+                    ));
+                };
+                model_id = Some(value.clone());
+                index += 2;
+            }
+            value => {
+                message_parts.push(value.to_string());
+                index += 1;
+            }
+        }
+    }
+
+    let provider_id = provider_id
+        .ok_or_else(|| AppError::InvalidInput("`call-model` requires `--provider <id>`".into()))?;
+    let model_id = model_id
+        .ok_or_else(|| AppError::InvalidInput("`call-model` requires `--model <id>`".into()))?;
+
+    if message_parts.is_empty() {
+        return Err(AppError::InvalidInput(
+            "`call-model` requires a message".into(),
+        ));
+    }
+
+    Ok((provider_id, model_id, message_parts.join(" ")))
+}
+
 fn print_help() {
     println!("agent-app-cli");
     println!();
     println!("Commands:");
     println!("  chat <message> [--conversation <id>]  Send a message");
+    println!("  providers                             List model providers");
+    println!("  models [provider-id]                  List models");
+    println!("  call-model -p <id> -m <id> <message>  Call a model without session");
     println!("  skills                                List skills");
     println!("  sessions                              List conversations");
     println!("  history [conversation-id]             Show conversation history");
     println!("  clear [conversation-id]               Clear a conversation");
     println!("  status                                Show runtime status");
+}
+
+fn print_providers(providers: Vec<ProviderInfo>) {
+    for provider in providers {
+        println!(
+            "{} | {} | auth={} | api_base={}",
+            provider.id,
+            provider.display_name,
+            provider.auth_env,
+            provider.api_base.unwrap_or_else(|| "default".to_string())
+        );
+    }
+}
+
+fn print_models(models: Vec<ModelInfo>) {
+    for model in models {
+        println!(
+            "{} | provider={} | chat={} tools={} streaming={}",
+            model.id,
+            model.provider_id,
+            model.capabilities.chat,
+            model.capabilities.tools,
+            model.capabilities.streaming
+        );
+    }
 }
 
 fn print_skills(skills: Vec<SkillInfo>) {

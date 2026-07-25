@@ -41,7 +41,7 @@ impl Storage {
                     "Conversation id cannot be empty".into(),
                 ))
             }
-            None => format!("conv_{now}"),
+            None => new_conversation_id(),
         };
 
         let conversation = Conversation {
@@ -145,4 +145,12 @@ pub fn now_ms() -> u128 {
         .duration_since(UNIX_EPOCH)
         .expect("system time should be after unix epoch")
         .as_millis()
+}
+
+fn new_conversation_id() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be after unix epoch")
+        .as_nanos();
+    format!("conv_{nanos}")
 }

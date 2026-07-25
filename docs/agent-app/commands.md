@@ -54,6 +54,30 @@ Show runtime status.
 - Output: app name, storage path, current conversation id, skill count, conversation count.
 - Core API: `Gateway::status`.
 
+### `providers`
+
+List configured model providers.
+
+- Input: none.
+- Output: provider id, display name, auth environment variable, optional API base.
+- Core API: `Gateway::list_providers`.
+
+### `models`
+
+List available models.
+
+- Input: optional provider id.
+- Output: model id, provider id, display name, capabilities.
+- Core API: `Gateway::list_models`.
+
+### `call-model`
+
+Call a model without reading or writing local sessions.
+
+- Input: provider id, model id, one or more messages.
+- Output: provider id, model id, model output.
+- Core API: `Gateway::call_model`.
+
 ## CLI Behavior
 
 - Successful commands exit with code `0`.
@@ -61,6 +85,7 @@ Show runtime status.
 - Storage/runtime errors exit with code `1`.
 - Default output is human-readable text.
 - `--json` is reserved for future structured output and should not be faked before the response schema is specified.
+- `call-model --provider <id> --model <id> <message>` performs a stateless model call.
 
 ## TUI Behavior
 
@@ -68,6 +93,7 @@ The first TUI is a compact interactive shell:
 
 - Shows status on startup.
 - Accepts `/help`, `/skills`, `/sessions`, `/history`, `/clear`, `/status`, and `/exit`.
+- Accepts `/providers`, `/models [provider]`, and `/call <provider> <model> <message>`.
 - Treats any non-command input as `chat`.
 - Reuses the same core gateway as CLI and Tauri.
 

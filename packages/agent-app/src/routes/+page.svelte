@@ -38,13 +38,51 @@
     description: string;
   };
 
+  type ProviderInfo = {
+    id: string;
+    display_name: string;
+    api_base: string | null;
+    auth_env: string;
+    kind: "open_ai" | "open_ai_compatible";
+  };
+
+  type ModelInfo = {
+    id: string;
+    provider_id: string;
+    display_name: string;
+    capabilities: {
+      chat: boolean;
+      tools: boolean;
+      streaming: boolean;
+    };
+  };
+
+  type ModelCallResponse = {
+    provider_id: string;
+    model_id: string;
+    output: string;
+  };
+
   let message = $state("");
   let response = $state("");
+  let modelInput = $state("");
+  let modelOutput = $state("");
+  let selectedProviderId = $state("");
+  let selectedModelId = $state("");
   let error = $state("");
   let status = $state<RuntimeStatus | null>(null);
   let skills = $state<SkillInfo[]>([]);
+  let providers = $state<ProviderInfo[]>([]);
+  let models = $state<ModelInfo[]>([]);
   let conversations = $state<Conversation[]>([]);
   let loading = $state(false);
+  let modelLoading = $state(false);
+
+  let visibleModels = $derived(
+    selectedProviderId
+      ? models.filter((model) => model.provider_id === selectedProviderId)
+      : models,
+  );
 
   onMount(() => {
     void refresh();
@@ -53,14 +91,24 @@
   async function refresh() {
     error = "";
     try {
-      const [nextStatus, nextSkills, nextConversations] = await Promise.all([
+      const [
+        nextStatus,
+        nextSkills,
+        nextProviders,
+        nextModels,
+        nextConversations,
+      ] = await Promise.all([
         invoke<RuntimeStatus>("status"),
         invoke<SkillInfo[]>("list_skills"),
+        invoke<ProviderInfo[]>("list_providers"),
+        invoke<ModelInfo[]>("list_models"),
         invoke<Conversation[]>("list_conversations"),
       ]);
 
       status = nextStatus;
       skills = nextSkills;
+      providers = nextProviders;
+      models = nextModels;
       conversations = nextConversations;
     } catch (caught) {
       error = formatError(caught);
@@ -99,6 +147,38 @@
       await refresh();
     } catch (caught) {
       error = formatError(caught);
+    }
+  }
+
+  async function callSelectedModel(event: Event) {
+    event.preventDefault();
+
+    if (!selectedProviderId || !selectedModelId) {
+      error = "请选择服务商和模型";
+      return;
+    }
+
+    if (!modelInput.trim()) {
+      error = "模型输入不能为空";
+      return;
+    }
+
+    modelLoading = true;
+    error = "";
+
+    try {
+      const result = await invoke<ModelCallResponse>("call_model", {
+        request: {
+          provider_id: selectedProviderId,
+          model_id: selectedModelId,
+          messages: [{ role: "user", content: modelInput }],
+        },
+      });
+      modelOutput = result.output;
+    } catch (caught) {
+      error = formatError(caught);
+    } finally {
+      modelLoading = false;
     }
   }
 
@@ -164,7 +244,53 @@
     {/if}
   </section>
 
+  <section class="panel">
+    <h2>模型调用（无会话）</h2>
+    <form onsubmit={callSelectedModel}>
+      <select bind:value={selectedProviderId} aria-label="选择服务商">
+        <option value="">选择服务商</option>
+        {#each providers as provider}
+          <option value={provider.id}>{provider.display_name}</option>
+        {/each}
+      </select>
+
+      <select bind:value={selectedModelId} aria-label="选择模型">
+        <option value="">选择模型</option>
+        {#each visibleModels as model}
+          <option value={model.id}>
+            {model.display_name} ({model.provider_id})
+          </option>
+        {/each}
+      </select>
+
+      <input
+        placeholder="输入一次性模型调用内容"
+        bind:value={modelInput}
+      />
+      <button type="submit" disabled={modelLoading}>
+        {modelLoading ? "调用中..." : "调用模型"}
+      </button>
+    </form>
+
+    {#if modelOutput}
+      <article class="response">
+        <strong>Model Output</strong>
+        <p>{modelOutput}</p>
+      </article>
+    {/if}
+  </section>
+
   <section class="grid">
+    <div class="panel">
+      <h2>服务商</h2>
+      {#each providers as provider}
+        <p>
+          <strong>{provider.id}</strong>
+          <span>{provider.api_base ?? "default OpenAI API base"}</span>
+        </p>
+      {/each}
+    </div>
+
     <div class="panel">
       <h2>技能</h2>
       {#each skills as skill}
@@ -283,6 +409,7 @@ dd {
 }
 
 input,
+select,
 button {
   border-radius: 8px;
   border: 1px solid transparent;
@@ -298,6 +425,10 @@ button {
 
 input {
   flex: 1;
+}
+
+select {
+  min-width: 180px;
 }
 
 button {
@@ -318,6 +449,7 @@ button:active {
 }
 
 input,
+select,
 button {
   outline: none;
 }
@@ -372,6 +504,7 @@ span {
   }
 
   input,
+  select,
   button {
     color: #ffffff;
     background-color: #0f0f0f98;

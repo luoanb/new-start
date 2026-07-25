@@ -18,6 +18,7 @@ flowchart LR
 
   core --> config["Config"]
   core --> storage["Storage"]
+  core --> providers["Provider Registry"]
   core --> tools["Tool Registry"]
   core --> runtime["Runtime"]
 ```
@@ -42,3 +43,13 @@ The first implementation provides a local deterministic agent runtime:
 - Report runtime status.
 
 LLM provider integration is intentionally outside the first Rust core milestone. The core API is shaped so a provider-backed runtime can replace the deterministic runtime later without changing entrypoint ownership.
+
+## Model Calling
+
+The first LLM integration adds a stateless model call path:
+
+- `list_providers`: returns known OpenAI/OpenAI-compatible service providers.
+- `list_models`: returns a static model registry, optionally filtered by provider.
+- `call_model`: sends explicit provider, model, and messages to the configured provider.
+
+`call_model` does not read or write local sessions. Session-based chat is a higher-level workflow that may translate persisted messages into model messages before calling this lower-level API.

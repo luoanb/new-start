@@ -1,0 +1,54 @@
+---
+description: Rust 通用编码约定：API 表面清晰、trait 克制、错误和文档完整
+globs: packages/**/*.rs
+alwaysApply: false
+---
+
+# Rust 通用编码约定
+
+适用于 `packages/` 下的 Rust 业务与库代码。
+
+参考 Rust API Guidelines、Rust Style Guide、rustfmt、clippy、rustdoc 以及 Tokio 等社区项目实践。
+
+## 1. Public API Surface
+
+- 先明确模块对外暴露的 `pub struct`、`pub enum`、`pub fn` 和返回类型。
+- `pub` 保守使用；内部实现默认私有，避免把临时结构暴露成稳定 API。
+- 构造函数优先使用 `new`；转换优先实现 `From` / `TryFrom` / `AsRef` 等标准 trait。
+- 类型、trait、enum variant 使用 `UpperCamelCase`；函数、方法、模块使用 `snake_case`。
+
+## 2. Trait 使用
+
+- 不为“看起来像接口”而抽 trait；只有存在多个实现、测试替身、provider 插拔或泛型边界时才抽。
+- 单方法 trait 名称应表达能力或动作，优先贴近 Rust 生态已有命名习惯。
+- 需要作为 trait object 使用时，确认 object safety；否则优先泛型 trait bound。
+- 扩展 trait 遵循 `FooExt` 命名，且只在确实扩展既有类型/trait 时使用。
+
+## 3. 错误与失败语义
+
+- 公共 API 使用明确错误类型和 `Result<T, E>`，不要返回裸字符串错误。
+- 公共函数的错误条件要能从类型或文档中看出来；可恢复错误不用 `panic!`。
+- `unwrap` / `expect` 只用于测试、不可达初始化或带明确上下文的内部断言。
+- 边界层可以转换错误展示形式，但不要改变底层错误语义。
+
+## 4. 文档与示例
+
+- 公共类型、trait、函数和重要模块应有简洁 rustdoc。
+- 可能失败的公共 API 文档写 `# Errors`；可能 panic 写 `# Panics`；unsafe API 写 `# Safety`。
+- 示例代码优先展示用户如何通过公开 API 调用，不引用不必要的内部模块。
+- 面向库的稳定 API 优先补 doc test；关键业务行为至少补单元测试。
+
+## 5. 模块组织
+
+- 模块按职责划分，不按临时实现细节堆叠。
+- 对外模块暴露稳定 API；内部子模块可以随实现调整。
+- 聚合导出放在 `mod.rs` 或上层模块中，避免调用方依赖深层路径。
+- 避免循环依赖式设计；共享类型放在更稳定的上层或独立模块。
+
+## 6. 工具链与验证
+
+- 使用默认 `cargo fmt` / rustfmt 风格，不引入无必要的格式化个性化配置。
+- 提交前运行相关 `cargo check`、`cargo test`；质量收紧时再加入 `cargo clippy`。
+- 纯函数、状态转换、错误分支优先写单元测试。
+- 跨模块或外部交互用集成测试或 smoke 测试覆盖。
+- 测试中可以使用 `unwrap` / `expect`，但错误信息应帮助定位失败原因。
