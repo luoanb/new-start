@@ -4,12 +4,14 @@ pub mod models;
 pub mod providers;
 pub mod runtime;
 pub mod skills;
-pub mod storage;
+pub mod compactor;
+pub mod conversation_store;
+pub mod engine;
 
 pub use error::{AppError, AppResult};
 pub use gateway::Gateway;
 pub use models::{
-    ChatModelSelection, ChatOptions, ChatResponse, Conversation, Message, MessageRole,
-    ModelCallRequest, ModelCallResponse, ModelCapabilities, ModelInfo, ModelMessage,
+    ChatModelSelection, ChatOptions, ChatResponse, CompactionConfig, Conversation, Message,
+    MessageRole, ModelCallRequest, ModelCallResponse, ModelCapabilities, ModelInfo, ModelMessage,
     ModelMessageRole, ProviderInfo, ProviderKind, RuntimeStatus, SkillInfo,
 };

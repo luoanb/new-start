@@ -490,7 +490,7 @@ mod tests {
     fn test_root(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
             "agent-app-providers-{name}-{}",
-            crate::core::storage::now_ms()
+            crate::core::conversation_store::now_ms()
         ))
     }
 

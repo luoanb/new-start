@@ -19,6 +19,7 @@ pub enum AppError {
     ModelNotSelected,
     ProviderAuthMissing(String),
     LlmRequestFailed(String),
+    CompactionFailed(String),
     StorageError(String),
     RuntimeError(String),
 }
@@ -34,6 +35,7 @@ impl AppError {
             AppError::ModelNotSelected => "model_not_selected",
             AppError::ProviderAuthMissing(_) => "provider_auth_missing",
             AppError::LlmRequestFailed(_) => "llm_request_failed",
+            AppError::CompactionFailed(_) => "compaction_failed",
             AppError::StorageError(_) => "storage_error",
             AppError::RuntimeError(_) => "runtime_error",
         }
@@ -56,6 +58,7 @@ impl AppError {
             | AppError::ModelNotSelected
             | AppError::ProviderAuthMissing(_) => 2,
             AppError::LlmRequestFailed(_)
+            | AppError::CompactionFailed(_)
             | AppError::StorageError(_)
             | AppError::RuntimeError(_) => 1,
         }
@@ -68,6 +71,7 @@ impl fmt::Display for AppError {
             AppError::InvalidInput(message)
             | AppError::ProviderAuthMissing(message)
             | AppError::LlmRequestFailed(message)
+            | AppError::CompactionFailed(message)
             | AppError::StorageError(message)
             | AppError::RuntimeError(message) => write!(f, "{message}"),
             AppError::ConversationNotFound(id) => write!(f, "Conversation not found: {id}"),

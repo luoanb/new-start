@@ -116,6 +116,7 @@ impl TuiApp {
                 MessageRole::User => TuiMessageRole::User,
                 MessageRole::Assistant => TuiMessageRole::Assistant,
                 MessageRole::System => TuiMessageRole::Status,
+                MessageRole::Compaction => TuiMessageRole::Status,
             };
             messages.push(TuiMessage {
                 id: format!("{}-{i}", active_session_id),
@@ -457,6 +458,7 @@ impl TuiApp {
                                         MessageRole::User => "user",
                                         MessageRole::Assistant => "assistant",
                                         MessageRole::System => "system",
+                                        MessageRole::Compaction => "compaction",
                                     };
                                     format!("  [{role}] {}", msg.content)
                                 })
@@ -552,6 +554,35 @@ impl TuiApp {
                     }
                 }
             }
+            Command::Compact => {
+                let task_id = format!("compact-{}", self.next_task_id());
+                self.tasks.push(TuiTaskBlock::new(
+                    task_id.clone(),
+                    TuiTaskKind::SessionLoad,
+                    "compacting conversation".to_string(),
+                ));
+
+                match self
+                    .gateway
+                    .compact_conversation(Some(self.active_session_id.clone()))
+                    .await
+                {
+                    Ok(message) => {
+                        if let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) {
+                            task.done("Compaction complete".to_string());
+                        }
+                        self.messages.push(TuiMessage::status(message));
+                        // Reload messages to show the compaction summary
+                        self.reload_messages();
+                    }
+                    Err(error) => {
+                        if let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) {
+                            task.fail(error.to_string());
+                        }
+                        self.error_banner = Some(TuiErrorView::from(error));
+                    }
+                }
+            }
             Command::Exit => {
                 self.should_quit = true;
             }
@@ -607,6 +638,9 @@ impl TuiApp {
 
         // Refresh conversations list after sending
         let _ = self.refresh_conversations();
+
+        // Auto-scroll to the latest message
+        self.scroll_to_bottom();
     }
 
     /// Switch to a different conversation/session.
@@ -624,6 +658,7 @@ impl TuiApp {
                 MessageRole::User => TuiMessageRole::User,
                 MessageRole::Assistant => TuiMessageRole::Assistant,
                 MessageRole::System => TuiMessageRole::Status,
+                MessageRole::Compaction => TuiMessageRole::Status,
             };
             self.messages.push(TuiMessage {
                 id: format!("{}-{i}", self.active_session_id),
@@ -637,7 +672,7 @@ impl TuiApp {
         self.focus = FocusPane::Input;
         self.show_sessions_list = false;
         self.error_banner = None;
-        self.scroll_offset = 0;
+        self.scroll_to_bottom();
 
         // Show a status message indicating the switch
         let short_id = if sid.len() > 16 {
@@ -681,6 +716,36 @@ impl TuiApp {
         Ok(())
     }
 
+    /// Reload chat messages from the gateway for the active session.
+    fn reload_messages(&mut self) {
+        let history = self
+            .gateway
+            .history(Some(self.active_session_id.clone()))
+            .unwrap_or_default();
+        self.messages.clear();
+        for (i, msg) in history.iter().enumerate() {
+            let role = match msg.role {
+                MessageRole::User => TuiMessageRole::User,
+                MessageRole::Assistant => TuiMessageRole::Assistant,
+                MessageRole::System => TuiMessageRole::Status,
+                MessageRole::Compaction => TuiMessageRole::Status,
+            };
+            self.messages.push(TuiMessage {
+                id: format!("{}-{i}", self.active_session_id),
+                role,
+                content: msg.content.clone(),
+                timestamp: Some(msg.timestamp),
+                collapsed: false,
+            });
+        }
+        self.scroll_to_bottom();
+    }
+
+    /// Scroll to the bottom of the chat area (newest messages).
+    fn scroll_to_bottom(&mut self) {
+        self.scroll_offset = 0;
+    }
+
     fn next_task_id(&mut self) -> u64 {
         self.task_counter += 1;
         self.task_counter
@@ -693,7 +758,7 @@ impl TuiApp {
             .lines()
             .first()
             .map_or(String::new(), |v| v.trim().to_string());
-        if text.starts_with('/') && text.len() > 1 {
+        if text.starts_with('/') && text.len() >= 1 {
             let filter = text[1..].to_lowercase();
             let all = super::commands::cmd_help_text();
             let matched: Vec<(String, String)> = all

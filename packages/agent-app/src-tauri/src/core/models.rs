@@ -8,6 +8,7 @@ pub enum MessageRole {
     User,
     Assistant,
     System,
+    Compaction,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -15,6 +16,10 @@ pub struct Message {
     pub role: MessageRole,
     pub content: String,
     pub timestamp: u128,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub msg_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_of: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -48,6 +53,33 @@ pub struct ChatOptions {
     pub provider_id: String,
     pub model_id: String,
     pub conversation_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CompactionConfig {
+    pub enabled: bool,
+    #[serde(default = "default_threshold_ratio")]
+    pub threshold_ratio: f64,
+    #[serde(default = "default_keep_last")]
+    pub keep_last: usize,
+}
+
+impl Default for CompactionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            threshold_ratio: 0.7,
+            keep_last: 10,
+        }
+    }
+}
+
+fn default_threshold_ratio() -> f64 {
+    0.7
+}
+
+fn default_keep_last() -> usize {
+    10
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

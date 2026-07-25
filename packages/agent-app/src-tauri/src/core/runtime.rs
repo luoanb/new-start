@@ -1,8 +1,8 @@
 use super::{
+    conversation_store::now_ms,
     error::{AppError, AppResult},
     models::{Message, MessageRole},
     skills::SkillRegistry,
-    storage::now_ms,
 };
 
 #[derive(Debug, Clone)]
@@ -39,6 +39,8 @@ impl AgentRuntime {
             role: MessageRole::Assistant,
             content: response,
             timestamp: now_ms(),
+            msg_type: None,
+            summary_of: None,
         })
     }
 }

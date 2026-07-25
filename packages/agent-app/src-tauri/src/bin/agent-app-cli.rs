@@ -229,6 +229,7 @@ fn print_history(messages: Vec<Message>) {
             MessageRole::User => "user",
             MessageRole::Assistant => "assistant",
             MessageRole::System => "system",
+            MessageRole::Compaction => "compaction",
         };
         println!("[{}] {}: {}", message.timestamp, role, message.content);
     }

@@ -105,6 +105,17 @@ impl From<AppError> for TuiErrorView {
                     "Verify file permissions on the data directory.".into(),
                 ],
             ),
+            AppError::CompactionFailed(_) => (
+                "Conversation compaction failed.".into(),
+                vec![
+                    "The LLM call for summarization may have failed.".into(),
+                    "The conversation might contain too few messages.".into(),
+                ],
+                vec![
+                    "Check that the selected model is available.".into(),
+                    "Ensure the conversation has enough messages to compact.".into(),
+                ],
+            ),
             AppError::RuntimeError(_) => (
                 "An internal runtime error occurred.".into(),
                 vec!["An unexpected error occurred in the application logic.".into()],

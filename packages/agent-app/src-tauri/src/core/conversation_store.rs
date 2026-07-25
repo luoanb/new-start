@@ -9,12 +9,12 @@ use std::{
 };
 
 #[derive(Debug, Clone)]
-pub struct Storage {
+pub struct ConversationStore {
     root: PathBuf,
     sessions_dir: PathBuf,
 }
 
-impl Storage {
+impl ConversationStore {
     pub fn default() -> AppResult<Self> {
         let root = std::env::current_dir()?.join(".agent-app");
         Self::new(root)
@@ -112,6 +112,13 @@ impl Storage {
         Ok(conversation)
     }
 
+    pub fn save_conversation(&self, conversation: &Conversation) -> AppResult<()> {
+        let path = self.conversation_path(&conversation.id);
+        let content = serde_json::to_string_pretty(conversation)?;
+        fs::write(path, content)?;
+        Ok(())
+    }
+
     pub fn clear_conversation(&self, conversation_id: &str) -> AppResult<()> {
         if conversation_id.trim().is_empty() {
             return Err(AppError::InvalidInput(
@@ -125,13 +132,6 @@ impl Storage {
         }
 
         fs::remove_file(path)?;
-        Ok(())
-    }
-
-    fn save_conversation(&self, conversation: &Conversation) -> AppResult<()> {
-        let path = self.conversation_path(&conversation.id);
-        let content = serde_json::to_string_pretty(conversation)?;
-        fs::write(path, content)?;
         Ok(())
     }
 

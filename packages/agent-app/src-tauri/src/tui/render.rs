@@ -189,15 +189,35 @@ fn render_chat_area(frame: &mut Frame, area: Rect, app: &TuiApp) {
         }
     }
 
-    let scroll_offset = app.scroll_offset as usize;
-    let text = Text::from(lines);
+    let text = Text::from(lines.clone());
+
+    // scroll_offset = 0  → show bottom (newest messages)
+    // scroll_offset > 0  → scrolled up by that many lines from the bottom
+    // Use estimated wrapped line count (each logical line may wrap to multiple visual lines)
+    let term_width = (area.width as usize).max(1);
+    let estimated_wrapped: usize = lines
+        .iter()
+        .map(|l| {
+            let w = l.width();
+            if w == 0 {
+                1
+            } else {
+                // Ceiling division: how many visual lines this logical line wraps to
+                (w + term_width - 1) / term_width
+            }
+        })
+        .sum();
+    let visible_height = (area.height as usize).max(1);
+    let max_scroll = estimated_wrapped.saturating_sub(visible_height);
+
+    let effective_scroll = max_scroll.saturating_sub(app.scroll_offset as usize);
 
     let chat_block = Block::default()
         .borders(Borders::NONE);
 
     let paragraph = Paragraph::new(text)
         .block(chat_block)
-        .scroll((scroll_offset as u16, 0))
+        .scroll((effective_scroll as u16, 0))
         .wrap(Wrap { trim: false });
 
     frame.render_widget(paragraph, area);

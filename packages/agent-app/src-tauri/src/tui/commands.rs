@@ -15,6 +15,7 @@ pub enum Command {
     Models(String),
     Call(String, String, String),
     Config,
+    Compact,
     Exit,
 }
 
@@ -35,6 +36,7 @@ impl Command {
             "/clear" => Some(Self::Clear),
             "/status" => Some(Self::Status),
             "/config" => Some(Self::Config),
+            "/compact" => Some(Self::Compact),
             "/exit" | "/quit" => Some(Self::Exit),
             _ => {
                 let parts: Vec<&str> = trimmed.splitn(4, ' ').collect();
@@ -78,6 +80,7 @@ pub fn cmd_help_text() -> Vec<(String, String)> {
         ("/clear".into(), "Clear current conversation".into()),
         ("/status".into(), "Show runtime status".into()),
         ("/config".into(), "Show configuration".into()),
+        ("/compact".into(), "Manually compress current conversation".into()),
         ("/call <p> <m> <msg>".into(), "Call a model directly".into()),
         ("/exit".into(), "Quit the application".into()),
     ]

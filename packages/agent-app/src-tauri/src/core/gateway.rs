@@ -1,43 +1,47 @@
 use super::{
+    conversation_store::{now_ms, ConversationStore},
+    engine::Engine,
     error::{AppError, AppResult},
     models::{
         ChatModelSelection, ChatOptions, ChatResponse, Conversation, Message, MessageRole,
-        ModelCallRequest, ModelCallResponse, ModelInfo, ModelMessage, ModelMessageRole,
-        ProviderInfo, RuntimeStatus, SkillInfo,
+        ModelCallRequest, ModelCallResponse, ModelInfo, ProviderInfo, RuntimeStatus, SkillInfo,
     },
     providers::ProviderRegistry,
-    runtime::AgentRuntime,
     skills::SkillRegistry,
-    storage::{now_ms, Storage},
+    CompactionConfig,
 };
 
 #[derive(Debug, Clone)]
 pub struct Gateway {
-    storage: Storage,
-    skills: SkillRegistry,
-    runtime: AgentRuntime,
+    engine: Engine,
+    store: ConversationStore,
     providers: ProviderRegistry,
+    skills: SkillRegistry,
     current_conversation_id: String,
 }
 
 impl Gateway {
     pub fn default() -> AppResult<Self> {
-        Self::new(Storage::default()?)
+        Self::new(ConversationStore::default()?)
     }
 
-    pub fn new(storage: Storage) -> AppResult<Self> {
+    pub fn new(store: ConversationStore) -> AppResult<Self> {
         let skills = SkillRegistry::with_defaults();
-        let runtime = AgentRuntime::new(skills.clone());
-        let providers = ProviderRegistry::new(storage.root().to_path_buf());
-        let current_conversation_id = match storage.list_conversations()?.first() {
+        let providers = ProviderRegistry::new(store.root().to_path_buf());
+        let current_conversation_id = match store.list_conversations()?.first() {
             Some(conversation) => conversation.id.clone(),
-            None => storage.create_conversation(None)?.id,
+            None => store.create_conversation(None)?.id,
         };
+        let engine = Engine::new(
+            store.clone(),
+            providers.clone(),
+            CompactionConfig::default(),
+        );
 
         Ok(Self {
-            storage,
+            engine,
+            store,
             skills,
-            runtime,
             providers,
             current_conversation_id,
         })
@@ -58,18 +62,46 @@ impl Gateway {
             role: MessageRole::User,
             content: input.to_string(),
             timestamp: now_ms(),
+            msg_type: None,
+            summary_of: None,
         };
 
-        self.storage.add_message(&conversation_id, user_message)?;
-        let assistant_message = self.runtime.respond(input)?;
+        self.store.add_message(&conversation_id, user_message)?;
+        let assistant_message = self.runtime_respond(input)?;
         let response = assistant_message.content.clone();
-        self.storage
+        self.store
             .add_message(&conversation_id, assistant_message)?;
         self.current_conversation_id = conversation_id.clone();
 
         Ok(ChatResponse {
             conversation_id,
             response,
+        })
+    }
+
+    /// Quick inline runtime respond for built-in commands.
+    fn runtime_respond(&self, input: &str) -> AppResult<Message> {
+        let trimmed = input.trim();
+        let response = if let Some(message) = trimmed.strip_prefix("/echo ") {
+            self.skills.execute_echo(message.trim())?
+        } else if trimmed == "/time" {
+            format!("Current timestamp: {}", self.skills.execute_time()?)
+        } else {
+            format!("Agent App 收到：{trimmed}")
+        };
+
+        if response.trim().is_empty() {
+            return Err(AppError::RuntimeError(
+                "Runtime produced an empty response".into(),
+            ));
+        }
+
+        Ok(Message {
+            role: MessageRole::Assistant,
+            content: response,
+            timestamp: now_ms(),
+            msg_type: None,
+            summary_of: None,
         })
     }
 
@@ -110,67 +142,47 @@ impl Gateway {
         self.providers
             .require_model(&options.provider_id, &options.model_id)?;
 
-        let conversation_id = self.resolve_conversation_id(options.conversation_id)?;
-        let conversation = self.storage.require_conversation(&conversation_id)?;
-        let mut messages = conversation
-            .messages
-            .iter()
-            .map(message_to_model_message)
-            .collect::<Vec<_>>();
-        messages.push(ModelMessage {
-            role: ModelMessageRole::User,
-            content: input.to_string(),
-        });
+        let conversation_id = self.resolve_conversation_id(options.conversation_id.clone())?;
 
-        let model_response = self
-            .providers
-            .call_model(ModelCallRequest {
-                provider_id: options.provider_id,
-                model_id: options.model_id,
-                messages,
-            })
+        // Delegate to engine for orchestration (get conversation → compact → call model → save)
+        let response = self
+            .engine
+            .chat(input, conversation_id.clone(), options)
             .await?;
 
-        let user_message = Message {
-            role: MessageRole::User,
-            content: input.to_string(),
-            timestamp: now_ms(),
-        };
-        let assistant_message = Message {
-            role: MessageRole::Assistant,
-            content: model_response.output.clone(),
-            timestamp: now_ms(),
-        };
-
-        self.storage.add_message(&conversation_id, user_message)?;
-        self.storage
-            .add_message(&conversation_id, assistant_message)?;
         self.current_conversation_id = conversation_id.clone();
 
-        Ok(ChatResponse {
-            conversation_id,
-            response: model_response.output,
-        })
+        Ok(response)
+    }
+
+    /// Manually trigger compaction for the current conversation.
+    pub async fn compact_conversation(
+        &mut self,
+        conversation_id: Option<String>,
+    ) -> AppResult<String> {
+        let id = self.resolve_existing_conversation_id(conversation_id)?;
+        let model = self
+            .default_model_selection()?
+            .ok_or(AppError::ModelNotSelected)?;
+        self.engine.compact(&id, &model).await?;
+        Ok(format!("Compacted conversation {id}"))
     }
 
     pub fn list_conversations(&self) -> AppResult<Vec<Conversation>> {
-        self.storage.list_conversations()
+        self.store.list_conversations()
     }
 
     pub fn history(&self, conversation_id: Option<String>) -> AppResult<Vec<Message>> {
         let conversation_id = self.resolve_existing_conversation_id(conversation_id)?;
-        Ok(self
-            .storage
-            .require_conversation(&conversation_id)?
-            .messages)
+        Ok(self.store.require_conversation(&conversation_id)?.messages)
     }
 
     pub fn clear_conversation(&mut self, conversation_id: Option<String>) -> AppResult<String> {
         let conversation_id = self.resolve_existing_conversation_id(conversation_id)?;
-        self.storage.clear_conversation(&conversation_id)?;
+        self.store.clear_conversation(&conversation_id)?;
 
         if self.current_conversation_id == conversation_id {
-            self.current_conversation_id = self.storage.create_conversation(None)?.id;
+            self.current_conversation_id = self.store.create_conversation(None)?.id;
         }
 
         Ok(conversation_id)
@@ -179,17 +191,17 @@ impl Gateway {
     /// Create a new blank conversation and return its id.
     /// The current conversation is left unchanged.
     pub fn create_new_conversation(&mut self) -> AppResult<String> {
-        let conv = self.storage.create_conversation(None)?;
+        let conv = self.store.create_conversation(None)?;
         Ok(conv.id)
     }
 
     pub fn status(&self) -> AppResult<RuntimeStatus> {
         Ok(RuntimeStatus {
             app_name: "agent-app".to_string(),
-            storage_path: self.storage.root().display().to_string(),
+            storage_path: self.store.root().display().to_string(),
             current_conversation_id: self.current_conversation_id.clone(),
             skill_count: self.skills.list().len(),
-            conversation_count: self.storage.list_conversations()?.len(),
+            conversation_count: self.store.list_conversations()?.len(),
         })
     }
 
@@ -199,8 +211,8 @@ impl Gateway {
                 "Conversation id cannot be empty".into(),
             )),
             Some(id) => {
-                if self.storage.get_conversation(&id)?.is_none() {
-                    self.storage.create_conversation(Some(id.clone()))?;
+                if self.store.get_conversation(&id)?.is_none() {
+                    self.store.create_conversation(Some(id.clone()))?;
                 }
                 Ok(id)
             }
@@ -219,21 +231,8 @@ impl Gateway {
             ));
         }
 
-        self.storage.require_conversation(&id)?;
+        self.store.require_conversation(&id)?;
         Ok(id)
-    }
-}
-
-fn message_to_model_message(message: &Message) -> ModelMessage {
-    let role = match message.role {
-        MessageRole::System => ModelMessageRole::System,
-        MessageRole::User => ModelMessageRole::User,
-        MessageRole::Assistant => ModelMessageRole::Assistant,
-    };
-
-    ModelMessage {
-        role,
-        content: message.content.clone(),
     }
 }
 
@@ -317,8 +316,8 @@ mod tests {
             fs::remove_dir_all(&root).expect("old test storage should be removable");
         }
 
-        let storage = Storage::new(root).expect("test storage should initialize");
-        Gateway::new(storage).expect("test gateway should initialize")
+        let store = ConversationStore::new(root).expect("test store should initialize");
+        Gateway::new(store).expect("test gateway should initialize")
     }
 
     fn test_root(name: &str) -> PathBuf {
