@@ -8,9 +8,12 @@ use super::{
 use async_openai::{
     config::OpenAIConfig,
     types::chat::{
-        ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
-        ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
-        CreateChatCompletionRequestArgs,
+        ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls, ChatCompletionRequestAssistantMessageArgs,
+        ChatCompletionRequestAssistantMessageContent, ChatCompletionRequestMessage,
+        ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestToolMessageArgs,
+        ChatCompletionRequestToolMessageContent, ChatCompletionRequestUserMessageArgs,
+        ChatCompletionTool, ChatCompletionTools, CreateChatCompletionRequestArgs, FinishReason,
+        FunctionCall, FunctionObject,
     },
     Client,
 };
@@ -147,9 +150,28 @@ impl ProviderRegistry {
             .map(to_chat_message)
             .collect::<AppResult<Vec<_>>>()?;
 
-        let chat_request = CreateChatCompletionRequestArgs::default()
-            .model(&request.model_id)
-            .messages(messages)
+        let mut args = CreateChatCompletionRequestArgs::default();
+        let builder = args.model(&request.model_id).messages(messages);
+
+        // Attach tools if present
+        if let Some(tools) = &request.tools {
+            let openai_tools: Vec<ChatCompletionTools> = tools
+                .iter()
+                .map(|t| {
+                    ChatCompletionTools::Function(ChatCompletionTool {
+                        function: FunctionObject {
+                            name: t.name.clone(),
+                            description: Some(t.description.clone()),
+                            parameters: Some(t.parameters.clone()),
+                            strict: None,
+                        },
+                    })
+                })
+                .collect();
+            builder.tools(openai_tools);
+        }
+
+        let chat_request = args
             .build()
             .map_err(|error| AppError::InvalidInput(error.to_string()))?;
 
@@ -159,16 +181,55 @@ impl ProviderRegistry {
             .await
             .map_err(|error| AppError::LlmRequestFailed(error.to_string()))?;
 
-        let output = response
-            .choices
-            .first()
-            .and_then(|choice| choice.message.content.clone())
-            .ok_or_else(|| AppError::LlmRequestFailed("Provider returned no text output".into()))?;
+        let choice = response.choices.first().ok_or_else(|| {
+            AppError::LlmRequestFailed("Provider returned no choices".into())
+        })?;
+
+        // Parse finish_reason
+        let finish_reason = match choice.finish_reason {
+            Some(FinishReason::Stop) => "stop",
+            Some(FinishReason::ToolCalls) => "tool_calls",
+            Some(FinishReason::Length) => "length",
+            Some(FinishReason::ContentFilter) => "content_filter",
+            Some(FinishReason::FunctionCall) => "function_call",
+            None => "stop",
+        }
+        .to_string();
+
+        // Parse tool_calls from response
+        let tool_calls: Option<Vec<super::models::ToolCall>> = choice
+            .message
+            .tool_calls
+            .as_ref()
+            .map(|calls| {
+                calls
+                    .iter()
+                    .filter_map(|tc| match tc {
+                        ChatCompletionMessageToolCalls::Function(ftc) => {
+                            let name = ftc.function.name.clone();
+                            let args: serde_json::Value =
+                                serde_json::from_str(&ftc.function.arguments).unwrap_or_default();
+                            Some(super::models::ToolCall {
+                                id: ftc.id.clone(),
+                                name,
+                                arguments: args,
+                            })
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .filter(|v: &Vec<_>| !v.is_empty());
+
+        // Extract text output (may be None when tool_calls is present)
+        let output = choice.message.content.clone().unwrap_or_default();
 
         Ok(ModelCallResponse {
             provider_id: request.provider_id,
             model_id: request.model_id,
             output,
+            tool_calls,
+            finish_reason,
         })
     }
 
@@ -275,11 +336,45 @@ fn to_chat_message(message: &ModelMessage) -> AppResult<ChatCompletionRequestMes
             .build()
             .map(Into::into)
             .map_err(|error| AppError::InvalidInput(error.to_string())),
-        ModelMessageRole::Assistant => ChatCompletionRequestAssistantMessageArgs::default()
-            .content(message.content.clone())
-            .build()
-            .map(Into::into)
-            .map_err(|error| AppError::InvalidInput(error.to_string())),
+        ModelMessageRole::Assistant => {
+            let mut args = ChatCompletionRequestAssistantMessageArgs::default();
+            if !message.content.is_empty() {
+                args.content(
+                    ChatCompletionRequestAssistantMessageContent::Text(message.content.clone()),
+                );
+            }
+            if let Some(tc) = &message.tool_calls {
+                let tool_calls: Vec<ChatCompletionMessageToolCalls> = tc
+                    .iter()
+                    .map(|t| {
+                        ChatCompletionMessageToolCalls::Function(ChatCompletionMessageToolCall {
+                            id: t.id.clone(),
+                            function: FunctionCall {
+                                name: t.name.clone(),
+                                arguments: t.arguments.to_string(),
+                            },
+                        })
+                    })
+                    .collect();
+                args.tool_calls(tool_calls);
+            }
+            args.build()
+                .map(Into::into)
+                .map_err(|error| AppError::InvalidInput(error.to_string()))
+        }
+        ModelMessageRole::Tool => {
+            let tool_call_id = message.tool_call_id.clone().ok_or_else(|| {
+                AppError::InvalidInput("Tool message missing tool_call_id".into())
+            })?;
+            ChatCompletionRequestToolMessageArgs::default()
+                .tool_call_id(tool_call_id)
+                .content(
+                    ChatCompletionRequestToolMessageContent::Text(message.content.clone()),
+                )
+                .build()
+                .map(Into::into)
+                .map_err(|error| AppError::InvalidInput(error.to_string()))
+        }
     }
 }
 
@@ -476,7 +571,10 @@ mod tests {
             messages: vec![ModelMessage {
                 role: ModelMessageRole::User,
                 content: "hello".to_string(),
+                tool_calls: None,
+                tool_call_id: None,
             }],
+            tools: None,
         };
 
         let error = registry

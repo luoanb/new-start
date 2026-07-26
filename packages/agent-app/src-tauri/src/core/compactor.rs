@@ -144,6 +144,8 @@ impl Compactor {
                     .map(|m| m.timestamp.to_string())
                     .collect(),
             ),
+            tool_calls: None,
+            tool_call_id: None,
         };
 
         // Insert the compaction summary at position 0 (original messages kept intact)
@@ -187,6 +189,8 @@ impl Compactor {
                     .map(|m| m.timestamp.to_string())
                     .collect(),
             ),
+            tool_calls: None,
+            tool_call_id: None,
         };
 
         // Insert the compaction summary at position 0 (original messages kept intact)
@@ -209,7 +213,10 @@ impl Compactor {
                 messages: vec![ModelMessage {
                     role: ModelMessageRole::System,
                     content: prompt.to_string(),
+                    tool_calls: None,
+                    tool_call_id: None,
                 }],
+                tools: None,
             })
             .await
             .map_err(|e| AppError::CompactionFailed(format!("LLM summary call failed: {e}")))?;
@@ -236,6 +243,8 @@ mod tests {
             timestamp: now_ms(),
             msg_type: None,
             summary_of: None,
+            tool_calls: None,
+            tool_call_id: None,
         }
     }
 

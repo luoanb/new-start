@@ -116,6 +116,17 @@ impl From<AppError> for TuiErrorView {
                     "Ensure the conversation has enough messages to compact.".into(),
                 ],
             ),
+            AppError::AgentMaxIterations(_) => (
+                "Agent stopped: maximum tool call iterations reached.".into(),
+                vec![
+                    "The model kept requesting tool calls without producing a final answer.".into(),
+                    "A tool may be returning unexpected results, causing repeated calls.".into(),
+                ],
+                vec![
+                    "Try simplifying your request.".into(),
+                    "Check that the tools are returning correct results.".into(),
+                ],
+            ),
             AppError::RuntimeError(_) => (
                 "An internal runtime error occurred.".into(),
                 vec!["An unexpected error occurred in the application logic.".into()],

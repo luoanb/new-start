@@ -20,6 +20,7 @@ pub enum AppError {
     ProviderAuthMissing(String),
     LlmRequestFailed(String),
     CompactionFailed(String),
+    AgentMaxIterations(String),
     StorageError(String),
     RuntimeError(String),
 }
@@ -36,6 +37,7 @@ impl AppError {
             AppError::ProviderAuthMissing(_) => "provider_auth_missing",
             AppError::LlmRequestFailed(_) => "llm_request_failed",
             AppError::CompactionFailed(_) => "compaction_failed",
+            AppError::AgentMaxIterations(_) => "agent_max_iterations",
             AppError::StorageError(_) => "storage_error",
             AppError::RuntimeError(_) => "runtime_error",
         }
@@ -59,6 +61,7 @@ impl AppError {
             | AppError::ProviderAuthMissing(_) => 2,
             AppError::LlmRequestFailed(_)
             | AppError::CompactionFailed(_)
+            | AppError::AgentMaxIterations(_)
             | AppError::StorageError(_)
             | AppError::RuntimeError(_) => 1,
         }
@@ -72,6 +75,7 @@ impl fmt::Display for AppError {
             | AppError::ProviderAuthMissing(message)
             | AppError::LlmRequestFailed(message)
             | AppError::CompactionFailed(message)
+            | AppError::AgentMaxIterations(message)
             | AppError::StorageError(message)
             | AppError::RuntimeError(message) => write!(f, "{message}"),
             AppError::ConversationNotFound(id) => write!(f, "Conversation not found: {id}"),

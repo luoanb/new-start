@@ -535,7 +535,10 @@ impl TuiApp {
                         messages: vec![crate::core::ModelMessage {
                             role: crate::core::ModelMessageRole::User,
                             content: message,
+                            tool_calls: None,
+                            tool_call_id: None,
                         }],
+                        tools: None,
                     })
                     .await
                 {
@@ -582,6 +585,9 @@ impl TuiApp {
                         self.error_banner = Some(TuiErrorView::from(error));
                     }
                 }
+            }
+            Command::Agent(message) => {
+                self.send_agent_message(message).await;
             }
             Command::Exit => {
                 self.should_quit = true;
@@ -637,6 +643,60 @@ impl TuiApp {
         }
 
         // Refresh conversations list after sending
+        let _ = self.refresh_conversations();
+
+        // Auto-scroll to the latest message
+        self.scroll_to_bottom();
+    }
+
+    /// Send a chat message through the agent tool-calling loop.
+    async fn send_agent_message(&mut self, input: String) {
+        let Some(ref model) = self.active_model.clone() else {
+            self.error_banner = Some(TuiErrorView::from(AppError::ModelNotSelected));
+            return;
+        };
+
+        // Add user message to the display
+        let user_msg_id = format!("user-{}", self.next_task_id());
+        self.messages
+            .push(TuiMessage::user(input.clone(), user_msg_id));
+
+        // Create a task block for this agent call
+        let task_id = format!("agent-{}", self.next_task_id());
+        let label = format!("agent {}/{}", model.provider_id, model.model_id);
+        self.tasks
+            .push(TuiTaskBlock::new(task_id.clone(), TuiTaskKind::ToolCall, label));
+
+        // Call the agent loop
+        let result = self
+            .gateway
+            .send_agent_message(
+                &input,
+                ChatOptions {
+                    provider_id: model.provider_id.clone(),
+                    model_id: model.model_id.clone(),
+                    conversation_id: Some(self.active_session_id.clone()),
+                },
+            )
+            .await;
+
+        match result {
+            Ok(response) => {
+                if let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) {
+                    task.done("Agent response received".to_string());
+                }
+                self.messages
+                    .push(TuiMessage::assistant(response.response, task_id));
+            }
+            Err(error) => {
+                if let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) {
+                    task.fail(error.to_string());
+                }
+                self.error_banner = Some(TuiErrorView::from(error));
+            }
+        }
+
+        // Refresh conversations list
         let _ = self.refresh_conversations();
 
         // Auto-scroll to the latest message

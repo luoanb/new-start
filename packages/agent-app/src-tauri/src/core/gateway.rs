@@ -8,6 +8,7 @@ use super::{
     },
     providers::ProviderRegistry,
     skills::SkillRegistry,
+    tool_registry::ToolRegistry,
     CompactionConfig,
 };
 
@@ -17,6 +18,7 @@ pub struct Gateway {
     store: ConversationStore,
     providers: ProviderRegistry,
     skills: SkillRegistry,
+    tool_registry: Option<ToolRegistry>,
     current_conversation_id: String,
 }
 
@@ -32,10 +34,12 @@ impl Gateway {
             Some(conversation) => conversation.id.clone(),
             None => store.create_conversation(None)?.id,
         };
-        let engine = Engine::new(
+        let tool_registry = Some(ToolRegistry::with_defaults());
+        let engine = Engine::with_tools(
             store.clone(),
             providers.clone(),
             CompactionConfig::default(),
+            tool_registry.clone().unwrap(),
         );
 
         Ok(Self {
@@ -43,6 +47,7 @@ impl Gateway {
             store,
             skills,
             providers,
+            tool_registry,
             current_conversation_id,
         })
     }
@@ -64,6 +69,8 @@ impl Gateway {
             timestamp: now_ms(),
             msg_type: None,
             summary_of: None,
+            tool_calls: None,
+            tool_call_id: None,
         };
 
         self.store.add_message(&conversation_id, user_message)?;
@@ -102,6 +109,8 @@ impl Gateway {
             timestamp: now_ms(),
             msg_type: None,
             summary_of: None,
+            tool_calls: None,
+            tool_call_id: None,
         })
     }
 
@@ -148,6 +157,32 @@ impl Gateway {
         let response = self
             .engine
             .chat(input, conversation_id.clone(), options)
+            .await?;
+
+        self.current_conversation_id = conversation_id.clone();
+
+        Ok(response)
+    }
+
+    /// Send a chat message through the agent tool-calling loop.
+    pub async fn send_agent_message(
+        &mut self,
+        input: impl AsRef<str>,
+        options: ChatOptions,
+    ) -> AppResult<ChatResponse> {
+        let input = input.as_ref().trim();
+        if input.is_empty() {
+            return Err(AppError::InvalidInput("Message cannot be empty".into()));
+        }
+
+        self.providers
+            .require_model(&options.provider_id, &options.model_id)?;
+
+        let conversation_id = self.resolve_conversation_id(options.conversation_id.clone())?;
+
+        let response = self
+            .engine
+            .chat_with_tools(input, conversation_id.clone(), options)
             .await?;
 
         self.current_conversation_id = conversation_id.clone();

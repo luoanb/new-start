@@ -16,6 +16,7 @@ pub enum Command {
     Call(String, String, String),
     Config,
     Compact,
+    Agent(String),
     Exit,
 }
 
@@ -56,6 +57,9 @@ impl Command {
                         parts[2].to_string(),
                         parts[3..].join(" "),
                     )),
+                    "/agent" if parts.len() >= 2 => {
+                        Some(Self::Agent(parts[1..].join(" ")))
+                    }
                     _ => None,
                 }
             }
@@ -82,6 +86,7 @@ pub fn cmd_help_text() -> Vec<(String, String)> {
         ("/config".into(), "Show configuration".into()),
         ("/compact".into(), "Manually compress current conversation".into()),
         ("/call <p> <m> <msg>".into(), "Call a model directly".into()),
+        ("/agent <message>".into(), "Send a message with tool-calling agent loop".into()),
         ("/exit".into(), "Quit the application".into()),
     ]
 }

@@ -41,6 +41,8 @@ impl AgentRuntime {
             timestamp: now_ms(),
             msg_type: None,
             summary_of: None,
+            tool_calls: None,
+            tool_call_id: None,
         })
     }
 }

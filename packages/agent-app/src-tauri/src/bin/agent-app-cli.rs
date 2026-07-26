@@ -45,7 +45,10 @@ async fn run() -> AppResult<()> {
                     messages: vec![ModelMessage {
                         role: ModelMessageRole::User,
                         content: message,
+                        tool_calls: None,
+                        tool_call_id: None,
                     }],
+                    tools: None,
                 })
                 .await?;
             println!("provider: {}", response.provider_id);
