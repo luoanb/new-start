@@ -9,6 +9,7 @@ use super::{
         MessageRole, ModelCallRequest, ModelCallResponse, ModelInfo, ProviderInfo, RuntimeStatus,
         SkillInfo,
     },
+    neuron_store::NeuronStore,
     providers::ProviderRegistry,
     skills::SkillRegistry,
     tool_registry::ToolRegistry,
@@ -24,6 +25,7 @@ pub struct Gateway {
     skills: SkillRegistry,
     tool_registry: Option<ToolRegistry>,
     topic_store: Option<Arc<Mutex<TopicStore>>>,
+    neuron_store: Option<Arc<Mutex<NeuronStore>>>,
     current_conversation_id: String,
 }
 
@@ -45,13 +47,23 @@ impl Gateway {
         let conn = rusqlite::Connection::open(&db_path)
             .map_err(|e| AppError::StorageError(format!("Failed to open app.db: {}", e)))?;
         let conn = Arc::new(Mutex::new(conn));
+
         let topic_store = Arc::new(Mutex::new(TopicStore::new(Arc::clone(&conn))));
         topic_store
             .lock()
             .map_err(|e| AppError::StorageError(format!("Lock error: {}", e)))?
             .init_table()?;
 
-        let tool_registry = Some(ToolRegistry::with_defaults_and_topics(Arc::clone(&topic_store)));
+        let neuron_store = Arc::new(Mutex::new(NeuronStore::new(Arc::clone(&conn))));
+        neuron_store
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Lock error: {}", e)))?
+            .init_table()?;
+
+        let tool_registry = Some(ToolRegistry::with_defaults_and_topics_and_neurons(
+            Arc::clone(&topic_store),
+            Arc::clone(&neuron_store),
+        ));
         let engine = Engine::with_tools(
             store.clone(),
             providers.clone(),
@@ -66,6 +78,7 @@ impl Gateway {
             providers,
             tool_registry,
             topic_store: Some(topic_store),
+            neuron_store: Some(neuron_store),
             current_conversation_id,
         })
     }
@@ -238,6 +251,13 @@ impl Gateway {
         self.topic_store
             .clone()
             .ok_or_else(|| AppError::StorageError("TopicStore not initialized".into()))
+    }
+
+    /// Access the NeuronStore for TUI commands.
+    pub fn neuron_store(&self) -> AppResult<Arc<Mutex<NeuronStore>>> {
+        self.neuron_store
+            .clone()
+            .ok_or_else(|| AppError::StorageError("NeuronStore not initialized".into()))
     }
 
     fn resolve_conversation_id(&mut self, conversation_id: Option<String>) -> AppResult<String> {

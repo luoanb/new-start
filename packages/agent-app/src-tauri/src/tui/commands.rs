@@ -19,6 +19,7 @@ pub enum Command {
     Compact,
     Agent(String),
     TopicAction(Vec<String>),
+    NeuronAction(Vec<String>),
     Exit,
 }
 
@@ -68,6 +69,9 @@ impl Command {
                     "/topic" if parts.len() >= 1 => {
                         Some(Self::TopicAction(parts[1..].iter().map(|s| s.to_string()).collect()))
                     }
+                    "/neuron" if parts.len() >= 1 => {
+                        Some(Self::NeuronAction(parts[1..].iter().map(|s| s.to_string()).collect()))
+                    }
                     _ => None,
                 }
             }
@@ -97,6 +101,7 @@ pub fn cmd_help_text() -> Vec<(String, String)> {
         ("/call <p> <m> <msg>".into(), "Call a model directly".into()),
         ("/agent <message>".into(), "Send a message with tool-calling agent loop".into()),
         ("/topic <cmd>".into(), "Topic management: list, new, <id>, <id> set, <id> delete (use /topic alone for help)".into()),
+        ("/neuron <cmd>".into(), "Neuron management: list, new, <id>, <id> set, <id> delete, <id> connect, <id> disconnect, network (use /neuron alone for help)".into()),
         ("/exit".into(), "Quit the application".into()),
     ]
 }

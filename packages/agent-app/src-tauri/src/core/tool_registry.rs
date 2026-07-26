@@ -67,6 +67,19 @@ impl ToolRegistry {
         reg
     }
 
+    /// Create with default tools plus topic and neuron management tools.
+    pub fn with_defaults_and_topics_and_neurons(
+        topic_store: Arc<Mutex<super::topic_store::TopicStore>>,
+        neuron_store: Arc<Mutex<super::neuron_store::NeuronStore>>,
+    ) -> Self {
+        let mut reg = Self::with_defaults();
+        let topic_manager = super::topic_manager::TopicManager::new(topic_store);
+        topic_manager.register_all(&mut reg);
+        let neuron_manager = super::neuron_manager::NeuronManager::new(neuron_store);
+        neuron_manager.register_all(&mut reg);
+        reg
+    }
+
     pub fn register(&mut self, tool: impl Tool + 'static) {
         let name = tool.name().to_string();
         self.tools.insert(name, ToolBox(Arc::new(tool)));

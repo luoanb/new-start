@@ -262,3 +262,29 @@ pub struct TopicUpdate {
     pub progress: Option<u8>,
     pub extra: Option<Option<serde_json::Value>>,
 }
+
+// ── Neuron / Knowledge Graph ──────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Neuron {
+    pub id: String,
+    pub desc: String,
+    pub content: String,
+    pub weight: f64,
+    pub created_at: u128,
+    pub updated_at: u128,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Connection {
+    pub source: String,
+    pub target: String,
+    pub weight: f64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct NeuronUpdate {
+    pub desc: Option<String>,
+    pub content: Option<String>,
+    pub weight: Option<f64>,
+}

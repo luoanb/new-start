@@ -617,6 +617,9 @@ impl TuiApp {
             Command::TopicAction(args) => {
                 self.handle_topic_action(args);
             }
+            Command::NeuronAction(args) => {
+                self.handle_neuron_action(args);
+            }
             Command::Exit => {
                 self.should_quit = true;
             }
@@ -904,6 +907,262 @@ impl TuiApp {
                             )),
                         },
                         Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Handle `/neuron <args>` commands.
+    fn handle_neuron_action(&mut self, args: Vec<String>) {
+        if args.is_empty() {
+            self.messages.push(TuiMessage::status(
+                concat!(
+                    "Neuron commands:\n",
+                    "  /neuron list                          - List all neurons\n",
+                    "  /neuron new <desc> [content]          - Create a new neuron\n",
+                    "  /neuron <id>                          - View neuron details\n",
+                    "  /neuron <id> set <field> <val>        - Update a field (desc/content/weight)\n",
+                    "  /neuron <id> delete                   - Delete a neuron\n",
+                    "  /neuron <id> connect <target> [weight]- Create/update a connection\n",
+                    "  /neuron <id> disconnect <target>      - Remove a connection\n",
+                    "  /neuron network <id> [depth]          - BFS network traversal"
+                )
+                .to_string(),
+            ));
+            return;
+        }
+
+        let action = args[0].as_str();
+        let store_arc = match self.gateway.neuron_store() {
+            Ok(s) => s,
+            Err(e) => {
+                self.error_banner = Some(TuiErrorView::from(e));
+                return;
+            }
+        };
+
+        match action {
+            "list" => {
+                match store_arc.lock() {
+                    Ok(store) => match store.list_neurons() {
+                        Ok(neurons) => {
+                            if neurons.is_empty() {
+                                self.messages
+                                    .push(TuiMessage::status("No neurons found.".into()));
+                                return;
+                            }
+                            let mut lines = vec!["Neurons:".to_string()];
+                            for n in &neurons {
+                                lines.push(format!(
+                                    "  [w:{:+.1}] {} (id: {})",
+                                    n.weight, n.desc, n.id
+                                ));
+                            }
+                            self.messages.push(TuiMessage::status(lines.join("\n")));
+                        }
+                        Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                    },
+                    Err(e) => self.error_banner = Some(TuiErrorView::from(
+                        AppError::StorageError(format!("Lock error: {}", e)),
+                    )),
+                }
+            }
+            "new" if args.len() >= 2 => {
+                let desc = args[1].clone();
+                let content = if args.len() >= 3 { args[2..].join(" ") } else { String::new() };
+                match store_arc.lock() {
+                    Ok(store) => match store.create_neuron(&desc, &content, 0.0) {
+                        Ok(n) => {
+                            self.messages.push(TuiMessage::status(format!(
+                                "Created neuron '{}' (id: {})",
+                                n.desc, n.id
+                            )));
+                        }
+                        Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                    },
+                    Err(e) => self.error_banner = Some(TuiErrorView::from(
+                        AppError::StorageError(format!("Lock error: {}", e)),
+                    )),
+                }
+            }
+            "network" if args.len() >= 2 => {
+                let id = args[1].clone();
+                let depth = if args.len() >= 3 {
+                    args[2].parse::<usize>().unwrap_or(3)
+                } else {
+                    3
+                };
+                match store_arc.lock() {
+                    Ok(store) => match store.get_network(&id, depth) {
+                        Ok(network) => {
+                            if network.is_empty() {
+                                self.messages.push(TuiMessage::status(format!(
+                                    "No network found for neuron: {id}"
+                                )));
+                                return;
+                            }
+                            let mut lines = vec![format!("Network (depth={depth}):")];
+                            for n in &network {
+                                lines.push(format!(
+                                    "  [w:{:+.1}] {} (id: {})",
+                                    n.weight, n.desc, n.id
+                                ));
+                            }
+                            self.messages.push(TuiMessage::status(lines.join("\n")));
+                        }
+                        Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                    },
+                    Err(e) => self.error_banner = Some(TuiErrorView::from(
+                        AppError::StorageError(format!("Lock error: {}", e)),
+                    )),
+                }
+            }
+            id => {
+                // View / set / delete / connect / disconnect
+                if args.len() >= 3 && args[1] == "set" && args.len() >= 4 {
+                    let field = args[2].as_str();
+                    let value = args[3..].join(" ");
+                    match store_arc.lock() {
+                        Ok(store) => {
+                            let mut update = crate::core::NeuronUpdate::default();
+                            match field {
+                                "desc" => update.desc = Some(value),
+                                "content" => update.content = Some(value),
+                                "weight" => {
+                                    if let Ok(w) = value.parse::<f64>() {
+                                        update.weight = Some(w);
+                                    } else {
+                                        self.error_banner = Some(TuiErrorView::from(
+                                            AppError::InvalidInput("Invalid weight".into()),
+                                        ));
+                                        return;
+                                    }
+                                }
+                                _ => {
+                                    self.error_banner = Some(TuiErrorView::from(
+                                        AppError::InvalidInput(format!(
+                                            "Unknown field: {field}"
+                                        )),
+                                    ));
+                                    return;
+                                }
+                            }
+                            match store.update_neuron(id, update) {
+                                Ok(n) => {
+                                    self.messages.push(TuiMessage::status(format!(
+                                        "Updated neuron '{}'",
+                                        n.desc
+                                    )));
+                                }
+                                Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                            }
+                        }
+                        Err(e) => self.error_banner = Some(TuiErrorView::from(
+                            AppError::StorageError(format!("Lock error: {}", e)),
+                        )),
+                    }
+                } else if args.len() >= 2 && args[1] == "delete" {
+                    match store_arc.lock() {
+                        Ok(store) => match store.delete_neuron(id) {
+                            Ok(true) => {
+                                self.messages.push(TuiMessage::status(format!(
+                                    "Deleted neuron: {id}"
+                                )));
+                            }
+                            Ok(false) => {
+                                self.error_banner = Some(TuiErrorView::from(
+                                    AppError::ConversationNotFound(format!(
+                                        "Neuron not found: {id}"
+                                    )),
+                                ));
+                            }
+                            Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                        },
+                        Err(e) => self.error_banner = Some(TuiErrorView::from(
+                            AppError::StorageError(format!("Lock error: {}", e)),
+                        )),
+                    }
+                } else if args.len() >= 3 && args[1] == "connect" {
+                    let target = args[2].clone();
+                    let weight = if args.len() >= 4 {
+                        args[3].parse::<f64>().unwrap_or(1.0)
+                    } else {
+                        1.0
+                    };
+                    match store_arc.lock() {
+                        Ok(store) => match store.link(id, &target, weight) {
+                            Ok(_) => {
+                                self.messages.push(TuiMessage::status(format!(
+                                    "Linked {} --[{}]--> {}",
+                                    id, weight, target
+                                )));
+                            }
+                            Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                        },
+                        Err(e) => self.error_banner = Some(TuiErrorView::from(
+                            AppError::StorageError(format!("Lock error: {}", e)),
+                        )),
+                    }
+                } else if args.len() >= 3 && args[1] == "disconnect" {
+                    let target = args[2].clone();
+                    match store_arc.lock() {
+                        Ok(store) => match store.unlink(id, &target) {
+                            Ok(true) => {
+                                self.messages.push(TuiMessage::status(format!(
+                                    "Removed link {} -> {}",
+                                    id, target
+                                )));
+                            }
+                            Ok(false) => {
+                                self.error_banner = Some(TuiErrorView::from(
+                                    AppError::ConversationNotFound(format!(
+                                        "Link not found: {id} -> {target}"
+                                    )),
+                                ));
+                            }
+                            Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                        },
+                        Err(e) => self.error_banner = Some(TuiErrorView::from(
+                            AppError::StorageError(format!("Lock error: {}", e)),
+                        )),
+                    }
+                } else {
+                    // View neuron details
+                    match store_arc.lock() {
+                        Ok(store) => {
+                            match store.get_neuron(id) {
+                                Ok(Some(n)) => {
+                                    let conns = store.get_connections(id).unwrap_or_default();
+                                    let mut lines = vec![
+                                        format!("Neuron: {} (id: {})", n.desc, n.id),
+                                        format!("Content: {}", n.content),
+                                        format!("Weight: {}", n.weight),
+                                    ];
+                                    if !conns.is_empty() {
+                                        lines.push("Connections:".into());
+                                        for c in &conns {
+                                            lines.push(format!(
+                                                "  {} --[{}]--> {}",
+                                                c.source, c.weight, c.target
+                                            ));
+                                        }
+                                    }
+                                    self.messages.push(TuiMessage::status(lines.join("\n")));
+                                }
+                                Ok(None) => {
+                                    self.error_banner = Some(TuiErrorView::from(
+                                        AppError::ConversationNotFound(format!(
+                                            "Neuron not found: {id}"
+                                        )),
+                                    ));
+                                }
+                                Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                            }
+                        }
+                        Err(e) => self.error_banner = Some(TuiErrorView::from(
+                            AppError::StorageError(format!("Lock error: {}", e)),
+                        )),
                     }
                 }
             }
