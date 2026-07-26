@@ -9,7 +9,7 @@ pub mod neuron_store;
 pub mod topic_manager;
 pub mod topic_store;
 pub mod neuron_manager;
-pub mod runtime_manager;
+pub mod session_tracker;
 pub mod tool_registry;
 
 pub use error::{AppError, AppResult};
@@ -21,4 +21,4 @@ pub use models::{
     RuntimeStatus, ScopeInItem, SkillInfo, ToolCall, ToolDefinition, Topic, TopicStatus,
     TopicUpdate,
 };
-pub use runtime_manager::{register_runtime_tools, RunningSession, RuntimeManager};
+pub use session_tracker::{register_session_tracker_tools, RunningSession, SessionTracker};

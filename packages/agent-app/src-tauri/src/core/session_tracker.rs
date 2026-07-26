@@ -21,22 +21,22 @@ struct SessionCtx {
     abort: Option<Box<dyn FnOnce() + Send>>,
 }
 
-/// Pure in-memory runtime session tracker.
+/// Pure in-memory session tracker.
 ///
 /// Manages the lifecycle of active conversation executions.
 /// Register at start, unregister on completion, close for forced cancellation.
 #[derive(Clone)]
-pub struct RuntimeManager {
+pub struct SessionTracker {
     inner: Arc<Mutex<HashMap<String, SessionCtx>>>,
 }
 
-impl std::fmt::Debug for RuntimeManager {
+impl std::fmt::Debug for SessionTracker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RuntimeManager").finish_non_exhaustive()
+        f.debug_struct("SessionTracker").finish_non_exhaustive()
     }
 }
 
-impl RuntimeManager {
+impl SessionTracker {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
@@ -74,7 +74,6 @@ impl RuntimeManager {
     /// Does NOT invoke the abort callback.
     pub fn unregister(&self, session_id: &str) {
         if let Ok(mut map) = self.inner.lock() {
-            // Take the abort out so it won't be dropped while holding the lock
             let _ = map.remove(session_id);
         }
     }
@@ -135,27 +134,27 @@ impl RuntimeManager {
     }
 }
 
-impl Default for RuntimeManager {
+impl Default for SessionTracker {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// Register runtime manager tools into the given registry.
-pub fn register_runtime_tools(registry: &mut ToolRegistry, runtime: RuntimeManager) {
-    registry.register(GetRunningSessionsTool::new(runtime.clone()));
-    registry.register(CloseSessionTool::new(runtime));
+/// Register session tracker tools into the given registry.
+pub fn register_session_tracker_tools(registry: &mut ToolRegistry, tracker: SessionTracker) {
+    registry.register(GetRunningSessionsTool::new(tracker.clone()));
+    registry.register(CloseSessionTool::new(tracker));
 }
 
 // ── GetRunningSessionsTool ─────────────────────────────────────
 
 struct GetRunningSessionsTool {
-    runtime: RuntimeManager,
+    tracker: SessionTracker,
 }
 
 impl GetRunningSessionsTool {
-    fn new(runtime: RuntimeManager) -> Self {
-        Self { runtime }
+    fn new(tracker: SessionTracker) -> Self {
+        Self { tracker }
     }
 }
 
@@ -171,7 +170,7 @@ impl Tool for GetRunningSessionsTool {
         serde_json::json!({"type": "object", "properties": {}})
     }
     async fn execute(&self, _args: serde_json::Value) -> AppResult<String> {
-        let sessions = self.runtime.list()?;
+        let sessions = self.tracker.list()?;
         if sessions.is_empty() {
             return Ok("No running sessions.".into());
         }
@@ -194,12 +193,12 @@ impl Tool for GetRunningSessionsTool {
 // ── CloseSessionTool ───────────────────────────────────────────
 
 struct CloseSessionTool {
-    runtime: RuntimeManager,
+    tracker: SessionTracker,
 }
 
 impl CloseSessionTool {
-    fn new(runtime: RuntimeManager) -> Self {
-        Self { runtime }
+    fn new(tracker: SessionTracker) -> Self {
+        Self { tracker }
     }
 }
 
@@ -228,7 +227,7 @@ impl Tool for CloseSessionTool {
             .get("session_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| AppError::InvalidInput("Missing: session_id".into()))?;
-        self.runtime.close(session_id)
+        self.tracker.close(session_id)
     }
 }
 
@@ -247,61 +246,61 @@ mod tests {
 
     #[test]
     fn test_register_and_list() {
-        let rm = RuntimeManager::new();
-        rm.register("sess-1", None).unwrap();
-        rm.register("sess-2", None).unwrap();
-        let list = rm.list().unwrap();
+        let st = SessionTracker::new();
+        st.register("sess-1", None).unwrap();
+        st.register("sess-2", None).unwrap();
+        let list = st.list().unwrap();
         assert_eq!(list.len(), 2);
     }
 
     #[test]
     fn test_unregister_removes_session() {
-        let rm = RuntimeManager::new();
-        rm.register("sess-1", None).unwrap();
-        rm.unregister("sess-1");
-        assert!(rm.list().unwrap().is_empty());
+        let st = SessionTracker::new();
+        st.register("sess-1", None).unwrap();
+        st.unregister("sess-1");
+        assert!(st.list().unwrap().is_empty());
     }
 
     #[test]
     fn test_update_step() {
-        let rm = RuntimeManager::new();
-        rm.register("sess-1", None).unwrap();
-        rm.update_step("sess-1", "calculate").unwrap();
-        let s = rm.get("sess-1").unwrap().unwrap();
+        let st = SessionTracker::new();
+        st.register("sess-1", None).unwrap();
+        st.update_step("sess-1", "calculate").unwrap();
+        let s = st.get("sess-1").unwrap().unwrap();
         assert_eq!(s.current_step.as_deref(), Some("calculate"));
     }
 
     #[test]
     fn test_close_invokes_abort() {
-        let rm = RuntimeManager::new();
+        let st = SessionTracker::new();
         let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let called_clone = called.clone();
         let abort = Box::new(move || {
             called_clone.store(true, std::sync::atomic::Ordering::Relaxed);
         });
-        rm.register("sess-1", Some(abort)).unwrap();
-        rm.close("sess-1").unwrap();
+        st.register("sess-1", Some(abort)).unwrap();
+        st.close("sess-1").unwrap();
         assert!(called.load(std::sync::atomic::Ordering::Relaxed));
-        assert!(rm.list().unwrap().is_empty());
+        assert!(st.list().unwrap().is_empty());
     }
 
     #[test]
     fn test_close_nonexistent_returns_error() {
-        let rm = RuntimeManager::new();
-        let result = rm.close("nonexistent");
+        let st = SessionTracker::new();
+        let result = st.close("nonexistent");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_update_step_nonexistent_returns_error() {
-        let rm = RuntimeManager::new();
-        let result = rm.update_step("nonexistent", "step");
+        let st = SessionTracker::new();
+        let result = st.update_step("nonexistent", "step");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_get_nonexistent() {
-        let rm = RuntimeManager::new();
-        assert!(rm.get("nonexistent").unwrap().is_none());
+        let st = SessionTracker::new();
+        assert!(st.get("nonexistent").unwrap().is_none());
     }
 }

@@ -596,7 +596,7 @@ impl TuiApp {
                 self.handle_neuron_action(args);
             }
             Command::Close(session_id) => {
-                match self.gateway.runtime_manager().close(&session_id) {
+                match self.gateway.session_tracker().close(&session_id) {
                     Ok(msg) => {
                         self.messages.push(TuiMessage::status(msg));
                     }

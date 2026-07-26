@@ -71,14 +71,14 @@ impl ToolRegistry {
     pub fn with_defaults_and_topics_and_neurons(
         topic_store: Arc<Mutex<super::topic_store::TopicStore>>,
         neuron_store: Arc<Mutex<super::neuron_store::NeuronStore>>,
-        runtime_manager: super::runtime_manager::RuntimeManager,
+        session_tracker: super::session_tracker::SessionTracker,
     ) -> Self {
         let mut reg = Self::with_defaults();
         let topic_manager = super::topic_manager::TopicManager::new(topic_store);
         topic_manager.register_all(&mut reg);
         let neuron_manager = super::neuron_manager::NeuronManager::new(neuron_store);
         neuron_manager.register_all(&mut reg);
-        super::runtime_manager::register_runtime_tools(&mut reg, runtime_manager);
+        super::session_tracker::register_session_tracker_tools(&mut reg, runtime_manager);
         reg
     }
 

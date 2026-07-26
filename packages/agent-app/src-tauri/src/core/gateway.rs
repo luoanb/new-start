@@ -11,7 +11,7 @@ use super::{
     },
     neuron_store::NeuronStore,
     providers::ProviderRegistry,
-    runtime_manager::RuntimeManager,
+    session_tracker::SessionTracker,
     tool_registry::ToolRegistry,
     topic_store::TopicStore,
     CompactionConfig,
@@ -25,7 +25,7 @@ pub struct Gateway {
     tool_registry: Option<ToolRegistry>,
     topic_store: Option<Arc<Mutex<TopicStore>>>,
     neuron_store: Option<Arc<Mutex<NeuronStore>>>,
-    runtime_manager: RuntimeManager,
+    session_tracker: SessionTracker,
     current_conversation_id: String,
 }
 
@@ -59,12 +59,12 @@ impl Gateway {
             .map_err(|e| AppError::StorageError(format!("Lock error: {}", e)))?
             .init_table()?;
 
-        let runtime_manager = RuntimeManager::new();
+        let session_tracker = SessionTracker::new();
 
         let tool_registry = Some(ToolRegistry::with_defaults_and_topics_and_neurons(
             Arc::clone(&topic_store),
             Arc::clone(&neuron_store),
-            runtime_manager.clone(),
+            session_tracker.clone(),
         ));
         let engine = Engine::with_tools(
             store.clone(),
@@ -80,7 +80,7 @@ impl Gateway {
             tool_registry,
             topic_store: Some(topic_store),
             neuron_store: Some(neuron_store),
-            runtime_manager,
+            session_tracker: session_tracker,
             current_conversation_id,
         })
     }
@@ -198,7 +198,7 @@ impl Gateway {
         let conversation_id = self.resolve_conversation_id(options.conversation_id.clone())?;
 
         // Register as a running session
-        self.runtime_manager
+        self.session_tracker
             .register(&conversation_id, None)?;
 
         // Engine dispatches by conversation.mode internally
@@ -208,7 +208,7 @@ impl Gateway {
             .await;
 
         // Unregister on completion (success or error)
-        self.runtime_manager.unregister(&conversation_id);
+        self.session_tracker.unregister(&conversation_id);
 
         let response = result?;
 
@@ -282,9 +282,9 @@ impl Gateway {
             .ok_or_else(|| AppError::StorageError("NeuronStore not initialized".into()))
     }
 
-    /// Access the RuntimeManager for TUI commands.
-    pub fn runtime_manager(&self) -> RuntimeManager {
-        self.runtime_manager.clone()
+    /// Access the SessionTracker for TUI commands.
+    pub fn session_tracker(&self) -> SessionTracker {
+        self.session_tracker.clone()
     }
 
     fn resolve_conversation_id(&mut self, conversation_id: Option<String>) -> AppResult<String> {

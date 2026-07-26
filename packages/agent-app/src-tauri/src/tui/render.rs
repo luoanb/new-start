@@ -323,7 +323,7 @@ fn render_sessions_list(frame: &mut Frame, area: Rect, app: &TuiApp) {
     // Get running session IDs for [Running] markers
     let running_ids: std::collections::HashSet<String> = app
         .gateway
-        .runtime_manager()
+        .session_tracker()
         .list()
         .ok()
         .map(|sessions| sessions.into_iter().map(|s| s.session_id).collect())
