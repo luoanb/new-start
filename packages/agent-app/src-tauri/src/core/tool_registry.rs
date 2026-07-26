@@ -7,6 +7,7 @@ use super::{
     error::{AppError, AppResult},
     models::ToolDefinition,
 };
+use std::sync::{Arc, Mutex};
 
 /// The Tool trait — implement this to add a new tool a model can call.
 #[async_trait]
@@ -25,7 +26,6 @@ pub struct ToolRegistry {
 }
 
 // Workaround: Box<dyn Tool> doesn't implement Clone, so we wrap with an Arc.
-use std::sync::Arc;
 
 struct ToolBox(Arc<dyn Tool>);
 
@@ -56,6 +56,14 @@ impl ToolRegistry {
         reg.register(GetCurrentTimeTool);
         reg.register(EchoTool);
         reg.register(CalculateTool);
+        reg
+    }
+
+    /// Create with default tools plus topic management tools.
+    pub fn with_defaults_and_topics(topic_store: Arc<Mutex<super::topic_store::TopicStore>>) -> Self {
+        let mut reg = Self::with_defaults();
+        let manager = super::topic_manager::TopicManager::new(topic_store);
+        manager.register_all(&mut reg);
         reg
     }
 

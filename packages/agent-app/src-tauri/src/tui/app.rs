@@ -2,8 +2,8 @@ use ratatui::widgets::ListState;
 use ratatui_textarea::TextArea;
 
 use crate::core::{
-    AppError, AppResult, ChatModelSelection, ChatOptions, Conversation, Gateway, MessageRole,
-    ModelInfo, ProviderInfo, RuntimeStatus,
+    AppError, AppResult, ChatModelSelection, ChatOptions, Conversation, ConversationMode, Gateway,
+    MessageRole, ModelInfo, ProviderInfo, RuntimeStatus,
 };
 
 use super::commands::{self, Command};
@@ -217,7 +217,7 @@ impl TuiApp {
                 }
             }
             TuiAction::NewSession => {
-                match self.create_new_session() {
+                match self.create_new_session(ConversationMode::Chat) {
                     Ok(()) => {}
                     Err(error) => {
                         self.error_banner = Some(TuiErrorView::from(error));
@@ -244,8 +244,7 @@ impl TuiApp {
                         self.suggestion_index -= 1;
                     }
                 } else if self.show_sessions_list {
-                    // Navigate sessions list (includes "New session" entry)
-                    let len = self.conversations.len() + 1;
+                    let len = self.conversations.len() + 2;
                     if len > 0 {
                         let i = self.session_list_state.selected().unwrap_or(0);
                         self.session_list_state
@@ -261,8 +260,7 @@ impl TuiApp {
                         self.suggestion_index += 1;
                     }
                 } else if self.show_sessions_list {
-                    // Navigate sessions list (includes "New session" entry)
-                    let len = self.conversations.len() + 1;
+                    let len = self.conversations.len() + 2;
                     if len > 0 {
                         let i = self.session_list_state.selected().unwrap_or(0);
                         self.session_list_state.select(Some((i + 1) % len));
@@ -366,7 +364,12 @@ impl TuiApp {
                 }
             }
             Command::New => {
-                if let Err(error) = self.create_new_session() {
+                if let Err(error) = self.create_new_session(ConversationMode::Chat) {
+                    self.error_banner = Some(TuiErrorView::from(error));
+                }
+            }
+            Command::NewAgent => {
+                if let Err(error) = self.create_new_session(ConversationMode::Agent) {
                     self.error_banner = Some(TuiErrorView::from(error));
                 }
             }
@@ -586,8 +589,33 @@ impl TuiApp {
                     }
                 }
             }
-            Command::Agent(message) => {
-                self.send_agent_message(message).await;
+            Command::Agent(cmd_msg) => {
+                // Check the current conversation's mode from the conversations list
+                let mode = self
+                    .conversations
+                    .iter()
+                    .find(|c| c.id == self.active_session_id)
+                    .map(|c| c.mode.clone())
+                    .unwrap_or(crate::core::ConversationMode::Chat);
+                match mode {
+                    crate::core::ConversationMode::Chat => {
+                        self.error_banner = Some(TuiErrorView::from(AppError::InvalidInput(
+                            "当前会话为 Chat 模式，请使用 /new agent 创建 Agent 会话".into(),
+                        )));
+                    }
+                    crate::core::ConversationMode::Agent => {
+                        // Agent 模式：/agent <msg> 重定向到 send_chat_message
+                        if !cmd_msg.is_empty() {
+                            return self.send_chat_message(cmd_msg).await;
+                        }
+                        self.messages.push(TuiMessage::status(
+                            "Agent 模式直接输入即可触发工具调用".into(),
+                        ));
+                    }
+                }
+            }
+            Command::TopicAction(args) => {
+                self.handle_topic_action(args);
             }
             Command::Exit => {
                 self.should_quit = true;
@@ -613,7 +641,7 @@ impl TuiApp {
         self.tasks
             .push(TuiTaskBlock::new(task_id.clone(), TuiTaskKind::ModelCall, label));
 
-        // Call the model
+        // Call the model (dispatches by conversation.mode)
         let result = self
             .gateway
             .send_model_message(
@@ -649,61 +677,239 @@ impl TuiApp {
         self.scroll_to_bottom();
     }
 
-    /// Send a chat message through the agent tool-calling loop.
-    async fn send_agent_message(&mut self, input: String) {
-        let Some(ref model) = self.active_model.clone() else {
-            self.error_banner = Some(TuiErrorView::from(AppError::ModelNotSelected));
-            return;
-        };
-
-        // Add user message to the display
-        let user_msg_id = format!("user-{}", self.next_task_id());
-        self.messages
-            .push(TuiMessage::user(input.clone(), user_msg_id));
-
-        // Create a task block for this agent call
-        let task_id = format!("agent-{}", self.next_task_id());
-        let label = format!("agent {}/{}", model.provider_id, model.model_id);
-        self.tasks
-            .push(TuiTaskBlock::new(task_id.clone(), TuiTaskKind::ToolCall, label));
-
-        // Call the agent loop
-        let result = self
-            .gateway
-            .send_agent_message(
-                &input,
-                ChatOptions {
-                    provider_id: model.provider_id.clone(),
-                    model_id: model.model_id.clone(),
-                    conversation_id: Some(self.active_session_id.clone()),
+    /// Handle `/topics` list command.
+    fn handle_topic_list(&mut self) {
+        match self.gateway.topic_store() {
+            Ok(store_arc) => match store_arc.lock() {
+                Ok(store) => match store.list(None) {
+                    Ok(topics) => {
+                        if topics.is_empty() {
+                            self.messages
+                                .push(TuiMessage::status("No topics found.".into()));
+                            return;
+                        }
+                        let mut lines = vec!["Topics:".to_string()];
+                        for t in &topics {
+                            let status = serde_json::to_string(&t.status)
+                                .unwrap_or_default()
+                                .trim_matches('"')
+                                .to_string();
+                            lines.push(format!(
+                                "  [{:>3}%] {} - {} (id: {})",
+                                t.progress, t.name, status, t.id
+                            ));
+                        }
+                        self.messages.push(TuiMessage::status(lines.join("\n")));
+                    }
+                    Err(e) => {
+                        self.error_banner = Some(TuiErrorView::from(e));
+                    }
                 },
-            )
-            .await;
-
-        match result {
-            Ok(response) => {
-                if let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) {
-                    task.done("Agent response received".to_string());
+                Err(e) => {
+                    self.error_banner = Some(TuiErrorView::from(AppError::StorageError(
+                        format!("Lock error: {}", e),
+                    )));
                 }
-                self.messages
-                    .push(TuiMessage::assistant(response.response, task_id));
-            }
-            Err(error) => {
-                if let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) {
-                    task.fail(error.to_string());
-                }
-                self.error_banner = Some(TuiErrorView::from(error));
+            },
+            Err(e) => {
+                self.error_banner = Some(TuiErrorView::from(e));
             }
         }
-
-        // Refresh conversations list
-        let _ = self.refresh_conversations();
-
-        // Auto-scroll to the latest message
-        self.scroll_to_bottom();
     }
 
-    /// Switch to a different conversation/session.
+    /// Handle `/topic <args>` commands.
+    fn handle_topic_action(&mut self, args: Vec<String>) {
+        if args.is_empty() {
+            self.messages.push(TuiMessage::status(
+                concat!(
+                    "Topic commands:\n",
+                    "  /topic list                 - List all topics\n",
+                    "  /topic new <name>           - Create a new topic\n",
+                    "  /topic <id>                 - View topic details\n",
+                    "  /topic <id> set <f> <v>     - Update a field (name/status/description/progress)\n",
+                    "  /topic <id> delete          - Delete a topic\n",
+                    "\n",
+                    "Status values: todo, in_progress, paused, done, cancelled"
+                )
+                .to_string(),
+            ));
+            return;
+        }
+        let action = args[0].as_str();
+        match action {
+            "list" => {
+                self.handle_topic_list();
+            }
+            "new" if args.len() >= 2 => {
+                let name = args[1..].join(" ");
+                match self.gateway.topic_store() {
+                    Ok(store_arc) => match store_arc.lock() {
+                        Ok(store) => match store.create(
+                            &name,
+                            "",
+                            crate::core::TopicStatus::Todo,
+                            vec![],
+                            None,
+                        ) {
+                            Ok(topic) => {
+                                self.messages.push(TuiMessage::status(format!(
+                                    "Created topic '{}' (id: {})",
+                                    topic.name, topic.id
+                                )));
+                            }
+                            Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                        },
+                        Err(e) => self.error_banner = Some(TuiErrorView::from(
+                            AppError::StorageError(format!("Lock error: {}", e)),
+                        )),
+                    },
+                    Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                }
+            }
+            id => {
+                // Check if this is a simple view or a set/delete command
+                if args.len() >= 3 && args[1] == "set" && args.len() >= 4 {
+                    let field = args[2].as_str();
+                    let value = args[3..].join(" ");
+                    match self.gateway.topic_store() {
+                        Ok(store_arc) => match store_arc.lock() {
+                            Ok(store) => {
+                                let mut update = crate::core::TopicUpdate::default();
+                                match field {
+                                    "name" => update.name = Some(value),
+                                    "status" => {
+                                        let json = format!("\"{}\"", value);
+                                        if let Ok(s) =
+                                            serde_json::from_str::<crate::core::TopicStatus>(&json)
+                                        {
+                                            update.status = Some(s);
+                                        } else {
+                                            self.error_banner = Some(TuiErrorView::from(
+                                                AppError::InvalidInput(
+                                                    "Invalid status".into(),
+                                                ),
+                                            ));
+                                            return;
+                                        }
+                                    }
+                                    "progress" => {
+                                        if let Ok(p) = value.parse::<u8>() {
+                                            update.progress = Some(p.min(100));
+                                        }
+                                    }
+                                    "description" => update.description = Some(value),
+                                    _ => {
+                                        self.error_banner = Some(TuiErrorView::from(
+                                            AppError::InvalidInput(format!(
+                                                "Unknown field: {field}"
+                                            )),
+                                        ));
+                                        return;
+                                    }
+                                }
+                                match store.update(id, update) {
+                                    Ok(topic) => {
+                                        self.messages.push(TuiMessage::status(format!(
+                                            "Updated topic '{}'",
+                                            topic.name
+                                        )));
+                                    }
+                                    Err(e) => {
+                                        self.error_banner = Some(TuiErrorView::from(e));
+                                    }
+                                }
+                            }
+                            Err(e) => self.error_banner = Some(TuiErrorView::from(
+                                AppError::StorageError(format!("Lock error: {}", e)),
+                            )),
+                        },
+                        Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                    }
+                } else if args.len() >= 2 && args[1] == "delete" {
+                    match self.gateway.topic_store() {
+                        Ok(store_arc) => match store_arc.lock() {
+                            Ok(store) => match store.delete(id) {
+                                Ok(true) => {
+                                    self.messages.push(TuiMessage::status(format!(
+                                        "Deleted topic: {id}"
+                                    )));
+                                }
+                                Ok(false) => {
+                                    self.error_banner = Some(TuiErrorView::from(
+                                        AppError::ConversationNotFound(format!(
+                                            "Topic not found: {id}"
+                                        )),
+                                    ));
+                                }
+                                Err(e) => {
+                                    self.error_banner = Some(TuiErrorView::from(e));
+                                }
+                            },
+                            Err(e) => self.error_banner = Some(TuiErrorView::from(
+                                AppError::StorageError(format!("Lock error: {}", e)),
+                            )),
+                        },
+                        Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                    }
+                } else {
+                    // View topic details
+                    match self.gateway.topic_store() {
+                        Ok(store_arc) => match store_arc.lock() {
+                            Ok(store) => match store.get(id) {
+                                Ok(Some(topic)) => {
+                                    let status = serde_json::to_string(&topic.status)
+                                        .unwrap_or_default()
+                                        .trim_matches('"')
+                                        .to_string();
+                                    let mut lines = vec![
+                                        format!("Topic: {}", topic.name),
+                                        format!("Status: {}", status),
+                                        format!("Progress: {}%", topic.progress),
+                                    ];
+                                    if !topic.description.is_empty() {
+                                        lines.push(format!(
+                                            "Description: {}",
+                                            topic.description
+                                        ));
+                                    }
+                                    if !topic.scope_in.is_empty() {
+                                        lines.push("Scope-in:".to_string());
+                                        for (i, item) in topic.scope_in.iter().enumerate() {
+                                            lines.push(format!("  {}. {}", i + 1, item.goal));
+                                        }
+                                    }
+                                    if let Some(ref extra) = topic.extra {
+                                        lines.push(format!(
+                                            "Extra: {}",
+                                            serde_json::to_string_pretty(extra)
+                                                .unwrap_or_default()
+                                        ));
+                                    }
+                                    self.messages
+                                        .push(TuiMessage::status(lines.join("\n")));
+                                }
+                                Ok(None) => {
+                                    self.error_banner = Some(TuiErrorView::from(
+                                        AppError::ConversationNotFound(format!(
+                                            "Topic not found: {id}"
+                                        )),
+                                    ));
+                                }
+                                Err(e) => {
+                                    self.error_banner = Some(TuiErrorView::from(e));
+                                }
+                            },
+                            Err(e) => self.error_banner = Some(TuiErrorView::from(
+                                AppError::StorageError(format!("Lock error: {}", e)),
+                            )),
+                        },
+                        Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                    }
+                }
+            }
+        }
+    }
+
     fn switch_session(&mut self, session_id: String) {
         let sid = session_id.clone();
         self.active_session_id = session_id.clone();
@@ -753,17 +959,16 @@ impl TuiApp {
                 let session_id = self.conversations[idx].id.clone();
                 self.switch_session(session_id);
             } else if idx == self.conversations.len() {
-                // "New session" entry selected
-                if let Err(error) = self.create_new_session() {
-                    self.error_banner = Some(TuiErrorView::from(error));
-                }
+                let _ = self.create_new_session(ConversationMode::Chat);
+            } else if idx == self.conversations.len() + 1 {
+                let _ = self.create_new_session(ConversationMode::Agent);
             }
         }
     }
 
-    /// Create a new blank session and switch to it.
-    fn create_new_session(&mut self) -> AppResult<()> {
-        let new_id = self.gateway.create_new_conversation()?;
+    /// Create a new session with the given mode and switch to it.
+    fn create_new_session(&mut self, mode: ConversationMode) -> AppResult<()> {
+        let new_id = self.gateway.create_new_conversation(mode)?;
         self.switch_session(new_id);
         self.refresh_conversations()?;
         Ok(())

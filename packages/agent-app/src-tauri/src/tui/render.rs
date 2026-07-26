@@ -8,6 +8,7 @@ use ratatui::{
 
 use super::app::{FocusPane, TuiApp, TuiMessageRole};
 use super::task::TuiTaskStatus;
+use crate::core::ConversationMode;
 
 /// Main render function called each frame.
 pub fn render(frame: &mut Frame, app: &TuiApp) {
@@ -325,9 +326,13 @@ fn render_sessions_list(frame: &mut Frame, area: Rect, app: &TuiApp) {
         .map(|conv| {
             let is_active = conv.id == app.active_session_id;
             let prefix = if is_active { "> " } else { "  " };
+            let mode_tag = match conv.mode {
+                ConversationMode::Chat => "[Chat]",
+                ConversationMode::Agent => "[Agent]",
+            };
             let msg_count = conv.messages.len();
             ListItem::new(format!(
-                "{prefix}{} ({} msgs)",
+                "{prefix}{mode_tag} {} ({} msgs)",
                 &conv.id[..conv.id.len().min(16)],
                 msg_count
             ))
@@ -339,19 +344,37 @@ fn render_sessions_list(frame: &mut Frame, area: Rect, app: &TuiApp) {
         })
         .collect();
 
-    // Add "New session" button at the end
-    let new_idx = app.conversations.len();
-    let new_selected = app.session_list_state.selected() == Some(new_idx);
-    let new_prefix = if new_selected { " > " } else { "   " };
+    // Add creation entries at the bottom
+    let chat_new_idx = app.conversations.len();
+    let agent_new_idx = app.conversations.len() + 1;
+    let chat_selected = app.session_list_state.selected() == Some(chat_new_idx);
+    let agent_selected = app.session_list_state.selected() == Some(agent_new_idx);
+
     items.push(
-        ListItem::new(format!("{new_prefix}[+] New session"))
-            .style(if new_selected {
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Green)
-            }),
+        ListItem::new(format!(
+            "{}[+] New Chat session",
+            if chat_selected { " > " } else { "   " }
+        ))
+        .style(if chat_selected {
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Green)
+        }),
+    );
+    items.push(
+        ListItem::new(format!(
+            "{}[+] New Agent session",
+            if agent_selected { " > " } else { "   " }
+        ))
+        .style(if agent_selected {
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Green)
+        }),
     );
 
     if items.is_empty() {

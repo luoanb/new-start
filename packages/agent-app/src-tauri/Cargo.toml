@@ -29,4 +29,5 @@ ratatui = "0.30"
 crossterm = "0.28"
 ratatui-textarea = "0.9"
 async-trait = "0.1"
+rusqlite = { version = "0.32", features = ["bundled"] }
 

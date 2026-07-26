@@ -61,8 +61,8 @@ impl From<AppError> for TuiErrorView {
                     "Run /status to view current configuration.".into(),
                 ],
             ),
-            AppError::InvalidInput(_) => (
-                "The input could not be processed.".into(),
+            AppError::InvalidInput(msg) => (
+                msg.clone(),
                 vec![
                     "The command format may be wrong.".into(),
                     "The message may contain invalid characters.".into(),

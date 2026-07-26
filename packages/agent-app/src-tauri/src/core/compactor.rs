@@ -1,8 +1,8 @@
 use super::{
     error::{AppError, AppResult},
     models::{
-        CompactionConfig, Conversation, Message, MessageRole, ModelCallRequest, ModelMessage,
-        ModelMessageRole,
+        CompactionConfig, Conversation, ConversationMode, Message, MessageRole, ModelCallRequest,
+        ModelMessage, ModelMessageRole,
     },
     providers::ProviderRegistry,
 };
@@ -262,6 +262,7 @@ mod tests {
         }
         Conversation {
             id: "test-conv".to_string(),
+            mode: ConversationMode::Chat,
             messages,
             created_at: now_ms(),
             updated_at: now_ms(),
@@ -310,6 +311,7 @@ mod tests {
         }
         let conv = Conversation {
             id: "test".to_string(),
+            mode: ConversationMode::Chat,
             messages,
             created_at: now_ms(),
             updated_at: now_ms(),

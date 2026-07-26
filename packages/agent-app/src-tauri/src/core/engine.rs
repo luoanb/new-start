@@ -5,8 +5,8 @@ use super::{
     conversation_store::{now_ms, ConversationStore},
     error::{AppError, AppResult},
     models::{
-        ChatModelSelection, ChatOptions, ChatResponse, CompactionConfig, Message, MessageRole,
-        ModelCallRequest, ModelMessage, ModelMessageRole,
+        ChatModelSelection, ChatOptions, ChatResponse, CompactionConfig, ConversationMode, Message,
+        MessageRole, ModelCallRequest, ModelMessage, ModelMessageRole,
     },
     providers::ProviderRegistry,
     tool_registry::ToolRegistry,
@@ -51,25 +51,20 @@ impl Engine {
         }
     }
 
-    /// Main chat orchestration.
+    /// Unified chat orchestration.
     ///
-    /// 1. Load the conversation
-    /// 2. Determine model's context_window
-    /// 3. Auto-compact if needed
-    /// 4. Build request context from conversation messages + input
-    /// 5. Call the model
-    /// 6. Save user message + assistant response
-    /// 7. Return response
+    /// Dispatches by `conversation.mode`:
+    /// - Chat  → single model call, no tools
+    /// - Agent → tool-calling loop
     pub async fn chat(
         &mut self,
         input: &str,
         conversation_id: String,
         options: ChatOptions,
     ) -> AppResult<ChatResponse> {
-        // 1. Load conversation
+        // ── Common preamble ──────────────────────────────────────
         let mut conversation = self.store.require_conversation(&conversation_id)?;
 
-        // 2. Determine context_window
         let context_window = self
             .providers
             .list_models(Some(&options.provider_id))
@@ -87,173 +82,15 @@ impl Engine {
             model_id: options.model_id.clone(),
         };
 
-        // 3. Auto-compact if needed
         let compacted = self
             .compactor
             .ensure_fits(&mut conversation, &self.providers, &model, context_window)
             .await?;
 
-        // 4. Build model request context
-        // Collect timestamps of messages that have been summarized by previous compactions
-        let summarized: HashSet<String> = conversation
-            .messages
-            .iter()
-            .filter(|m| m.role == MessageRole::Compaction)
-            .filter_map(|m| m.summary_of.clone())
-            .flatten()
-            .collect();
+        // Build model context (mode-aware filtering)
+        let mut context_messages = build_context(&conversation, &conversation.mode);
 
-        // Build context: include compaction summaries + messages NOT covered by any summary
-        let mut messages: Vec<ModelMessage> = conversation
-            .messages
-            .iter()
-            .filter(|m| {
-                // Always include compaction messages (they provide context)
-                if m.role == MessageRole::Compaction {
-                    return true;
-                }
-                // Skip messages whose timestamps are recorded in any summary_of
-                !summarized.contains(&m.timestamp.to_string())
-            })
-            .map(message_to_model_message)
-            .collect();
-
-        // Add the user input
-        messages.push(ModelMessage {
-            role: ModelMessageRole::User,
-            content: input.to_string(),
-            tool_calls: None,
-            tool_call_id: None,
-        });
-
-        // 5. Save user message before calling model (separate timestamp)
-        let user_ts = now_ms();
-        let user_message = Message {
-            role: MessageRole::User,
-            content: input.to_string(),
-            timestamp: user_ts,
-            msg_type: None,
-            summary_of: None,
-            tool_calls: None,
-            tool_call_id: None,
-        };
-        self.store.add_message(&conversation_id, user_message)?;
-
-        // 6. Call the model
-        let model_response = self
-            .providers
-            .call_model(ModelCallRequest {
-                provider_id: options.provider_id,
-                model_id: options.model_id,
-                messages,
-                tools: None,
-            })
-            .await?;
-
-        // 7. Save assistant response (different timestamp from user message)
-        let assistant_message = Message {
-            role: MessageRole::Assistant,
-            content: model_response.output.clone(),
-            timestamp: now_ms(),
-            msg_type: None,
-            summary_of: None,
-            tool_calls: None,
-            tool_call_id: None,
-        };
-        self.store
-            .add_message(&conversation_id, assistant_message)?;
-
-        // If compaction happened, save the conversation state (messages have been modified in place)
-        if compacted {
-            self.store
-                .save_conversation(&conversation)?;
-        }
-
-        // 7. Return response
-        Ok(ChatResponse {
-            conversation_id,
-            response: model_response.output,
-        })
-    }
-
-    /// Manually trigger compaction for a conversation.
-    pub async fn compact(
-        &self,
-        conversation_id: &str,
-        model: &ChatModelSelection,
-    ) -> AppResult<bool> {
-        let mut conversation = self.store.require_conversation(conversation_id)?;
-        let result = self
-            .compactor
-            .compact(&mut conversation, &self.providers, model)
-            .await?;
-        if result {
-            self.store.save_conversation(&conversation)?;
-        }
-        Ok(result)
-    }
-
-    /// Agent chat with tool-calling loop.
-    ///
-    /// 1. Load conversation → auto-compact → build context
-    /// 2. Save user message (separate timestamp)
-    /// 3. Loop: call model with tools, execute tool calls, add results to context
-    /// 4. When model responds with text ("stop"), save and return
-    pub async fn chat_with_tools(
-        &mut self,
-        input: &str,
-        conversation_id: String,
-        options: ChatOptions,
-    ) -> AppResult<ChatResponse> {
-        // 1. Load conversation
-        let mut conversation = self.store.require_conversation(&conversation_id)?;
-
-        // 2. Determine context_window
-        let context_window = self
-            .providers
-            .list_models(Some(&options.provider_id))
-            .ok()
-            .and_then(|models| {
-                models
-                    .iter()
-                    .find(|m| m.id == options.model_id)
-                    .and_then(|m| m.context_window)
-            })
-            .unwrap_or(128_000);
-
-        let model = ChatModelSelection {
-            provider_id: options.provider_id.clone(),
-            model_id: options.model_id.clone(),
-        };
-
-        // 3. Auto-compact if needed
-        let compacted = self
-            .compactor
-            .ensure_fits(&mut conversation, &self.providers, &model, context_window)
-            .await?;
-
-        // 4. Build context from history (filter summarized messages)
-        let summarized: HashSet<String> = conversation
-            .messages
-            .iter()
-            .filter(|m| m.role == MessageRole::Compaction)
-            .filter_map(|m| m.summary_of.clone())
-            .flatten()
-            .collect();
-
-        let mut context_messages: Vec<ModelMessage> = conversation
-            .messages
-            .iter()
-            .filter(|m| {
-                if m.role == MessageRole::Compaction {
-                    return true;
-                }
-                !summarized.contains(&m.timestamp.to_string())
-            })
-            .map(message_to_model_message)
-            .collect();
-
-        // 5. Save user message before tool loop (separate timestamp)
+        // Save user message (separate timestamp from model response)
         let user_ts = now_ms();
         let user_message = Message {
             role: MessageRole::User,
@@ -274,15 +111,73 @@ impl Engine {
             tool_call_id: None,
         });
 
-        // 6. Get tool definitions (if any)
+        // ── Dispatch by mode ────────────────────────────────────
+        let response = match conversation.mode {
+            ConversationMode::Chat => {
+                self.chat_mode(context_messages, &options, &conversation_id)
+                    .await?
+            }
+            ConversationMode::Agent => {
+                self.agent_mode(context_messages, &options, &conversation_id)
+                    .await?
+            }
+        };
+
+        // Save if compaction modified messages in-place
+        if compacted {
+            self.store.save_conversation(&conversation)?;
+        }
+
+        Ok(response)
+    }
+
+    /// Chat mode: single model call (no tools), save assistant response.
+    async fn chat_mode(
+        &self,
+        messages: Vec<ModelMessage>,
+        options: &ChatOptions,
+        conversation_id: &str,
+    ) -> AppResult<ChatResponse> {
+        let model_response = self
+            .providers
+            .call_model(ModelCallRequest {
+                provider_id: options.provider_id.clone(),
+                model_id: options.model_id.clone(),
+                messages,
+                tools: None,
+            })
+            .await?;
+
+        let assistant_msg = Message {
+            role: MessageRole::Assistant,
+            content: model_response.output.clone(),
+            timestamp: now_ms(),
+            msg_type: None,
+            summary_of: None,
+            tool_calls: None,
+            tool_call_id: None,
+        };
+        self.store.add_message(conversation_id, assistant_msg)?;
+
+        Ok(ChatResponse {
+            conversation_id: conversation_id.to_string(),
+            response: model_response.output,
+        })
+    }
+
+    /// Agent mode: tool-calling loop.
+    async fn agent_mode(
+        &self,
+        mut context_messages: Vec<ModelMessage>,
+        options: &ChatOptions,
+        conversation_id: &str,
+    ) -> AppResult<ChatResponse> {
         let tool_defs = self
             .tool_registry
             .as_ref()
             .map(|reg| reg.list_definitions());
 
-        // 7. Tool loop
         let mut iterations = 0u32;
-        let mut final_output = String::new();
 
         loop {
             iterations += 1;
@@ -320,8 +215,7 @@ impl Engine {
                     tool_calls: model_response.tool_calls.clone(),
                     tool_call_id: None,
                 };
-                self.store
-                    .add_message(&conversation_id, assistant_msg)?;
+                self.store.add_message(conversation_id, assistant_msg)?;
 
                 // Add assistant response to context
                 context_messages.push(ModelMessage {
@@ -340,7 +234,6 @@ impl Engine {
                     };
                     let result_str = result.unwrap_or_else(|e| format!("Error: {}", e));
 
-                    // Add tool result to model context (Tool role)
                     context_messages.push(ModelMessage {
                         role: ModelMessageRole::Tool,
                         content: result_str.clone(),
@@ -348,7 +241,6 @@ impl Engine {
                         tool_call_id: Some(tc.id.clone()),
                     });
 
-                    // Persist tool result (stored as Assistant with tool_call_id)
                     let tool_result_msg = Message {
                         role: MessageRole::Assistant,
                         content: format!("[Tool {} result]: {}", tc.name, result_str),
@@ -358,40 +250,82 @@ impl Engine {
                         tool_calls: None,
                         tool_call_id: Some(tc.id.clone()),
                     };
-                    self.store
-                        .add_message(&conversation_id, tool_result_msg)?;
+                    self.store.add_message(conversation_id, tool_result_msg)?;
                 }
-                // Continue loop — model will see tool results and produce next response
+                // Continue loop
             } else {
                 // Normal text response
-                final_output = model_response.output.clone();
-
                 let assistant_msg = Message {
                     role: MessageRole::Assistant,
-                    content: final_output.clone(),
+                    content: model_response.output.clone(),
                     timestamp: now_ms(),
                     msg_type: None,
                     summary_of: None,
                     tool_calls: None,
                     tool_call_id: None,
                 };
-                self.store
-                    .add_message(&conversation_id, assistant_msg)?;
+                self.store.add_message(conversation_id, assistant_msg)?;
 
-                break;
+                return Ok(ChatResponse {
+                    conversation_id: conversation_id.to_string(),
+                    response: model_response.output,
+                });
             }
         }
+    }
 
-        // Save if compaction modified messages
-        if compacted {
+    /// Manually trigger compaction for a conversation.
+    pub async fn compact(
+        &self,
+        conversation_id: &str,
+        model: &ChatModelSelection,
+    ) -> AppResult<bool> {
+        let mut conversation = self.store.require_conversation(conversation_id)?;
+        let result = self
+            .compactor
+            .compact(&mut conversation, &self.providers, model)
+            .await?;
+        if result {
             self.store.save_conversation(&conversation)?;
         }
-
-        Ok(ChatResponse {
-            conversation_id,
-            response: final_output,
-        })
+        Ok(result)
     }
+}
+
+/// Build model context from conversation history, filtering by mode.
+///
+/// - Chat  mode: skip messages with tool_calls or tool_call_id
+/// - Agent mode: include all messages (tool_calls / tool results preserved)
+fn build_context(conversation: &super::models::Conversation, mode: &ConversationMode) -> Vec<ModelMessage> {
+    let summarized: HashSet<String> = conversation
+        .messages
+        .iter()
+        .filter(|m| m.role == MessageRole::Compaction)
+        .filter_map(|m| m.summary_of.clone())
+        .flatten()
+        .collect();
+
+    conversation
+        .messages
+        .iter()
+        .filter(|m| {
+            // Always include compaction summaries
+            if m.role == MessageRole::Compaction {
+                return true;
+            }
+            // Skip messages already covered by a summary
+            if summarized.contains(&m.timestamp.to_string()) {
+                return false;
+            }
+            // Chat mode: skip tool-related messages
+            if *mode == ConversationMode::Chat {
+                m.tool_calls.is_none() && m.tool_call_id.is_none()
+            } else {
+                true
+            }
+        })
+        .map(message_to_model_message)
+        .collect()
 }
 
 /// Convert a stored Message to a ModelMessage for the LLM API call.
@@ -414,7 +348,6 @@ fn message_to_model_message(message: &Message) -> ModelMessage {
             tool_call_id: None,
         },
         MessageRole::Assistant => {
-            // If stored with tool_call_id, it's a tool result → convert to Tool role
             if message.tool_call_id.is_some() {
                 ModelMessage {
                     role: ModelMessageRole::Tool,

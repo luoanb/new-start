@@ -1,6 +1,6 @@
 use super::{
     error::{AppError, AppResult},
-    models::{Conversation, Message},
+    models::{Conversation, ConversationMode, Message},
 };
 use std::{
     fs,
@@ -32,7 +32,11 @@ impl ConversationStore {
         &self.root
     }
 
-    pub fn create_conversation(&self, conversation_id: Option<String>) -> AppResult<Conversation> {
+    pub fn create_conversation(
+        &self,
+        conversation_id: Option<String>,
+        mode: ConversationMode,
+    ) -> AppResult<Conversation> {
         let now = now_ms();
         let id = match conversation_id {
             Some(id) if !id.trim().is_empty() => id,
@@ -46,6 +50,7 @@ impl ConversationStore {
 
         let conversation = Conversation {
             id,
+            mode,
             messages: Vec::new(),
             created_at: now,
             updated_at: now,
@@ -103,7 +108,9 @@ impl ConversationStore {
     pub fn add_message(&self, conversation_id: &str, message: Message) -> AppResult<Conversation> {
         let mut conversation = match self.get_conversation(conversation_id)? {
             Some(conversation) => conversation,
-            None => self.create_conversation(Some(conversation_id.to_string()))?,
+            None => {
+                self.create_conversation(Some(conversation_id.to_string()), ConversationMode::Chat)?
+            }
         };
 
         conversation.messages.push(message);

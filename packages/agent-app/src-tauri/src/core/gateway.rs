@@ -1,14 +1,18 @@
+use std::sync::{Arc, Mutex};
+
 use super::{
     conversation_store::{now_ms, ConversationStore},
     engine::Engine,
     error::{AppError, AppResult},
     models::{
-        ChatModelSelection, ChatOptions, ChatResponse, Conversation, Message, MessageRole,
-        ModelCallRequest, ModelCallResponse, ModelInfo, ProviderInfo, RuntimeStatus, SkillInfo,
+        ChatModelSelection, ChatOptions, ChatResponse, Conversation, ConversationMode, Message,
+        MessageRole, ModelCallRequest, ModelCallResponse, ModelInfo, ProviderInfo, RuntimeStatus,
+        SkillInfo,
     },
     providers::ProviderRegistry,
     skills::SkillRegistry,
     tool_registry::ToolRegistry,
+    topic_store::TopicStore,
     CompactionConfig,
 };
 
@@ -19,6 +23,7 @@ pub struct Gateway {
     providers: ProviderRegistry,
     skills: SkillRegistry,
     tool_registry: Option<ToolRegistry>,
+    topic_store: Option<Arc<Mutex<TopicStore>>>,
     current_conversation_id: String,
 }
 
@@ -32,9 +37,21 @@ impl Gateway {
         let providers = ProviderRegistry::new(store.root().to_path_buf());
         let current_conversation_id = match store.list_conversations()?.first() {
             Some(conversation) => conversation.id.clone(),
-            None => store.create_conversation(None)?.id,
+            None => store.create_conversation(None, ConversationMode::Chat)?.id,
         };
-        let tool_registry = Some(ToolRegistry::with_defaults());
+
+        // Initialize App-level SQLite database
+        let db_path = store.root().join("app.db");
+        let conn = rusqlite::Connection::open(&db_path)
+            .map_err(|e| AppError::StorageError(format!("Failed to open app.db: {}", e)))?;
+        let conn = Arc::new(Mutex::new(conn));
+        let topic_store = Arc::new(Mutex::new(TopicStore::new(Arc::clone(&conn))));
+        topic_store
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Lock error: {}", e)))?
+            .init_table()?;
+
+        let tool_registry = Some(ToolRegistry::with_defaults_and_topics(Arc::clone(&topic_store)));
         let engine = Engine::with_tools(
             store.clone(),
             providers.clone(),
@@ -48,6 +65,7 @@ impl Gateway {
             skills,
             providers,
             tool_registry,
+            topic_store: Some(topic_store),
             current_conversation_id,
         })
     }
@@ -153,36 +171,10 @@ impl Gateway {
 
         let conversation_id = self.resolve_conversation_id(options.conversation_id.clone())?;
 
-        // Delegate to engine for orchestration (get conversation → compact → call model → save)
+        // Engine dispatches by conversation.mode internally
         let response = self
             .engine
             .chat(input, conversation_id.clone(), options)
-            .await?;
-
-        self.current_conversation_id = conversation_id.clone();
-
-        Ok(response)
-    }
-
-    /// Send a chat message through the agent tool-calling loop.
-    pub async fn send_agent_message(
-        &mut self,
-        input: impl AsRef<str>,
-        options: ChatOptions,
-    ) -> AppResult<ChatResponse> {
-        let input = input.as_ref().trim();
-        if input.is_empty() {
-            return Err(AppError::InvalidInput("Message cannot be empty".into()));
-        }
-
-        self.providers
-            .require_model(&options.provider_id, &options.model_id)?;
-
-        let conversation_id = self.resolve_conversation_id(options.conversation_id.clone())?;
-
-        let response = self
-            .engine
-            .chat_with_tools(input, conversation_id.clone(), options)
             .await?;
 
         self.current_conversation_id = conversation_id.clone();
@@ -217,16 +209,17 @@ impl Gateway {
         self.store.clear_conversation(&conversation_id)?;
 
         if self.current_conversation_id == conversation_id {
-            self.current_conversation_id = self.store.create_conversation(None)?.id;
+            self.current_conversation_id =
+                self.store.create_conversation(None, ConversationMode::Chat)?.id;
         }
 
         Ok(conversation_id)
     }
 
-    /// Create a new blank conversation and return its id.
+    /// Create a new blank conversation with the given mode and return its id.
     /// The current conversation is left unchanged.
-    pub fn create_new_conversation(&mut self) -> AppResult<String> {
-        let conv = self.store.create_conversation(None)?;
+    pub fn create_new_conversation(&mut self, mode: ConversationMode) -> AppResult<String> {
+        let conv = self.store.create_conversation(None, mode)?;
         Ok(conv.id)
     }
 
@@ -240,6 +233,13 @@ impl Gateway {
         })
     }
 
+    /// Access the TopicStore for TUI commands.
+    pub fn topic_store(&self) -> AppResult<Arc<Mutex<TopicStore>>> {
+        self.topic_store
+            .clone()
+            .ok_or_else(|| AppError::StorageError("TopicStore not initialized".into()))
+    }
+
     fn resolve_conversation_id(&mut self, conversation_id: Option<String>) -> AppResult<String> {
         match conversation_id {
             Some(id) if id.trim().is_empty() => Err(AppError::InvalidInput(
@@ -247,7 +247,8 @@ impl Gateway {
             )),
             Some(id) => {
                 if self.store.get_conversation(&id)?.is_none() {
-                    self.store.create_conversation(Some(id.clone()))?;
+                    self.store
+                        .create_conversation(Some(id.clone()), ConversationMode::Chat)?;
                 }
                 Ok(id)
             }

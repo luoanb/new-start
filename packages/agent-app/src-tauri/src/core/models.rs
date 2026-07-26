@@ -27,8 +27,23 @@ pub struct Message {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationMode {
+    Chat,
+    Agent,
+}
+
+impl Default for ConversationMode {
+    fn default() -> Self {
+        Self::Chat
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Conversation {
     pub id: String,
+    #[serde(default)]
+    pub mode: ConversationMode,
     pub messages: Vec<Message>,
     pub created_at: u128,
     pub updated_at: u128,
@@ -203,4 +218,47 @@ pub struct ModelCallResponse {
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(default)]
     pub finish_reason: String,
+}
+
+// ── Topic / Project Management ─────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScopeInItem {
+    pub goal: String,
+    pub done_contract: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TopicStatus {
+    Todo,
+    InProgress,
+    Paused,
+    Done,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Topic {
+    pub id: String,
+    pub name: String,
+    pub status: TopicStatus,
+    pub description: String,
+    pub scope_in: Vec<ScopeInItem>,
+    pub progress: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<serde_json::Value>,
+    pub created_at: u128,
+    pub updated_at: u128,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TopicUpdate {
+    pub name: Option<String>,
+    pub status: Option<TopicStatus>,
+    pub description: Option<String>,
+    pub scope_in: Option<Vec<ScopeInItem>>,
+    pub progress: Option<u8>,
+    pub extra: Option<Option<serde_json::Value>>,
 }

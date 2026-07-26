@@ -4,6 +4,7 @@ use crate::core::{Conversation, ModelInfo, ProviderInfo};
 pub enum Command {
     Help,
     New,
+    NewAgent,
     Skills,
     Providers,
     Sessions,
@@ -17,6 +18,7 @@ pub enum Command {
     Config,
     Compact,
     Agent(String),
+    TopicAction(Vec<String>),
     Exit,
 }
 
@@ -57,8 +59,14 @@ impl Command {
                         parts[2].to_string(),
                         parts[3..].join(" "),
                     )),
+                    "/new" if parts.len() >= 2 && parts[1] == "agent" => {
+                        Some(Self::NewAgent)
+                    }
                     "/agent" if parts.len() >= 2 => {
                         Some(Self::Agent(parts[1..].join(" ")))
+                    }
+                    "/topic" if parts.len() >= 1 => {
+                        Some(Self::TopicAction(parts[1..].iter().map(|s| s.to_string()).collect()))
                     }
                     _ => None,
                 }
@@ -70,7 +78,8 @@ impl Command {
 pub fn cmd_help_text() -> Vec<(String, String)> {
     vec![
         ("/help".into(), "Show this help".into()),
-        ("/new".into(), "Create a new blank session".into()),
+        ("/new".into(), "Create a new Chat session".into()),
+        ("/new agent".into(), "Create a new Agent session".into()),
         ("/skills".into(), "List available skills".into()),
         ("/providers".into(), "List providers".into()),
         ("/provider <id>".into(), "Show provider details".into()),
@@ -87,6 +96,7 @@ pub fn cmd_help_text() -> Vec<(String, String)> {
         ("/compact".into(), "Manually compress current conversation".into()),
         ("/call <p> <m> <msg>".into(), "Call a model directly".into()),
         ("/agent <message>".into(), "Send a message with tool-calling agent loop".into()),
+        ("/topic <cmd>".into(), "Topic management: list, new, <id>, <id> set, <id> delete (use /topic alone for help)".into()),
         ("/exit".into(), "Quit the application".into()),
     ]
 }
