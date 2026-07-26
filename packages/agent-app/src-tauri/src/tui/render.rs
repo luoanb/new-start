@@ -320,6 +320,15 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
 }
 
 fn render_sessions_list(frame: &mut Frame, area: Rect, app: &TuiApp) {
+    // Get running session IDs for [Running] markers
+    let running_ids: std::collections::HashSet<String> = app
+        .gateway
+        .runtime_manager()
+        .list()
+        .ok()
+        .map(|sessions| sessions.into_iter().map(|s| s.session_id).collect())
+        .unwrap_or_default();
+
     let mut items: Vec<ListItem> = app
         .conversations
         .iter()
@@ -330,9 +339,14 @@ fn render_sessions_list(frame: &mut Frame, area: Rect, app: &TuiApp) {
                 ConversationMode::Chat => "[Chat]",
                 ConversationMode::Agent => "[Agent]",
             };
+            let running_tag = if running_ids.contains(&conv.id) {
+                " [Running]"
+            } else {
+                ""
+            };
             let msg_count = conv.messages.len();
             ListItem::new(format!(
-                "{prefix}{mode_tag} {} ({} msgs)",
+                "{prefix}{mode_tag} {} ({} msgs){running_tag}",
                 &conv.id[..conv.id.len().min(16)],
                 msg_count
             ))

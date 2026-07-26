@@ -11,7 +11,7 @@ use super::{
     },
     neuron_store::NeuronStore,
     providers::ProviderRegistry,
-    skills::SkillRegistry,
+    runtime_manager::RuntimeManager,
     tool_registry::ToolRegistry,
     topic_store::TopicStore,
     CompactionConfig,
@@ -22,10 +22,10 @@ pub struct Gateway {
     engine: Engine,
     store: ConversationStore,
     providers: ProviderRegistry,
-    skills: SkillRegistry,
     tool_registry: Option<ToolRegistry>,
     topic_store: Option<Arc<Mutex<TopicStore>>>,
     neuron_store: Option<Arc<Mutex<NeuronStore>>>,
+    runtime_manager: RuntimeManager,
     current_conversation_id: String,
 }
 
@@ -35,7 +35,6 @@ impl Gateway {
     }
 
     pub fn new(store: ConversationStore) -> AppResult<Self> {
-        let skills = SkillRegistry::with_defaults();
         let providers = ProviderRegistry::new(store.root().to_path_buf());
         let current_conversation_id = match store.list_conversations()?.first() {
             Some(conversation) => conversation.id.clone(),
@@ -60,9 +59,12 @@ impl Gateway {
             .map_err(|e| AppError::StorageError(format!("Lock error: {}", e)))?
             .init_table()?;
 
+        let runtime_manager = RuntimeManager::new();
+
         let tool_registry = Some(ToolRegistry::with_defaults_and_topics_and_neurons(
             Arc::clone(&topic_store),
             Arc::clone(&neuron_store),
+            runtime_manager.clone(),
         ));
         let engine = Engine::with_tools(
             store.clone(),
@@ -74,11 +76,11 @@ impl Gateway {
         Ok(Self {
             engine,
             store,
-            skills,
             providers,
             tool_registry,
             topic_store: Some(topic_store),
             neuron_store: Some(neuron_store),
+            runtime_manager,
             current_conversation_id,
         })
     }
@@ -121,9 +123,9 @@ impl Gateway {
     fn runtime_respond(&self, input: &str) -> AppResult<Message> {
         let trimmed = input.trim();
         let response = if let Some(message) = trimmed.strip_prefix("/echo ") {
-            self.skills.execute_echo(message.trim())?
+            message.trim().to_string()
         } else if trimmed == "/time" {
-            format!("Current timestamp: {}", self.skills.execute_time()?)
+            format!("Current timestamp: {}", now_ms())
         } else {
             format!("Agent App 收到：{trimmed}")
         };
@@ -146,7 +148,18 @@ impl Gateway {
     }
 
     pub fn list_skills(&self) -> Vec<SkillInfo> {
-        self.skills.list()
+        self.tool_registry
+            .as_ref()
+            .map(|reg| {
+                reg.list_definitions()
+                    .into_iter()
+                    .map(|d| SkillInfo {
+                        name: d.name,
+                        description: d.description,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub fn list_providers(&self) -> Vec<ProviderInfo> {
@@ -184,11 +197,20 @@ impl Gateway {
 
         let conversation_id = self.resolve_conversation_id(options.conversation_id.clone())?;
 
+        // Register as a running session
+        self.runtime_manager
+            .register(&conversation_id, None)?;
+
         // Engine dispatches by conversation.mode internally
-        let response = self
+        let result = self
             .engine
             .chat(input, conversation_id.clone(), options)
-            .await?;
+            .await;
+
+        // Unregister on completion (success or error)
+        self.runtime_manager.unregister(&conversation_id);
+
+        let response = result?;
 
         self.current_conversation_id = conversation_id.clone();
 
@@ -241,7 +263,7 @@ impl Gateway {
             app_name: "agent-app".to_string(),
             storage_path: self.store.root().display().to_string(),
             current_conversation_id: self.current_conversation_id.clone(),
-            skill_count: self.skills.list().len(),
+            skill_count: self.tool_registry.as_ref().map(|r| r.list_definitions().len()).unwrap_or(0),
             conversation_count: self.store.list_conversations()?.len(),
         })
     }
@@ -258,6 +280,11 @@ impl Gateway {
         self.neuron_store
             .clone()
             .ok_or_else(|| AppError::StorageError("NeuronStore not initialized".into()))
+    }
+
+    /// Access the RuntimeManager for TUI commands.
+    pub fn runtime_manager(&self) -> RuntimeManager {
+        self.runtime_manager.clone()
     }
 
     fn resolve_conversation_id(&mut self, conversation_id: Option<String>) -> AppResult<String> {
@@ -315,15 +342,19 @@ mod tests {
     }
 
     #[test]
-    fn list_skills_returns_default_registry() {
-        let gateway = test_gateway("list_skills_returns_default_registry");
+    fn list_skills_returns_tool_registry() {
+        let gateway = test_gateway("list_skills_returns_tool_registry");
         let skill_names = gateway
             .list_skills()
             .into_iter()
             .map(|skill| skill.name)
             .collect::<Vec<_>>();
 
-        assert_eq!(skill_names, vec!["calculate", "echo", "get_current_time"]);
+        assert!(skill_names.len() > 3, "expected many tools, got: {:?}", skill_names);
+        assert!(skill_names.contains(&"get_current_time".to_string()));
+        assert!(skill_names.contains(&"echo".to_string()));
+        assert!(skill_names.contains(&"create_neuron".to_string()));
+        assert!(skill_names.contains(&"get_running_sessions".to_string()));
     }
 
     #[test]

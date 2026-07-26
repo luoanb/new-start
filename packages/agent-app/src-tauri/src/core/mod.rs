@@ -2,8 +2,6 @@ pub mod error;
 pub mod gateway;
 pub mod models;
 pub mod providers;
-pub mod runtime;
-pub mod skills;
 pub mod compactor;
 pub mod conversation_store;
 pub mod engine;
@@ -11,6 +9,7 @@ pub mod neuron_store;
 pub mod topic_manager;
 pub mod topic_store;
 pub mod neuron_manager;
+pub mod runtime_manager;
 pub mod tool_registry;
 
 pub use error::{AppError, AppResult};
@@ -22,3 +21,4 @@ pub use models::{
     RuntimeStatus, ScopeInItem, SkillInfo, ToolCall, ToolDefinition, Topic, TopicStatus,
     TopicUpdate,
 };
+pub use runtime_manager::{register_runtime_tools, RunningSession, RuntimeManager};

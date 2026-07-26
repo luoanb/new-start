@@ -67,16 +67,18 @@ impl ToolRegistry {
         reg
     }
 
-    /// Create with default tools plus topic and neuron management tools.
+    /// Create with default tools plus topic, neuron, and runtime management tools.
     pub fn with_defaults_and_topics_and_neurons(
         topic_store: Arc<Mutex<super::topic_store::TopicStore>>,
         neuron_store: Arc<Mutex<super::neuron_store::NeuronStore>>,
+        runtime_manager: super::runtime_manager::RuntimeManager,
     ) -> Self {
         let mut reg = Self::with_defaults();
         let topic_manager = super::topic_manager::TopicManager::new(topic_store);
         topic_manager.register_all(&mut reg);
         let neuron_manager = super::neuron_manager::NeuronManager::new(neuron_store);
         neuron_manager.register_all(&mut reg);
+        super::runtime_manager::register_runtime_tools(&mut reg, runtime_manager);
         reg
     }
 

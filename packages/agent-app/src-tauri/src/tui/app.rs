@@ -589,36 +589,21 @@ impl TuiApp {
                     }
                 }
             }
-            Command::Agent(cmd_msg) => {
-                // Check the current conversation's mode from the conversations list
-                let mode = self
-                    .conversations
-                    .iter()
-                    .find(|c| c.id == self.active_session_id)
-                    .map(|c| c.mode.clone())
-                    .unwrap_or(crate::core::ConversationMode::Chat);
-                match mode {
-                    crate::core::ConversationMode::Chat => {
-                        self.error_banner = Some(TuiErrorView::from(AppError::InvalidInput(
-                            "当前会话为 Chat 模式，请使用 /new agent 创建 Agent 会话".into(),
-                        )));
-                    }
-                    crate::core::ConversationMode::Agent => {
-                        // Agent 模式：/agent <msg> 重定向到 send_chat_message
-                        if !cmd_msg.is_empty() {
-                            return self.send_chat_message(cmd_msg).await;
-                        }
-                        self.messages.push(TuiMessage::status(
-                            "Agent 模式直接输入即可触发工具调用".into(),
-                        ));
-                    }
-                }
-            }
             Command::TopicAction(args) => {
                 self.handle_topic_action(args);
             }
             Command::NeuronAction(args) => {
                 self.handle_neuron_action(args);
+            }
+            Command::Close(session_id) => {
+                match self.gateway.runtime_manager().close(&session_id) {
+                    Ok(msg) => {
+                        self.messages.push(TuiMessage::status(msg));
+                    }
+                    Err(e) => {
+                        self.error_banner = Some(TuiErrorView::from(e));
+                    }
+                }
             }
             Command::Exit => {
                 self.should_quit = true;
@@ -1310,11 +1295,9 @@ impl TuiApp {
             return;
         }
         let (cmd, _) = &self.suggestions[self.suggestion_index];
-        // Get the actual command name (before the first space or paren)
-        let cmd_name = cmd.split_whitespace().next().unwrap_or(cmd);
-        // Replace the input with the command + trailing space
+        // Replace the input with the full command text + trailing space
         let mut textarea = TextArea::default();
-        textarea.insert_str(format!("{cmd_name} "));
+        textarea.insert_str(format!("{cmd} "));
         self.input = textarea;
         self.show_suggestions = false;
         self.suggestions.clear();

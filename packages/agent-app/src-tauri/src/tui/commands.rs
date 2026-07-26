@@ -17,9 +17,9 @@ pub enum Command {
     Call(String, String, String),
     Config,
     Compact,
-    Agent(String),
     TopicAction(Vec<String>),
     NeuronAction(Vec<String>),
+    Close(String),
     Exit,
 }
 
@@ -41,6 +41,7 @@ impl Command {
             "/status" => Some(Self::Status),
             "/config" => Some(Self::Config),
             "/compact" => Some(Self::Compact),
+            "/new_agent" => Some(Self::NewAgent),
             "/exit" | "/quit" => Some(Self::Exit),
             _ => {
                 let parts: Vec<&str> = trimmed.splitn(4, ' ').collect();
@@ -60,17 +61,14 @@ impl Command {
                         parts[2].to_string(),
                         parts[3..].join(" "),
                     )),
-                    "/new" if parts.len() >= 2 && parts[1] == "agent" => {
-                        Some(Self::NewAgent)
-                    }
-                    "/agent" if parts.len() >= 2 => {
-                        Some(Self::Agent(parts[1..].join(" ")))
-                    }
                     "/topic" if parts.len() >= 1 => {
                         Some(Self::TopicAction(parts[1..].iter().map(|s| s.to_string()).collect()))
                     }
                     "/neuron" if parts.len() >= 1 => {
                         Some(Self::NeuronAction(parts[1..].iter().map(|s| s.to_string()).collect()))
+                    }
+                    "/close" if parts.len() >= 2 => {
+                        Some(Self::Close(parts[1].to_string()))
                     }
                     _ => None,
                 }
@@ -83,7 +81,7 @@ pub fn cmd_help_text() -> Vec<(String, String)> {
     vec![
         ("/help".into(), "Show this help".into()),
         ("/new".into(), "Create a new Chat session".into()),
-        ("/new agent".into(), "Create a new Agent session".into()),
+        ("/new_agent".into(), "Create a new Agent session".into()),
         ("/skills".into(), "List available skills".into()),
         ("/providers".into(), "List providers".into()),
         ("/provider <id>".into(), "Show provider details".into()),
@@ -99,9 +97,9 @@ pub fn cmd_help_text() -> Vec<(String, String)> {
         ("/config".into(), "Show configuration".into()),
         ("/compact".into(), "Manually compress current conversation".into()),
         ("/call <p> <m> <msg>".into(), "Call a model directly".into()),
-        ("/agent <message>".into(), "Send a message with tool-calling agent loop".into()),
         ("/topic <cmd>".into(), "Topic management: list, new, <id>, <id> set, <id> delete (use /topic alone for help)".into()),
         ("/neuron <cmd>".into(), "Neuron management: list, new, <id>, <id> set, <id> delete, <id> connect, <id> disconnect, network (use /neuron alone for help)".into()),
+        ("/close <session_id>".into(), "Close a running session".into()),
         ("/exit".into(), "Quit the application".into()),
     ]
 }
