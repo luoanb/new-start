@@ -91,6 +91,11 @@ Model lists and chat defaults are configured in `.agent-app/config.json` so prov
       "api_key": "...",
       "api_base": "https://example.com/v1"
     }
+  },
+  "neurons": {
+    "bootstrap": {
+      "create_neuron_prompt": "Create one neuron and return only JSON with desc, content, weight, and tool_ids."
+    }
   }
 }
 ```
@@ -102,6 +107,9 @@ Configuration fields:
 - `providers.<id>.api_key`: provider API key. Environment variables override this value.
 - `providers.<id>.api_base`: provider API base. Environment variables override this value.
 - `providers.<id>.models`: provider model list shown by `/models` and accepted by `/use`.
+- `neurons.bootstrap.create_neuron_prompt`: content of the unique `system_type=create_neuron` system neuron. It is required only when neuron bootstrap first needs to create or restore that system neuron.
+
+Missing neuron bootstrap configuration does not prevent application startup. Bootstrap calls fail with a recoverable configuration error until the prompt is configured.
 
 Known provider environment variables:
 
