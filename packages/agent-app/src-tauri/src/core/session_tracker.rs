@@ -176,10 +176,7 @@ impl Tool for GetRunningSessionsTool {
         }
         let mut lines = vec!["Running sessions:".to_string()];
         for s in &sessions {
-            let step = s
-                .current_step
-                .as_deref()
-                .unwrap_or("awaiting response");
+            let step = s.current_step.as_deref().unwrap_or("awaiting response");
             lines.push(format!(
                 "  {} | step: {}",
                 &s.session_id[..s.session_id.len().min(16)],

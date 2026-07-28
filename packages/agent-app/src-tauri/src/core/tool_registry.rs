@@ -60,7 +60,9 @@ impl ToolRegistry {
     }
 
     /// Create with default tools plus topic management tools.
-    pub fn with_defaults_and_topics(topic_store: Arc<Mutex<super::topic_store::TopicStore>>) -> Self {
+    pub fn with_defaults_and_topics(
+        topic_store: Arc<Mutex<super::topic_store::TopicStore>>,
+    ) -> Self {
         let mut reg = Self::with_defaults();
         let manager = super::topic_manager::TopicManager::new(topic_store);
         manager.register_all(&mut reg);
@@ -70,15 +72,14 @@ impl ToolRegistry {
     /// Create with default tools plus topic, neuron, and runtime management tools.
     pub fn with_defaults_and_topics_and_neurons(
         topic_store: Arc<Mutex<super::topic_store::TopicStore>>,
-        neuron_store: Arc<Mutex<super::neuron_store::NeuronStore>>,
+        neuron_manager: Arc<super::neuron_manager::NeuronManager>,
         session_tracker: super::session_tracker::SessionTracker,
     ) -> Self {
         let mut reg = Self::with_defaults();
         let topic_manager = super::topic_manager::TopicManager::new(topic_store);
         topic_manager.register_all(&mut reg);
-        let neuron_manager = super::neuron_manager::NeuronManager::new(neuron_store);
-        neuron_manager.register_all(&mut reg);
-        super::session_tracker::register_session_tracker_tools(&mut reg, runtime_manager);
+        neuron_manager.register_ai_tools(&mut reg);
+        super::session_tracker::register_session_tracker_tools(&mut reg, session_tracker);
         reg
     }
 
@@ -242,9 +243,7 @@ mod tests {
     #[tokio::test]
     async fn execute_unknown_tool_returns_error() {
         let registry = ToolRegistry::with_defaults();
-        let result = registry
-            .execute("nonexistent", serde_json::json!({}))
-            .await;
+        let result = registry.execute("nonexistent", serde_json::json!({})).await;
         assert!(result.is_err());
     }
 }

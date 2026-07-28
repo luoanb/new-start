@@ -33,7 +33,9 @@ impl From<AppError> for TuiErrorView {
                     "API key may be missing from config.json.".into(),
                 ],
                 vec![
-                    format!("Set the {provider_id} API key via environment variable or config.json."),
+                    format!(
+                        "Set the {provider_id} API key via environment variable or config.json."
+                    ),
                     format!("Check documentation for required auth env: `{provider_id}`."),
                 ],
             ),
@@ -75,9 +77,7 @@ impl From<AppError> for TuiErrorView {
                     "The provider ID might be misspelled.".into(),
                     "The provider might not be configured in the system.".into(),
                 ],
-                vec![
-                    "Run /provider to list all registered providers.".into(),
-                ],
+                vec!["Run /provider to list all registered providers.".into()],
             ),
             AppError::ConversationNotFound(id) => (
                 format!("Conversation `{id}` was not found."),
@@ -85,8 +85,25 @@ impl From<AppError> for TuiErrorView {
                     "The session may have been deleted.".into(),
                     "The session ID might be incorrect.".into(),
                 ],
+                vec!["Run /sessions to list available conversations.".into()],
+            ),
+            AppError::NeuronNotFound(id) => (
+                format!("Neuron `{id}` was not found."),
                 vec![
-                    "Run /sessions to list available conversations.".into(),
+                    "The neuron may have been deleted.".into(),
+                    "The neuron ID might be incorrect.".into(),
+                ],
+                vec!["Run /neuron list to list available neurons.".into()],
+            ),
+            AppError::NeuronBootstrapFailed(_) => (
+                "Neuron bootstrap failed.".into(),
+                vec![
+                    "The bootstrap prompt may be missing or invalid.".into(),
+                    "The model may have returned invalid neuron JSON.".into(),
+                ],
+                vec![
+                    "Check neurons.bootstrap.create_neuron_prompt in config.json.".into(),
+                    "Run /neuron ensure-creator to diagnose the system neuron.".into(),
                 ],
             ),
             AppError::SkillNotFound(name) => (

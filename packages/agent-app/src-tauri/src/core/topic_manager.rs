@@ -159,9 +159,9 @@ impl Tool for GetTopicTool {
             .store
             .lock()
             .map_err(|e| AppError::StorageError(format!("Lock error: {}", e)))?;
-        let topic = store.get(id)?.ok_or_else(|| {
-            AppError::ConversationNotFound(format!("Topic not found: {id}"))
-        })?;
+        let topic = store
+            .get(id)?
+            .ok_or_else(|| AppError::ConversationNotFound(format!("Topic not found: {id}")))?;
 
         let mut lines = vec![
             format!("Topic: {}", topic.name),
@@ -380,7 +380,11 @@ impl Tool for UpdateTopicTool {
         if let Some(v) = args.get("progress").and_then(|v| v.as_u64()) {
             update.progress = Some(v.min(100) as u8);
         }
-        if args.get("extra_clear").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if args
+            .get("extra_clear")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             update.extra = Some(None);
         } else if let Some(v) = args.get("extra") {
             update.extra = Some(Some(v.clone()));

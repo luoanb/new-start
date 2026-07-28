@@ -271,8 +271,21 @@ pub struct Neuron {
     pub desc: String,
     pub content: String,
     pub weight: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_type: Option<String>,
+    #[serde(default)]
+    pub tool_ids: Vec<String>,
     pub created_at: u128,
     pub updated_at: u128,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct NeuronCreate {
+    pub desc: String,
+    pub content: String,
+    pub weight: f64,
+    pub system_type: Option<String>,
+    pub tool_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -286,5 +299,25 @@ pub struct Connection {
 pub struct NeuronUpdate {
     pub desc: Option<String>,
     pub content: Option<String>,
-    pub weight: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CandidateQuery {
+    pub n: usize,
+    #[serde(default)]
+    pub source_id: Option<String>,
+    #[serde(default)]
+    pub system_type: Option<String>,
+    #[serde(default)]
+    pub min_new: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeneratedNeuronDraft {
+    pub desc: String,
+    pub content: String,
+    #[serde(default)]
+    pub weight: f64,
+    #[serde(default)]
+    pub tool_ids: Vec<String>,
 }

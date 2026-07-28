@@ -5,7 +5,7 @@ use rusqlite::{params, Connection};
 
 use super::{
     error::{AppError, AppResult},
-    models::{Connection as NeuronConnection, Neuron, NeuronUpdate},
+    models::{Connection as NeuronConnection, Neuron, NeuronCreate, NeuronUpdate},
 };
 
 static NEURON_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -26,9 +26,10 @@ impl NeuronStore {
     }
 
     pub fn init_table(&self) -> AppResult<()> {
-        let conn = self.conn.lock().map_err(|e| {
-            AppError::StorageError(format!("Failed to lock database: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS neurons (
                 id         TEXT PRIMARY KEY,
@@ -47,44 +48,89 @@ impl NeuronStore {
             PRAGMA foreign_keys = ON;",
         )
         .map_err(|e| AppError::StorageError(format!("Failed to init neuron tables: {}", e)))?;
+        if !has_column(&conn, "neurons", "system_type")? {
+            conn.execute("ALTER TABLE neurons ADD COLUMN system_type TEXT", [])
+                .map_err(|e| AppError::StorageError(format!("Failed to add system_type: {}", e)))?;
+        }
+        if !has_column(&conn, "neurons", "tool_ids")? {
+            conn.execute(
+                "ALTER TABLE neurons ADD COLUMN tool_ids TEXT NOT NULL DEFAULT '[]'",
+                [],
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to add tool_ids: {}", e)))?;
+        }
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_neurons_system_type_unique
+             ON neurons(system_type) WHERE system_type IS NOT NULL",
+            [],
+        )
+        .map_err(|e| {
+            AppError::StorageError(format!("Failed to index neuron system_type: {}", e))
+        })?;
         Ok(())
     }
 
-    pub fn create_neuron(
-        &self,
-        desc: &str,
-        content: &str,
-        weight: f64,
-    ) -> AppResult<Neuron> {
+    pub fn create_neuron(&self, create: NeuronCreate) -> AppResult<Neuron> {
+        if !create.weight.is_finite() {
+            return Err(AppError::InvalidInput(
+                "neuron weight must be finite".into(),
+            ));
+        }
+        if create
+            .system_type
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(AppError::InvalidInput("system_type cannot be empty".into()));
+        }
         let now = now_ms();
         let seq = NEURON_COUNTER.fetch_add(1, Ordering::Relaxed);
         let id = format!("n_{now}_{seq}");
+        let tool_ids = serde_json::to_string(&create.tool_ids)
+            .map_err(|e| AppError::StorageError(format!("Failed to encode tool_ids: {}", e)))?;
 
-        let conn = self.conn.lock().map_err(|e| {
-            AppError::StorageError(format!("Failed to lock database: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         conn.execute(
-            "INSERT INTO neurons (id, desc, content, weight, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-            params![id, desc, content, weight, now as i64],
+            "INSERT INTO neurons
+             (id, desc, content, weight, created_at, updated_at, system_type, tool_ids)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7)",
+            params![
+                id,
+                &create.desc,
+                &create.content,
+                create.weight,
+                now as i64,
+                create.system_type.as_deref(),
+                &tool_ids
+            ],
         )
         .map_err(|e| AppError::StorageError(format!("Failed to create neuron: {}", e)))?;
 
         Ok(Neuron {
             id,
-            desc: desc.to_string(),
-            content: content.to_string(),
-            weight,
+            desc: create.desc,
+            content: create.content,
+            weight: create.weight,
+            system_type: create.system_type,
+            tool_ids: create.tool_ids,
             created_at: now,
             updated_at: now,
         })
     }
 
     pub fn get_neuron(&self, id: &str) -> AppResult<Option<Neuron>> {
-        let conn = self.conn.lock().map_err(|e| {
-            AppError::StorageError(format!("Failed to lock database: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         let mut stmt = conn
-            .prepare("SELECT id, desc, content, weight, created_at, updated_at FROM neurons WHERE id = ?1")
+            .prepare(
+                "SELECT id, desc, content, weight, system_type, tool_ids, created_at, updated_at
+                 FROM neurons WHERE id = ?1",
+            )
             .map_err(|e| AppError::StorageError(format!("Failed to prepare: {}", e)))?;
         let mut rows = stmt
             .query_map(params![id], row_to_neuron)
@@ -97,28 +143,56 @@ impl NeuronStore {
     }
 
     pub fn list_neurons(&self) -> AppResult<Vec<Neuron>> {
-        let conn = self.conn.lock().map_err(|e| {
-            AppError::StorageError(format!("Failed to lock database: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         let mut stmt = conn
-            .prepare("SELECT id, desc, content, weight, created_at, updated_at FROM neurons ORDER BY created_at DESC")
+            .prepare(
+                "SELECT id, desc, content, weight, system_type, tool_ids, created_at, updated_at
+                 FROM neurons ORDER BY created_at DESC",
+            )
             .map_err(|e| AppError::StorageError(format!("Failed to prepare: {}", e)))?;
         let rows = stmt
             .query_map([], row_to_neuron)
             .map_err(|e| AppError::StorageError(format!("Failed to query: {}", e)))?;
         let mut neurons = Vec::new();
         for row in rows {
-            neurons.push(
-                row.map_err(|e| AppError::StorageError(format!("Failed to read: {}", e)))?,
-            );
+            neurons
+                .push(row.map_err(|e| AppError::StorageError(format!("Failed to read: {}", e)))?);
         }
         Ok(neurons)
     }
 
+    pub fn get_neuron_by_system_type(&self, system_type: &str) -> AppResult<Option<Neuron>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, desc, content, weight, system_type, tool_ids, created_at, updated_at
+                 FROM neurons WHERE system_type = ?1",
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to prepare: {}", e)))?;
+        let mut rows = stmt
+            .query_map(params![system_type], row_to_neuron)
+            .map_err(|e| AppError::StorageError(format!("Failed to query: {}", e)))?;
+        match rows.next() {
+            Some(Ok(neuron)) => Ok(Some(neuron)),
+            Some(Err(error)) => Err(AppError::StorageError(format!(
+                "Failed to read neuron: {}",
+                error
+            ))),
+            None => Ok(None),
+        }
+    }
+
     pub fn update_neuron(&self, id: &str, update: NeuronUpdate) -> AppResult<Neuron> {
-        let conn = self.conn.lock().map_err(|e| {
-            AppError::StorageError(format!("Failed to lock database: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
 
         let mut set_parts: Vec<String> = Vec::new();
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -131,16 +205,10 @@ impl NeuronStore {
             set_parts.push("content = ?".to_string());
             param_values.push(Box::new(c.clone()));
         }
-        if let Some(w) = update.weight {
-            set_parts.push("weight = ?".to_string());
-            param_values.push(Box::new(w));
-        }
-
         if set_parts.is_empty() {
-            drop(conn);
-            return self.get_neuron(id)?.ok_or_else(|| {
-                AppError::ConversationNotFound(format!("Neuron not found: {id}"))
-            });
+            return Err(AppError::InvalidInput(
+                "update_neuron requires desc or content".into(),
+            ));
         }
 
         let now = now_ms();
@@ -154,32 +222,167 @@ impl NeuronStore {
             .map_err(|e| AppError::StorageError(format!("Failed to update neuron: {}", e)))?;
 
         drop(conn);
-        self.get_neuron(id)?.ok_or_else(|| {
-            AppError::ConversationNotFound(format!("Neuron not found: {id}"))
-        })
+        self.get_neuron(id)?
+            .ok_or_else(|| AppError::NeuronNotFound(id.to_string()))
+    }
+
+    pub fn adjust_weight(&self, id: &str, delta: f64) -> AppResult<Neuron> {
+        if !delta.is_finite() {
+            return Err(AppError::InvalidInput("weight delta must be finite".into()));
+        }
+        let now = now_ms();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let affected = conn
+            .execute(
+                "UPDATE neurons SET weight = weight + ?1, updated_at = ?2 WHERE id = ?3",
+                params![delta, now as i64, id],
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to adjust weight: {}", e)))?;
+        drop(conn);
+        if affected == 0 {
+            return Err(AppError::NeuronNotFound(id.to_string()));
+        }
+        self.get_neuron(id)?
+            .ok_or_else(|| AppError::NeuronNotFound(id.to_string()))
+    }
+
+    pub fn set_system_type(&self, id: &str, system_type: Option<&str>) -> AppResult<Neuron> {
+        if system_type.is_some_and(|value| value.trim().is_empty()) {
+            return Err(AppError::InvalidInput("system_type cannot be empty".into()));
+        }
+        let now = now_ms();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let affected = conn
+            .execute(
+                "UPDATE neurons SET system_type = ?1, updated_at = ?2 WHERE id = ?3",
+                params![system_type, now as i64, id],
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to set system_type: {}", e)))?;
+        drop(conn);
+        if affected == 0 {
+            return Err(AppError::NeuronNotFound(id.to_string()));
+        }
+        self.get_neuron(id)?
+            .ok_or_else(|| AppError::NeuronNotFound(id.to_string()))
+    }
+
+    pub fn set_tool_ids(&self, id: &str, tool_ids: Vec<String>) -> AppResult<Neuron> {
+        let encoded = serde_json::to_string(&tool_ids)
+            .map_err(|e| AppError::StorageError(format!("Failed to encode tool_ids: {}", e)))?;
+        let now = now_ms();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let affected = conn
+            .execute(
+                "UPDATE neurons SET tool_ids = ?1, updated_at = ?2 WHERE id = ?3",
+                params![encoded, now as i64, id],
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to set tool_ids: {}", e)))?;
+        drop(conn);
+        if affected == 0 {
+            return Err(AppError::NeuronNotFound(id.to_string()));
+        }
+        self.get_neuron(id)?
+            .ok_or_else(|| AppError::NeuronNotFound(id.to_string()))
     }
 
     pub fn delete_neuron(&self, id: &str) -> AppResult<bool> {
-        let conn = self.conn.lock().map_err(|e| {
-            AppError::StorageError(format!("Failed to lock database: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         let affected = conn
             .execute("DELETE FROM neurons WHERE id = ?1", params![id])
             .map_err(|e| AppError::StorageError(format!("Failed to delete neuron: {}", e)))?;
         Ok(affected > 0)
     }
 
+    pub fn create_downstream_neuron(
+        &self,
+        source_id: &str,
+        create: NeuronCreate,
+        edge_weight: f64,
+    ) -> AppResult<(Neuron, NeuronConnection)> {
+        if !create.weight.is_finite() || !edge_weight.is_finite() {
+            return Err(AppError::InvalidInput(
+                "neuron and edge weights must be finite".into(),
+            ));
+        }
+        if create
+            .system_type
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(AppError::InvalidInput("system_type cannot be empty".into()));
+        }
+        let now = now_ms();
+        let seq = NEURON_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let id = format!("n_{now}_{seq}");
+        let tool_ids = serde_json::to_string(&create.tool_ids)
+            .map_err(|e| AppError::StorageError(format!("Failed to encode tool_ids: {}", e)))?;
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| AppError::StorageError(format!("Failed to start transaction: {}", e)))?;
+        tx.execute(
+            "INSERT INTO neurons
+             (id, desc, content, weight, created_at, updated_at, system_type, tool_ids)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7)",
+            params![
+                &id,
+                &create.desc,
+                &create.content,
+                create.weight,
+                now as i64,
+                create.system_type.as_deref(),
+                &tool_ids
+            ],
+        )
+        .map_err(|e| AppError::StorageError(format!("Failed to create neuron: {}", e)))?;
+        tx.execute(
+            "INSERT INTO connections (source, target, weight) VALUES (?1, ?2, ?3)",
+            params![source_id, &id, edge_weight],
+        )
+        .map_err(|e| AppError::StorageError(format!("Failed to link downstream neuron: {}", e)))?;
+        tx.commit()
+            .map_err(|e| AppError::StorageError(format!("Failed to commit transaction: {}", e)))?;
+
+        let neuron = Neuron {
+            id: id.clone(),
+            desc: create.desc,
+            content: create.content,
+            weight: create.weight,
+            system_type: create.system_type,
+            tool_ids: create.tool_ids,
+            created_at: now,
+            updated_at: now,
+        };
+        let connection = NeuronConnection {
+            source: source_id.to_string(),
+            target: id,
+            weight: edge_weight,
+        };
+        Ok((neuron, connection))
+    }
+
     // ── Connection operations ───────────────────────────────────
 
-    pub fn link(
-        &self,
-        source: &str,
-        target: &str,
-        weight: f64,
-    ) -> AppResult<NeuronConnection> {
-        let conn = self.conn.lock().map_err(|e| {
-            AppError::StorageError(format!("Failed to lock database: {}", e))
-        })?;
+    pub fn link(&self, source: &str, target: &str, weight: f64) -> AppResult<NeuronConnection> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         conn.execute(
             "INSERT OR REPLACE INTO connections (source, target, weight) VALUES (?1, ?2, ?3)",
             params![source, target, weight],
@@ -193,9 +396,10 @@ impl NeuronStore {
     }
 
     pub fn unlink(&self, source: &str, target: &str) -> AppResult<bool> {
-        let conn = self.conn.lock().map_err(|e| {
-            AppError::StorageError(format!("Failed to lock database: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         let affected = conn
             .execute(
                 "DELETE FROM connections WHERE source = ?1 AND target = ?2",
@@ -206,9 +410,10 @@ impl NeuronStore {
     }
 
     pub fn get_connections(&self, neuron_id: &str) -> AppResult<Vec<NeuronConnection>> {
-        let conn = self.conn.lock().map_err(|e| {
-            AppError::StorageError(format!("Failed to lock database: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         let mut stmt = conn
             .prepare(
                 "SELECT source, target, weight FROM connections WHERE source = ?1 OR target = ?1",
@@ -225,11 +430,80 @@ impl NeuronStore {
             .map_err(|e| AppError::StorageError(format!("Failed to query: {}", e)))?;
         let mut conns = Vec::new();
         for row in rows {
-            conns.push(
-                row.map_err(|e| AppError::StorageError(format!("Failed to read: {}", e)))?,
-            );
+            conns.push(row.map_err(|e| AppError::StorageError(format!("Failed to read: {}", e)))?);
         }
         Ok(conns)
+    }
+
+    pub fn list_direct_downstream(
+        &self,
+        source_id: &str,
+        limit: usize,
+        excluded_ids: &std::collections::HashSet<String>,
+    ) -> AppResult<Vec<Neuron>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT n.id, n.desc, n.content, n.weight, n.system_type, n.tool_ids,
+                        n.created_at, n.updated_at
+                 FROM connections c
+                 JOIN neurons n ON n.id = c.target
+                 WHERE c.source = ?1 AND n.system_type IS NULL
+                 ORDER BY n.weight DESC, RANDOM()",
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to prepare: {}", e)))?;
+        let rows = stmt
+            .query_map(params![source_id], row_to_neuron)
+            .map_err(|e| AppError::StorageError(format!("Failed to query: {}", e)))?;
+        let mut neurons = Vec::new();
+        for row in rows {
+            let neuron =
+                row.map_err(|e| AppError::StorageError(format!("Failed to read: {}", e)))?;
+            if !excluded_ids.contains(&neuron.id) {
+                neurons.push(neuron);
+                if neurons.len() == limit {
+                    break;
+                }
+            }
+        }
+        Ok(neurons)
+    }
+
+    pub fn list_global_candidates(
+        &self,
+        limit: usize,
+        excluded_ids: &std::collections::HashSet<String>,
+    ) -> AppResult<Vec<Neuron>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, desc, content, weight, system_type, tool_ids, created_at, updated_at
+                 FROM neurons
+                 WHERE system_type IS NULL
+                 ORDER BY weight DESC, RANDOM()",
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to prepare: {}", e)))?;
+        let rows = stmt
+            .query_map([], row_to_neuron)
+            .map_err(|e| AppError::StorageError(format!("Failed to query: {}", e)))?;
+        let mut neurons = Vec::new();
+        for row in rows {
+            let neuron =
+                row.map_err(|e| AppError::StorageError(format!("Failed to read: {}", e)))?;
+            if !excluded_ids.contains(&neuron.id) {
+                neurons.push(neuron);
+                if neurons.len() == limit {
+                    break;
+                }
+            }
+        }
+        Ok(neurons)
     }
 
     /// Get network around a neuron using iterative BFS up to max_depth.
@@ -271,14 +545,35 @@ impl NeuronStore {
 }
 
 fn row_to_neuron(row: &rusqlite::Row) -> rusqlite::Result<Neuron> {
+    let tool_ids_json: String = row.get(5)?;
+    let tool_ids = serde_json::from_str(&tool_ids_json).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(error))
+    })?;
     Ok(Neuron {
         id: row.get(0)?,
         desc: row.get(1)?,
         content: row.get(2)?,
         weight: row.get(3)?,
-        created_at: row.get::<_, i64>(4)? as u128,
-        updated_at: row.get::<_, i64>(5)? as u128,
+        system_type: row.get(4)?,
+        tool_ids,
+        created_at: row.get::<_, i64>(6)? as u128,
+        updated_at: row.get::<_, i64>(7)? as u128,
     })
+}
+
+fn has_column(conn: &Connection, table: &str, column: &str) -> AppResult<bool> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({})", table))
+        .map_err(|e| AppError::StorageError(format!("Failed to inspect table: {}", e)))?;
+    let names = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| AppError::StorageError(format!("Failed to inspect columns: {}", e)))?;
+    for name in names {
+        if name.map_err(|e| AppError::StorageError(e.to_string()))? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn now_ms() -> u128 {
@@ -300,10 +595,21 @@ mod tests {
         store
     }
 
+    fn create(store: &NeuronStore, desc: &str, content: &str, weight: f64) -> Neuron {
+        store
+            .create_neuron(NeuronCreate {
+                desc: desc.into(),
+                content: content.into(),
+                weight,
+                ..Default::default()
+            })
+            .unwrap()
+    }
+
     #[test]
     fn test_create_and_get() {
         let s = test_store();
-        let n = s.create_neuron("test", "hello", 1.0).unwrap();
+        let n = create(&s, "test", "hello", 1.0);
         assert_eq!(n.desc, "test");
         let got = s.get_neuron(&n.id).unwrap().unwrap();
         assert_eq!(got.content, "hello");
@@ -312,33 +618,33 @@ mod tests {
     #[test]
     fn test_list_neurons() {
         let s = test_store();
-        s.create_neuron("a", "", 0.0).unwrap();
-        s.create_neuron("b", "", 0.0).unwrap();
+        create(&s, "a", "", 0.0);
+        create(&s, "b", "", 0.0);
         assert_eq!(s.list_neurons().unwrap().len(), 2);
     }
 
     #[test]
     fn test_update_neuron() {
         let s = test_store();
-        let n = s.create_neuron("old", "", 0.0).unwrap();
+        let n = create(&s, "old", "", 0.0);
         let u = s
             .update_neuron(
                 &n.id,
                 NeuronUpdate {
                     desc: Some("new".into()),
-                    weight: Some(5.5),
                     ..Default::default()
                 },
             )
             .unwrap();
         assert_eq!(u.desc, "new");
+        let u = s.adjust_weight(&n.id, 5.5).unwrap();
         assert!((u.weight - 5.5).abs() < 1e-6);
     }
 
     #[test]
     fn test_delete_neuron() {
         let s = test_store();
-        let n = s.create_neuron("del", "", 0.0).unwrap();
+        let n = create(&s, "del", "", 0.0);
         assert!(s.delete_neuron(&n.id).unwrap());
         assert!(s.get_neuron(&n.id).unwrap().is_none());
     }
@@ -346,8 +652,8 @@ mod tests {
     #[test]
     fn test_link_and_get_connections() {
         let s = test_store();
-        let a = s.create_neuron("A", "", 0.0).unwrap();
-        let b = s.create_neuron("B", "", 0.0).unwrap();
+        let a = create(&s, "A", "", 0.0);
+        let b = create(&s, "B", "", 0.0);
         s.link(&a.id, &b.id, 0.8).unwrap();
 
         let conns = s.get_connections(&a.id).unwrap();
@@ -358,8 +664,8 @@ mod tests {
     #[test]
     fn test_unlink() {
         let s = test_store();
-        let a = s.create_neuron("A", "", 0.0).unwrap();
-        let b = s.create_neuron("B", "", 0.0).unwrap();
+        let a = create(&s, "A", "", 0.0);
+        let b = create(&s, "B", "", 0.0);
         s.link(&a.id, &b.id, 1.0).unwrap();
         assert!(s.unlink(&a.id, &b.id).unwrap());
         assert_eq!(s.get_connections(&a.id).unwrap().len(), 0);
@@ -368,10 +674,10 @@ mod tests {
     #[test]
     fn test_network_bfs() {
         let s = test_store();
-        let a = s.create_neuron("A", "", 0.0).unwrap();
-        let b = s.create_neuron("B", "", 0.0).unwrap();
-        let c = s.create_neuron("C", "", 0.0).unwrap();
-        let d = s.create_neuron("D", "", 0.0).unwrap();
+        let a = create(&s, "A", "", 0.0);
+        let b = create(&s, "B", "", 0.0);
+        let c = create(&s, "C", "", 0.0);
+        let d = create(&s, "D", "", 0.0);
 
         s.link(&a.id, &b.id, 1.0).unwrap();
         s.link(&b.id, &c.id, 1.0).unwrap();
@@ -388,5 +694,78 @@ mod tests {
         // depth 3 from A → all 4
         let net = s.get_network(&a.id, 3).unwrap();
         assert_eq!(net.len(), 4);
+    }
+
+    #[test]
+    fn test_migrates_legacy_neuron_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE neurons (
+                id TEXT PRIMARY KEY,
+                desc TEXT NOT NULL DEFAULT '',
+                content TEXT NOT NULL DEFAULT '',
+                weight REAL NOT NULL DEFAULT 0.0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );",
+        )
+        .unwrap();
+        let store = NeuronStore::new(Arc::new(Mutex::new(conn)));
+        store.init_table().unwrap();
+        let neuron = create(&store, "migrated", "content", 0.0);
+        assert_eq!(neuron.system_type, None);
+        assert!(neuron.tool_ids.is_empty());
+    }
+
+    #[test]
+    fn test_system_type_is_unique_and_downstream_creation_is_atomic() {
+        let store = test_store();
+        let first = store
+            .create_neuron(NeuronCreate {
+                desc: "system".into(),
+                content: "prompt".into(),
+                system_type: Some("topic_match".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let duplicate = store.create_neuron(NeuronCreate {
+            desc: "duplicate".into(),
+            content: "prompt".into(),
+            system_type: Some("topic_match".into()),
+            ..Default::default()
+        });
+        assert!(duplicate.is_err());
+
+        let (child, connection) = store
+            .create_downstream_neuron(
+                &first.id,
+                NeuronCreate {
+                    desc: "child".into(),
+                    content: "content".into(),
+                    ..Default::default()
+                },
+                1.0,
+            )
+            .unwrap();
+        assert_eq!(connection.source, first.id);
+        assert_eq!(connection.target, child.id);
+        let downstream = store
+            .list_direct_downstream(&first.id, 10, &std::collections::HashSet::new())
+            .unwrap();
+        assert_eq!(downstream.len(), 1);
+        assert_eq!(downstream[0].id, child.id);
+
+        let count_before = store.list_neurons().unwrap().len();
+        let failed = store.create_downstream_neuron(
+            "missing-source",
+            NeuronCreate {
+                desc: "orphan".into(),
+                content: "content".into(),
+                ..Default::default()
+            },
+            1.0,
+        );
+        assert!(failed.is_err());
+        assert_eq!(store.list_neurons().unwrap().len(), count_before);
     }
 }

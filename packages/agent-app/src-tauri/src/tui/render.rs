@@ -18,9 +18,9 @@ pub fn render(frame: &mut Frame, app: &TuiApp) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),   // top status bar
-            Constraint::Min(1),      // main content (chat + lists + overlays)
-            Constraint::Length(3),   // input area (min 3 lines for textarea)
+            Constraint::Length(1), // top status bar
+            Constraint::Min(1),    // main content (chat + lists + overlays)
+            Constraint::Length(3), // input area (min 3 lines for textarea)
         ])
         .split(area);
 
@@ -38,12 +38,20 @@ fn render_top_bar(frame: &mut Frame, area: Rect, app: &TuiApp) {
 
     let session_id = &app.active_session_id;
     let short_session = if session_id.len() > 12 {
-        format!("{}..{}", &session_id[..6], &session_id[session_id.len() - 4..])
+        format!(
+            "{}..{}",
+            &session_id[..6],
+            &session_id[session_id.len() - 4..]
+        )
     } else {
         session_id.clone()
     };
 
-    let tasks_running = app.tasks.iter().filter(|t| t.status == TuiTaskStatus::Running).count();
+    let tasks_running = app
+        .tasks
+        .iter()
+        .filter(|t| t.status == TuiTaskStatus::Running)
+        .count();
     let status_suffix = if tasks_running > 0 {
         format!(" | {} running", tasks_running)
     } else {
@@ -91,11 +99,26 @@ fn render_chat_area(frame: &mut Frame, area: Rect, app: &TuiApp) {
     // Render messages
     for msg in &app.messages {
         let role_span = match msg.role {
-            TuiMessageRole::User => Span::styled(" You ", Style::default().fg(Color::Green).bg(Color::DarkGray)),
-            TuiMessageRole::Assistant => Span::styled(" Assistant ", Style::default().fg(Color::Cyan).bg(Color::DarkGray)),
-            TuiMessageRole::Tool => Span::styled(" Tool ", Style::default().fg(Color::Yellow).bg(Color::DarkGray)),
-            TuiMessageRole::Error => Span::styled(" Error ", Style::default().fg(Color::Red).bg(Color::DarkGray)),
-            TuiMessageRole::Status => Span::styled(" Status ", Style::default().fg(Color::Blue).bg(Color::DarkGray)),
+            TuiMessageRole::User => Span::styled(
+                " You ",
+                Style::default().fg(Color::Green).bg(Color::DarkGray),
+            ),
+            TuiMessageRole::Assistant => Span::styled(
+                " Assistant ",
+                Style::default().fg(Color::Cyan).bg(Color::DarkGray),
+            ),
+            TuiMessageRole::Tool => Span::styled(
+                " Tool ",
+                Style::default().fg(Color::Yellow).bg(Color::DarkGray),
+            ),
+            TuiMessageRole::Error => Span::styled(
+                " Error ",
+                Style::default().fg(Color::Red).bg(Color::DarkGray),
+            ),
+            TuiMessageRole::Status => Span::styled(
+                " Status ",
+                Style::default().fg(Color::Blue).bg(Color::DarkGray),
+            ),
         };
         lines.push(Line::from(vec![role_span]));
         lines.push(Line::from(Span::raw(&msg.content)));
@@ -117,7 +140,9 @@ fn render_chat_area(frame: &mut Frame, area: Rect, app: &TuiApp) {
 
         let header = Span::styled(
             format!("{title} | {elapsed}"),
-            Style::default().fg(status_color).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(status_color)
+                .add_modifier(Modifier::BOLD),
         );
         lines.push(Line::from(header));
         lines.push(Line::from(Span::raw(format!("  {}", task.label))));
@@ -139,7 +164,10 @@ fn render_chat_area(frame: &mut Frame, area: Rect, app: &TuiApp) {
             } else {
                 "  [press t to expand]"
             };
-            lines.push(Line::from(Span::styled(hint, Style::default().fg(Color::DarkGray))));
+            lines.push(Line::from(Span::styled(
+                hint,
+                Style::default().fg(Color::DarkGray),
+            )));
         }
 
         lines.push(Line::from(""));
@@ -149,9 +177,15 @@ fn render_chat_area(frame: &mut Frame, area: Rect, app: &TuiApp) {
     if let Some(error) = &app.error_banner {
         lines.push(Line::from(Span::styled(
             format!(" Error [{}] ", error.code),
-            Style::default().fg(Color::Red).bg(Color::DarkGray).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Red)
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
         )));
-        lines.push(Line::from(Span::raw(format!(" What: {}", error.what_happened))));
+        lines.push(Line::from(Span::raw(format!(
+            " What: {}",
+            error.what_happened
+        ))));
         for cause in &error.possible_causes {
             lines.push(Line::from(Span::styled(
                 format!(" Cause: {cause}"),
@@ -175,7 +209,9 @@ fn render_chat_area(frame: &mut Frame, area: Rect, app: &TuiApp) {
     if lines.is_empty() {
         lines.push(Line::from(Span::styled(
             " Welcome to Agent App TUI",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
@@ -213,8 +249,7 @@ fn render_chat_area(frame: &mut Frame, area: Rect, app: &TuiApp) {
 
     let effective_scroll = max_scroll.saturating_sub(app.scroll_offset as usize);
 
-    let chat_block = Block::default()
-        .borders(Borders::NONE);
+    let chat_block = Block::default().borders(Borders::NONE);
 
     let paragraph = Paragraph::new(text)
         .block(chat_block)
@@ -266,7 +301,10 @@ fn render_input_area(frame: &mut Frame, area: Rect, app: &TuiApp) {
             Style::default().fg(Color::DarkGray),
         )
     } else {
-        Span::styled(" Press Tab to focus input ", Style::default().fg(Color::DarkGray))
+        Span::styled(
+            " Press Tab to focus input ",
+            Style::default().fg(Color::DarkGray),
+        )
     };
     frame.render_widget(Paragraph::new(Line::from(hint)), input_area[1]);
 }
@@ -275,12 +313,10 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
     let lines: Vec<Line> = super::commands::cmd_help_text()
         .iter()
         .flat_map(|(cmd, desc)| {
-            vec![
-                Line::from(Span::styled(
-                    format!("  {cmd:<30} {desc}"),
-                    Style::default().fg(Color::White),
-                )),
-            ]
+            vec![Line::from(Span::styled(
+                format!("  {cmd:<30} {desc}"),
+                Style::default().fg(Color::White),
+            ))]
         })
         .collect();
 
@@ -351,7 +387,9 @@ fn render_sessions_list(frame: &mut Frame, area: Rect, app: &TuiApp) {
                 msg_count
             ))
             .style(if is_active {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White)
             })
@@ -443,8 +481,7 @@ fn render_suggestions(frame: &mut Frame, input_area: Rect, app: &TuiApp) {
             } else {
                 Style::default().fg(Color::White)
             };
-            ListItem::new(format!("{prefix}{cmd:<25} {desc}"))
-                .style(style)
+            ListItem::new(format!("{prefix}{cmd:<25} {desc}")).style(style)
         })
         .collect();
 
@@ -462,6 +499,7 @@ fn render_suggestions(frame: &mut Frame, input_area: Rect, app: &TuiApp) {
             .add_modifier(Modifier::BOLD),
     );
 
-    let mut state = ratatui::widgets::ListState::default().with_selected(Some(app.suggestion_index));
+    let mut state =
+        ratatui::widgets::ListState::default().with_selected(Some(app.suggestion_index));
     frame.render_stateful_widget(list, popup_area, &mut state);
 }

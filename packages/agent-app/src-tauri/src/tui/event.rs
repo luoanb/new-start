@@ -54,9 +54,7 @@ pub fn read_action() -> io::Result<TuiAction> {
     let event = event::read()?;
     Ok(match event {
         // Only handle key-press events; release / repeat are ignored.
-        Event::Key(key) if key.kind == KeyEventKind::Press => {
-            intercept_app_key(key)
-        }
+        Event::Key(key) if key.kind == KeyEventKind::Press => intercept_app_key(key),
         Event::Paste(content) => {
             // Ratatui-textarea handles paste via its input() method when it
             // receives the constituent key events.  We forward the first char
@@ -76,9 +74,7 @@ pub fn read_action() -> io::Result<TuiAction> {
 /// Intercept app-level keys; everything else passes through to the widget.
 fn intercept_app_key(key: KeyEvent) -> TuiAction {
     match key.code {
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            TuiAction::Exit
-        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => TuiAction::Exit,
         KeyCode::Enter => TuiAction::Submit,
         KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             TuiAction::NewSession

@@ -27,9 +27,10 @@ impl TopicStore {
     }
 
     pub fn init_table(&self) -> AppResult<()> {
-        let conn = self.conn.lock().map_err(|e| {
-            AppError::StorageError(format!("Failed to lock database: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS topics (
                 id          TEXT PRIMARY KEY,
@@ -48,9 +49,10 @@ impl TopicStore {
     }
 
     pub fn list(&self, status_filter: Option<TopicStatus>) -> AppResult<Vec<Topic>> {
-        let conn = self.conn.lock().map_err(|e| {
-            AppError::StorageError(format!("Failed to lock database: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
 
         let (query, status_str): (&str, Option<String>) = match &status_filter {
             Some(s) => (
@@ -68,28 +70,29 @@ impl TopicStore {
             .map_err(|e| AppError::StorageError(format!("Failed to prepare query: {}", e)))?;
 
         let rows = match status_str {
-            Some(ref s) => stmt
-                .query_map(params![s], row_to_topic),
-            None => stmt
-                .query_map([], row_to_topic),
+            Some(ref s) => stmt.query_map(params![s], row_to_topic),
+            None => stmt.query_map([], row_to_topic),
         };
 
-        let rows = rows
-            .map_err(|e| AppError::StorageError(format!("Failed to query topics: {}", e)))?;
+        let rows =
+            rows.map_err(|e| AppError::StorageError(format!("Failed to query topics: {}", e)))?;
 
         let mut topics = Vec::new();
         for row in rows {
             topics.push(
-                row.map_err(|e| AppError::StorageError(format!("Failed to read topic row: {}", e)))?,
+                row.map_err(|e| {
+                    AppError::StorageError(format!("Failed to read topic row: {}", e))
+                })?,
             );
         }
         Ok(topics)
     }
 
     pub fn get(&self, id: &str) -> AppResult<Option<Topic>> {
-        let conn = self.conn.lock().map_err(|e| {
-            AppError::StorageError(format!("Failed to lock database: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         let mut stmt = conn
             .prepare("SELECT id, name, status, description, scope_in, progress, extra, created_at, updated_at FROM topics WHERE id = ?1")
             .map_err(|e| AppError::StorageError(format!("Failed to prepare query: {}", e)))?;
@@ -125,9 +128,10 @@ impl TopicStore {
             .as_ref()
             .map(|v| serde_json::to_string(v).unwrap_or_default());
 
-        let conn = self.conn.lock().map_err(|e| {
-            AppError::StorageError(format!("Failed to lock database: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         conn.execute(
             "INSERT INTO topics (id, name, status, description, scope_in, progress, extra, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?7)",
             params![id, name, status_str, description, scope_in_str, extra_str, now as i64],
@@ -148,9 +152,10 @@ impl TopicStore {
     }
 
     pub fn update(&self, id: &str, update: TopicUpdate) -> AppResult<Topic> {
-        let conn = self.conn.lock().map_err(|e| {
-            AppError::StorageError(format!("Failed to lock database: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
 
         // Build SET clause dynamically
         let mut set_parts: Vec<String> = Vec::new();
@@ -187,19 +192,16 @@ impl TopicStore {
         }
 
         if set_parts.is_empty() {
-            return self.get(id)?.ok_or_else(|| {
-                AppError::ConversationNotFound(format!("Topic not found: {id}"))
-            });
+            return self
+                .get(id)?
+                .ok_or_else(|| AppError::ConversationNotFound(format!("Topic not found: {id}")));
         }
 
         let now = now_ms();
         set_parts.push("updated_at = ?".to_string());
         param_values.push(Box::new(now as i64));
 
-        let sql = format!(
-            "UPDATE topics SET {} WHERE id = ?",
-            set_parts.join(", ")
-        );
+        let sql = format!("UPDATE topics SET {} WHERE id = ?", set_parts.join(", "));
         param_values.push(Box::new(id.to_string()));
 
         conn.execute(&sql, rusqlite::params_from_iter(param_values.iter()))
@@ -226,9 +228,10 @@ impl TopicStore {
     }
 
     pub fn delete(&self, id: &str) -> AppResult<bool> {
-        let conn = self.conn.lock().map_err(|e| {
-            AppError::StorageError(format!("Failed to lock database: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         let affected = conn
             .execute("DELETE FROM topics WHERE id = ?1", params![id])
             .map_err(|e| AppError::StorageError(format!("Failed to delete topic: {}", e)))?;
@@ -241,18 +244,16 @@ fn row_to_topic(row: &rusqlite::Row) -> rusqlite::Result<Topic> {
     let scope_in_str: String = row.get(4)?;
     let extra_str: Option<String> = row.get(6)?;
 
-    let status: TopicStatus = serde_json::from_str(&format!("\"{}\"", status_str))
-        .unwrap_or(TopicStatus::Todo);
-    let scope_in: Vec<ScopeInItem> =
-        serde_json::from_str(&scope_in_str).unwrap_or_default();
-    let extra: Option<serde_json::Value> = extra_str
-        .and_then(|s| {
-            if s.is_empty() {
-                None
-            } else {
-                serde_json::from_str(&s).ok()
-            }
-        });
+    let status: TopicStatus =
+        serde_json::from_str(&format!("\"{}\"", status_str)).unwrap_or(TopicStatus::Todo);
+    let scope_in: Vec<ScopeInItem> = serde_json::from_str(&scope_in_str).unwrap_or_default();
+    let extra: Option<serde_json::Value> = extra_str.and_then(|s| {
+        if s.is_empty() {
+            None
+        } else {
+            serde_json::from_str(&s).ok()
+        }
+    });
 
     Ok(Topic {
         id: row.get(0)?,
@@ -299,7 +300,13 @@ mod tests {
     fn test_create_and_list() {
         let store = test_store("create_and_list");
         let topic = store
-            .create("Test Topic", "A description", TopicStatus::Todo, vec![], None)
+            .create(
+                "Test Topic",
+                "A description",
+                TopicStatus::Todo,
+                vec![],
+                None,
+            )
             .unwrap();
         assert_eq!(topic.name, "Test Topic");
         assert_eq!(topic.status, TopicStatus::Todo);

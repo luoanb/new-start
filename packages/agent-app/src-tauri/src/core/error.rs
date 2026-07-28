@@ -13,6 +13,8 @@ pub struct AppErrorPayload {
 pub enum AppError {
     InvalidInput(String),
     ConversationNotFound(String),
+    NeuronNotFound(String),
+    NeuronBootstrapFailed(String),
     SkillNotFound(String),
     ProviderNotFound(String),
     ModelNotFound(String),
@@ -30,6 +32,8 @@ impl AppError {
         match self {
             AppError::InvalidInput(_) => "invalid_input",
             AppError::ConversationNotFound(_) => "conversation_not_found",
+            AppError::NeuronNotFound(_) => "neuron_not_found",
+            AppError::NeuronBootstrapFailed(_) => "neuron_bootstrap_failed",
             AppError::SkillNotFound(_) => "skill_not_found",
             AppError::ProviderNotFound(_) => "provider_not_found",
             AppError::ModelNotFound(_) => "model_not_found",
@@ -54,12 +58,14 @@ impl AppError {
         match self {
             AppError::InvalidInput(_)
             | AppError::ConversationNotFound(_)
+            | AppError::NeuronNotFound(_)
             | AppError::SkillNotFound(_)
             | AppError::ProviderNotFound(_)
             | AppError::ModelNotFound(_)
             | AppError::ModelNotSelected
             | AppError::ProviderAuthMissing(_) => 2,
             AppError::LlmRequestFailed(_)
+            | AppError::NeuronBootstrapFailed(_)
             | AppError::CompactionFailed(_)
             | AppError::AgentMaxIterations(_)
             | AppError::StorageError(_)
@@ -74,11 +80,13 @@ impl fmt::Display for AppError {
             AppError::InvalidInput(message)
             | AppError::ProviderAuthMissing(message)
             | AppError::LlmRequestFailed(message)
+            | AppError::NeuronBootstrapFailed(message)
             | AppError::CompactionFailed(message)
             | AppError::AgentMaxIterations(message)
             | AppError::StorageError(message)
             | AppError::RuntimeError(message) => write!(f, "{message}"),
             AppError::ConversationNotFound(id) => write!(f, "Conversation not found: {id}"),
+            AppError::NeuronNotFound(id) => write!(f, "Neuron not found: {id}"),
             AppError::SkillNotFound(name) => write!(f, "Skill not found: {name}"),
             AppError::ProviderNotFound(id) => write!(f, "Provider not found: {id}"),
             AppError::ModelNotFound(id) => write!(f, "Model not found: {id}"),

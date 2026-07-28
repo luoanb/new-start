@@ -9,6 +9,9 @@ use super::{
         MessageRole, ModelCallRequest, ModelCallResponse, ModelInfo, ProviderInfo, RuntimeStatus,
         SkillInfo,
     },
+    neuron_config::NeuronConfigReader,
+    neuron_manager::NeuronManager,
+    neuron_model::DefaultNeuronModelCaller,
     neuron_store::NeuronStore,
     providers::ProviderRegistry,
     session_tracker::SessionTracker,
@@ -25,6 +28,7 @@ pub struct Gateway {
     tool_registry: Option<ToolRegistry>,
     topic_store: Option<Arc<Mutex<TopicStore>>>,
     neuron_store: Option<Arc<Mutex<NeuronStore>>>,
+    neuron_manager: Arc<NeuronManager>,
     session_tracker: SessionTracker,
     current_conversation_id: String,
 }
@@ -60,10 +64,15 @@ impl Gateway {
             .init_table()?;
 
         let session_tracker = SessionTracker::new();
+        let neuron_manager = Arc::new(NeuronManager::new(
+            Arc::clone(&neuron_store),
+            Arc::new(DefaultNeuronModelCaller::new(providers.clone())),
+            NeuronConfigReader::new(store.root().to_path_buf()),
+        ));
 
         let tool_registry = Some(ToolRegistry::with_defaults_and_topics_and_neurons(
             Arc::clone(&topic_store),
-            Arc::clone(&neuron_store),
+            Arc::clone(&neuron_manager),
             session_tracker.clone(),
         ));
         let engine = Engine::with_tools(
@@ -80,6 +89,7 @@ impl Gateway {
             tool_registry,
             topic_store: Some(topic_store),
             neuron_store: Some(neuron_store),
+            neuron_manager,
             session_tracker: session_tracker,
             current_conversation_id,
         })
@@ -198,8 +208,7 @@ impl Gateway {
         let conversation_id = self.resolve_conversation_id(options.conversation_id.clone())?;
 
         // Register as a running session
-        self.session_tracker
-            .register(&conversation_id, None)?;
+        self.session_tracker.register(&conversation_id, None)?;
 
         // Engine dispatches by conversation.mode internally
         let result = self
@@ -244,8 +253,10 @@ impl Gateway {
         self.store.clear_conversation(&conversation_id)?;
 
         if self.current_conversation_id == conversation_id {
-            self.current_conversation_id =
-                self.store.create_conversation(None, ConversationMode::Chat)?.id;
+            self.current_conversation_id = self
+                .store
+                .create_conversation(None, ConversationMode::Chat)?
+                .id;
         }
 
         Ok(conversation_id)
@@ -263,7 +274,11 @@ impl Gateway {
             app_name: "agent-app".to_string(),
             storage_path: self.store.root().display().to_string(),
             current_conversation_id: self.current_conversation_id.clone(),
-            skill_count: self.tool_registry.as_ref().map(|r| r.list_definitions().len()).unwrap_or(0),
+            skill_count: self
+                .tool_registry
+                .as_ref()
+                .map(|r| r.list_definitions().len())
+                .unwrap_or(0),
             conversation_count: self.store.list_conversations()?.len(),
         })
     }
@@ -280,6 +295,10 @@ impl Gateway {
         self.neuron_store
             .clone()
             .ok_or_else(|| AppError::StorageError("NeuronStore not initialized".into()))
+    }
+
+    pub fn neuron_manager(&self) -> Arc<NeuronManager> {
+        Arc::clone(&self.neuron_manager)
     }
 
     /// Access the SessionTracker for TUI commands.
@@ -350,10 +369,16 @@ mod tests {
             .map(|skill| skill.name)
             .collect::<Vec<_>>();
 
-        assert!(skill_names.len() > 3, "expected many tools, got: {:?}", skill_names);
+        assert!(
+            skill_names.len() > 3,
+            "expected many tools, got: {:?}",
+            skill_names
+        );
         assert!(skill_names.contains(&"get_current_time".to_string()));
         assert!(skill_names.contains(&"echo".to_string()));
-        assert!(skill_names.contains(&"create_neuron".to_string()));
+        assert!(skill_names.contains(&"create_downstream_neuron".to_string()));
+        assert!(skill_names.contains(&"select_neuron_candidates".to_string()));
+        assert!(!skill_names.contains(&"create_neuron".to_string()));
         assert!(skill_names.contains(&"get_running_sessions".to_string()));
     }
 

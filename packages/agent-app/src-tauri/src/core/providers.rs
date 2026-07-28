@@ -8,12 +8,12 @@ use super::{
 use async_openai::{
     config::OpenAIConfig,
     types::chat::{
-        ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls, ChatCompletionRequestAssistantMessageArgs,
-        ChatCompletionRequestAssistantMessageContent, ChatCompletionRequestMessage,
-        ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestToolMessageArgs,
-        ChatCompletionRequestToolMessageContent, ChatCompletionRequestUserMessageArgs,
-        ChatCompletionTool, ChatCompletionTools, CreateChatCompletionRequestArgs, FinishReason,
-        FunctionCall, FunctionObject,
+        ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
+        ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestAssistantMessageContent,
+        ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
+        ChatCompletionRequestToolMessageArgs, ChatCompletionRequestToolMessageContent,
+        ChatCompletionRequestUserMessageArgs, ChatCompletionTool, ChatCompletionTools,
+        CreateChatCompletionRequestArgs, FinishReason, FunctionCall, FunctionObject,
     },
     Client,
 };
@@ -181,9 +181,10 @@ impl ProviderRegistry {
             .await
             .map_err(|error| AppError::LlmRequestFailed(error.to_string()))?;
 
-        let choice = response.choices.first().ok_or_else(|| {
-            AppError::LlmRequestFailed("Provider returned no choices".into())
-        })?;
+        let choice = response
+            .choices
+            .first()
+            .ok_or_else(|| AppError::LlmRequestFailed("Provider returned no choices".into()))?;
 
         // Parse finish_reason
         let finish_reason = match choice.finish_reason {
@@ -339,9 +340,9 @@ fn to_chat_message(message: &ModelMessage) -> AppResult<ChatCompletionRequestMes
         ModelMessageRole::Assistant => {
             let mut args = ChatCompletionRequestAssistantMessageArgs::default();
             if !message.content.is_empty() {
-                args.content(
-                    ChatCompletionRequestAssistantMessageContent::Text(message.content.clone()),
-                );
+                args.content(ChatCompletionRequestAssistantMessageContent::Text(
+                    message.content.clone(),
+                ));
             }
             if let Some(tc) = &message.tool_calls {
                 let tool_calls: Vec<ChatCompletionMessageToolCalls> = tc
@@ -368,9 +369,9 @@ fn to_chat_message(message: &ModelMessage) -> AppResult<ChatCompletionRequestMes
             })?;
             ChatCompletionRequestToolMessageArgs::default()
                 .tool_call_id(tool_call_id)
-                .content(
-                    ChatCompletionRequestToolMessageContent::Text(message.content.clone()),
-                )
+                .content(ChatCompletionRequestToolMessageContent::Text(
+                    message.content.clone(),
+                ))
                 .build()
                 .map(Into::into)
                 .map_err(|error| AppError::InvalidInput(error.to_string()))

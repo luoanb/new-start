@@ -196,10 +196,18 @@ fn print_models(models: Vec<ModelInfo>) {
         };
         let caps = {
             let mut parts = vec![];
-            if model.capabilities.chat { parts.push("chat"); }
-            if model.capabilities.tools { parts.push("tools"); }
-            if model.capabilities.streaming { parts.push("streaming"); }
-            if model.capabilities.structured_output { parts.push("json"); }
+            if model.capabilities.chat {
+                parts.push("chat");
+            }
+            if model.capabilities.tools {
+                parts.push("tools");
+            }
+            if model.capabilities.streaming {
+                parts.push("streaming");
+            }
+            if model.capabilities.structured_output {
+                parts.push("json");
+            }
             parts.join(" ")
         };
         println!(

@@ -2,8 +2,9 @@ use ratatui::widgets::ListState;
 use ratatui_textarea::TextArea;
 
 use crate::core::{
-    AppError, AppResult, ChatModelSelection, ChatOptions, Conversation, ConversationMode, Gateway,
-    MessageRole, ModelInfo, ProviderInfo, RuntimeStatus,
+    AppError, AppResult, CandidateQuery, ChatModelSelection, ChatOptions, Conversation,
+    ConversationMode, Gateway, MessageRole, ModelInfo, NeuronCreate, NeuronUpdate, ProviderInfo,
+    RuntimeStatus,
 };
 
 use super::commands::{self, Command};
@@ -109,7 +110,9 @@ impl TuiApp {
         let providers = gateway.list_providers();
 
         // Load history for the active session
-        let history = gateway.history(Some(active_session_id.clone())).unwrap_or_default();
+        let history = gateway
+            .history(Some(active_session_id.clone()))
+            .unwrap_or_default();
         let mut messages = Vec::new();
         for (i, msg) in history.iter().enumerate() {
             let role = match msg.role {
@@ -157,9 +160,8 @@ impl TuiApp {
         };
 
         // Add a startup status message
-        app.messages.push(TuiMessage::status(
-            "Agent App TUI started.".to_string(),
-        ));
+        app.messages
+            .push(TuiMessage::status("Agent App TUI started.".to_string()));
         if app.active_model.is_none() {
             app.messages.push(TuiMessage::status(
                 "No model selected. Use /provider then /model <provider> <model>.".to_string(),
@@ -216,14 +218,12 @@ impl TuiApp {
                     self.select_current_session();
                 }
             }
-            TuiAction::NewSession => {
-                match self.create_new_session(ConversationMode::Chat) {
-                    Ok(()) => {}
-                    Err(error) => {
-                        self.error_banner = Some(TuiErrorView::from(error));
-                    }
+            TuiAction::NewSession => match self.create_new_session(ConversationMode::Chat) {
+                Ok(()) => {}
+                Err(error) => {
+                    self.error_banner = Some(TuiErrorView::from(error));
                 }
-            }
+            },
             TuiAction::FocusNext => {
                 self.focus = match self.focus {
                     FocusPane::Input => FocusPane::Chat,
@@ -247,8 +247,7 @@ impl TuiApp {
                     let len = self.conversations.len() + 2;
                     if len > 0 {
                         let i = self.session_list_state.selected().unwrap_or(0);
-                        self.session_list_state
-                            .select(Some((i + len - 1) % len));
+                        self.session_list_state.select(Some((i + len - 1) % len));
                     }
                 } else {
                     self.scroll_offset = self.scroll_offset.saturating_add(amount);
@@ -320,8 +319,7 @@ impl TuiApp {
                     let len = self.conversations.len();
                     if len > 0 {
                         let i = self.session_list_state.selected().unwrap_or(0);
-                        self.session_list_state
-                            .select(Some((i + len - 1) % len));
+                        self.session_list_state.select(Some((i + len - 1) % len));
                     }
                 }
             }
@@ -384,9 +382,8 @@ impl TuiApp {
                         .map(|s| format!("  {} - {}", s.name, s.description))
                         .collect::<Vec<_>>()
                         .join("\n");
-                    self.messages.push(TuiMessage::status(format!(
-                        "Skills:\n{text}"
-                    )));
+                    self.messages
+                        .push(TuiMessage::status(format!("Skills:\n{text}")));
                 }
             }
             Command::Providers => {
@@ -447,38 +444,38 @@ impl TuiApp {
                     self.focus = FocusPane::SessionsList;
                 }
             }
-            Command::History => {
-                match self.gateway.history(Some(self.active_session_id.clone())) {
-                    Ok(history) => {
-                        if history.is_empty() {
-                            self.messages
-                                .push(TuiMessage::status("No history.".into()));
-                        } else {
-                            let lines: Vec<String> = history
-                                .iter()
-                                .map(|msg| {
-                                    let role = match msg.role {
-                                        MessageRole::User => "user",
-                                        MessageRole::Assistant => "assistant",
-                                        MessageRole::System => "system",
-                                        MessageRole::Compaction => "compaction",
-                                    };
-                                    format!("  [{role}] {}", msg.content)
-                                })
-                                .collect();
-                            self.messages.push(TuiMessage::status(format!(
-                                "History:\n{}",
-                                lines.join("\n")
-                            )));
-                        }
-                    }
-                    Err(error) => {
-                        self.error_banner = Some(TuiErrorView::from(error));
+            Command::History => match self.gateway.history(Some(self.active_session_id.clone())) {
+                Ok(history) => {
+                    if history.is_empty() {
+                        self.messages.push(TuiMessage::status("No history.".into()));
+                    } else {
+                        let lines: Vec<String> = history
+                            .iter()
+                            .map(|msg| {
+                                let role = match msg.role {
+                                    MessageRole::User => "user",
+                                    MessageRole::Assistant => "assistant",
+                                    MessageRole::System => "system",
+                                    MessageRole::Compaction => "compaction",
+                                };
+                                format!("  [{role}] {}", msg.content)
+                            })
+                            .collect();
+                        self.messages.push(TuiMessage::status(format!(
+                            "History:\n{}",
+                            lines.join("\n")
+                        )));
                     }
                 }
-            }
+                Err(error) => {
+                    self.error_banner = Some(TuiErrorView::from(error));
+                }
+            },
             Command::Clear => {
-                match self.gateway.clear_conversation(Some(self.active_session_id.clone())) {
+                match self
+                    .gateway
+                    .clear_conversation(Some(self.active_session_id.clone()))
+                {
                     Ok(new_id) => {
                         self.messages.clear();
                         self.active_session_id = new_id;
@@ -491,25 +488,23 @@ impl TuiApp {
                     }
                 }
             }
-            Command::Status => {
-                match self.gateway.status() {
-                    Ok(s) => {
-                        let model_label = self
-                            .active_model
-                            .as_ref()
-                            .map(|m| format!("{}/{}", m.provider_id, m.model_id))
-                            .unwrap_or_else(|| "none".to_string());
-                        self.messages.push(TuiMessage::status(format!(
+            Command::Status => match self.gateway.status() {
+                Ok(s) => {
+                    let model_label = self
+                        .active_model
+                        .as_ref()
+                        .map(|m| format!("{}/{}", m.provider_id, m.model_id))
+                        .unwrap_or_else(|| "none".to_string());
+                    self.messages.push(TuiMessage::status(format!(
                             "Status:\n  app: {}\n  storage: {}\n  session: {}\n  model: {}\n  skills: {}\n  conversations: {}",
                             s.app_name, s.storage_path, s.current_conversation_id,
                             model_label, s.skill_count, s.conversation_count
                         )));
-                    }
-                    Err(error) => {
-                        self.error_banner = Some(TuiErrorView::from(error));
-                    }
                 }
-            }
+                Err(error) => {
+                    self.error_banner = Some(TuiErrorView::from(error));
+                }
+            },
             Command::Config => {
                 // Show current config info from status
                 match self.gateway.status() {
@@ -527,8 +522,11 @@ impl TuiApp {
             Command::Call(provider_id, model_id, message) => {
                 let task_id = format!("call-{}", self.next_task_id());
                 let label = format!("calling {provider_id}/{model_id}");
-                self.tasks
-                    .push(TuiTaskBlock::new(task_id.clone(), TuiTaskKind::ModelCall, label));
+                self.tasks.push(TuiTaskBlock::new(
+                    task_id.clone(),
+                    TuiTaskKind::ModelCall,
+                    label,
+                ));
 
                 match self
                     .gateway
@@ -593,18 +591,16 @@ impl TuiApp {
                 self.handle_topic_action(args);
             }
             Command::NeuronAction(args) => {
-                self.handle_neuron_action(args);
+                self.handle_neuron_action(args).await;
             }
-            Command::Close(session_id) => {
-                match self.gateway.session_tracker().close(&session_id) {
-                    Ok(msg) => {
-                        self.messages.push(TuiMessage::status(msg));
-                    }
-                    Err(e) => {
-                        self.error_banner = Some(TuiErrorView::from(e));
-                    }
+            Command::Close(session_id) => match self.gateway.session_tracker().close(&session_id) {
+                Ok(msg) => {
+                    self.messages.push(TuiMessage::status(msg));
                 }
-            }
+                Err(e) => {
+                    self.error_banner = Some(TuiErrorView::from(e));
+                }
+            },
             Command::Exit => {
                 self.should_quit = true;
             }
@@ -626,8 +622,11 @@ impl TuiApp {
         // Create a task block for this model call
         let task_id = format!("call-{}", self.next_task_id());
         let label = format!("calling {}/{}", model.provider_id, model.model_id);
-        self.tasks
-            .push(TuiTaskBlock::new(task_id.clone(), TuiTaskKind::ModelCall, label));
+        self.tasks.push(TuiTaskBlock::new(
+            task_id.clone(),
+            TuiTaskKind::ModelCall,
+            label,
+        ));
 
         // Call the model (dispatches by conversation.mode)
         let result = self
@@ -694,9 +693,10 @@ impl TuiApp {
                     }
                 },
                 Err(e) => {
-                    self.error_banner = Some(TuiErrorView::from(AppError::StorageError(
-                        format!("Lock error: {}", e),
-                    )));
+                    self.error_banner = Some(TuiErrorView::from(AppError::StorageError(format!(
+                        "Lock error: {}",
+                        e
+                    ))));
                 }
             },
             Err(e) => {
@@ -747,9 +747,11 @@ impl TuiApp {
                             }
                             Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
                         },
-                        Err(e) => self.error_banner = Some(TuiErrorView::from(
-                            AppError::StorageError(format!("Lock error: {}", e)),
-                        )),
+                        Err(e) => {
+                            self.error_banner = Some(TuiErrorView::from(AppError::StorageError(
+                                format!("Lock error: {}", e),
+                            )))
+                        }
                     },
                     Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
                 }
@@ -773,9 +775,7 @@ impl TuiApp {
                                             update.status = Some(s);
                                         } else {
                                             self.error_banner = Some(TuiErrorView::from(
-                                                AppError::InvalidInput(
-                                                    "Invalid status".into(),
-                                                ),
+                                                AppError::InvalidInput("Invalid status".into()),
                                             ));
                                             return;
                                         }
@@ -787,11 +787,10 @@ impl TuiApp {
                                     }
                                     "description" => update.description = Some(value),
                                     _ => {
-                                        self.error_banner = Some(TuiErrorView::from(
-                                            AppError::InvalidInput(format!(
-                                                "Unknown field: {field}"
-                                            )),
-                                        ));
+                                        self.error_banner =
+                                            Some(TuiErrorView::from(AppError::InvalidInput(
+                                                format!("Unknown field: {field}"),
+                                            )));
                                         return;
                                     }
                                 }
@@ -807,9 +806,11 @@ impl TuiApp {
                                     }
                                 }
                             }
-                            Err(e) => self.error_banner = Some(TuiErrorView::from(
-                                AppError::StorageError(format!("Lock error: {}", e)),
-                            )),
+                            Err(e) => {
+                                self.error_banner = Some(TuiErrorView::from(
+                                    AppError::StorageError(format!("Lock error: {}", e)),
+                                ))
+                            }
                         },
                         Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
                     }
@@ -818,24 +819,24 @@ impl TuiApp {
                         Ok(store_arc) => match store_arc.lock() {
                             Ok(store) => match store.delete(id) {
                                 Ok(true) => {
-                                    self.messages.push(TuiMessage::status(format!(
-                                        "Deleted topic: {id}"
-                                    )));
+                                    self.messages
+                                        .push(TuiMessage::status(format!("Deleted topic: {id}")));
                                 }
                                 Ok(false) => {
-                                    self.error_banner = Some(TuiErrorView::from(
-                                        AppError::ConversationNotFound(format!(
-                                            "Topic not found: {id}"
-                                        )),
-                                    ));
+                                    self.error_banner =
+                                        Some(TuiErrorView::from(AppError::ConversationNotFound(
+                                            format!("Topic not found: {id}"),
+                                        )));
                                 }
                                 Err(e) => {
                                     self.error_banner = Some(TuiErrorView::from(e));
                                 }
                             },
-                            Err(e) => self.error_banner = Some(TuiErrorView::from(
-                                AppError::StorageError(format!("Lock error: {}", e)),
-                            )),
+                            Err(e) => {
+                                self.error_banner = Some(TuiErrorView::from(
+                                    AppError::StorageError(format!("Lock error: {}", e)),
+                                ))
+                            }
                         },
                         Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
                     }
@@ -855,10 +856,7 @@ impl TuiApp {
                                         format!("Progress: {}%", topic.progress),
                                     ];
                                     if !topic.description.is_empty() {
-                                        lines.push(format!(
-                                            "Description: {}",
-                                            topic.description
-                                        ));
+                                        lines.push(format!("Description: {}", topic.description));
                                     }
                                     if !topic.scope_in.is_empty() {
                                         lines.push("Scope-in:".to_string());
@@ -869,27 +867,26 @@ impl TuiApp {
                                     if let Some(ref extra) = topic.extra {
                                         lines.push(format!(
                                             "Extra: {}",
-                                            serde_json::to_string_pretty(extra)
-                                                .unwrap_or_default()
+                                            serde_json::to_string_pretty(extra).unwrap_or_default()
                                         ));
                                     }
-                                    self.messages
-                                        .push(TuiMessage::status(lines.join("\n")));
+                                    self.messages.push(TuiMessage::status(lines.join("\n")));
                                 }
                                 Ok(None) => {
-                                    self.error_banner = Some(TuiErrorView::from(
-                                        AppError::ConversationNotFound(format!(
-                                            "Topic not found: {id}"
-                                        )),
-                                    ));
+                                    self.error_banner =
+                                        Some(TuiErrorView::from(AppError::ConversationNotFound(
+                                            format!("Topic not found: {id}"),
+                                        )));
                                 }
                                 Err(e) => {
                                     self.error_banner = Some(TuiErrorView::from(e));
                                 }
                             },
-                            Err(e) => self.error_banner = Some(TuiErrorView::from(
-                                AppError::StorageError(format!("Lock error: {}", e)),
-                            )),
+                            Err(e) => {
+                                self.error_banner = Some(TuiErrorView::from(
+                                    AppError::StorageError(format!("Lock error: {}", e)),
+                                ))
+                            }
                         },
                         Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
                     }
@@ -899,15 +896,20 @@ impl TuiApp {
     }
 
     /// Handle `/neuron <args>` commands.
-    fn handle_neuron_action(&mut self, args: Vec<String>) {
+    async fn handle_neuron_action(&mut self, args: Vec<String>) {
         if args.is_empty() {
             self.messages.push(TuiMessage::status(
                 concat!(
                     "Neuron commands:\n",
                     "  /neuron list                          - List all neurons\n",
                     "  /neuron new <desc> [content]          - Create a new neuron\n",
+                    "  /neuron candidates <n> [--source-id <id>|--system-type <type>] [--min-new <n>]\n",
+                    "  /neuron ensure-creator                - Ensure create_neuron system node\n",
                     "  /neuron <id>                          - View neuron details\n",
-                    "  /neuron <id> set <field> <val>        - Update a field (desc/content/weight)\n",
+                    "  /neuron <id> set <field> <val>        - Update desc/content\n",
+                    "  /neuron <id> weight <delta>           - Add or subtract weight\n",
+                    "  /neuron <id> system-type <type|none>  - Set system type\n",
+                    "  /neuron <id> tools <id,...>            - Set allowed tool IDs\n",
                     "  /neuron <id> delete                   - Delete a neuron\n",
                     "  /neuron <id> connect <target> [weight]- Create/update a connection\n",
                     "  /neuron <id> disconnect <target>      - Remove a connection\n",
@@ -919,6 +921,7 @@ impl TuiApp {
         }
 
         let action = args[0].as_str();
+        let manager = self.gateway.neuron_manager();
         let store_arc = match self.gateway.neuron_store() {
             Ok(s) => s,
             Err(e) => {
@@ -928,47 +931,126 @@ impl TuiApp {
         };
 
         match action {
-            "list" => {
-                match store_arc.lock() {
-                    Ok(store) => match store.list_neurons() {
-                        Ok(neurons) => {
-                            if neurons.is_empty() {
-                                self.messages
-                                    .push(TuiMessage::status("No neurons found.".into()));
-                                return;
-                            }
-                            let mut lines = vec!["Neurons:".to_string()];
-                            for n in &neurons {
-                                lines.push(format!(
-                                    "  [w:{:+.1}] {} (id: {})",
-                                    n.weight, n.desc, n.id
-                                ));
-                            }
-                            self.messages.push(TuiMessage::status(lines.join("\n")));
+            "candidates" if args.len() >= 2 => {
+                let n = match args[1].parse::<usize>() {
+                    Ok(n) => n,
+                    Err(_) => {
+                        self.error_banner = Some(TuiErrorView::from(AppError::InvalidInput(
+                            "candidates requires an integer n".into(),
+                        )));
+                        return;
+                    }
+                };
+                let mut source_id = None;
+                let mut system_type = None;
+                let mut min_new = 0usize;
+                let mut index = 2;
+                while index < args.len() {
+                    match args[index].as_str() {
+                        "--source-id" if index + 1 < args.len() => {
+                            source_id = Some(args[index + 1].clone());
+                            index += 2;
                         }
-                        Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
-                    },
-                    Err(e) => self.error_banner = Some(TuiErrorView::from(
-                        AppError::StorageError(format!("Lock error: {}", e)),
-                    )),
+                        "--system-type" if index + 1 < args.len() => {
+                            system_type = Some(args[index + 1].clone());
+                            index += 2;
+                        }
+                        "--min-new" if index + 1 < args.len() => {
+                            match args[index + 1].parse::<usize>() {
+                                Ok(value) => min_new = value,
+                                Err(_) => {
+                                    self.error_banner =
+                                        Some(TuiErrorView::from(AppError::InvalidInput(
+                                            "--min-new requires an integer".into(),
+                                        )));
+                                    return;
+                                }
+                            }
+                            index += 2;
+                        }
+                        unknown => {
+                            self.error_banner = Some(TuiErrorView::from(AppError::InvalidInput(
+                                format!("Unknown candidates argument: {unknown}"),
+                            )));
+                            return;
+                        }
+                    }
+                }
+                match manager
+                    .select_candidates(CandidateQuery {
+                        n,
+                        source_id,
+                        system_type,
+                        min_new,
+                    })
+                    .await
+                {
+                    Ok(neurons) => {
+                        let lines = neurons
+                            .iter()
+                            .map(|neuron| {
+                                format!(
+                                    "  [w:{:+.1}] {} (id: {})",
+                                    neuron.weight, neuron.desc, neuron.id
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        self.messages
+                            .push(TuiMessage::status(format!("Neuron candidates:\n{lines}")));
+                    }
+                    Err(error) => self.error_banner = Some(TuiErrorView::from(error)),
                 }
             }
+            "ensure-creator" => match manager.ensure_creator_for_admin() {
+                Ok(neuron) => self.messages.push(TuiMessage::status(format!(
+                    "Creator neuron ready: {} (id: {})",
+                    neuron.desc, neuron.id
+                ))),
+                Err(error) => self.error_banner = Some(TuiErrorView::from(error)),
+            },
+            "list" => match store_arc.lock() {
+                Ok(store) => match store.list_neurons() {
+                    Ok(neurons) => {
+                        if neurons.is_empty() {
+                            self.messages
+                                .push(TuiMessage::status("No neurons found.".into()));
+                            return;
+                        }
+                        let mut lines = vec!["Neurons:".to_string()];
+                        for n in &neurons {
+                            lines.push(format!("  [w:{:+.1}] {} (id: {})", n.weight, n.desc, n.id));
+                        }
+                        self.messages.push(TuiMessage::status(lines.join("\n")));
+                    }
+                    Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                },
+                Err(e) => {
+                    self.error_banner = Some(TuiErrorView::from(AppError::StorageError(format!(
+                        "Lock error: {}",
+                        e
+                    ))))
+                }
+            },
             "new" if args.len() >= 2 => {
                 let desc = args[1].clone();
-                let content = if args.len() >= 3 { args[2..].join(" ") } else { String::new() };
-                match store_arc.lock() {
-                    Ok(store) => match store.create_neuron(&desc, &content, 0.0) {
-                        Ok(n) => {
-                            self.messages.push(TuiMessage::status(format!(
-                                "Created neuron '{}' (id: {})",
-                                n.desc, n.id
-                            )));
-                        }
-                        Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
-                    },
-                    Err(e) => self.error_banner = Some(TuiErrorView::from(
-                        AppError::StorageError(format!("Lock error: {}", e)),
-                    )),
+                let content = if args.len() >= 3 {
+                    args[2..].join(" ")
+                } else {
+                    String::new()
+                };
+                match manager.create_for_admin(NeuronCreate {
+                    desc,
+                    content,
+                    ..Default::default()
+                }) {
+                    Ok(n) => {
+                        self.messages.push(TuiMessage::status(format!(
+                            "Created neuron '{}' (id: {})",
+                            n.desc, n.id
+                        )));
+                    }
+                    Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
                 }
             }
             "network" if args.len() >= 2 => {
@@ -998,9 +1080,11 @@ impl TuiApp {
                         }
                         Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
                     },
-                    Err(e) => self.error_banner = Some(TuiErrorView::from(
-                        AppError::StorageError(format!("Lock error: {}", e)),
-                    )),
+                    Err(e) => {
+                        self.error_banner = Some(TuiErrorView::from(AppError::StorageError(
+                            format!("Lock error: {}", e),
+                        )))
+                    }
                 }
             }
             id => {
@@ -1008,65 +1092,77 @@ impl TuiApp {
                 if args.len() >= 3 && args[1] == "set" && args.len() >= 4 {
                     let field = args[2].as_str();
                     let value = args[3..].join(" ");
-                    match store_arc.lock() {
-                        Ok(store) => {
-                            let mut update = crate::core::NeuronUpdate::default();
-                            match field {
-                                "desc" => update.desc = Some(value),
-                                "content" => update.content = Some(value),
-                                "weight" => {
-                                    if let Ok(w) = value.parse::<f64>() {
-                                        update.weight = Some(w);
-                                    } else {
-                                        self.error_banner = Some(TuiErrorView::from(
-                                            AppError::InvalidInput("Invalid weight".into()),
-                                        ));
-                                        return;
-                                    }
-                                }
-                                _ => {
-                                    self.error_banner = Some(TuiErrorView::from(
-                                        AppError::InvalidInput(format!(
-                                            "Unknown field: {field}"
-                                        )),
-                                    ));
-                                    return;
-                                }
-                            }
-                            match store.update_neuron(id, update) {
-                                Ok(n) => {
-                                    self.messages.push(TuiMessage::status(format!(
-                                        "Updated neuron '{}'",
-                                        n.desc
-                                    )));
-                                }
-                                Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
-                            }
+                    let update = match field {
+                        "desc" => NeuronUpdate {
+                            desc: Some(value),
+                            content: None,
+                        },
+                        "content" => NeuronUpdate {
+                            desc: None,
+                            content: Some(value),
+                        },
+                        _ => {
+                            self.error_banner = Some(TuiErrorView::from(AppError::InvalidInput(
+                                format!("Unknown field: {field}; expected desc or content"),
+                            )));
+                            return;
                         }
-                        Err(e) => self.error_banner = Some(TuiErrorView::from(
-                            AppError::StorageError(format!("Lock error: {}", e)),
-                        )),
+                    };
+                    match manager.update_for_admin(id, update) {
+                        Ok(n) => self
+                            .messages
+                            .push(TuiMessage::status(format!("Updated neuron '{}'", n.desc))),
+                        Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                    }
+                } else if args.len() >= 3 && args[1] == "weight" {
+                    let delta = match args[2].parse::<f64>() {
+                        Ok(delta) => delta,
+                        Err(_) => {
+                            self.error_banner = Some(TuiErrorView::from(AppError::InvalidInput(
+                                "Invalid weight delta".into(),
+                            )));
+                            return;
+                        }
+                    };
+                    match manager.adjust_weight(id, delta) {
+                        Ok(n) => self.messages.push(TuiMessage::status(format!(
+                            "Adjusted neuron '{}' weight to {}",
+                            n.desc, n.weight
+                        ))),
+                        Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                    }
+                } else if args.len() >= 3 && args[1] == "system-type" {
+                    let system_type = (args[2] != "none").then_some(args[2].as_str());
+                    match manager.set_system_type_for_admin(id, system_type) {
+                        Ok(n) => self.messages.push(TuiMessage::status(format!(
+                            "Updated neuron '{}' system type",
+                            n.desc
+                        ))),
+                        Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                    }
+                } else if args.len() >= 3 && args[1] == "tools" {
+                    let tool_ids = args[2]
+                        .split(',')
+                        .filter(|value| !value.trim().is_empty())
+                        .map(|value| value.trim().to_string())
+                        .collect();
+                    match manager.set_tool_ids_for_admin(id, tool_ids) {
+                        Ok(n) => self.messages.push(TuiMessage::status(format!(
+                            "Updated neuron '{}' tool IDs",
+                            n.desc
+                        ))),
+                        Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
                     }
                 } else if args.len() >= 2 && args[1] == "delete" {
-                    match store_arc.lock() {
-                        Ok(store) => match store.delete_neuron(id) {
-                            Ok(true) => {
-                                self.messages.push(TuiMessage::status(format!(
-                                    "Deleted neuron: {id}"
-                                )));
-                            }
-                            Ok(false) => {
-                                self.error_banner = Some(TuiErrorView::from(
-                                    AppError::ConversationNotFound(format!(
-                                        "Neuron not found: {id}"
-                                    )),
-                                ));
-                            }
-                            Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
-                        },
-                        Err(e) => self.error_banner = Some(TuiErrorView::from(
-                            AppError::StorageError(format!("Lock error: {}", e)),
-                        )),
+                    match manager.delete_for_admin(id) {
+                        Ok(true) => self
+                            .messages
+                            .push(TuiMessage::status(format!("Deleted neuron: {id}"))),
+                        Ok(false) => {
+                            self.error_banner =
+                                Some(TuiErrorView::from(AppError::NeuronNotFound(id.to_string())));
+                        }
+                        Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
                     }
                 } else if args.len() >= 3 && args[1] == "connect" {
                     let target = args[2].clone();
@@ -1075,79 +1171,67 @@ impl TuiApp {
                     } else {
                         1.0
                     };
-                    match store_arc.lock() {
-                        Ok(store) => match store.link(id, &target, weight) {
-                            Ok(_) => {
-                                self.messages.push(TuiMessage::status(format!(
-                                    "Linked {} --[{}]--> {}",
-                                    id, weight, target
-                                )));
-                            }
-                            Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
-                        },
-                        Err(e) => self.error_banner = Some(TuiErrorView::from(
-                            AppError::StorageError(format!("Lock error: {}", e)),
-                        )),
+                    match manager.link_for_admin(id, &target, weight) {
+                        Ok(_) => self.messages.push(TuiMessage::status(format!(
+                            "Linked {} --[{}]--> {}",
+                            id, weight, target
+                        ))),
+                        Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
                     }
                 } else if args.len() >= 3 && args[1] == "disconnect" {
                     let target = args[2].clone();
-                    match store_arc.lock() {
-                        Ok(store) => match store.unlink(id, &target) {
-                            Ok(true) => {
-                                self.messages.push(TuiMessage::status(format!(
-                                    "Removed link {} -> {}",
-                                    id, target
-                                )));
-                            }
-                            Ok(false) => {
-                                self.error_banner = Some(TuiErrorView::from(
-                                    AppError::ConversationNotFound(format!(
-                                        "Link not found: {id} -> {target}"
-                                    )),
-                                ));
-                            }
-                            Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
-                        },
-                        Err(e) => self.error_banner = Some(TuiErrorView::from(
-                            AppError::StorageError(format!("Lock error: {}", e)),
-                        )),
+                    match manager.unlink_for_admin(id, &target) {
+                        Ok(true) => self.messages.push(TuiMessage::status(format!(
+                            "Removed link {} -> {}",
+                            id, target
+                        ))),
+                        Ok(false) => {
+                            self.error_banner =
+                                Some(TuiErrorView::from(AppError::ConversationNotFound(format!(
+                                    "Link not found: {id} -> {target}"
+                                ))));
+                        }
+                        Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
                     }
                 } else {
                     // View neuron details
                     match store_arc.lock() {
-                        Ok(store) => {
-                            match store.get_neuron(id) {
-                                Ok(Some(n)) => {
-                                    let conns = store.get_connections(id).unwrap_or_default();
-                                    let mut lines = vec![
-                                        format!("Neuron: {} (id: {})", n.desc, n.id),
-                                        format!("Content: {}", n.content),
-                                        format!("Weight: {}", n.weight),
-                                    ];
-                                    if !conns.is_empty() {
-                                        lines.push("Connections:".into());
-                                        for c in &conns {
-                                            lines.push(format!(
-                                                "  {} --[{}]--> {}",
-                                                c.source, c.weight, c.target
-                                            ));
-                                        }
+                        Ok(store) => match store.get_neuron(id) {
+                            Ok(Some(n)) => {
+                                let conns = store.get_connections(id).unwrap_or_default();
+                                let mut lines = vec![
+                                    format!("Neuron: {} (id: {})", n.desc, n.id),
+                                    format!("Content: {}", n.content),
+                                    format!("Weight: {}", n.weight),
+                                    format!(
+                                        "System type: {}",
+                                        n.system_type.as_deref().unwrap_or("-")
+                                    ),
+                                    format!("Tool IDs: {}", n.tool_ids.join(", ")),
+                                ];
+                                if !conns.is_empty() {
+                                    lines.push("Connections:".into());
+                                    for c in &conns {
+                                        lines.push(format!(
+                                            "  {} --[{}]--> {}",
+                                            c.source, c.weight, c.target
+                                        ));
                                     }
-                                    self.messages.push(TuiMessage::status(lines.join("\n")));
                                 }
-                                Ok(None) => {
-                                    self.error_banner = Some(TuiErrorView::from(
-                                        AppError::ConversationNotFound(format!(
-                                            "Neuron not found: {id}"
-                                        )),
-                                    ));
-                                }
-                                Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                                self.messages.push(TuiMessage::status(lines.join("\n")));
                             }
+                            Ok(None) => {
+                                self.error_banner = Some(TuiErrorView::from(
+                                    AppError::NeuronNotFound(id.to_string()),
+                                ));
+                            }
+                            Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                        },
+                        Err(e) => {
+                            self.error_banner = Some(TuiErrorView::from(AppError::StorageError(
+                                format!("Lock error: {}", e),
+                            )))
                         }
-                        Err(e) => self.error_banner = Some(TuiErrorView::from(
-                            AppError::StorageError(format!("Lock error: {}", e)),
-                        )),
                     }
                 }
             }
@@ -1159,10 +1243,7 @@ impl TuiApp {
         self.active_session_id = session_id.clone();
         self.messages.clear();
 
-        let history = self
-            .gateway
-            .history(Some(session_id))
-            .unwrap_or_default();
+        let history = self.gateway.history(Some(session_id)).unwrap_or_default();
         for (i, msg) in history.iter().enumerate() {
             let role = match msg.role {
                 MessageRole::User => TuiMessageRole::User,

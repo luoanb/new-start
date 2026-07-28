@@ -46,30 +46,23 @@ impl Command {
             _ => {
                 let parts: Vec<&str> = trimmed.splitn(4, ' ').collect();
                 match parts[0] {
-                    "/model" if parts.len() >= 3 => Some(Self::Model(
-                        parts[1].to_string(),
-                        parts[2].to_string(),
-                    )),
-                    "/provider" if parts.len() >= 2 => {
-                        Some(Self::Provider(parts[1].to_string()))
+                    "/model" if parts.len() >= 3 => {
+                        Some(Self::Model(parts[1].to_string(), parts[2].to_string()))
                     }
-                    "/models" if parts.len() >= 2 => {
-                        Some(Self::Models(parts[1].to_string()))
-                    }
+                    "/provider" if parts.len() >= 2 => Some(Self::Provider(parts[1].to_string())),
+                    "/models" if parts.len() >= 2 => Some(Self::Models(parts[1].to_string())),
                     "/call" if parts.len() >= 4 => Some(Self::Call(
                         parts[1].to_string(),
                         parts[2].to_string(),
                         parts[3..].join(" "),
                     )),
-                    "/topic" if parts.len() >= 1 => {
-                        Some(Self::TopicAction(parts[1..].iter().map(|s| s.to_string()).collect()))
-                    }
-                    "/neuron" if parts.len() >= 1 => {
-                        Some(Self::NeuronAction(parts[1..].iter().map(|s| s.to_string()).collect()))
-                    }
-                    "/close" if parts.len() >= 2 => {
-                        Some(Self::Close(parts[1].to_string()))
-                    }
+                    "/topic" if parts.len() >= 1 => Some(Self::TopicAction(
+                        parts[1..].iter().map(|s| s.to_string()).collect(),
+                    )),
+                    "/neuron" if parts.len() >= 1 => Some(Self::NeuronAction(
+                        parts[1..].iter().map(|s| s.to_string()).collect(),
+                    )),
+                    "/close" if parts.len() >= 2 => Some(Self::Close(parts[1].to_string())),
                     _ => None,
                 }
             }
@@ -98,7 +91,7 @@ pub fn cmd_help_text() -> Vec<(String, String)> {
         ("/compact".into(), "Manually compress current conversation".into()),
         ("/call <p> <m> <msg>".into(), "Call a model directly".into()),
         ("/topic <cmd>".into(), "Topic management: list, new, <id>, <id> set, <id> delete (use /topic alone for help)".into()),
-        ("/neuron <cmd>".into(), "Neuron management: list, new, <id>, <id> set, <id> delete, <id> connect, <id> disconnect, network (use /neuron alone for help)".into()),
+        ("/neuron <cmd>".into(), "Neuron management: list, new, candidates, weight, tools, system-type, connect, disconnect, network (use /neuron alone for help)".into()),
         ("/close <session_id>".into(), "Close a running session".into()),
         ("/exit".into(), "Quit the application".into()),
     ]
@@ -111,12 +104,7 @@ pub fn cmd_provider_text(providers: &[ProviderInfo]) -> String {
 
     providers
         .iter()
-        .map(|p| {
-            format!(
-                "  {} - {} (auth: {})",
-                p.id, p.display_name, p.auth_env
-            )
-        })
+        .map(|p| format!("  {} - {} (auth: {})", p.id, p.display_name, p.auth_env))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -173,10 +161,8 @@ pub fn cmd_models_text(models: &[ModelInfo]) -> String {
 
             if let Some(extras) = &m.capabilities.extras {
                 if !extras.is_empty() {
-                    let items: Vec<String> = extras
-                        .iter()
-                        .map(|(k, v)| format!("{k}: {v}"))
-                        .collect();
+                    let items: Vec<String> =
+                        extras.iter().map(|(k, v)| format!("{k}: {v}")).collect();
                     out.push_str(&format!("\n    extras  : {}", items.join(", ")));
                 }
             }

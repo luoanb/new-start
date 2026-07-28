@@ -296,7 +296,10 @@ impl Engine {
 ///
 /// - Chat  mode: skip messages with tool_calls or tool_call_id
 /// - Agent mode: include all messages (tool_calls / tool results preserved)
-fn build_context(conversation: &super::models::Conversation, mode: &ConversationMode) -> Vec<ModelMessage> {
+fn build_context(
+    conversation: &super::models::Conversation,
+    mode: &ConversationMode,
+) -> Vec<ModelMessage> {
     let summarized: HashSet<String> = conversation
         .messages
         .iter()

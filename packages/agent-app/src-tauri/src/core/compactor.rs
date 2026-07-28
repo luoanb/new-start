@@ -128,9 +128,7 @@ impl Compactor {
 
         // Build summary via LLM
         let prompt = compaction_prompt(&old_messages);
-        let summary = self
-            .call_summary_llm(providers, model, &prompt)
-            .await?;
+        let summary = self.call_summary_llm(providers, model, &prompt).await?;
 
         // Create a Compaction message with timestamps of summarized messages
         let compaction_msg = Message {
@@ -173,9 +171,7 @@ impl Compactor {
 
         // Build summary via LLM
         let prompt = compaction_prompt(&old_messages);
-        let summary = self
-            .call_summary_llm(providers, model, &prompt)
-            .await?;
+        let summary = self.call_summary_llm(providers, model, &prompt).await?;
 
         // Create a Compaction message with timestamps of summarized messages
         let compaction_msg = Message {
