@@ -714,10 +714,12 @@ impl TuiApp {
                     "  /topic list                 - List all topics\n",
                     "  /topic new <name>           - Create a new topic\n",
                     "  /topic <id>                 - View topic details\n",
-                    "  /topic <id> set <f> <v>     - Update a field (name/status/description/progress)\n",
+                    "  /topic <id> set <f> <v>     - Update name/description\n",
+                    "  /topic <id> scope-add <goal> --done <contract>\n",
+                    "  /topic <id> scope-delete <item_id>\n",
+                    "  /topic <id> scope-complete <item_id>\n",
+                    "  /topic <id> pause|resume\n",
                     "  /topic <id> delete          - Delete a topic\n",
-                    "\n",
-                    "Status values: todo, in_progress, paused, done, cancelled"
                 )
                 .to_string(),
             ));
@@ -767,24 +769,6 @@ impl TuiApp {
                                 let mut update = crate::core::TopicUpdate::default();
                                 match field {
                                     "name" => update.name = Some(value),
-                                    "status" => {
-                                        let json = format!("\"{}\"", value);
-                                        if let Ok(s) =
-                                            serde_json::from_str::<crate::core::TopicStatus>(&json)
-                                        {
-                                            update.status = Some(s);
-                                        } else {
-                                            self.error_banner = Some(TuiErrorView::from(
-                                                AppError::InvalidInput("Invalid status".into()),
-                                            ));
-                                            return;
-                                        }
-                                    }
-                                    "progress" => {
-                                        if let Ok(p) = value.parse::<u8>() {
-                                            update.progress = Some(p.min(100));
-                                        }
-                                    }
                                     "description" => update.description = Some(value),
                                     _ => {
                                         self.error_banner =
@@ -804,6 +788,93 @@ impl TuiApp {
                                     Err(e) => {
                                         self.error_banner = Some(TuiErrorView::from(e));
                                     }
+                                }
+                            }
+                            Err(e) => {
+                                self.error_banner = Some(TuiErrorView::from(
+                                    AppError::StorageError(format!("Lock error: {}", e)),
+                                ))
+                            }
+                        },
+                        Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                    }
+                } else if args.len() >= 3 && args[1] == "scope-add" {
+                    let Some(done_index) = args.iter().position(|arg| arg == "--done") else {
+                        self.error_banner = Some(TuiErrorView::from(AppError::InvalidInput(
+                            "scope-add requires --done <contract>".into(),
+                        )));
+                        return;
+                    };
+                    let goal = args[2..done_index].join(" ");
+                    let done_contract = args[done_index + 1..].join(" ");
+                    match self.gateway.topic_store() {
+                        Ok(store_arc) => match store_arc.lock() {
+                            Ok(store) => match store.add_scope_item(id, &goal, &done_contract) {
+                                Ok(topic) => self.messages.push(TuiMessage::status(format!(
+                                    "Added scope item to '{}' ({}%)",
+                                    topic.name, topic.progress
+                                ))),
+                                Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                            },
+                            Err(e) => {
+                                self.error_banner = Some(TuiErrorView::from(
+                                    AppError::StorageError(format!("Lock error: {}", e)),
+                                ))
+                            }
+                        },
+                        Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                    }
+                } else if args.len() >= 3 && args[1] == "scope-delete" {
+                    match self.gateway.topic_store() {
+                        Ok(store_arc) => match store_arc.lock() {
+                            Ok(store) => match store.delete_scope_item(id, &args[2]) {
+                                Ok(topic) => self.messages.push(TuiMessage::status(format!(
+                                    "Deleted scope item from '{}' ({}%)",
+                                    topic.name, topic.progress
+                                ))),
+                                Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                            },
+                            Err(e) => {
+                                self.error_banner = Some(TuiErrorView::from(
+                                    AppError::StorageError(format!("Lock error: {}", e)),
+                                ))
+                            }
+                        },
+                        Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                    }
+                } else if args.len() >= 3 && args[1] == "scope-complete" {
+                    match self.gateway.topic_store() {
+                        Ok(store_arc) => match store_arc.lock() {
+                            Ok(store) => match store.complete_scope_item(id, &args[2]) {
+                                Ok(topic) => self.messages.push(TuiMessage::status(format!(
+                                    "Completed scope item in '{}' ({}%)",
+                                    topic.name, topic.progress
+                                ))),
+                                Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                            },
+                            Err(e) => {
+                                self.error_banner = Some(TuiErrorView::from(
+                                    AppError::StorageError(format!("Lock error: {}", e)),
+                                ))
+                            }
+                        },
+                        Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                    }
+                } else if args.len() >= 2 && (args[1] == "pause" || args[1] == "resume") {
+                    match self.gateway.topic_store() {
+                        Ok(store_arc) => match store_arc.lock() {
+                            Ok(store) => {
+                                let result = if args[1] == "pause" {
+                                    store.pause(id)
+                                } else {
+                                    store.resume(id)
+                                };
+                                match result {
+                                    Ok(topic) => self.messages.push(TuiMessage::status(format!(
+                                        "Topic '{}' is now {:?}",
+                                        topic.name, topic.status
+                                    ))),
+                                    Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
                                 }
                             }
                             Err(e) => {
@@ -861,7 +932,15 @@ impl TuiApp {
                                     if !topic.scope_in.is_empty() {
                                         lines.push("Scope-in:".to_string());
                                         for (i, item) in topic.scope_in.iter().enumerate() {
-                                            lines.push(format!("  {}. {}", i + 1, item.goal));
+                                            lines.push(format!(
+                                                "  {}. {} (id: {}, status: {})",
+                                                i + 1,
+                                                item.goal,
+                                                item.id,
+                                                item.status
+                                            ));
+                                            lines
+                                                .push(format!("     Done: {}", item.done_contract));
                                         }
                                     }
                                     if let Some(ref extra) = topic.extra {

@@ -90,7 +90,7 @@ pub fn cmd_help_text() -> Vec<(String, String)> {
         ("/config".into(), "Show configuration".into()),
         ("/compact".into(), "Manually compress current conversation".into()),
         ("/call <p> <m> <msg>".into(), "Call a model directly".into()),
-        ("/topic <cmd>".into(), "Topic management: list, new, <id>, <id> set, <id> delete (use /topic alone for help)".into()),
+        ("/topic <cmd>".into(), "Topic management: list, new, scope-add/delete/complete, pause/resume, set, delete (use /topic alone for help)".into()),
         ("/neuron <cmd>".into(), "Neuron management: list, new, candidates, weight, tools, system-type, connect, disconnect, network (use /neuron alone for help)".into()),
         ("/close <session_id>".into(), "Close a running session".into()),
         ("/exit".into(), "Quit the application".into()),

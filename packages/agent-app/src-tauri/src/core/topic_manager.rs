@@ -9,7 +9,7 @@ use super::{
     topic_store::TopicStore,
 };
 
-/// TopicManager wraps TopicStore and implements Tool for the 5 topic commands.
+/// TopicManager wraps TopicStore and registers topic-management tools.
 pub struct TopicManager {
     store: Arc<Mutex<TopicStore>>,
 }
@@ -25,6 +25,11 @@ impl TopicManager {
         registry.register(GetTopicTool::new(Arc::clone(&self.store)));
         registry.register(CreateTopicTool::new(Arc::clone(&self.store)));
         registry.register(UpdateTopicTool::new(Arc::clone(&self.store)));
+        registry.register(AddTopicScopeItemTool::new(Arc::clone(&self.store)));
+        registry.register(DeleteTopicScopeItemTool::new(Arc::clone(&self.store)));
+        registry.register(CompleteTopicScopeItemTool::new(Arc::clone(&self.store)));
+        registry.register(PauseTopicTool::new(Arc::clone(&self.store)));
+        registry.register(ResumeTopicTool::new(Arc::clone(&self.store)));
         registry.register(DeleteTopicTool::new(Arc::clone(&self.store)));
     }
 }
@@ -176,7 +181,7 @@ impl Tool for GetTopicTool {
         if !topic.scope_in.is_empty() {
             lines.push("Scope-in:".to_string());
             for (i, item) in topic.scope_in.iter().enumerate() {
-                lines.push(format!("  {}. {}", i + 1, item.goal));
+                lines.push(format!("  {}. {} (id: {})", i + 1, item.goal, item.id));
                 lines.push(format!("     Done: {}", item.done_contract));
                 lines.push(format!("     Status: {}", item.status));
             }
@@ -238,8 +243,13 @@ impl Tool for CreateTopicTool {
                         "properties": {
                             "goal": {"type": "string"},
                             "done_contract": {"type": "string"},
-                            "status": {"type": "string"}
-                        }
+                            "status": {
+                                "type": "string",
+                                "enum": ["pending", "completed"],
+                                "default": "pending"
+                            }
+                        },
+                        "required": ["goal", "done_contract"]
                     }
                 },
                 "extra": {
@@ -267,10 +277,11 @@ impl Tool for CreateTopicTool {
             None => TopicStatus::Todo,
         };
 
-        let scope_in: Vec<ScopeInItem> = args
-            .get("scope_in")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
+        let scope_in: Vec<ScopeInItem> = match args.get("scope_in") {
+            Some(value) => serde_json::from_value(value.clone())
+                .map_err(|e| AppError::InvalidInput(format!("Invalid scope_in: {}", e)))?,
+            None => Vec::new(),
+        };
 
         let extra = args.get("extra").cloned();
 
@@ -321,27 +332,8 @@ impl Tool for UpdateTopicTool {
                     "type": "string",
                     "description": "New name"
                 },
-                "status": {
-                    "type": "string",
-                    "enum": ["todo", "in_progress", "paused", "done", "cancelled"]
-                },
                 "description": {
                     "type": "string"
-                },
-                "scope_in": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "goal": {"type": "string"},
-                            "done_contract": {"type": "string"},
-                            "status": {"type": "string"}
-                        }
-                    }
-                },
-                "progress": {
-                    "type": "integer",
-                    "description": "Progress 0-100"
                 },
                 "extra": {
                     "type": "object",
@@ -366,19 +358,8 @@ impl Tool for UpdateTopicTool {
         if let Some(v) = args.get("name").and_then(|v| v.as_str()) {
             update.name = Some(v.to_string());
         }
-        if let Some(v) = args.get("status") {
-            update.status = Some(parse_status(v)?);
-        }
         if let Some(v) = args.get("description").and_then(|v| v.as_str()) {
             update.description = Some(v.to_string());
-        }
-        if let Some(v) = args.get("scope_in") {
-            let items: Vec<ScopeInItem> = serde_json::from_value(v.clone())
-                .map_err(|e| AppError::InvalidInput(format!("Invalid scope_in: {}", e)))?;
-            update.scope_in = Some(items);
-        }
-        if let Some(v) = args.get("progress").and_then(|v| v.as_u64()) {
-            update.progress = Some(v.min(100) as u8);
         }
         if args
             .get("extra_clear")
@@ -403,6 +384,230 @@ impl Tool for UpdateTopicTool {
             status_to_string(&topic.status)
         ))
     }
+}
+
+pub struct AddTopicScopeItemTool {
+    store: Arc<Mutex<TopicStore>>,
+}
+
+impl AddTopicScopeItemTool {
+    pub fn new(store: Arc<Mutex<TopicStore>>) -> Self {
+        Self { store }
+    }
+}
+
+#[async_trait]
+impl Tool for AddTopicScopeItemTool {
+    fn name(&self) -> &str {
+        "add_topic_scope_item"
+    }
+
+    fn description(&self) -> &str {
+        "Add one pending scope item to an active topic"
+    }
+
+    fn parameters(&self) -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "topic_id": {"type": "string"},
+                "goal": {"type": "string"},
+                "done_contract": {"type": "string"}
+            },
+            "required": ["topic_id", "goal", "done_contract"]
+        })
+    }
+
+    async fn execute(&self, args: Value) -> AppResult<String> {
+        let topic_id = required_str(&args, "topic_id")?;
+        let goal = required_str(&args, "goal")?;
+        let done_contract = required_str(&args, "done_contract")?;
+        let topic =
+            self.store
+                .lock()
+                .map_err(lock_error)?
+                .add_scope_item(topic_id, goal, done_contract)?;
+        Ok(format!(
+            "Added scope item to '{}' ({}%)",
+            topic.name, topic.progress
+        ))
+    }
+}
+
+pub struct DeleteTopicScopeItemTool {
+    store: Arc<Mutex<TopicStore>>,
+}
+
+impl DeleteTopicScopeItemTool {
+    pub fn new(store: Arc<Mutex<TopicStore>>) -> Self {
+        Self { store }
+    }
+}
+
+#[async_trait]
+impl Tool for DeleteTopicScopeItemTool {
+    fn name(&self) -> &str {
+        "delete_topic_scope_item"
+    }
+
+    fn description(&self) -> &str {
+        "Delete one scope item from an active topic"
+    }
+
+    fn parameters(&self) -> Value {
+        topic_item_parameters()
+    }
+
+    async fn execute(&self, args: Value) -> AppResult<String> {
+        let topic_id = required_str(&args, "topic_id")?;
+        let item_id = required_str(&args, "item_id")?;
+        let topic = self
+            .store
+            .lock()
+            .map_err(lock_error)?
+            .delete_scope_item(topic_id, item_id)?;
+        Ok(format!(
+            "Deleted scope item from '{}' ({}%)",
+            topic.name, topic.progress
+        ))
+    }
+}
+
+pub struct CompleteTopicScopeItemTool {
+    store: Arc<Mutex<TopicStore>>,
+}
+
+impl CompleteTopicScopeItemTool {
+    pub fn new(store: Arc<Mutex<TopicStore>>) -> Self {
+        Self { store }
+    }
+}
+
+#[async_trait]
+impl Tool for CompleteTopicScopeItemTool {
+    fn name(&self) -> &str {
+        "complete_topic_scope_item"
+    }
+
+    fn description(&self) -> &str {
+        "Complete one scope item and recompute topic progress and status"
+    }
+
+    fn parameters(&self) -> Value {
+        topic_item_parameters()
+    }
+
+    async fn execute(&self, args: Value) -> AppResult<String> {
+        let topic_id = required_str(&args, "topic_id")?;
+        let item_id = required_str(&args, "item_id")?;
+        let topic = self
+            .store
+            .lock()
+            .map_err(lock_error)?
+            .complete_scope_item(topic_id, item_id)?;
+        Ok(format!(
+            "Completed scope item in '{}' ({}%) - {}",
+            topic.name,
+            topic.progress,
+            status_to_string(&topic.status)
+        ))
+    }
+}
+
+pub struct PauseTopicTool {
+    store: Arc<Mutex<TopicStore>>,
+}
+
+impl PauseTopicTool {
+    pub fn new(store: Arc<Mutex<TopicStore>>) -> Self {
+        Self { store }
+    }
+}
+
+#[async_trait]
+impl Tool for PauseTopicTool {
+    fn name(&self) -> &str {
+        "pause_topic"
+    }
+
+    fn description(&self) -> &str {
+        "Pause a topic and block scope item mutations"
+    }
+
+    fn parameters(&self) -> Value {
+        topic_id_parameters()
+    }
+
+    async fn execute(&self, args: Value) -> AppResult<String> {
+        let topic_id = required_str(&args, "topic_id")?;
+        let topic = self.store.lock().map_err(lock_error)?.pause(topic_id)?;
+        Ok(format!("Paused topic '{}'", topic.name))
+    }
+}
+
+pub struct ResumeTopicTool {
+    store: Arc<Mutex<TopicStore>>,
+}
+
+impl ResumeTopicTool {
+    pub fn new(store: Arc<Mutex<TopicStore>>) -> Self {
+        Self { store }
+    }
+}
+
+#[async_trait]
+impl Tool for ResumeTopicTool {
+    fn name(&self) -> &str {
+        "resume_topic"
+    }
+
+    fn description(&self) -> &str {
+        "Resume a topic and derive its status from scope items"
+    }
+
+    fn parameters(&self) -> Value {
+        topic_id_parameters()
+    }
+
+    async fn execute(&self, args: Value) -> AppResult<String> {
+        let topic_id = required_str(&args, "topic_id")?;
+        let topic = self.store.lock().map_err(lock_error)?.resume(topic_id)?;
+        Ok(format!(
+            "Resumed topic '{}' as {}",
+            topic.name,
+            status_to_string(&topic.status)
+        ))
+    }
+}
+
+fn topic_id_parameters() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {"topic_id": {"type": "string"}},
+        "required": ["topic_id"]
+    })
+}
+
+fn topic_item_parameters() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "topic_id": {"type": "string"},
+            "item_id": {"type": "string"}
+        },
+        "required": ["topic_id", "item_id"]
+    })
+}
+
+fn required_str<'a>(args: &'a Value, key: &str) -> AppResult<&'a str> {
+    args.get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| AppError::InvalidInput(format!("Missing required field: {key}")))
+}
+
+fn lock_error<T: std::fmt::Display>(error: T) -> AppError {
+    AppError::StorageError(format!("Lock error: {error}"))
 }
 
 // ── DeleteTopicTool ───────────────────────────────────────────────

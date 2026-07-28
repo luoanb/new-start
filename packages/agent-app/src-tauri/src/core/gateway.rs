@@ -379,6 +379,11 @@ mod tests {
         assert!(skill_names.contains(&"create_downstream_neuron".to_string()));
         assert!(skill_names.contains(&"select_neuron_candidates".to_string()));
         assert!(!skill_names.contains(&"create_neuron".to_string()));
+        assert!(skill_names.contains(&"add_topic_scope_item".to_string()));
+        assert!(skill_names.contains(&"delete_topic_scope_item".to_string()));
+        assert!(skill_names.contains(&"complete_topic_scope_item".to_string()));
+        assert!(skill_names.contains(&"pause_topic".to_string()));
+        assert!(skill_names.contains(&"resume_topic".to_string()));
         assert!(skill_names.contains(&"get_running_sessions".to_string()));
     }
 

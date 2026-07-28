@@ -224,9 +224,16 @@ pub struct ModelCallResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScopeInItem {
+    #[serde(default)]
+    pub id: String,
     pub goal: String,
     pub done_contract: String,
+    #[serde(default = "default_scope_in_status")]
     pub status: String,
+}
+
+fn default_scope_in_status() -> String {
+    "pending".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -256,10 +263,7 @@ pub struct Topic {
 #[derive(Debug, Clone, Default)]
 pub struct TopicUpdate {
     pub name: Option<String>,
-    pub status: Option<TopicStatus>,
     pub description: Option<String>,
-    pub scope_in: Option<Vec<ScopeInItem>>,
-    pub progress: Option<u8>,
     pub extra: Option<Option<serde_json::Value>>,
 }
 
