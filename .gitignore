@@ -6,4 +6,4 @@ dist
 *.log
 packages/agent-app/.agent-app/sessions/*
 packages/agent-app/.agent-app/config.json
-# packages/agent-app/.agent-app/app.db
+packages/agent-app/.agent-app/app.db
