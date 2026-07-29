@@ -31,6 +31,7 @@ pub struct Message {
 pub enum ConversationMode {
     Chat,
     Agent,
+    Assistant,
 }
 
 impl Default for ConversationMode {
@@ -255,6 +256,8 @@ pub struct Topic {
     pub scope_in: Vec<ScopeInItem>,
     pub progress: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra: Option<serde_json::Value>,
     pub created_at: u128,
     pub updated_at: u128,
@@ -311,9 +314,19 @@ pub struct CandidateQuery {
     #[serde(default)]
     pub source_id: Option<String>,
     #[serde(default)]
-    pub system_type: Option<String>,
-    #[serde(default)]
     pub min_new: usize,
+}
+
+#[derive(Debug, Clone)]
+pub enum CreateNeuronInput {
+    Purpose(String),
+    Messages(Vec<ModelMessage>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BootstrapReadyReport {
+    pub create_neuron_id: String,
+    pub assistant_select_neuron_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

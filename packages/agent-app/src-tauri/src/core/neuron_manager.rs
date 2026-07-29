@@ -9,7 +9,8 @@ use serde_json::Value;
 use super::{
     error::{AppError, AppResult},
     models::{
-        CandidateQuery, Connection, GeneratedNeuronDraft, Neuron, NeuronCreate, NeuronUpdate,
+        BootstrapReadyReport, CandidateQuery, Connection, CreateNeuronInput, GeneratedNeuronDraft,
+        Neuron, NeuronCreate, NeuronUpdate,
     },
     neuron_config::NeuronConfigReader,
     neuron_model::NeuronModelCaller,
@@ -17,7 +18,9 @@ use super::{
     tool_registry::{Tool, ToolRegistry},
 };
 
-const CREATOR_SYSTEM_TYPE: &str = "create_neuron";
+pub const CREATOR_SYSTEM_TYPE: &str = "create_neuron";
+pub const ASSISTANT_SELECT_NEURON: &str = "assistant_select_neuron";
+const DEFAULT_SELECT_N: usize = 7;
 
 pub struct NeuronManager {
     store: Arc<Mutex<NeuronStore>>,
@@ -57,6 +60,10 @@ impl NeuronManager {
 
     pub fn get_neuron(&self, id: &str) -> AppResult<Option<Neuron>> {
         self.store()?.get_neuron(id)
+    }
+
+    pub fn get_neuron_by_system_type(&self, system_type: &str) -> AppResult<Option<Neuron>> {
+        self.store()?.get_neuron_by_system_type(system_type)
     }
 
     pub fn list_neurons(&self) -> AppResult<Vec<Neuron>> {
@@ -154,9 +161,7 @@ impl NeuronManager {
             return Ok(Vec::new());
         }
 
-        let source_id = self
-            .resolve_source(query.source_id.as_deref(), query.system_type.as_deref())
-            .await?;
+        let source_id = self.resolve_source_id(query.source_id.as_deref())?;
         let mut selected = Vec::with_capacity(query.n);
         let mut selected_ids = HashSet::new();
 
@@ -193,11 +198,127 @@ impl NeuronManager {
         Ok(selected)
     }
 
+    pub async fn select_one(&self, query: CandidateQuery) -> AppResult<Neuron> {
+        let mut query = query;
+        if query.n == 0 {
+            query.n = DEFAULT_SELECT_N;
+        }
+        let candidates = self.select_candidates(query).await?;
+        self.select_one_from(&candidates).await
+    }
+
+    pub async fn select_one_from(&self, candidates: &[Neuron]) -> AppResult<Neuron> {
+        if candidates.is_empty() {
+            return Err(AppError::InvalidInput(
+                "No neuron candidates available for selection".into(),
+            ));
+        }
+        match self.try_llm_select(candidates).await {
+            Ok(neuron) => Ok(neuron),
+            Err(_) => pick_by_weight(candidates),
+        }
+    }
+
+    pub async fn create_generated(
+        &self,
+        input: CreateNeuronInput,
+        link_to: Option<&str>,
+    ) -> AppResult<Neuron> {
+        let creator = self.ensure_creator_neuron()?;
+        let prompt_neuron = self
+            .select_one(CandidateQuery {
+                n: DEFAULT_SELECT_N,
+                source_id: Some(creator.id.clone()),
+                min_new: 0,
+            })
+            .await?;
+        let user_prompt = match &input {
+            CreateNeuronInput::Purpose(purpose) => format!(
+                "Create one neuron for this purpose. Return only JSON with desc, content, weight, and tool_ids.\nPurpose: {purpose}"
+            ),
+            CreateNeuronInput::Messages(messages) => format!(
+                "Create one neuron from this conversation context. Return only JSON with desc, content, weight, and tool_ids.\nContext: {}",
+                serde_json::to_string(messages).unwrap_or_default()
+            ),
+        };
+        let draft = self
+            .generate_draft(&prompt_neuron.content, &user_prompt)
+            .await?;
+        let create = NeuronCreate {
+            desc: draft.desc,
+            content: draft.content,
+            weight: draft.weight,
+            system_type: None,
+            tool_ids: draft.tool_ids,
+        };
+        match link_to {
+            Some(source_id) => self
+                .create_downstream(source_id, create, 1.0)
+                .map(|(neuron, _)| neuron),
+            None => self.create_for_admin(create),
+        }
+    }
+
+    pub async fn ensure_system_neuron(&self, system_type: &str, reset: bool) -> AppResult<Neuron> {
+        let system_type = system_type.trim();
+        if system_type.is_empty() {
+            return Err(AppError::InvalidInput("system_type cannot be empty".into()));
+        }
+
+        if reset {
+            if let Some(existing) = self.get_neuron_by_system_type(system_type)? {
+                let _ = self.store()?.unlink_all_edges_of(&existing.id)?;
+                let _ = self.delete_for_admin(&existing.id)?;
+            }
+        } else if let Some(existing) = self.get_neuron_by_system_type(system_type)? {
+            return Ok(existing);
+        }
+
+        let creator = self.ensure_creator_neuron()?;
+        let winner = self
+            .select_one(CandidateQuery {
+                n: DEFAULT_SELECT_N,
+                source_id: Some(creator.id.clone()),
+                min_new: 0,
+            })
+            .await?;
+        let user_prompt = format!(
+            "Write a system prompt for a neuron with system_type={system_type}.\n\
+             Use the winning candidate as inspiration (do not copy blindly).\n\
+             Winner id={} desc={} content={}\n\
+             Return only JSON with desc, content, weight, and tool_ids. content must be the full system prompt text.",
+            winner.id, winner.desc, winner.content
+        );
+        let draft = self.generate_draft(&creator.content, &user_prompt).await?;
+        self.create_for_admin(NeuronCreate {
+            desc: if draft.desc.trim().is_empty() {
+                system_type.to_string()
+            } else {
+                draft.desc
+            },
+            content: draft.content,
+            weight: draft.weight,
+            system_type: Some(system_type.to_string()),
+            tool_ids: draft.tool_ids,
+        })
+    }
+
+    pub async fn bootstrap_ready(&self) -> AppResult<BootstrapReadyReport> {
+        let creator = self.ensure_creator_neuron()?;
+        let selector = self
+            .ensure_system_neuron(ASSISTANT_SELECT_NEURON, false)
+            .await?;
+        Ok(BootstrapReadyReport {
+            create_neuron_id: creator.id,
+            assistant_select_neuron_id: selector.id,
+        })
+    }
+
     pub async fn bootstrap_creator_candidates(&self) -> AppResult<Vec<Neuron>> {
+        let creator = self.ensure_creator_neuron()?;
         self.select_candidates(CandidateQuery {
-            n: 7,
-            source_id: None,
-            system_type: Some(CREATOR_SYSTEM_TYPE.into()),
+            n: DEFAULT_SELECT_N,
+            source_id: Some(creator.id),
             min_new: 0,
         })
         .await
@@ -207,32 +328,7 @@ impl NeuronManager {
         self.ensure_creator_neuron()
     }
 
-    async fn resolve_source(
-        &self,
-        source_id: Option<&str>,
-        system_type: Option<&str>,
-    ) -> AppResult<Option<String>> {
-        if let Some(source_id) = source_id {
-            if self.get_neuron(source_id)?.is_none() {
-                return Err(AppError::NeuronNotFound(source_id.to_string()));
-            }
-            return Ok(Some(source_id.to_string()));
-        }
-        let Some(system_type) = system_type else {
-            return Ok(None);
-        };
-        if system_type == CREATOR_SYSTEM_TYPE {
-            return Ok(Some(self.ensure_creator_neuron()?.id));
-        }
-        self.store()?
-            .get_neuron_by_system_type(system_type)?
-            .map(|neuron| Some(neuron.id))
-            .ok_or_else(|| {
-                AppError::InvalidInput(format!("System neuron type not found: {system_type}"))
-            })
-    }
-
-    fn ensure_creator_neuron(&self) -> AppResult<Neuron> {
+    pub fn ensure_creator_neuron(&self) -> AppResult<Neuron> {
         let mut cached_id = self.creator_id.lock().map_err(lock_error)?;
         if let Some(id) = cached_id.clone() {
             if let Some(neuron) = self.get_neuron(&id)? {
@@ -251,10 +347,7 @@ impl NeuronManager {
             return Ok(neuron);
         }
 
-        let prompt = self
-            .config
-            .create_neuron_prompt()
-            .map_err(|error| AppError::NeuronBootstrapFailed(error.to_string()))?;
+        let prompt = self.config.create_neuron_prompt()?;
         let neuron = self.store()?.create_neuron(NeuronCreate {
             desc: "创建神经元".into(),
             content: prompt,
@@ -264,6 +357,86 @@ impl NeuronManager {
         })?;
         *cached_id = Some(neuron.id.clone());
         Ok(neuron)
+    }
+
+    fn resolve_source_id(&self, source_id: Option<&str>) -> AppResult<Option<String>> {
+        let Some(source_id) = source_id else {
+            return Ok(None);
+        };
+        if self.get_neuron(source_id)?.is_none() {
+            return Err(AppError::NeuronNotFound(source_id.to_string()));
+        }
+        Ok(Some(source_id.to_string()))
+    }
+
+    async fn try_llm_select(&self, candidates: &[Neuron]) -> AppResult<Neuron> {
+        let selector = self
+            .get_neuron_by_system_type(ASSISTANT_SELECT_NEURON)?
+            .ok_or_else(|| {
+                AppError::InvalidInput(format!(
+                    "Missing system prompt neuron with system_type={ASSISTANT_SELECT_NEURON}"
+                ))
+            })?;
+        let payload = serde_json::json!({
+            "candidates": candidates.iter().map(|n| serde_json::json!({
+                "id": n.id,
+                "desc": n.desc,
+                "content": n.content,
+                "weight": n.weight,
+                "tool_ids": n.tool_ids,
+            })).collect::<Vec<_>>(),
+        });
+        let output = self
+            .model_caller
+            .call_model(&selector.content, &payload.to_string())
+            .await?;
+        let decision = extract_json_object(&output)?;
+        let neuron_id = decision
+            .get("neuron_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                AppError::InvalidInput("select neuron response missing neuron_id".into())
+            })?;
+        candidates
+            .iter()
+            .find(|n| n.id == neuron_id)
+            .cloned()
+            .ok_or_else(|| {
+                AppError::InvalidInput(format!(
+                    "Selected neuron_id {neuron_id} is not in candidates"
+                ))
+            })
+    }
+
+    async fn generate_draft(
+        &self,
+        system_prompt: &str,
+        user_prompt: &str,
+    ) -> AppResult<GeneratedNeuronDraft> {
+        let output = self
+            .model_caller
+            .call_model(system_prompt, user_prompt)
+            .await?;
+        let draft: GeneratedNeuronDraft = match serde_json::from_str(output.trim()) {
+            Ok(draft) => draft,
+            Err(_) => {
+                let value = extract_json_object(&output)?;
+                serde_json::from_value(value).map_err(|error| {
+                    AppError::NeuronBootstrapFailed(format!(
+                        "Invalid generated neuron JSON: {error}"
+                    ))
+                })?
+            }
+        };
+        if draft.desc.trim().is_empty()
+            || draft.content.trim().is_empty()
+            || !draft.weight.is_finite()
+        {
+            return Err(AppError::NeuronBootstrapFailed(
+                "Generated neuron must have non-empty desc/content and finite weight".into(),
+            ));
+        }
+        Ok(draft)
     }
 
     async fn create_generated_neuron(&self, source_id: Option<&str>) -> AppResult<Neuron> {
@@ -277,21 +450,7 @@ impl NeuronManager {
                     .to_string()
             }
         };
-        let output = self
-            .model_caller
-            .call_model(&creator.content, &user_prompt)
-            .await?;
-        let draft: GeneratedNeuronDraft = serde_json::from_str(output.trim()).map_err(|error| {
-            AppError::NeuronBootstrapFailed(format!("Invalid generated neuron JSON: {error}"))
-        })?;
-        if draft.desc.trim().is_empty()
-            || draft.content.trim().is_empty()
-            || !draft.weight.is_finite()
-        {
-            return Err(AppError::NeuronBootstrapFailed(
-                "Generated neuron must have non-empty desc/content and finite weight".into(),
-            ));
-        }
+        let draft = self.generate_draft(&creator.content, &user_prompt).await?;
         let create = NeuronCreate {
             desc: draft.desc,
             content: draft.content,
@@ -310,6 +469,53 @@ impl NeuronManager {
     fn store(&self) -> AppResult<std::sync::MutexGuard<'_, NeuronStore>> {
         self.store.lock().map_err(lock_error)
     }
+}
+
+fn pick_by_weight(candidates: &[Neuron]) -> AppResult<Neuron> {
+    let max_weight = candidates
+        .iter()
+        .map(|n| n.weight)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let tops: Vec<&Neuron> = candidates
+        .iter()
+        .filter(|n| (n.weight - max_weight).abs() < f64::EPSILON || n.weight == max_weight)
+        .collect();
+    if tops.is_empty() {
+        return Err(AppError::InvalidInput(
+            "No neuron candidates available for selection".into(),
+        ));
+    }
+    let idx = (now_ms() as usize).wrapping_mul(2654435761) % tops.len();
+    Ok(tops[idx].clone())
+}
+
+fn extract_json_object(text: &str) -> AppResult<serde_json::Value> {
+    let trimmed = text.trim();
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if value.is_object() {
+            return Ok(value);
+        }
+    }
+    let start = trimmed
+        .find('{')
+        .ok_or_else(|| AppError::InvalidInput("LLM response missing JSON object".into()))?;
+    let end = trimmed
+        .rfind('}')
+        .ok_or_else(|| AppError::InvalidInput("LLM response missing JSON object end".into()))?;
+    if end < start {
+        return Err(AppError::InvalidInput(
+            "LLM response has invalid JSON object bounds".into(),
+        ));
+    }
+    serde_json::from_str(&trimmed[start..=end])
+        .map_err(|e| AppError::InvalidInput(format!("Failed to parse LLM JSON: {e}")))
+}
+
+fn now_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
 }
 
 fn lock_error<T: std::fmt::Display>(error: T) -> AppError {
@@ -561,7 +767,6 @@ impl Tool for SelectNeuronCandidatesTool {
             "properties": {
                 "n": {"type": "integer", "minimum": 0},
                 "source_id": {"type": "string"},
-                "system_type": {"type": "string"},
                 "min_new": {"type": "integer", "minimum": 0, "default": 0}
             },
             "required": ["n"]
@@ -578,10 +783,6 @@ impl Tool for SelectNeuronCandidatesTool {
             n,
             source_id: args
                 .get("source_id")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            system_type: args
-                .get("system_type")
                 .and_then(Value::as_str)
                 .map(str::to_string),
             min_new: args.get("min_new").and_then(Value::as_u64).unwrap_or(0) as usize,
@@ -664,7 +865,6 @@ mod tests {
             .select_candidates(CandidateQuery {
                 n: 3,
                 source_id: Some(source.id.clone()),
-                system_type: Some("missing-system-type".into()),
                 min_new: 2,
             })
             .await
@@ -706,6 +906,39 @@ mod tests {
             },
         );
         assert!(result.is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn select_one_from_falls_back_to_weight_without_selector() {
+        let (manager, root) = test_manager();
+        let low = manager
+            .create_for_admin(NeuronCreate {
+                desc: "low".into(),
+                content: "low".into(),
+                weight: 1.0,
+                ..Default::default()
+            })
+            .unwrap();
+        let high = manager
+            .create_for_admin(NeuronCreate {
+                desc: "high".into(),
+                content: "high".into(),
+                weight: 9.0,
+                ..Default::default()
+            })
+            .unwrap();
+        let selected = manager.select_one_from(&[low, high.clone()]).await.unwrap();
+        assert_eq!(selected.id, high.id);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ensure_creator_uses_default_prompt_without_config() {
+        let (manager, root) = test_manager();
+        let creator = manager.ensure_creator_for_admin().unwrap();
+        assert_eq!(creator.system_type.as_deref(), Some(CREATOR_SYSTEM_TYPE));
+        assert!(!creator.content.trim().is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 }

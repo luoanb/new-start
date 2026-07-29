@@ -107,9 +107,15 @@ Configuration fields:
 - `providers.<id>.api_key`: provider API key. Environment variables override this value.
 - `providers.<id>.api_base`: provider API base. Environment variables override this value.
 - `providers.<id>.models`: provider model list shown by `/models` and accepted by `/use`.
-- `neurons.bootstrap.create_neuron_prompt`: content of the unique `system_type=create_neuron` system neuron. It is required only when neuron bootstrap first needs to create or restore that system neuron.
+- `neurons.bootstrap.create_neuron_prompt`: content of the unique `system_type=create_neuron` system neuron. Optional; when missing, the app uses a built-in default seed prompt so bootstrap can still create the first system neuron.
+- Assistant mode fixed `system_type` prompt neurons are ensured via `NeuronManager::ensure_system_neuron` / `bootstrap_ready` (startup creates at least `assistant_select_neuron`):
+  - `assistant_select_neuron`: 7-candidate neuron selection
+  - `assistant_match_topic`: topic match / create decision (lazy ensure)
+  - `assistant_complete_scope`: afterhook scope completion decision (lazy ensure)
+  - `assistant_score_feedback`: user satisfaction score (lazy ensure)
+- Candidate pool rule: with `source_id`, only direct downstream; without source, global neurons including system nodes.
 
-Missing neuron bootstrap configuration does not prevent application startup. Bootstrap calls fail with a recoverable configuration error until the prompt is configured.
+Missing optional neuron bootstrap configuration does not prevent application startup. Built-in default seed is used until overridden in config.
 
 Known provider environment variables:
 

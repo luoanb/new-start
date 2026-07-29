@@ -21,6 +21,13 @@ async fn run() -> AppResult<()> {
     args.remove(0);
 
     let mut gateway = Gateway::default()?;
+    if let Err(error) = gateway.bootstrap_neurons().await {
+        eprintln!(
+            "warning: neuron bootstrap incomplete [{}]: {}",
+            error.code(),
+            error
+        );
+    }
 
     match command.as_str() {
         "chat" => {

@@ -121,6 +121,11 @@ impl Engine {
                 self.agent_mode(context_messages, &options, &conversation_id)
                     .await?
             }
+            ConversationMode::Assistant => {
+                return Err(AppError::RuntimeError(
+                    "Assistant mode must be routed via Gateway/AssistantMode".into(),
+                ));
+            }
         };
 
         // Save if compaction modified messages in-place

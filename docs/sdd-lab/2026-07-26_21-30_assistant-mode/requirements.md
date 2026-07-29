@@ -16,12 +16,13 @@ Assistant 内部每轮流程统一为：**beforehook → Assistant 对话/步进
 
 - **一次工具调用即结束**：与 Agent 模式的迭代循环不同，Assistant 模式每轮调一次 LLM + 一次工具执行后即结束，不继续轮询 LLM。
 - **外层轮询驱动**：系统级 Poller 只负责调度到期任务；Assistant 注册自己的 handler，在触发时自行判断课题、会话和轮次推进。
-- **神经元动态选为 system prompt**：beforehook 可在每轮前准备候选神经元，完成 7 选 1，选中 neuron 的 content 作为 system prompt 插入本轮上下文。
+- **神经元动态选为 system prompt**：beforehook 先用 `select_candidates` 按权重准备固定数量候选（默认 7），再用固定 `system_type` 取出并缓存提示词神经元，构造提示词后调用大模型在候选中选 1 个；选中 neuron 的 content 作为本轮 Assistant 对话 system prompt。
 - **神经元持有工具权限**：系统工具注册表仍负责登记工具能力，但 Assistant 每轮可见、可调用的工具集由本轮选中的神经元决定；神经元持久化记录自己获准使用的工具 ID 集合。
 - **课题与会话绑定**：Assistant 会话必须绑定课题，一个课题一个绑定会话。
 - **AI 和用户均可全权管理课题**（已验证：Agent 工具 + TUI `/topic` 已覆盖）。
-- **课题匹配**：用户输入时，Assistant 可通过 beforehook 检索未完成课题；匹配则切换到对应会话转发输入，无匹配则创建新课题关联当前会话。
-- **轮后更新**：afterhook 可在每轮完成后检查 scope_in 完成情况，更新 scope_in 状态，重新计算 progress，全部完成则自动标记 Done。
+- **课题匹配**：用户输入时的 beforehook 与神经元 7 选 1 采用同一处理方式，仅 `system_type` 不同；匹配则切换到对应会话转发输入，无匹配则创建新课题关联当前会话。
+- **用户满意度打分**：用户再次介入时，根据输入猜测满意度分数（-5..=5，不可为 0），并对“上一轮用户介入到本次用户介入”区间内的上游神经元及其关联单向边增减权重。
+- **轮后更新**：afterhook 用固定 `system_type` 取系统提示词，调用大模型确认本轮实际完成了什么，再据此完成对应 `scope_in` 条目；进度与课题状态由既有条目管理能力重算，全部完成则自动标记 Done。
 - **课题关联会话**：Topic 增加 `session_id` 字段，轮询时判断是否已有活跃会话。
 
 ## Prerequisites / 前置依赖
@@ -49,11 +50,20 @@ Assistant 内部每轮流程统一为：**beforehook → Assistant 对话/步进
 - beforehook/afterhook 在选中神经元确定后，与 Assistant 对话共享同一份经过神经元权限过滤的工具集，不得绕过权限直接使用系统完整工具集。
 - 神经元记录的工具 ID 在系统注册表中不存在时，不得扩大权限或回退为完整工具集；具体报错或忽略策略由技术方案确定。
 - Topic 表新增 `session_id` 字段（SQLite 迁移）。
-- 神经元上下文 beforehook：获取候选神经元并选择本轮 system prompt；7 选 1（可配置），权重优先 + 同权重随机，不足时调用 LLM 创建。
+- 通用“固定 system_type 提示词 + 候选/上下文交给大模型裁决”模式，至少用于：
+  - 神经元 7 选 1
+  - 课题匹配
+  - afterhook 确认本轮完成了哪些 scope_in 条目
+- 神经元上下文 beforehook：
+  1. 调用前置神经元能力的 `select_candidates`，按权重准备固定数量候选（默认 `n=7`，不足自动补齐）。
+  2. 用固定 `system_type` 查找/缓存提示词神经元。
+  3. 用该提示词构造请求，把 7 个候选交给大模型选 1 个。
+  4. 选中神经元的 `content` 作为本轮 Assistant 对话 system prompt。
 - 神经元候选准备和自动补齐由前置神经元能力提供；Assistant 不自行复制神经元自举逻辑。
-- 次生轮次选择：以已选神经元为起点 BFS 取邻居，不足时补充创建。
-- 用户介入类 beforehook：检测输入与课题相关性、识别满意/纠偏/大怒/重来等反馈，并据此更新关联神经元权重或回滚对话。
-- 轮后 afterhook：每轮完成后检查 scope_in 状态，更新 scope_in，重算 progress，全部完成则自动标记 Done。
+- 课题匹配 beforehook：与神经元 7 选 1 同一处理方式，仅 `system_type` 不同；匹配到已有未完成课题则切换到绑定会话，无匹配则创建新课题并关联当前会话。
+- 用户介入 beforehook：根据用户输入猜测满意度分数，范围 `-5..=5` 且不可为 `0`；分数作用在“上一轮用户介入到本次用户介入”区间内的上游神经元及其关联单向边，执行权重增减。不做对话回滚。
+- 轮后 afterhook：用固定 `system_type` 取系统提示词，调用大模型确认本轮实际做了什么，再调用既有 `scope_in` 单条完成能力更新条目；进度与课题状态由条目管理能力重算，全部完成则自动标记 Done。
+- 次生轮次候选池：Poller 对该课题第 2 次及以后的推进，以上一轮选中神经元为 `source_id`，只取其直接子节点（`source → target` 下游，不取父节点、不递归更深后代）；再按同一套 7 选 1 流程（不足由 `select_candidates` 补齐后交给大模型选 1）。
 - 系统级 `Poller`：作为通用轮询调度器，允许多个业务按不同间隔注册 handler；Poller 只调度并调用 handler，不理解 Assistant 业务，也不返回 handler 结果。
 - TUI 命令：`/new_assistant`、`/poll`（status/pause/resume/trigger）。
 - 会话列表显示 `[Assistant]` 标签。
@@ -62,8 +72,8 @@ Assistant 内部每轮流程统一为：**beforehook → Assistant 对话/步进
 
 - Assistant 模式与 Chat/Agent 模式共享会话（不支持 mode 切换）。
 - 多课题并行轮询的并发上限控制。
-- 持久化神经元评分历史。
-- Hook 结果持久化（除用户反馈导致的 neuron weight 更新）。
+- 持久化神经元评分历史之外的明细流水（本迭代只要求落盘权重增减结果）。
+- 基于情感标签的对话回滚（“重来回到上一次介入点”已废弃）。
 - 在 `engine.rs` 内直接实现 Assistant 流程或 hook 细节。
 - Poller 内硬编码 Assistant、Topic、Neuron 等业务逻辑。
 - 为 Assistant 或 hook 另建一套脱离系统工具注册表的工具实现。
@@ -118,38 +128,36 @@ Poller 的边界：
 
 ## Acceptance Criteria / 验收标准
 
-- [ ] Assistant 业务逻辑收束在独立助手模式文件中，`engine.rs` 不直接实现 Assistant 流程。
-- [ ] `engine.rs` 后续只需实例化 Assistant 并调用其对外方法即可接入 Assistant 模式。
-- [ ] Assistant 对外暴露对话、步进、注册系统轮询三个方法。
-- [ ] 用户输入、手动步进、系统轮询触发复用同一套 Assistant 每轮流程。
-- [ ] 新 Assistant 会话直接输入，工具调用一次即结束，结果拼接回对话。
-- [ ] Assistant 会话必须绑定课题，新建时自动关联或通过 beforehook 匹配/创建课题。
-- [ ] 用户输入时 beforehook 可检索未完成课题，匹配时切换到对应会话转发输入。
-- [ ] 用户输入时 beforehook 无匹配可创建新课题并关联当前会话。
-- [ ] Hook 体系只暴露助手级 `beforehook` / `afterhook` 通用规范，不再以 PreHook0/1/2 作为通用协议。
-- [ ] beforehook 能更新本轮对话入参，也能只作为业务调用时机运行。
-- [ ] afterhook 能更新本轮对话出参，也能只作为业务调用时机运行。
-- [ ] hook 获取的上下文与 Assistant 对话上下文同源，工具访问原则上与 Assistant 对话一致。
-- [ ] 神经元 beforehook 完成神经元 7 选 1：不足时调用 LLM 创建，权重优先，同权重随机。
-- [ ] 次生轮次以已选神经元为起点 BFS 取邻居。
-- [ ] 选中神经元 content 作为本轮 system prompt 注入 Assistant 对话上下文。
-- [ ] 神经元持久化记录允许使用的工具 ID 集合。
-- [ ] Assistant 根据选中神经元的工具 ID 从系统工具注册表解析本轮授权工具集。
-- [ ] Assistant 只向模型暴露本轮神经元授权的工具，并在执行前再次校验权限。
-- [ ] beforehook、Assistant 对话核心和 afterhook 在权限确定后共享同一份授权工具集。
-- [ ] 空工具 ID 集合表示无工具权限；未知工具 ID 不得导致回退到系统完整工具集。
-- [ ] 用户介入时检测情感，对关联神经元 ±1 分。
-- [ ] "重来"情感回滚对话至上一次介入点。
-- [ ] afterhook 每轮后更新 scope_in 状态，重算 progress。
-- [ ] scope_in 全部完成时课题自动标记 Done。
-- [ ] Poller 是通用轮询调度器，通过 handler 注入业务逻辑，不包含 Assistant 专用分支。
-- [ ] Poller 支持 pause/resume/trigger/status，并在 trigger 后的下一次 tick 调用所有 handler。
-- [ ] `/poll pause` 暂停轮询，`/poll resume` 恢复，`/poll trigger` 手动触发一次。
+- [x] Assistant 业务逻辑收束在独立助手模式文件中，`engine.rs` 不直接实现 Assistant 流程。
+- [x] `engine.rs` 后续只需实例化 Assistant 并调用其对外方法即可接入 Assistant 模式。
+- [x] Assistant 对外暴露对话、步进、注册系统轮询三个方法。
+- [x] 用户输入、手动步进、系统轮询触发复用同一套 Assistant 每轮流程。
+- [x] 新 Assistant 会话直接输入，工具调用一次即结束，结果拼接回对话。
+- [x] Assistant 会话必须绑定课题，新建时自动关联或通过 beforehook 匹配/创建课题。
+- [x] 用户输入时 beforehook 与 7 选 1 同模式（不同 `system_type`）完成课题匹配；匹配时切换到对应会话转发输入。
+- [x] 用户输入时 beforehook 无匹配可创建新课题并关联当前会话。
+- [x] Hook 体系只暴露助手级 `beforehook` / `afterhook` 通用规范，不再以 PreHook0/1/2 作为通用协议。
+- [x] beforehook 能更新本轮对话入参，也能只作为业务调用时机运行。
+- [x] afterhook 能更新本轮对话出参，也能只作为业务调用时机运行。
+- [x] hook 获取的上下文与 Assistant 对话上下文同源，工具访问原则上与 Assistant 对话一致。
+- [x] 神经元 beforehook：`select_candidates` 按权重凑齐默认 7 个候选后，用固定 `system_type` 提示词调用大模型从中选 1 个。
+- [x] 次生轮次候选仅取上一轮选中神经元的直接子节点，不取父节点、不递归更深后代。
+- [x] 选中神经元 content 作为本轮 system prompt 注入 Assistant 对话上下文。
+- [x] 神经元持久化记录允许使用的工具 ID 集合。
+- [x] Assistant 根据选中神经元的工具 ID 从系统工具注册表解析本轮授权工具集。
+- [x] Assistant 只向模型暴露本轮神经元授权的工具，并在执行前再次校验权限。
+- [x] beforehook、Assistant 对话核心和 afterhook 在权限确定后共享同一份授权工具集。
+- [x] 空工具 ID 集合表示无工具权限；未知工具 ID 不得导致回退到系统完整工具集。
+- [x] 用户再次介入时，根据输入给出满意度分数 `-5..=5`（不可为 0），并对介入区间内的上游神经元与关联单向边增减权重。
+- [x] afterhook 用固定 `system_type` 提示词调用大模型确认本轮完成内容，再完成对应 `scope_in` 条目。
+- [x] scope_in 全部完成时课题自动标记 Done。
+- [x] Poller 是通用轮询调度器，通过 handler 注入业务逻辑，不包含 Assistant 专用分支。
+- [x] Poller 支持 pause/resume/trigger/status，并在 trigger 后的下一次 tick 调用所有 handler。
+- [x] `/poll pause` 暂停轮询，`/poll resume` 恢复，`/poll trigger` 手动触发一次。
 
 ## Constraints / 约束
 
-- 本次只更新需求文档，不修改代码。
-- 无新增外部依赖，复用现有 async_openai / rusqlite / tokio。
+- 无新增外部依赖，复用现有 async_openai / rusqlite / tokio（启用 `time` / `sync` features）。
 - Assistant 业务实现不得落在 `packages/agent-app/src-tauri/src/core/engine.rs`。
 - Poller 后台任务使用 tokio，与 TUI 事件循环共存。
 - session_id 写入 SQLite，运行中状态通过 session_tracker 判断。
@@ -170,9 +178,18 @@ Poller 的边界：
 - [x] Q6 Poller 是否是 Assistant 专用？
   - 修正：Poller 是系统级通用轮询调度器，通过 handler 注入业务逻辑，不返回业务值，不处理业务异常。
 - [x] Q7 "次生轮次"如何判定？
-  - 默认：Poller 对该课题发起的第 2 次及以后的处理即为次生轮次（而非按消息条数）。
+  - 决策：Poller 对该课题发起的第 2 次及以后的处理即为次生轮次（而非按消息条数）。
 - [x] Q8 在本轮神经元尚未选出前，负责候选准备和神经元选择的 beforehook 可以使用哪些工具？
   - 决策：不开放模型可调用的系统工具。beforehook 调用前置神经元迭代定义的内部候选准备与自举能力；选出神经元后再建立本轮授权工具集。
+- [x] Q9 次生轮次候选池如何取？
+  - 决策：保留次生轮次换候选池。以上一轮选中神经元为起点，只取以其为 `source` 的直接子节点（下游），不取父节点，不递归更深后代；不足时仍由 `select_candidates` 补齐，再走同一套大模型 7 选 1。
+- [x] Q10 7 选 1 / 课题匹配 / afterhook 完成判定如何实现？
+  - 决策：统一为“程序准备候选或上下文 + 固定 `system_type` 提示词神经元 + 大模型裁决”。
+  - 7 选 1：程序 `select_candidates` 按权重凑 7 个，再交给大模型选 1 个。
+  - 课题匹配：同一模式，仅 `system_type` 不同。
+  - afterhook：同一模式，由大模型确认本轮完成了什么，再完成对应 `scope_in`。
+- [x] Q11 用户介入如何影响权重？
+  - 决策：不是情感标签分类，也不是对话回滚。根据用户输入猜测满意度分数 `-5..=5`（不可为 0），对“上一轮用户介入到本次用户介入”区间内的上游神经元及其关联单向边增减权重。
 
 ## Requirement Decisions / 需求决策
 
@@ -186,3 +203,9 @@ Poller 的边界：
   - 决策：Assistant 工具权限改由神经元持有。神经元记录允许使用的工具 ID；Assistant、beforehook 和 afterhook 在权限确定后共享经神经元授权过滤的工具集，不得直接使用系统完整工具集。
 - 2026-07-28 23:50:
   - 决策：神经元自举与工具契约拆分到 `docs/sdd-lab/2026-07-28_23-43_neuron-bootstrap/`，作为本迭代前置依赖；神经元选出前的 beforehook 只调用该模块内部能力，不开放系统完整工具集。
+- 2026-07-29 20:57:
+  - 决策：7 选 1、课题匹配、afterhook 完成判定统一为“固定 system_type 提示词 + 大模型裁决”；用户介入改为满意度分数打分上游节点/边，废弃情感回滚叙事。
+- 2026-07-29 21:00:
+  - 决策：次生轮次保留；“邻居”仅指以上一轮选中神经元为 source 的直接子节点，不做双向或递归遍历。
+- 2026-07-29 23:58:
+  - 决策：系统提示词获取改由 `NeuronManager::ensure_system_neuron` / `bootstrap_ready` 完成；缺失时补齐而非硬失败。详见 `docs/sdd-lab/2026-07-29_22-50_neuron-system-prompt-ready/`。

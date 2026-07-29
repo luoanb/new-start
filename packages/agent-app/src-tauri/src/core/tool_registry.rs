@@ -99,6 +99,19 @@ impl ToolRegistry {
             .collect()
     }
 
+    pub fn definitions_for(&self, tool_ids: &[String]) -> Vec<ToolDefinition> {
+        tool_ids
+            .iter()
+            .filter_map(|id| {
+                self.tools.get(id).map(|tb| ToolDefinition {
+                    name: tb.0.name().to_string(),
+                    description: tb.0.description().to_string(),
+                    parameters: tb.0.parameters(),
+                })
+            })
+            .collect()
+    }
+
     pub async fn execute(&self, name: &str, args: serde_json::Value) -> AppResult<String> {
         let tool = self
             .tools

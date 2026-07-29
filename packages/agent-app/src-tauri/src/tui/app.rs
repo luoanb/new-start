@@ -308,7 +308,7 @@ impl TuiApp {
             TuiAction::ListNext => {
                 if self.show_sessions_list {
                     let i = self.session_list_state.selected().unwrap_or(0);
-                    let len = self.conversations.len();
+                    let len = self.conversations.len() + 3;
                     if len > 0 {
                         self.session_list_state.select(Some((i + 1) % len));
                     }
@@ -316,7 +316,7 @@ impl TuiApp {
             }
             TuiAction::ListPrev => {
                 if self.show_sessions_list {
-                    let len = self.conversations.len();
+                    let len = self.conversations.len() + 3;
                     if len > 0 {
                         let i = self.session_list_state.selected().unwrap_or(0);
                         self.session_list_state.select(Some((i + len - 1) % len));
@@ -368,6 +368,11 @@ impl TuiApp {
             }
             Command::NewAgent => {
                 if let Err(error) = self.create_new_session(ConversationMode::Agent) {
+                    self.error_banner = Some(TuiErrorView::from(error));
+                }
+            }
+            Command::NewAssistant => {
+                if let Err(error) = self.create_new_session(ConversationMode::Assistant) {
                     self.error_banner = Some(TuiErrorView::from(error));
                 }
             }
@@ -593,6 +598,9 @@ impl TuiApp {
             Command::NeuronAction(args) => {
                 self.handle_neuron_action(args).await;
             }
+            Command::PollAction(args) => {
+                self.handle_poll_command(args).await;
+            }
             Command::Close(session_id) => match self.gateway.session_tracker().close(&session_id) {
                 Ok(msg) => {
                     self.messages.push(TuiMessage::status(msg));
@@ -645,6 +653,9 @@ impl TuiApp {
             Ok(response) => {
                 if let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) {
                     task.done("Response received".to_string());
+                }
+                if response.conversation_id != self.active_session_id {
+                    self.switch_session(response.conversation_id.clone());
                 }
                 self.messages
                     .push(TuiMessage::assistant(response.response, task_id));
@@ -974,6 +985,66 @@ impl TuiApp {
         }
     }
 
+    /// Handle `/poll` commands.
+    async fn handle_poll_command(&mut self, args: Vec<String>) {
+        let action = args.first().map(|s| s.as_str()).unwrap_or("status");
+        match action {
+            "status" | "" => match self.gateway.poll_status() {
+                Ok(status) => {
+                    self.messages.push(TuiMessage::status(format!(
+                        "Poller: state={:?}, ticks={}, base_interval_ms={}, tasks={}, pending_trigger={}",
+                        status.state,
+                        status.tick_count,
+                        status.base_interval_ms,
+                        status.task_count,
+                        status.pending_trigger
+                    )));
+                }
+                Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+            },
+            "pause" => match self.gateway.poll_pause() {
+                Ok(()) => self
+                    .messages
+                    .push(TuiMessage::status("Poller paused".into())),
+                Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+            },
+            "resume" => match self.gateway.poll_resume() {
+                Ok(()) => self
+                    .messages
+                    .push(TuiMessage::status("Poller resumed".into())),
+                Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+            },
+            "trigger" => match self.gateway.poll_trigger() {
+                Ok(()) => self.messages.push(TuiMessage::status(
+                    "Poller will fire all handlers on next tick".into(),
+                )),
+                Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+            },
+            "step" => {
+                let Some(ref model) = self.active_model.clone() else {
+                    self.error_banner = Some(TuiErrorView::from(AppError::ModelNotSelected));
+                    return;
+                };
+                match self
+                    .gateway
+                    .assistant_step(Some(self.active_session_id.clone()), model)
+                    .await
+                {
+                    Ok(response) => {
+                        self.messages
+                            .push(TuiMessage::assistant(response.response, "poll-step".into()));
+                    }
+                    Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
+                }
+            }
+            _ => {
+                self.messages.push(TuiMessage::status(
+                    "Usage: /poll [status|pause|resume|trigger|step]".into(),
+                ));
+            }
+        }
+    }
+
     /// Handle `/neuron <args>` commands.
     async fn handle_neuron_action(&mut self, args: Vec<String>) {
         if args.is_empty() {
@@ -982,8 +1053,11 @@ impl TuiApp {
                     "Neuron commands:\n",
                     "  /neuron list                          - List all neurons\n",
                     "  /neuron new <desc> [content]          - Create a new neuron\n",
-                    "  /neuron candidates <n> [--source-id <id>|--system-type <type>] [--min-new <n>]\n",
+                    "  /neuron candidates <n> [--source-id <id>] [--min-new <n>]\n",
                     "  /neuron ensure-creator                - Ensure create_neuron system node\n",
+                    "  /neuron bootstrap                     - Bootstrap create_neuron + assistant_select_neuron\n",
+                    "  /neuron ensure-system <type>          - Ensure system prompt neuron\n",
+                    "  /neuron reset-system <type>           - Reset system prompt (unlink edges, recreate)\n",
                     "  /neuron <id>                          - View neuron details\n",
                     "  /neuron <id> set <field> <val>        - Update desc/content\n",
                     "  /neuron <id> weight <delta>           - Add or subtract weight\n",
@@ -1021,17 +1095,12 @@ impl TuiApp {
                     }
                 };
                 let mut source_id = None;
-                let mut system_type = None;
                 let mut min_new = 0usize;
                 let mut index = 2;
                 while index < args.len() {
                     match args[index].as_str() {
                         "--source-id" if index + 1 < args.len() => {
                             source_id = Some(args[index + 1].clone());
-                            index += 2;
-                        }
-                        "--system-type" if index + 1 < args.len() => {
-                            system_type = Some(args[index + 1].clone());
                             index += 2;
                         }
                         "--min-new" if index + 1 < args.len() => {
@@ -1059,7 +1128,6 @@ impl TuiApp {
                     .select_candidates(CandidateQuery {
                         n,
                         source_id,
-                        system_type,
                         min_new,
                     })
                     .await
@@ -1088,6 +1156,31 @@ impl TuiApp {
                 ))),
                 Err(error) => self.error_banner = Some(TuiErrorView::from(error)),
             },
+            "bootstrap" => match manager.bootstrap_ready().await {
+                Ok(report) => self.messages.push(TuiMessage::status(format!(
+                    "Bootstrap ready: create_neuron={}, assistant_select_neuron={}",
+                    report.create_neuron_id, report.assistant_select_neuron_id
+                ))),
+                Err(error) => self.error_banner = Some(TuiErrorView::from(error)),
+            },
+            "ensure-system" if args.len() >= 2 => {
+                match manager.ensure_system_neuron(&args[1], false).await {
+                    Ok(neuron) => self.messages.push(TuiMessage::status(format!(
+                        "System neuron ready: type={} id={}",
+                        args[1], neuron.id
+                    ))),
+                    Err(error) => self.error_banner = Some(TuiErrorView::from(error)),
+                }
+            }
+            "reset-system" if args.len() >= 2 => {
+                match manager.ensure_system_neuron(&args[1], true).await {
+                    Ok(neuron) => self.messages.push(TuiMessage::status(format!(
+                        "System neuron reset: type={} id={}",
+                        args[1], neuron.id
+                    ))),
+                    Err(error) => self.error_banner = Some(TuiErrorView::from(error)),
+                }
+            }
             "list" => match store_arc.lock() {
                 Ok(store) => match store.list_neurons() {
                     Ok(neurons) => {
@@ -1366,6 +1459,8 @@ impl TuiApp {
                 let _ = self.create_new_session(ConversationMode::Chat);
             } else if idx == self.conversations.len() + 1 {
                 let _ = self.create_new_session(ConversationMode::Agent);
+            } else if idx == self.conversations.len() + 2 {
+                let _ = self.create_new_session(ConversationMode::Assistant);
             }
         }
     }

@@ -1,6 +1,10 @@
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use tokio::sync::mpsc;
 
 use super::{
+    assistant_mode::{AssistantMode, AssistantStepRequest, DEFAULT_ASSISTANT_POLL_TICKS},
     conversation_store::{now_ms, ConversationStore},
     engine::Engine,
     error::{AppError, AppResult},
@@ -13,12 +17,15 @@ use super::{
     neuron_manager::NeuronManager,
     neuron_model::DefaultNeuronModelCaller,
     neuron_store::NeuronStore,
+    poller::{Poller, PollerStatus},
     providers::ProviderRegistry,
     session_tracker::SessionTracker,
     tool_registry::ToolRegistry,
     topic_store::TopicStore,
     CompactionConfig,
 };
+
+const DEFAULT_POLLER_BASE_INTERVAL_MS: u64 = 1000;
 
 #[derive(Debug, Clone)]
 pub struct Gateway {
@@ -29,6 +36,8 @@ pub struct Gateway {
     topic_store: Option<Arc<Mutex<TopicStore>>>,
     neuron_store: Option<Arc<Mutex<NeuronStore>>>,
     neuron_manager: Arc<NeuronManager>,
+    assistant: Arc<AssistantMode>,
+    poller: Arc<Mutex<Poller>>,
     session_tracker: SessionTracker,
     current_conversation_id: String,
 }
@@ -70,27 +79,56 @@ impl Gateway {
             NeuronConfigReader::new(store.root().to_path_buf()),
         ));
 
-        let tool_registry = Some(ToolRegistry::with_defaults_and_topics_and_neurons(
+        let tool_registry = ToolRegistry::with_defaults_and_topics_and_neurons(
             Arc::clone(&topic_store),
             Arc::clone(&neuron_manager),
             session_tracker.clone(),
-        ));
+        );
         let engine = Engine::with_tools(
             store.clone(),
             providers.clone(),
             CompactionConfig::default(),
-            tool_registry.clone().unwrap(),
+            tool_registry.clone(),
+        );
+
+        let (step_tx, step_rx) = mpsc::unbounded_channel::<AssistantStepRequest>();
+        let assistant = Arc::new(AssistantMode::new(
+            store.clone(),
+            providers.clone(),
+            Arc::clone(&neuron_manager),
+            Arc::clone(&topic_store),
+            Arc::clone(&neuron_store),
+            tool_registry.clone(),
+            step_tx,
+        ));
+
+        let poller = Arc::new(Mutex::new(Poller::new(DEFAULT_POLLER_BASE_INTERVAL_MS)));
+        {
+            let mut guard = poller
+                .lock()
+                .map_err(|e| AppError::StorageError(format!("Poller lock error: {}", e)))?;
+            assistant.register_polling(&mut guard, DEFAULT_ASSISTANT_POLL_TICKS)?;
+        }
+
+        spawn_poller_runtime(
+            Arc::clone(&poller),
+            Arc::clone(&assistant),
+            providers.clone(),
+            step_rx,
+            DEFAULT_POLLER_BASE_INTERVAL_MS,
         );
 
         Ok(Self {
             engine,
             store,
             providers,
-            tool_registry,
+            tool_registry: Some(tool_registry),
             topic_store: Some(topic_store),
             neuron_store: Some(neuron_store),
             neuron_manager,
-            session_tracker: session_tracker,
+            assistant,
+            poller,
+            session_tracker,
             current_conversation_id,
         })
     }
@@ -206,24 +244,79 @@ impl Gateway {
             .require_model(&options.provider_id, &options.model_id)?;
 
         let conversation_id = self.resolve_conversation_id(options.conversation_id.clone())?;
+        let conversation = self.store.require_conversation(&conversation_id)?;
 
-        // Register as a running session
         self.session_tracker.register(&conversation_id, None)?;
 
-        // Engine dispatches by conversation.mode internally
-        let result = self
-            .engine
-            .chat(input, conversation_id.clone(), options)
-            .await;
+        let result = if conversation.mode == ConversationMode::Assistant {
+            let model = ChatModelSelection {
+                provider_id: options.provider_id.clone(),
+                model_id: options.model_id.clone(),
+            };
+            self.assistant
+                .converse(&conversation_id, input, &model)
+                .await
+        } else {
+            self.engine
+                .chat(input, conversation_id.clone(), options)
+                .await
+        };
 
-        // Unregister on completion (success or error)
         self.session_tracker.unregister(&conversation_id);
 
         let response = result?;
-
-        self.current_conversation_id = conversation_id.clone();
-
+        self.current_conversation_id = response.conversation_id.clone();
         Ok(response)
+    }
+
+    pub async fn assistant_step(
+        &mut self,
+        conversation_id: Option<String>,
+        model: &ChatModelSelection,
+    ) -> AppResult<ChatResponse> {
+        let conversation_id = self.resolve_existing_conversation_id(conversation_id)?;
+        let conversation = self.store.require_conversation(&conversation_id)?;
+        if conversation.mode != ConversationMode::Assistant {
+            return Err(AppError::InvalidInput(
+                "assistant step requires an Assistant session".into(),
+            ));
+        }
+        self.session_tracker.register(&conversation_id, None)?;
+        let result = self.assistant.step(&conversation_id, model).await;
+        self.session_tracker.unregister(&conversation_id);
+        result
+    }
+
+    pub fn poll_status(&self) -> AppResult<PollerStatus> {
+        Ok(self
+            .poller
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Poller lock error: {e}")))?
+            .status())
+    }
+
+    pub fn poll_pause(&self) -> AppResult<()> {
+        self.poller
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Poller lock error: {e}")))?
+            .pause();
+        Ok(())
+    }
+
+    pub fn poll_resume(&self) -> AppResult<()> {
+        self.poller
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Poller lock error: {e}")))?
+            .resume();
+        Ok(())
+    }
+
+    pub fn poll_trigger(&self) -> AppResult<()> {
+        self.poller
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Poller lock error: {e}")))?
+            .trigger();
+        Ok(())
     }
 
     /// Manually trigger compaction for the current conversation.
@@ -301,6 +394,15 @@ impl Gateway {
         Arc::clone(&self.neuron_manager)
     }
 
+    pub async fn bootstrap_neurons(&self) -> AppResult<()> {
+        let _ = self.neuron_manager.bootstrap_ready().await?;
+        Ok(())
+    }
+
+    pub fn assistant(&self) -> Arc<AssistantMode> {
+        Arc::clone(&self.assistant)
+    }
+
     /// Access the SessionTracker for TUI commands.
     pub fn session_tracker(&self) -> SessionTracker {
         self.session_tracker.clone()
@@ -336,6 +438,37 @@ impl Gateway {
         self.store.require_conversation(&id)?;
         Ok(id)
     }
+}
+
+fn spawn_poller_runtime(
+    poller: Arc<Mutex<Poller>>,
+    assistant: Arc<AssistantMode>,
+    providers: ProviderRegistry,
+    mut step_rx: mpsc::UnboundedReceiver<AssistantStepRequest>,
+    base_interval_ms: u64,
+) {
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    handle.spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(base_interval_ms));
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    if let Ok(mut guard) = poller.lock() {
+                        guard.tick();
+                    }
+                }
+                Some(request) = step_rx.recv() => {
+                    let model = match providers.default_model_selection() {
+                        Ok(Some(model)) => model,
+                        _ => continue,
+                    };
+                    assistant.process_step_request(request, &model).await;
+                }
+            }
+        }
+    });
 }
 
 #[cfg(test)]
@@ -400,6 +533,14 @@ mod tests {
 
         assert_eq!(cleared, response.conversation_id);
         assert!(gateway.history(Some(cleared)).is_err());
+    }
+
+    #[test]
+    fn poller_status_available() {
+        let gateway = test_gateway("poller_status_available");
+        let status = gateway.poll_status().expect("poll status");
+        assert_eq!(status.base_interval_ms, DEFAULT_POLLER_BASE_INTERVAL_MS);
+        assert!(status.task_count >= 1);
     }
 
     #[tokio::test]

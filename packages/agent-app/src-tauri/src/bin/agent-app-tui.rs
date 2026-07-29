@@ -10,6 +10,13 @@ async fn main() {
             std::process::exit(error.exit_code());
         }
     };
+    if let Err(error) = gateway.bootstrap_neurons().await {
+        eprintln!(
+            "warning: neuron bootstrap incomplete [{}]: {}",
+            error.code(),
+            error
+        );
+    }
 
     // Initialize terminal with a guard for safety
     let _guard = match agent_app_lib::tui::TerminalGuard::new() {

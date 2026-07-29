@@ -5,6 +5,7 @@ pub enum Command {
     Help,
     New,
     NewAgent,
+    NewAssistant,
     Skills,
     Providers,
     Sessions,
@@ -19,6 +20,7 @@ pub enum Command {
     Compact,
     TopicAction(Vec<String>),
     NeuronAction(Vec<String>),
+    PollAction(Vec<String>),
     Close(String),
     Exit,
 }
@@ -42,6 +44,7 @@ impl Command {
             "/config" => Some(Self::Config),
             "/compact" => Some(Self::Compact),
             "/new_agent" => Some(Self::NewAgent),
+            "/new_assistant" => Some(Self::NewAssistant),
             "/exit" | "/quit" => Some(Self::Exit),
             _ => {
                 let parts: Vec<&str> = trimmed.splitn(4, ' ').collect();
@@ -62,6 +65,9 @@ impl Command {
                     "/neuron" if parts.len() >= 1 => Some(Self::NeuronAction(
                         parts[1..].iter().map(|s| s.to_string()).collect(),
                     )),
+                    "/poll" => Some(Self::PollAction(
+                        parts[1..].iter().map(|s| s.to_string()).collect(),
+                    )),
                     "/close" if parts.len() >= 2 => Some(Self::Close(parts[1].to_string())),
                     _ => None,
                 }
@@ -75,6 +81,10 @@ pub fn cmd_help_text() -> Vec<(String, String)> {
         ("/help".into(), "Show this help".into()),
         ("/new".into(), "Create a new Chat session".into()),
         ("/new_agent".into(), "Create a new Agent session".into()),
+        (
+            "/new_assistant".into(),
+            "Create a new Assistant session".into(),
+        ),
         ("/skills".into(), "List available skills".into()),
         ("/providers".into(), "List providers".into()),
         ("/provider <id>".into(), "Show provider details".into()),
@@ -92,6 +102,10 @@ pub fn cmd_help_text() -> Vec<(String, String)> {
         ("/call <p> <m> <msg>".into(), "Call a model directly".into()),
         ("/topic <cmd>".into(), "Topic management: list, new, scope-add/delete/complete, pause/resume, set, delete (use /topic alone for help)".into()),
         ("/neuron <cmd>".into(), "Neuron management: list, new, candidates, weight, tools, system-type, connect, disconnect, network (use /neuron alone for help)".into()),
+        (
+            "/poll [status|pause|resume|trigger]".into(),
+            "Control the system poller".into(),
+        ),
         ("/close <session_id>".into(), "Close a running session".into()),
         ("/exit".into(), "Quit the application".into()),
     ]

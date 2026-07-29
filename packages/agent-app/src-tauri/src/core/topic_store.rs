@@ -40,12 +40,14 @@ impl TopicStore {
                 description TEXT NOT NULL DEFAULT '',
                 scope_in    TEXT NOT NULL DEFAULT '[]',
                 progress    INTEGER NOT NULL DEFAULT 0,
+                session_id  TEXT,
                 extra       TEXT,
                 created_at  INTEGER NOT NULL,
                 updated_at  INTEGER NOT NULL
             );",
         )
         .map_err(|e| AppError::StorageError(format!("Failed to init topics table: {}", e)))?;
+        migrate_session_id(&conn)?;
         migrate_scope_items(&conn)?;
         Ok(())
     }
@@ -58,11 +60,11 @@ impl TopicStore {
 
         let (query, status_str): (&str, Option<String>) = match &status_filter {
             Some(s) => (
-                "SELECT id, name, status, description, scope_in, progress, extra, created_at, updated_at FROM topics WHERE status = ?1 ORDER BY created_at DESC",
+                "SELECT id, name, status, description, scope_in, progress, session_id, extra, created_at, updated_at FROM topics WHERE status = ?1 ORDER BY created_at DESC",
                 Some(status_to_string(s)),
             ),
             None => (
-                "SELECT id, name, status, description, scope_in, progress, extra, created_at, updated_at FROM topics ORDER BY created_at DESC",
+                "SELECT id, name, status, description, scope_in, progress, session_id, extra, created_at, updated_at FROM topics ORDER BY created_at DESC",
                 None,
             ),
         };
@@ -96,7 +98,7 @@ impl TopicStore {
             .lock()
             .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         let mut stmt = conn
-            .prepare("SELECT id, name, status, description, scope_in, progress, extra, created_at, updated_at FROM topics WHERE id = ?1")
+            .prepare("SELECT id, name, status, description, scope_in, progress, session_id, extra, created_at, updated_at FROM topics WHERE id = ?1")
             .map_err(|e| AppError::StorageError(format!("Failed to prepare query: {}", e)))?;
 
         let mut rows = stmt
@@ -111,6 +113,86 @@ impl TopicStore {
             ))),
             None => Ok(None),
         }
+    }
+
+    pub fn find_by_session_id(&self, session_id: &str) -> AppResult<Option<Topic>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let mut stmt = conn
+            .prepare("SELECT id, name, status, description, scope_in, progress, session_id, extra, created_at, updated_at FROM topics WHERE session_id = ?1")
+            .map_err(|e| AppError::StorageError(format!("Failed to prepare query: {}", e)))?;
+        let mut rows = stmt
+            .query_map(params![session_id], row_to_topic)
+            .map_err(|e| AppError::StorageError(format!("Failed to query topic: {}", e)))?;
+        match rows.next() {
+            Some(Ok(topic)) => Ok(Some(topic)),
+            Some(Err(e)) => Err(AppError::StorageError(format!(
+                "Failed to read topic row: {}",
+                e
+            ))),
+            None => Ok(None),
+        }
+    }
+
+    pub fn list_unfinished(&self) -> AppResult<Vec<Topic>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, status, description, scope_in, progress, session_id, extra, created_at, updated_at \
+                 FROM topics WHERE status NOT IN ('done', 'cancelled') ORDER BY created_at DESC",
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to prepare query: {}", e)))?;
+        let rows = stmt
+            .query_map([], row_to_topic)
+            .map_err(|e| AppError::StorageError(format!("Failed to query topics: {}", e)))?;
+        let mut topics = Vec::new();
+        for row in rows {
+            topics.push(
+                row.map_err(|e| {
+                    AppError::StorageError(format!("Failed to read topic row: {}", e))
+                })?,
+            );
+        }
+        Ok(topics)
+    }
+
+    pub fn bind_session(&self, topic_id: &str, session_id: &str) -> AppResult<Topic> {
+        if session_id.trim().is_empty() {
+            return Err(AppError::InvalidInput("session_id cannot be empty".into()));
+        }
+        if let Some(existing) = self.find_by_session_id(session_id)? {
+            if existing.id != topic_id {
+                return Err(AppError::InvalidInput(format!(
+                    "session_id already bound to topic {}",
+                    existing.id
+                )));
+            }
+            return Ok(existing);
+        }
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let now = now_ms();
+        let affected = conn
+            .execute(
+                "UPDATE topics SET session_id = ?1, updated_at = ?2 WHERE id = ?3",
+                params![session_id, now as i64, topic_id],
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to bind session: {}", e)))?;
+        if affected == 0 {
+            return Err(AppError::ConversationNotFound(format!(
+                "Topic not found: {topic_id}"
+            )));
+        }
+        drop(conn);
+        self.get(topic_id)?
+            .ok_or_else(|| AppError::ConversationNotFound(format!("Topic not found: {topic_id}")))
     }
 
     pub fn create(
@@ -151,7 +233,7 @@ impl TopicStore {
             .lock()
             .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         conn.execute(
-            "INSERT INTO topics (id, name, status, description, scope_in, progress, extra, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+            "INSERT INTO topics (id, name, status, description, scope_in, progress, session_id, extra, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?8)",
             params![id, name, status_str, description, scope_in_str, progress, extra_str, now as i64],
         )
         .map_err(|e| AppError::StorageError(format!("Failed to create topic: {}", e)))?;
@@ -163,6 +245,7 @@ impl TopicStore {
             description: description.to_string(),
             scope_in,
             progress,
+            session_id: None,
             extra,
             created_at: now,
             updated_at: now,
@@ -214,7 +297,7 @@ impl TopicStore {
 
         // Fetch updated record
         let mut stmt = conn
-            .prepare("SELECT id, name, status, description, scope_in, progress, extra, created_at, updated_at FROM topics WHERE id = ?1")
+            .prepare("SELECT id, name, status, description, scope_in, progress, session_id, extra, created_at, updated_at FROM topics WHERE id = ?1")
             .map_err(|e| AppError::StorageError(format!("Failed to prepare query: {}", e)))?;
         let mut rows = stmt
             .query_map(params![id], row_to_topic)
@@ -323,7 +406,7 @@ impl TopicStore {
             .map_err(|e| AppError::StorageError(format!("Failed to start transaction: {}", e)))?;
         let mut topic = tx
             .query_row(
-                "SELECT id, name, status, description, scope_in, progress, extra, created_at, updated_at FROM topics WHERE id = ?1",
+                "SELECT id, name, status, description, scope_in, progress, session_id, extra, created_at, updated_at FROM topics WHERE id = ?1",
                 params![id],
                 row_to_topic,
             )
@@ -395,6 +478,36 @@ impl TopicStore {
             .map_err(|e| AppError::StorageError(format!("Failed to delete topic: {}", e)))?;
         Ok(affected > 0)
     }
+}
+
+fn migrate_session_id(conn: &Connection) -> AppResult<()> {
+    if !topic_has_column(conn, "session_id")? {
+        conn.execute("ALTER TABLE topics ADD COLUMN session_id TEXT", [])
+            .map_err(|e| AppError::StorageError(format!("Failed to add session_id: {}", e)))?;
+    }
+    conn.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_topics_session_id
+         ON topics(session_id) WHERE session_id IS NOT NULL;",
+    )
+    .map_err(|e| AppError::StorageError(format!("Failed to create session_id index: {}", e)))?;
+    Ok(())
+}
+
+fn topic_has_column(conn: &Connection, column: &str) -> AppResult<bool> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(topics)")
+        .map_err(|e| AppError::StorageError(format!("Failed to inspect topics: {}", e)))?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| AppError::StorageError(format!("Failed to read columns: {}", e)))?;
+    for row in rows {
+        let name =
+            row.map_err(|e| AppError::StorageError(format!("Failed to read column: {}", e)))?;
+        if name == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn migrate_scope_items(conn: &Connection) -> AppResult<()> {
@@ -482,7 +595,8 @@ fn new_scope_item_id() -> String {
 fn row_to_topic(row: &rusqlite::Row) -> rusqlite::Result<Topic> {
     let status_str: String = row.get(2)?;
     let scope_in_str: String = row.get(4)?;
-    let extra_str: Option<String> = row.get(6)?;
+    let session_id: Option<String> = row.get(6)?;
+    let extra_str: Option<String> = row.get(7)?;
 
     let status: TopicStatus =
         serde_json::from_str(&format!("\"{}\"", status_str)).unwrap_or(TopicStatus::Todo);
@@ -502,9 +616,10 @@ fn row_to_topic(row: &rusqlite::Row) -> rusqlite::Result<Topic> {
         description: row.get(3)?,
         scope_in,
         progress: row.get::<_, i32>(5)? as u8,
+        session_id,
         extra,
-        created_at: row.get::<_, i64>(7)? as u128,
-        updated_at: row.get::<_, i64>(8)? as u128,
+        created_at: row.get::<_, i64>(8)? as u128,
+        updated_at: row.get::<_, i64>(9)? as u128,
     })
 }
 
@@ -755,5 +870,19 @@ mod tests {
             .add_scope_item("legacy", &large_text, &large_text)
             .unwrap();
         assert_eq!(updated.scope_in[1].goal.chars().count(), 50_000);
+    }
+
+    #[test]
+    fn test_bind_session_and_list_unfinished() {
+        let store = test_store("bind_session");
+        let topic = store
+            .create("Bound", "desc", TopicStatus::Todo, vec![], None)
+            .unwrap();
+        let bound = store.bind_session(&topic.id, "conv_test_1").unwrap();
+        assert_eq!(bound.session_id.as_deref(), Some("conv_test_1"));
+        let found = store.find_by_session_id("conv_test_1").unwrap().unwrap();
+        assert_eq!(found.id, topic.id);
+        let unfinished = store.list_unfinished().unwrap();
+        assert!(unfinished.iter().any(|t| t.id == topic.id));
     }
 }

@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use super::{
     error::{AppError, AppResult},
@@ -395,6 +395,42 @@ impl NeuronStore {
         })
     }
 
+    pub fn adjust_connection_weight(
+        &self,
+        source: &str,
+        target: &str,
+        delta: f64,
+    ) -> AppResult<NeuronConnection> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let existing: Option<f64> = conn
+            .query_row(
+                "SELECT weight FROM connections WHERE source = ?1 AND target = ?2",
+                params![source, target],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| AppError::StorageError(format!("Failed to read connection: {}", e)))?;
+        let Some(current) = existing else {
+            return Err(AppError::InvalidInput(format!(
+                "Connection not found: {source} -> {target}"
+            )));
+        };
+        let weight = current + delta;
+        conn.execute(
+            "UPDATE connections SET weight = ?1 WHERE source = ?2 AND target = ?3",
+            params![weight, source, target],
+        )
+        .map_err(|e| AppError::StorageError(format!("Failed to adjust connection: {}", e)))?;
+        Ok(NeuronConnection {
+            source: source.to_string(),
+            target: target.to_string(),
+            weight,
+        })
+    }
+
     pub fn unlink(&self, source: &str, target: &str) -> AppResult<bool> {
         let conn = self
             .conn
@@ -407,6 +443,20 @@ impl NeuronStore {
             )
             .map_err(|e| AppError::StorageError(format!("Failed to unlink: {}", e)))?;
         Ok(affected > 0)
+    }
+
+    pub fn unlink_all_edges_of(&self, neuron_id: &str) -> AppResult<usize> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let affected = conn
+            .execute(
+                "DELETE FROM connections WHERE source = ?1 OR target = ?1",
+                params![neuron_id],
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to unlink edges: {}", e)))?;
+        Ok(affected)
     }
 
     pub fn get_connections(&self, neuron_id: &str) -> AppResult<Vec<NeuronConnection>> {
@@ -451,7 +501,7 @@ impl NeuronStore {
                         n.created_at, n.updated_at
                  FROM connections c
                  JOIN neurons n ON n.id = c.target
-                 WHERE c.source = ?1 AND n.system_type IS NULL
+                 WHERE c.source = ?1
                  ORDER BY n.weight DESC, RANDOM()",
             )
             .map_err(|e| AppError::StorageError(format!("Failed to prepare: {}", e)))?;
@@ -485,7 +535,6 @@ impl NeuronStore {
             .prepare(
                 "SELECT id, desc, content, weight, system_type, tool_ids, created_at, updated_at
                  FROM neurons
-                 WHERE system_type IS NULL
                  ORDER BY weight DESC, RANDOM()",
             )
             .map_err(|e| AppError::StorageError(format!("Failed to prepare: {}", e)))?;
