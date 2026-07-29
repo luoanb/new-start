@@ -7,3 +7,4 @@ dist
 packages/agent-app/.agent-app/sessions/*
 packages/agent-app/.agent-app/config.json
 packages/agent-app/.agent-app/app.db
+packages/agent-app/src-tauri/.agent-app/app.db
