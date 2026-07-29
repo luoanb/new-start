@@ -1,517 +1,373 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
   import { onMount } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
+  import type {
+    ProviderInfo,
+    ModelInfo,
+    SkillInfo,
+    Conversation,
+    Message,
+    ChatResponse,
+    RuntimeStatus,
+  } from "$lib/types";
+  import StatusBar from "$lib/components/StatusBar.svelte";
+  import ModelBar from "$lib/components/ModelBar.svelte";
+  import SessionList from "$lib/components/SessionList.svelte";
+  import ChatArea from "$lib/components/ChatArea.svelte";
+  import SidePanel from "$lib/components/SidePanel.svelte";
+  import SessionCreateModal from "$lib/components/SessionCreateModal.svelte";
+  import ErrorBanner from "$lib/components/ErrorBanner.svelte";
 
-  type AppError = {
-    code: string;
-    message: string;
-  };
+  // ── Bootstrap state (loaded once) ──
+  let providers: ProviderInfo[] = $state([]);
+  let models: ModelInfo[] = $state([]);
+  let skills: SkillInfo[] = $state([]);
+  let conversations: Conversation[] = $state([]);
+  let runtimeStatus: RuntimeStatus | null = $state(null);
+  let ready = $state(false);
 
-  type ChatResponse = {
-    conversation_id: string;
-    response: string;
-  };
+  // ── Active selection ──
+  let activeConversationId: string = $state("");
+  let activeProviderId: string = $state("");
+  let activeModelId: string = $state("");
 
-  type Conversation = {
-    id: string;
-    messages: Message[];
-    created_at: number;
-    updated_at: number;
-  };
-
-  type Message = {
-    role: "user" | "assistant" | "system";
-    content: string;
-    timestamp: number;
-  };
-
-  type RuntimeStatus = {
-    app_name: string;
-    storage_path: string;
-    current_conversation_id: string;
-    skill_count: number;
-    conversation_count: number;
-  };
-
-  type SkillInfo = {
-    name: string;
-    description: string;
-  };
-
-  type ProviderInfo = {
-    id: string;
-    display_name: string;
-    api_base: string | null;
-    auth_env: string;
-    kind: "open_ai" | "open_ai_compatible";
-  };
-
-  type ModelInfo = {
-    id: string;
-    provider_id: string;
-    display_name: string;
-    capabilities: {
-      chat: boolean;
-      tools: boolean;
-      streaming: boolean;
-    };
-  };
-
-  type ModelCallResponse = {
-    provider_id: string;
-    model_id: string;
-    output: string;
-  };
-
-  let message = $state("");
-  let response = $state("");
-  let modelInput = $state("");
-  let modelOutput = $state("");
-  let selectedProviderId = $state("");
-  let selectedModelId = $state("");
-  let error = $state("");
-  let status = $state<RuntimeStatus | null>(null);
-  let skills = $state<SkillInfo[]>([]);
-  let providers = $state<ProviderInfo[]>([]);
-  let models = $state<ModelInfo[]>([]);
-  let conversations = $state<Conversation[]>([]);
+  // ── Messages & loading ──
+  let messages: Message[] = $state([]);
   let loading = $state(false);
-  let modelLoading = $state(false);
 
-  let visibleModels = $derived(
-    selectedProviderId
-      ? models.filter((model) => model.provider_id === selectedProviderId)
-      : models,
+  // ── UI state ──
+  let error = $state("");
+  let showCreateModal = $state(false);
+  let sidebarCollapsed = $state(false);
+
+  // ── Derived ──
+  let activeConversation = $derived(
+    conversations.find((c) => c.id === activeConversationId)
+  );
+  let activeMode = $derived(activeConversation?.mode ?? "chat");
+  let hasModel = $derived(!!activeProviderId && !!activeModelId);
+  let modelsForProvider = $derived(
+    activeProviderId
+      ? models.filter((m) => m.provider_id === activeProviderId)
+      : []
   );
 
-  onMount(() => {
-    void refresh();
+  // ── Bootstrap ──
+  let debugInfo = $state("");
+
+  onMount(async () => {
+    try {
+      // Debug: check storage path
+      const path = await invoke<string>("debug_storage_path").catch(() => "n/a");
+      debugInfo = path;
+
+      const [providersRes, modelsRes, skillsRes, convsRes, statusRes] =
+        await Promise.all([
+          invoke<ProviderInfo[]>("list_providers"),
+          invoke<ModelInfo[]>("list_models"),
+          invoke<SkillInfo[]>("list_skills"),
+          invoke<Conversation[]>("list_conversations"),
+          invoke<RuntimeStatus>("status"),
+        ]);
+
+      providers = providersRes;
+      models = modelsRes;
+      skills = skillsRes;
+      conversations = convsRes;
+      runtimeStatus = statusRes;
+
+      // Auto-select first conversation if available
+      if (convsRes.length > 0) {
+        activeConversationId = convsRes[0].id;
+      }
+
+      ready = true;
+    } catch (e) {
+      error = `Failed to load: ${e}`;
+    }
   });
 
-  async function refresh() {
-    error = "";
-    try {
-      const [
-        nextStatus,
-        nextSkills,
-        nextProviders,
-        nextModels,
-        nextConversations,
-      ] = await Promise.all([
-        invoke<RuntimeStatus>("status"),
-        invoke<SkillInfo[]>("list_skills"),
-        invoke<ProviderInfo[]>("list_providers"),
-        invoke<ModelInfo[]>("list_models"),
-        invoke<Conversation[]>("list_conversations"),
-      ]);
+  // ── Load messages when active conversation changes ──
+  $effect(() => {
+    if (!activeConversationId) return;
 
-      status = nextStatus;
-      skills = nextSkills;
-      providers = nextProviders;
-      models = nextModels;
-      conversations = nextConversations;
-    } catch (caught) {
-      error = formatError(caught);
+    invoke<Message[]>("history", { conversationId: activeConversationId })
+      .then((msgs) => {
+        messages = msgs;
+      })
+      .catch((e) => {
+        error = `Failed to load history: ${e}`;
+      });
+  });
+
+  // ── Send message ──
+  async function handleSend(text: string) {
+    if (!activeConversationId) {
+      error = "No active session. Create a new session first.";
+      return;
     }
-  }
-
-  async function send(event: Event) {
-    event.preventDefault();
-    if (!message.trim()) {
-      error = "消息不能为空";
+    if (!hasModel) {
+      error = "Select a provider and model before sending.";
       return;
     }
 
+    // Optimistic append
+    const userMsg: Message = {
+      role: "user",
+      content: text,
+      timestamp: Date.now(),
+    };
+    messages = [...messages, userMsg];
     loading = true;
     error = "";
 
     try {
-      const result = await invoke<ChatResponse>("send_message", { message });
-      response = result.response;
-      message = "";
-      await refresh();
-    } catch (caught) {
-      error = formatError(caught);
+      const res = await invoke<ChatResponse>("send_chat_message", {
+        message: text,
+        providerId: activeProviderId,
+        modelId: activeModelId,
+        conversationId: activeConversationId,
+      });
+
+      const assistantMsg: Message = {
+        role: "assistant",
+        content: res.response,
+        timestamp: Date.now(),
+      };
+      messages = [...messages, assistantMsg];
+    } catch (e) {
+      error = `Send failed: ${e}`;
     } finally {
       loading = false;
     }
   }
 
-  async function clearCurrentConversation() {
-    error = "";
+  // ── Create session ──
+  async function handleCreateSession(mode: string) {
+    showCreateModal = false;
     try {
-      await invoke<string>("clear_conversation", {
-        conversationId: status?.current_conversation_id,
-      });
-      response = "";
-      await refresh();
-    } catch (caught) {
-      error = formatError(caught);
+      const id = await invoke<string>("create_conversation", { mode });
+      // Refresh conversation list
+      const convs = await invoke<Conversation[]>("list_conversations");
+      conversations = convs;
+      activeConversationId = id;
+    } catch (e) {
+      error = `Failed to create session: ${e}`;
     }
   }
 
-  async function callSelectedModel(event: Event) {
-    event.preventDefault();
-
-    if (!selectedProviderId || !selectedModelId) {
-      error = "请选择服务商和模型";
-      return;
-    }
-
-    if (!modelInput.trim()) {
-      error = "模型输入不能为空";
-      return;
-    }
-
-    modelLoading = true;
-    error = "";
-
+  // ── Close session ──
+  async function handleCloseSession(sessionId: string) {
     try {
-      const result = await invoke<ModelCallResponse>("call_model", {
-        request: {
-          provider_id: selectedProviderId,
-          model_id: selectedModelId,
-          messages: [{ role: "user", content: modelInput }],
-        },
-      });
-      modelOutput = result.output;
-    } catch (caught) {
-      error = formatError(caught);
-    } finally {
-      modelLoading = false;
+      await invoke<string>("close_session", { sessionId });
+      conversations = conversations.filter((c) => c.id !== sessionId);
+      if (activeConversationId === sessionId) {
+        activeConversationId = conversations[0]?.id ?? "";
+        if (!activeConversationId) messages = [];
+      }
+    } catch (e) {
+      error = `Failed to close session: ${e}`;
     }
   }
 
-  function formatError(caught: unknown) {
-    const appError = caught as Partial<AppError>;
-    return appError.message ?? "未知错误";
+  // ── Select conversation ──
+  function handleSelectConversation(id: string) {
+    activeConversationId = id;
+  }
+
+  // ── Model/Provider change ──
+  function handleModelChange(providerId: string, modelId: string) {
+    activeProviderId = providerId;
+    activeModelId = modelId;
+  }
+
+  // ── Keyboard shortcuts ──
+  function handleKeydown(e: KeyboardEvent) {
+    if (e.ctrlKey && e.key === "j") {
+      e.preventDefault();
+      showCreateModal = true;
+    }
   }
 </script>
 
-<main class="container">
-  <header>
-    <div>
-      <p class="eyebrow">Rust Core / Tauri / CLI / TUI</p>
-      <h1>Agent App</h1>
-    </div>
-    <button type="button" onclick={refresh}>刷新状态</button>
+<svelte:window onkeydown={handleKeydown} />
+
+<div class="app-layout">
+  <header class="status-area">
+    <StatusBar
+      appName={runtimeStatus?.app_name ?? "Agent App"}
+      sessionId={activeConversationId}
+      mode={activeMode}
+      providerId={activeProviderId}
+      modelId={activeModelId}
+    />
   </header>
 
-  {#if error}
-    <p class="error">{error}</p>
-  {/if}
+  <nav class="model-area">
+    <ModelBar
+      {providers}
+      totalModels={models.length}
+      visibleModels={modelsForProvider}
+      selectedProviderId={activeProviderId}
+      selectedModelId={activeModelId}
+      onChange={handleModelChange}
+    />
+    <span class="cwd-debug">{debugInfo}</span>
+  </nav>
 
-  <section class="panel">
-    <h2>运行状态</h2>
-    {#if status}
-      <dl>
-        <div>
-          <dt>当前会话</dt>
-          <dd>{status.current_conversation_id}</dd>
-        </div>
-        <div>
-          <dt>存储路径</dt>
-          <dd>{status.storage_path}</dd>
-        </div>
-        <div>
-          <dt>技能 / 会话</dt>
-          <dd>{status.skill_count} / {status.conversation_count}</dd>
-        </div>
-      </dl>
-    {:else}
-      <p>状态加载中...</p>
-    {/if}
-  </section>
+  <aside class="sidebar-area">
+    <SessionList
+      {conversations}
+      activeId={activeConversationId}
+      collapsed={sidebarCollapsed}
+      onSelect={handleSelectConversation}
+      onCreate={() => (showCreateModal = true)}
+      onClose={handleCloseSession}
+      onToggle={() => (sidebarCollapsed = !sidebarCollapsed)}
+    />
+  </aside>
 
-  <section class="panel">
-    <h2>发送消息</h2>
-    <form onsubmit={send}>
-      <input
-        id="message-input"
-        placeholder="输入消息，或试试 /time、/echo hello"
-        bind:value={message}
-      />
-      <button type="submit" disabled={loading}>
-        {loading ? "发送中..." : "发送"}
-      </button>
-    </form>
+  <main class="chat-area">
+    <ChatArea {messages} {loading} onSend={handleSend} />
+  </main>
 
-    {#if response}
-      <article class="response">
-        <strong>Assistant</strong>
-        <p>{response}</p>
-      </article>
-    {/if}
-  </section>
+  <aside class="info-area">
+    <SidePanel {providers} {models} {skills} />
+  </aside>
 
-  <section class="panel">
-    <h2>模型调用（无会话）</h2>
-    <form onsubmit={callSelectedModel}>
-      <select bind:value={selectedProviderId} aria-label="选择服务商">
-        <option value="">选择服务商</option>
-        {#each providers as provider}
-          <option value={provider.id}>{provider.display_name}</option>
-        {/each}
-      </select>
+  <div class="error-area">
+    <ErrorBanner message={error} onDismiss={() => (error = "")} />
+  </div>
+</div>
 
-      <select bind:value={selectedModelId} aria-label="选择模型">
-        <option value="">选择模型</option>
-        {#each visibleModels as model}
-          <option value={model.id}>
-            {model.display_name} ({model.provider_id})
-          </option>
-        {/each}
-      </select>
+<SessionCreateModal
+  open={showCreateModal}
+  onCreate={handleCreateSession}
+  onClose={() => (showCreateModal = false)}
+/>
 
-      <input
-        placeholder="输入一次性模型调用内容"
-        bind:value={modelInput}
-      />
-      <button type="submit" disabled={modelLoading}>
-        {modelLoading ? "调用中..." : "调用模型"}
-      </button>
-    </form>
-
-    {#if modelOutput}
-      <article class="response">
-        <strong>Model Output</strong>
-        <p>{modelOutput}</p>
-      </article>
-    {/if}
-  </section>
-
-  <section class="grid">
-    <div class="panel">
-      <h2>服务商</h2>
-      {#each providers as provider}
-        <p>
-          <strong>{provider.id}</strong>
-          <span>{provider.api_base ?? "default OpenAI API base"}</span>
-        </p>
-      {/each}
-    </div>
-
-    <div class="panel">
-      <h2>技能</h2>
-      {#each skills as skill}
-        <p><strong>{skill.name}</strong>：{skill.description}</p>
-      {/each}
-    </div>
-
-    <div class="panel">
-      <div class="panel-title">
-        <h2>会话</h2>
-        <button type="button" onclick={clearCurrentConversation}>清空当前</button>
-      </div>
-      {#if conversations.length === 0}
-        <p>暂无会话</p>
-      {:else}
-        {#each conversations as conversation}
-          <p>
-            <strong>{conversation.id}</strong>
-            <span>{conversation.messages.length} 条消息</span>
-          </p>
-        {/each}
-      {/if}
-    </div>
-  </section>
-</main>
+{#if !ready}
+  <div class="loading-overlay">
+    <p>Loading...</p>
+  </div>
+{/if}
 
 <style>
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
-}
-
-.container {
-  max-width: 980px;
-  margin: 0 auto;
-  padding: 48px 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-header,
-.panel-title,
-form {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.eyebrow {
-  margin: 0;
-  color: #396cd8;
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-h1,
-h2,
-p {
-  margin-top: 0;
-}
-
-h1 {
-  margin-bottom: 0;
-  font-size: 42px;
-}
-
-h2 {
-  font-size: 18px;
-}
-
-.panel {
-  border: 1px solid #d8d8d8;
-  border-radius: 16px;
-  padding: 20px;
-  background: #ffffff;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
-}
-
-.grid {
-  display: grid;
-  gap: 20px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-dl {
-  display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin: 0;
-}
-
-dt {
-  color: #666666;
-  font-size: 13px;
-}
-
-dd {
-  margin: 4px 0 0;
-  overflow-wrap: anywhere;
-  font-weight: 700;
-}
-
-input,
-select,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-}
-
-input {
-  flex: 1;
-}
-
-select {
-  min-width: 180px;
-}
-
-button {
-  cursor: pointer;
-}
-
-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
-}
-
-input,
-select,
-button {
-  outline: none;
-}
-
-.response,
-.error {
-  border-radius: 12px;
-  padding: 14px;
-}
-
-.response {
-  margin-top: 16px;
-  background: #eef4ff;
-}
-
-.response p {
-  margin-bottom: 0;
-}
-
-.error {
-  color: #7a1f1f;
-  background: #ffe7e7;
-}
-
-span {
-  color: #666666;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
+  :global(body) {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+      Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    background: var(--color-bg);
+    color: var(--color-text);
+    overflow: hidden;
   }
 
-  .panel {
-    border-color: #444444;
-    background: #1f1f1f;
+  :global(*) {
+    box-sizing: border-box;
   }
 
-  .response {
-    background: #162338;
+  :global(:root) {
+    --color-bg: #ffffff;
+    --color-surface: #f7f8fa;
+    --color-text: #1d1d1f;
+    --color-text-muted: #86868b;
+    --color-border: #e6e6ea;
+    --color-primary: #1a73e8;
+    --color-on-primary: #ffffff;
+    --color-hover: #f0f0f3;
+    --color-error: #d93025;
+    --color-error-bg: #fce8e6;
+    --color-error-border: #f5c6c2;
   }
 
-  .error {
-    color: #ffd0d0;
-    background: #4a1f1f;
+  @media (prefers-color-scheme: dark) {
+    :global(:root) {
+      --color-bg: #1c1c1e;
+      --color-surface: #2c2c2e;
+      --color-text: #f5f5f7;
+      --color-text-muted: #98989d;
+      --color-border: #38383a;
+      --color-primary: #64b5f6;
+      --color-on-primary: #1c1c1e;
+      --color-hover: #3a3a3c;
+      --color-error: #f28b82;
+      --color-error-bg: #3c1a1a;
+      --color-error-border: #5c2a2a;
+    }
   }
 
-  dt,
-  span {
-    color: #b8b8b8;
+  .app-layout {
+    display: grid;
+    height: 100vh;
+    grid-template-rows: auto auto 1fr auto;
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas:
+      "status status status"
+      "model model model"
+      "sidebar chat info"
+      "error error error";
+    overflow: hidden;
   }
 
-  input,
-  select,
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
+  .status-area {
+    grid-area: status;
   }
-  button:active {
-    background-color: #0f0f0f69;
-  }
-}
 
+  .model-area {
+    grid-area: model;
+  }
+
+  .sidebar-area {
+    grid-area: sidebar;
+  }
+
+  .chat-area {
+    grid-area: chat;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .info-area {
+    grid-area: info;
+    width: 280px;
+    border-left: 1px solid var(--color-border);
+    background: var(--color-surface);
+    overflow-y: auto;
+  }
+
+  .error-area {
+    grid-area: error;
+  }
+
+  .loading-overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--color-bg);
+    z-index: 200;
+  }
+
+  .loading-overlay p {
+    font-size: 16px;
+    color: var(--color-text-muted);
+  }
+
+  .cwd-debug {
+    font-size: 10px;
+    color: var(--color-text-muted);
+    padding: 4px 12px;
+    opacity: 0.7;
+    font-family: monospace;
+  }
+
+  @media (max-width: 800px) {
+    .info-area {
+      display: none;
+    }
+  }
 </style>
