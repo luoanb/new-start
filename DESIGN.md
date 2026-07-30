@@ -8,37 +8,37 @@ Dual-theme with equal polish. Light and dark are independently designed, not mec
 
 ### Light theme
 
-A warm-leaning neutral palette. Not clinical white, not cold blue-grey.
+A clean, cool-leaning neutral palette. Crisp white with subtle cool undertone. Higher contrast and saturation for a modern, energetic feel.
 
 ```
---color-bg:        oklch(0.98 0.003 75)       /* warm off-white background */
---color-surface:   oklch(0.95 0.005 75)       /* subtle warm card surface */
---color-elevated:  oklch(0.92 0.006 75)       /* hover/dropdown elevation */
---color-text:      oklch(0.18 0.008 75)       /* near-black with warm tint */
---color-muted:     oklch(0.55 0.015 75)       /* secondary text */
---color-border:    oklch(0.88 0.006 75)       /* soft warm border */
---color-accent:    oklch(0.55 0.18 255)       /* calm blue accent */
---color-accent-dim: oklch(0.45 0.14 255)      /* darker accent for hover */
---color-on-accent: oklch(0.98 0.002 75)       /* text on accent */
+--color-bg:        oklch(0.99 0.002 265)      /* crisp near-white */
+--color-surface:   oklch(0.965 0.004 265)     /* subtle cool card surface */
+--color-elevated:  oklch(0.94 0.005 265)      /* hover/dropdown elevation */
+--color-text:      oklch(0.12 0.008 265)      /* rich near-black */
+--color-muted:     oklch(0.47 0.012 265)      /* secondary text */
+--color-border:    oklch(0.89 0.005 265)      /* soft border */
+--color-accent:    oklch(0.52 0.24 260)       /* vibrant blue accent */
+--color-accent-dim: oklch(0.42 0.2 260)       /* darker accent for hover */
+--color-on-accent: oklch(0.99 0.002 265)      /* text on accent */
 ```
 
 ### Dark theme
 
-Deep but not pure black. Warm charcoal undertones, avoiding the generic blue-black tool look.
+Deep cool charcoal. Not pure black, not blue-black. Rich, modern, with enough lightness for clarity.
 
 ```
---color-bg:        oklch(0.13 0.004 75)       /* deep warm charcoal */
---color-surface:   oklch(0.17 0.005 75)       /* elevated surface */
---color-elevated:  oklch(0.21 0.006 75)       /* overlay/dropdown */
---color-text:      oklch(0.92 0.004 75)       /* off-white with warm tint */
---color-muted:     oklch(0.55 0.01 75)        /* secondary text */
---color-border:    oklch(0.25 0.005 75)       /* subtle border */
---color-accent:    oklch(0.7 0.18 255)        /* lighter blue accent for dark bg */
---color-accent-dim: oklch(0.6 0.15 255)       /* hover state */
---color-on-accent: oklch(0.13 0.004 75)       /* text on accent */
+--color-bg:        oklch(0.105 0.005 265)     /* deep cool charcoal */
+--color-surface:   oklch(0.145 0.006 265)     /* elevated surface */
+--color-elevated:  oklch(0.19 0.007 265)      /* overlay/dropdown */
+--color-text:      oklch(0.95 0.004 265)      /* bright off-white */
+--color-muted:     oklch(0.58 0.01 265)       /* secondary text */
+--color-border:    oklch(0.23 0.006 265)      /* subtle border */
+--color-accent:    oklch(0.68 0.24 258)       /* vibrant blue accent for dark bg */
+--color-accent-dim: oklch(0.58 0.2 258)       /* hover state */
+--color-on-accent: oklch(0.11 0.005 265)      /* text on accent */
 ```
 
-Key choice: Both themes share the same hue angle (75 = warm yellowish tint) for neutrals and (255 = blue) for accent. This creates a coherent brand feel across themes without mechanical inversion.
+Key choice: Both themes share the same hue angle (265 = subtle cool-purple) for neutrals and (~260 = blue) for accent. This creates a coherent brand feel across themes without mechanical inversion. Cold neutrals and vibrant accent replace the vintage warm palette for a younger, more energetic feel.
 
 ### Semantic colors
 

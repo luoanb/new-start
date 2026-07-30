@@ -4,26 +4,26 @@
     <meta charset="utf-8" />
     <link rel="icon" href="%sveltekit.assets%/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Tauri + SvelteKit + Typescript App</title>
+    <title>Agent App</title>
     %sveltekit.head%
     <style>
       :root,
       [data-theme="light"] {
-        /* ── Colors ── */
-        --color-bg:           oklch(0.98 0.003 75);
-        --color-surface:      oklch(0.95 0.005 75);
-        --color-elevated:     oklch(0.92 0.006 75);
-        --color-text:         oklch(0.18 0.008 75);
-        --color-text-muted:   oklch(0.55 0.015 75);
-        --color-border:       oklch(0.88 0.006 75);
-        --color-primary:      oklch(0.55 0.18 255);
-        --color-primary-dim:  oklch(0.45 0.14 255);
-        --color-on-primary:   oklch(0.98 0.002 75);
-        --color-hover:        oklch(0.92 0.006 75);
-        --color-error:        oklch(0.55 0.2 30);
-        --color-error-bg:     oklch(0.9 0.05 30);
-        --color-success:      oklch(0.55 0.15 150);
-        --color-warning:      oklch(0.65 0.18 85);
+        /* ── Colors (cool palette) ── */
+        --color-bg:           oklch(0.99 0.002 265);
+        --color-surface:      oklch(0.965 0.004 265);
+        --color-elevated:     oklch(0.94 0.005 265);
+        --color-text:         oklch(0.12 0.008 265);
+        --color-text-muted:   oklch(0.47 0.012 265);
+        --color-border:       oklch(0.89 0.005 265);
+        --color-primary:      oklch(0.52 0.24 260);
+        --color-primary-dim:  oklch(0.42 0.2 260);
+        --color-on-primary:   oklch(0.99 0.002 265);
+        --color-hover:        oklch(0.92 0.004 265);
+        --color-error:        oklch(0.5 0.22 25);
+        --color-error-bg:     oklch(0.92 0.06 25);
+        --color-success:      oklch(0.52 0.18 145);
+        --color-warning:      oklch(0.62 0.2 80);
 
         /* ── Typography scale ── */
         --fs-xs:   11px;
@@ -58,39 +58,39 @@
       }
 
       [data-theme="dark"] {
-        --color-bg:           oklch(0.13 0.004 75);
-        --color-surface:      oklch(0.17 0.005 75);
-        --color-elevated:     oklch(0.21 0.006 75);
-        --color-text:         oklch(0.92 0.004 75);
-        --color-text-muted:   oklch(0.55 0.01 75);
-        --color-border:       oklch(0.25 0.005 75);
-        --color-primary:      oklch(0.7 0.18 255);
-        --color-primary-dim:  oklch(0.6 0.15 255);
-        --color-on-primary:   oklch(0.13 0.004 75);
-        --color-hover:        oklch(0.25 0.005 75);
-        --color-error:        oklch(0.55 0.2 30);
-        --color-error-bg:     oklch(0.2 0.05 30);
-        --color-success:      oklch(0.55 0.15 150);
-        --color-warning:      oklch(0.65 0.18 85);
+        --color-bg:           oklch(0.105 0.005 265);
+        --color-surface:      oklch(0.145 0.006 265);
+        --color-elevated:     oklch(0.19 0.007 265);
+        --color-text:         oklch(0.95 0.004 265);
+        --color-text-muted:   oklch(0.58 0.01 265);
+        --color-border:       oklch(0.23 0.006 265);
+        --color-primary:      oklch(0.68 0.24 258);
+        --color-primary-dim:  oklch(0.58 0.2 258);
+        --color-on-primary:   oklch(0.11 0.005 265);
+        --color-hover:        oklch(0.23 0.006 265);
+        --color-error:        oklch(0.55 0.22 25);
+        --color-error-bg:     oklch(0.18 0.06 25);
+        --color-success:      oklch(0.55 0.18 145);
+        --color-warning:      oklch(0.65 0.2 80);
       }
 
       @media (prefers-color-scheme: dark) {
         :root:not([data-theme="light"]):not([data-theme="dark"]),
         [data-theme="system"] {
-          --color-bg:           oklch(0.13 0.004 75);
-          --color-surface:      oklch(0.17 0.005 75);
-          --color-elevated:     oklch(0.21 0.006 75);
-          --color-text:         oklch(0.92 0.004 75);
-          --color-text-muted:   oklch(0.55 0.01 75);
-          --color-border:       oklch(0.25 0.005 75);
-          --color-primary:      oklch(0.7 0.18 255);
-          --color-primary-dim:  oklch(0.6 0.15 255);
-          --color-on-primary:   oklch(0.13 0.004 75);
-          --color-hover:        oklch(0.25 0.005 75);
-          --color-error:        oklch(0.55 0.2 30);
-          --color-error-bg:     oklch(0.2 0.05 30);
-          --color-success:      oklch(0.55 0.15 150);
-          --color-warning:      oklch(0.65 0.18 85);
+          --color-bg:           oklch(0.105 0.005 265);
+          --color-surface:      oklch(0.145 0.006 265);
+          --color-elevated:     oklch(0.19 0.007 265);
+          --color-text:         oklch(0.95 0.004 265);
+          --color-text-muted:   oklch(0.58 0.01 265);
+          --color-border:       oklch(0.23 0.006 265);
+          --color-primary:      oklch(0.68 0.24 258);
+          --color-primary-dim:  oklch(0.58 0.2 258);
+          --color-on-primary:   oklch(0.11 0.005 265);
+          --color-hover:        oklch(0.23 0.006 265);
+          --color-error:        oklch(0.55 0.22 25);
+          --color-error-bg:     oklch(0.18 0.06 25);
+          --color-success:      oklch(0.55 0.18 145);
+          --color-warning:      oklch(0.65 0.2 80);
         }
       }
     </style>
