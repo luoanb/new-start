@@ -103,6 +103,23 @@ export type Topic = {
   updated_at: number;
 };
 
+export type Neuron = {
+  id: string;
+  desc: string;
+  content: string;
+  weight: number;
+  system_type?: string | null;
+  tool_ids: string[];
+  created_at: number;
+  updated_at: number;
+};
+
+export type Connection = {
+  source: string;
+  target: string;
+  weight: number;
+};
+
 export type PollerRunState = "running" | "paused";
 
 export type PollerStatus = {

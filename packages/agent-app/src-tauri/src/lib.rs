@@ -3,9 +3,9 @@ pub mod tui;
 
 use crate::core::{
     conversation_store::ConversationStore, error::AppErrorPayload, ChatOptions, ChatResponse,
-    Conversation, ConversationMode, Gateway, Message, ModelCallRequest, ModelCallResponse,
-    ModelInfo, PollerStatus, ProviderInfo, RuntimeStatus, SkillInfo, Topic, TopicStatus,
-    TopicUpdate,
+    Connection, Conversation, ConversationMode, Gateway, Message, ModelCallRequest,
+    ModelCallResponse, ModelInfo, Neuron, NeuronUpdate, PollerStatus, ProviderInfo, RuntimeStatus,
+    SkillInfo, Topic, TopicStatus, TopicUpdate,
 };
 use core::topic_store::TopicStore;
 use std::path::PathBuf;
@@ -281,6 +281,57 @@ fn poll_trigger(state: State<'_, Mutex<Gateway>>) -> TauriResult<()> {
     with_gateway(state, |gateway| gateway.poll_trigger())
 }
 
+// ── Neuron ──
+
+#[tauri::command]
+fn list_neurons(state: State<'_, Mutex<Gateway>>) -> TauriResult<Vec<Neuron>> {
+    with_neuron_manager(state, |mgr| mgr.list_neurons())
+}
+
+#[tauri::command]
+fn get_neuron(
+    state: State<'_, Mutex<Gateway>>,
+    id: String,
+) -> TauriResult<Neuron> {
+    with_neuron_manager(state, |mgr| {
+        mgr.get_neuron(&id)?
+            .ok_or_else(|| {
+                crate::core::AppError::NeuronNotFound(id)
+            })
+    })
+}
+
+#[tauri::command]
+fn update_neuron(
+    state: State<'_, Mutex<Gateway>>,
+    id: String,
+    desc: Option<String>,
+    content: Option<String>,
+) -> TauriResult<Neuron> {
+    with_neuron_manager(state, |mgr| {
+        mgr.update_for_admin(&id, NeuronUpdate { desc, content })
+    })
+}
+
+#[tauri::command]
+fn get_connections(
+    state: State<'_, Mutex<Gateway>>,
+    id: String,
+) -> TauriResult<Vec<Connection>> {
+    with_neuron_manager(state, |mgr| mgr.get_connections(&id))
+}
+
+#[tauri::command]
+fn get_network(
+    state: State<'_, Mutex<Gateway>>,
+    id: String,
+    max_depth: Option<usize>,
+) -> TauriResult<Vec<Neuron>> {
+    with_neuron_manager(state, |mgr| {
+        mgr.get_network(&id, max_depth.unwrap_or(2))
+    })
+}
+
 // ── Helpers ──
 
 fn with_gateway<T>(
@@ -305,6 +356,15 @@ fn with_topic_store<T>(
             crate::core::AppError::RuntimeError("TopicStore lock failed".into()).payload()
         })?;
     action(&store).map_err(|error| error.payload())
+}
+
+fn with_neuron_manager<T>(
+    state: State<'_, Mutex<Gateway>>,
+    action: impl FnOnce(&crate::core::neuron_manager::NeuronManager) -> crate::core::AppResult<T>,
+) -> TauriResult<T> {
+    let gateway = state.blocking_lock();
+    let mgr = gateway.neuron_manager();
+    action(&mgr).map_err(|error| error.payload())
 }
 
 // ── App Entry ──
@@ -351,6 +411,12 @@ pub fn run() {
             poll_pause,
             poll_resume,
             poll_trigger,
+            // Neuron
+            list_neurons,
+            get_neuron,
+            update_neuron,
+            get_connections,
+            get_network,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

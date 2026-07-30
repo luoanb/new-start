@@ -12,9 +12,11 @@
     models = [],
     selectedProviderId,
     selectedModelId,
+    neuronActive = false,
     onChange,
     onToggleSidebar,
     onToggleInfo,
+    onToggleNeuron,
   }: {
     appName: string;
     sessionId: string;
@@ -23,9 +25,11 @@
     models?: ModelInfo[];
     selectedProviderId: string;
     selectedModelId: string;
+    neuronActive?: boolean;
     onChange?: (providerId: string, modelId: string) => void;
     onToggleSidebar?: () => void;
     onToggleInfo?: () => void;
+    onToggleNeuron?: () => void;
   } = $props();
 
   let modelOpen = $state(false);
@@ -125,6 +129,15 @@
       {/if}
     </div>
 
+    <button
+      class="neuron-btn"
+      class:active={neuronActive}
+      onclick={onToggleNeuron}
+      title="Neuron Manager"
+    >
+      🧠
+    </button>
+
     <button class="drawer-btn mobile-only" onclick={onToggleInfo} title={t("drawer.info")}>
       ⓘ
     </button>
@@ -183,6 +196,10 @@
     line-height: 1;
     transition: background var(--duration-fast) var(--ease-out);
   }
+
+  .neuron-btn { font-size: 16px; padding: 0 var(--space-1); background: none; border: none; cursor: pointer; line-height: 1; opacity: 0.5; transition: opacity var(--duration-fast) var(--ease-out); }
+  .neuron-btn.active { opacity: 1; }
+  .neuron-btn:hover { opacity: 0.8; }
 
   .drawer-btn:hover { background: var(--color-hover); }
 

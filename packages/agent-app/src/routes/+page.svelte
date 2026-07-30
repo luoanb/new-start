@@ -18,6 +18,7 @@
   import SidePanel from "$lib/components/SidePanel.svelte";
   import SessionCreateModal from "$lib/components/SessionCreateModal.svelte";
   import ErrorBanner from "$lib/components/ErrorBanner.svelte";
+  import NeuronManager from "$lib/components/NeuronManager.svelte";
   import { t } from "$lib/i18n";
 
   // ── Bootstrap state (loaded once) ──
@@ -42,6 +43,7 @@
   // ── UI state ──
   let error = $state("");
   let showCreateModal = $state(false);
+  let showNeuronView = $state(false);
   let sidebarCollapsed = $state(false);
   let drawerSidebar = $state(false);
   let drawerInfo = $state(false);
@@ -183,9 +185,11 @@
       {models}
       selectedProviderId={activeProviderId}
       selectedModelId={activeModelId}
+      neuronActive={showNeuronView}
       onChange={handleModelChange}
       onToggleSidebar={() => (drawerSidebar = !drawerSidebar)}
       onToggleInfo={() => (drawerInfo = !drawerInfo)}
+      onToggleNeuron={() => (showNeuronView = !showNeuronView)}
     />
   </header>
 
@@ -203,7 +207,11 @@
   </aside>
 
   <main class="chat-area">
-    <ChatArea {messages} {loading} onSend={handleSend} />
+    {#if showNeuronView}
+      <NeuronManager />
+    {:else}
+      <ChatArea {messages} {loading} onSend={handleSend} />
+    {/if}
   </main>
 
   <!-- Desktop info panel -->
@@ -273,8 +281,14 @@
     overflow: hidden;
   }
 
-  :global(*) {
+  :global(*, *::before, *::after) {
+    margin: 0;
+    padding: 0;
     box-sizing: border-box;
+  }
+
+  :global(h1, h2, h3, h4, h5, h6, p, ul, ol, pre) {
+    margin: 0;
   }
 
   .app-layout {

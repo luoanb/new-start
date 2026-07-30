@@ -110,6 +110,34 @@ export type Translations = {
     noPoller: string;
     pendingTrigger: string;
   };
+  neuronPanel: {
+    neurons: string;
+    list: string;
+    detail: string;
+    network: string;
+    noNeurons: string;
+    weight: string;
+    systemType: string;
+    description: string;
+    content: string;
+    toolIds: string;
+    createdAt: string;
+    updatedAt: string;
+    edit: string;
+    save: string;
+    saving: string;
+    cancel: string;
+    connections: string;
+    source: string;
+    target: string;
+    connectionWeight: string;
+    networkTitle: string;
+    networkDepth: string;
+    back: string;
+    viewNetwork: string;
+    jumpTo: string;
+    loading: string;
+  };
 };
 
 export const en: Translations = {
@@ -230,6 +258,34 @@ export const en: Translations = {
     noPoller: "Poller not available.",
     pendingTrigger: "Pending Trigger",
   },
+  neuronPanel: {
+    neurons: "Neurons",
+    list: "Neuron List",
+    detail: "Neuron Detail",
+    network: "Network View",
+    noNeurons: "No neurons yet.",
+    weight: "Weight",
+    systemType: "System Type",
+    description: "Description",
+    content: "Content",
+    toolIds: "Tool IDs",
+    createdAt: "Created",
+    updatedAt: "Updated",
+    edit: "Edit",
+    save: "Save",
+    saving: "Saving...",
+    cancel: "Cancel",
+    connections: "Connections",
+    source: "Source",
+    target: "Target",
+    connectionWeight: "Weight",
+    networkTitle: "Network (depth: {depth})",
+    networkDepth: "Depth",
+    back: "Back",
+    viewNetwork: "View Network",
+    jumpTo: "View",
+    loading: "Loading...",
+  },
 };
 
 export const zh: Translations = {
@@ -349,5 +405,33 @@ export const zh: Translations = {
     triggering: "触发中...",
     noPoller: "Poller 不可用。",
     pendingTrigger: "待触发",
+  },
+  neuronPanel: {
+    neurons: "神经元",
+    list: "神经元列表",
+    detail: "神经元详情",
+    network: "网络视图",
+    noNeurons: "暂无神经元。",
+    weight: "权重",
+    systemType: "系统类型",
+    description: "描述",
+    content: "内容",
+    toolIds: "工具 ID",
+    createdAt: "创建于",
+    updatedAt: "更新于",
+    edit: "编辑",
+    save: "保存",
+    saving: "保存中...",
+    cancel: "取消",
+    connections: "连接",
+    source: "来源",
+    target: "目标",
+    connectionWeight: "权重",
+    networkTitle: "网络视图（深度: {depth}）",
+    networkDepth: "深度",
+    back: "返回",
+    viewNetwork: "查看网络",
+    jumpTo: "查看",
+    loading: "加载中...",
   },
 };
