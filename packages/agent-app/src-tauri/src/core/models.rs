@@ -302,6 +302,14 @@ pub struct Connection {
     pub weight: f64,
 }
 
+/// Ego-network subgraph returned by BFS around a seed neuron.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NeuronSubgraph {
+    pub seed_id: String,
+    pub neurons: Vec<Neuron>,
+    pub connections: Vec<Connection>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct NeuronUpdate {
     pub desc: Option<String>,

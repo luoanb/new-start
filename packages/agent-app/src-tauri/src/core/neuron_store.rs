@@ -5,7 +5,9 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use super::{
     error::{AppError, AppResult},
-    models::{Connection as NeuronConnection, Neuron, NeuronCreate, NeuronUpdate},
+    models::{
+        Connection as NeuronConnection, Neuron, NeuronCreate, NeuronSubgraph, NeuronUpdate,
+    },
 };
 
 static NEURON_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -555,10 +557,15 @@ impl NeuronStore {
         Ok(neurons)
     }
 
-    /// Get network around a neuron using iterative BFS up to max_depth.
-    pub fn get_network(&self, seed_id: &str, max_depth: usize) -> AppResult<Vec<Neuron>> {
+    /// Get ego-network subgraph around a neuron using iterative BFS up to max_depth.
+    ///
+    /// Neighborhood expansion follows undirected adjacency (in + out edges).
+    /// Returned `connections` only include edges whose both endpoints are in `neurons`.
+    pub fn get_network(&self, seed_id: &str, max_depth: usize) -> AppResult<NeuronSubgraph> {
         let mut visited = std::collections::HashSet::new();
-        let mut result: Vec<Neuron> = Vec::new();
+        let mut neurons: Vec<Neuron> = Vec::new();
+        let mut edge_keys = std::collections::HashSet::new();
+        let mut connections: Vec<NeuronConnection> = Vec::new();
         let mut queue = std::collections::VecDeque::new();
         queue.push_back((seed_id.to_string(), 0usize));
 
@@ -569,7 +576,7 @@ impl NeuronStore {
 
             // Only add to result if it's a valid neuron (skip errors gracefully)
             if let Some(neuron) = self.get_neuron(&current_id)? {
-                result.push(neuron);
+                neurons.push(neuron);
             }
 
             if depth >= max_depth {
@@ -578,6 +585,10 @@ impl NeuronStore {
 
             let conns = self.get_connections(&current_id)?;
             for c in &conns {
+                let edge_key = format!("{}->{}", c.source, c.target);
+                if edge_keys.insert(edge_key) {
+                    connections.push(c.clone());
+                }
                 let neighbor = if c.source == current_id {
                     c.target.clone()
                 } else {
@@ -589,7 +600,15 @@ impl NeuronStore {
             }
         }
 
-        Ok(result)
+        let neuron_ids: std::collections::HashSet<&str> =
+            neurons.iter().map(|n| n.id.as_str()).collect();
+        connections.retain(|c| neuron_ids.contains(c.source.as_str()) && neuron_ids.contains(c.target.as_str()));
+
+        Ok(NeuronSubgraph {
+            seed_id: seed_id.to_string(),
+            neurons,
+            connections,
+        })
     }
 }
 
@@ -732,17 +751,23 @@ mod tests {
         s.link(&b.id, &c.id, 1.0).unwrap();
         s.link(&c.id, &d.id, 1.0).unwrap();
 
-        // depth 1 from A → A, B (2)
+        // depth 1 from A → A, B (2); edge A→B
         let net = s.get_network(&a.id, 1).unwrap();
-        assert_eq!(net.len(), 2);
+        assert_eq!(net.seed_id, a.id);
+        assert_eq!(net.neurons.len(), 2);
+        assert_eq!(net.connections.len(), 1);
+        assert_eq!(net.connections[0].source, a.id);
+        assert_eq!(net.connections[0].target, b.id);
 
-        // depth 2 from A → A, B, C (3)
+        // depth 2 from A → A, B, C (3); edges A→B, B→C
         let net = s.get_network(&a.id, 2).unwrap();
-        assert_eq!(net.len(), 3);
+        assert_eq!(net.neurons.len(), 3);
+        assert_eq!(net.connections.len(), 2);
 
-        // depth 3 from A → all 4
+        // depth 3 from A → all 4; edges A→B, B→C, C→D
         let net = s.get_network(&a.id, 3).unwrap();
-        assert_eq!(net.len(), 4);
+        assert_eq!(net.neurons.len(), 4);
+        assert_eq!(net.connections.len(), 3);
     }
 
     #[test]

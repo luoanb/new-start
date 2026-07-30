@@ -4,7 +4,8 @@ pub mod tui;
 use crate::core::{
     conversation_store::ConversationStore, error::AppErrorPayload, ChatOptions, ChatResponse,
     Connection, Conversation, ConversationMode, Gateway, Message, ModelCallRequest,
-    ModelCallResponse, ModelInfo, Neuron, NeuronUpdate, PollerStatus, ProviderInfo, RuntimeStatus,
+    ModelCallResponse, ModelInfo, Neuron, NeuronSubgraph, NeuronUpdate, PollerStatus, ProviderInfo,
+    RuntimeStatus,
     SkillInfo, Topic, TopicStatus, TopicUpdate,
 };
 use core::topic_store::TopicStore;
@@ -326,7 +327,7 @@ fn get_network(
     state: State<'_, Mutex<Gateway>>,
     id: String,
     max_depth: Option<usize>,
-) -> TauriResult<Vec<Neuron>> {
+) -> TauriResult<NeuronSubgraph> {
     with_neuron_manager(state, |mgr| {
         mgr.get_network(&id, max_depth.unwrap_or(2))
     })

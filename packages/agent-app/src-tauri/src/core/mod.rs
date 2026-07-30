@@ -24,7 +24,8 @@ pub use models::{
     CompactionConfig, Connection, Conversation, ConversationMode, CreateNeuronInput,
     GeneratedNeuronDraft, Message, MessageRole, ModelCallRequest, ModelCallResponse,
     ModelCapabilities, ModelInfo, ModelMessage, ModelMessageRole, Neuron, NeuronCreate,
-    NeuronUpdate, ProviderInfo, ProviderKind, RuntimeStatus, ScopeInItem, SkillInfo, ToolCall,
+    NeuronSubgraph, NeuronUpdate, ProviderInfo, ProviderKind, RuntimeStatus, ScopeInItem, SkillInfo,
+    ToolCall,
     ToolDefinition, Topic, TopicStatus, TopicUpdate,
 };
 pub use poller::{PollHandler, Poller, PollerRunState, PollerStatus};

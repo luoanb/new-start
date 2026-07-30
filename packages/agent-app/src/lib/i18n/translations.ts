@@ -133,6 +133,10 @@ export type Translations = {
     connectionWeight: string;
     networkTitle: string;
     networkDepth: string;
+    viewModeGraph: string;
+    viewModeTree: string;
+    edgeWeight: string;
+    depthLabel: string;
     back: string;
     viewNetwork: string;
     jumpTo: string;
@@ -281,6 +285,10 @@ export const en: Translations = {
     connectionWeight: "Weight",
     networkTitle: "Network (depth: {depth})",
     networkDepth: "Depth",
+    viewModeGraph: "Graph",
+    viewModeTree: "Tree",
+    edgeWeight: "Edge",
+    depthLabel: "Depth",
     back: "Back",
     viewNetwork: "View Network",
     jumpTo: "View",
@@ -429,6 +437,10 @@ export const zh: Translations = {
     connectionWeight: "权重",
     networkTitle: "网络视图（深度: {depth}）",
     networkDepth: "深度",
+    viewModeGraph: "图",
+    viewModeTree: "树",
+    edgeWeight: "边权",
+    depthLabel: "深度",
     back: "返回",
     viewNetwork: "查看网络",
     jumpTo: "查看",

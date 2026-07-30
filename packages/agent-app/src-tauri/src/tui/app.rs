@@ -1235,18 +1235,31 @@ impl TuiApp {
                 match store_arc.lock() {
                     Ok(store) => match store.get_network(&id, depth) {
                         Ok(network) => {
-                            if network.is_empty() {
+                            if network.neurons.is_empty() {
                                 self.messages.push(TuiMessage::status(format!(
                                     "No network found for neuron: {id}"
                                 )));
                                 return;
                             }
-                            let mut lines = vec![format!("Network (depth={depth}):")];
-                            for n in &network {
+                            let mut lines = vec![format!(
+                                "Network (depth={depth}): {} neurons, {} edges",
+                                network.neurons.len(),
+                                network.connections.len()
+                            )];
+                            for n in &network.neurons {
                                 lines.push(format!(
                                     "  [w:{:+.1}] {} (id: {})",
                                     n.weight, n.desc, n.id
                                 ));
+                            }
+                            if !network.connections.is_empty() {
+                                lines.push("Edges:".into());
+                                for c in &network.connections {
+                                    lines.push(format!(
+                                        "  {} --({:.2})--> {}",
+                                        c.source, c.weight, c.target
+                                    ));
+                                }
                             }
                             self.messages.push(TuiMessage::status(lines.join("\n")));
                         }

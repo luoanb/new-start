@@ -120,6 +120,12 @@ export type Connection = {
   weight: number;
 };
 
+export type NeuronSubgraph = {
+  seed_id: string;
+  neurons: Neuron[];
+  connections: Connection[];
+};
+
 export type PollerRunState = "running" | "paused";
 
 export type PollerStatus = {

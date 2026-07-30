@@ -10,7 +10,7 @@ use super::{
     error::{AppError, AppResult},
     models::{
         BootstrapReadyReport, CandidateQuery, Connection, CreateNeuronInput, GeneratedNeuronDraft,
-        Neuron, NeuronCreate, NeuronUpdate,
+        Neuron, NeuronCreate, NeuronSubgraph, NeuronUpdate,
     },
     neuron_config::NeuronConfigReader,
     neuron_model::NeuronModelCaller,
@@ -74,7 +74,7 @@ impl NeuronManager {
         self.store()?.get_connections(id)
     }
 
-    pub fn get_network(&self, id: &str, max_depth: usize) -> AppResult<Vec<Neuron>> {
+    pub fn get_network(&self, id: &str, max_depth: usize) -> AppResult<NeuronSubgraph> {
         self.store()?.get_network(id, max_depth)
     }
 
@@ -659,7 +659,7 @@ impl Tool for GetNetworkTool {
     }
 
     fn description(&self) -> &str {
-        "BFS traverse the neuron network from a seed up to max_depth"
+        "BFS traverse the neuron network from a seed up to max_depth; returns { seed_id, neurons, connections }"
     }
 
     fn parameters(&self) -> Value {
