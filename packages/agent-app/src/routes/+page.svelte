@@ -9,6 +9,8 @@
     Message,
     ChatResponse,
     RuntimeStatus,
+    Topic,
+    PollerStatus,
   } from "$lib/types";
   import StatusBar from "$lib/components/StatusBar.svelte";
   import SessionList from "$lib/components/SessionList.svelte";
@@ -24,12 +26,14 @@
   let skills: SkillInfo[] = $state([]);
   let conversations: Conversation[] = $state([]);
   let runtimeStatus: RuntimeStatus | null = $state(null);
+  let topics: Topic[] = $state([]);
+  let pollerStatus: PollerStatus | null = $state(null);
   let ready = $state(false);
 
-  // ── Active selection ──
+  // ── Active selection (persisted to localStorage) ──
   let activeConversationId: string = $state("");
-  let activeProviderId: string = $state("");
-  let activeModelId: string = $state("");
+  let activeProviderId: string = $state(localStorage.getItem("agent-app:providerId") ?? "");
+  let activeModelId: string = $state(localStorage.getItem("agent-app:modelId") ?? "");
 
   // ── Messages & loading ──
   let messages: Message[] = $state([]);
@@ -52,13 +56,15 @@
   // ── Bootstrap ──
   onMount(async () => {
     try {
-      const [providersRes, modelsRes, skillsRes, convsRes, statusRes] =
+      const [providersRes, modelsRes, skillsRes, convsRes, statusRes, topicsRes, pollerRes] =
         await Promise.all([
           invoke<ProviderInfo[]>("list_providers"),
           invoke<ModelInfo[]>("list_models"),
           invoke<SkillInfo[]>("list_skills"),
           invoke<Conversation[]>("list_conversations"),
           invoke<RuntimeStatus>("status"),
+          invoke<Topic[]>("list_topics"),
+          invoke<PollerStatus>("poll_status"),
         ]);
 
       providers = providersRes;
@@ -66,6 +72,8 @@
       skills = skillsRes;
       conversations = convsRes;
       runtimeStatus = statusRes;
+      topics = topicsRes;
+      pollerStatus = pollerRes;
 
       if (convsRes.length > 0) {
         activeConversationId = convsRes[0].id;
@@ -142,6 +150,8 @@
   function handleModelChange(providerId: string, modelId: string) {
     activeProviderId = providerId;
     activeModelId = modelId;
+    localStorage.setItem("agent-app:providerId", providerId);
+    localStorage.setItem("agent-app:modelId", modelId);
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -198,7 +208,7 @@
 
   <!-- Desktop info panel -->
   <aside class="info-area desktop-only">
-    <SidePanel {providers} {models} {skills} />
+    <SidePanel {providers} {models} {skills} {topics} {pollerStatus} />
   </aside>
 
   <div class="error-area">
@@ -235,7 +245,7 @@
       <h2>{t("drawer.info")}</h2>
       <button class="drawer-close" onclick={closeDrawers}>×</button>
     </div>
-    <SidePanel {providers} {models} {skills} />
+    <SidePanel {providers} {models} {skills} {topics} {pollerStatus} />
   </aside>
 {/if}
 

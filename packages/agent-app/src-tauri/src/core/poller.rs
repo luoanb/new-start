@@ -1,5 +1,7 @@
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use super::error::AppResult;
 
 /// Handler invoked by the generic Poller when a task is due.
@@ -7,13 +9,13 @@ pub trait PollHandler: Send {
     fn on_tick(&mut self);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PollerRunState {
     Running,
     Paused,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PollerStatus {
     pub state: PollerRunState,
     pub tick_count: u64,

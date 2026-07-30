@@ -78,3 +78,37 @@ export type ModelCallResponse = {
   model_id: string;
   output: string;
 };
+
+// ── Topic / Poller ──
+
+export type TopicStatus = "todo" | "in_progress" | "paused" | "done" | "cancelled";
+
+export type ScopeInItem = {
+  id: string;
+  goal: string;
+  done_contract: string;
+  status: string; // "pending" | "done"
+};
+
+export type Topic = {
+  id: string;
+  name: string;
+  status: TopicStatus;
+  description: string;
+  scope_in: ScopeInItem[];
+  progress: number;
+  session_id?: string | null;
+  extra?: Record<string, unknown> | null;
+  created_at: number;
+  updated_at: number;
+};
+
+export type PollerRunState = "running" | "paused";
+
+export type PollerStatus = {
+  state: PollerRunState;
+  tick_count: number;
+  base_interval_ms: number;
+  task_count: number;
+  pending_trigger: boolean;
+};

@@ -66,6 +66,50 @@ export type Translations = {
     sessions: string;
     info: string;
   };
+  topicPanel: {
+    topics: string;
+    all: string;
+    create: string;
+    createTitle: string;
+    createName: string;
+    createDesc: string;
+    createSubmit: string;
+    creating: string;
+    noTopics: string;
+    deleteConfirm: string;
+    cancel: string;
+    confirm: string;
+    pause: string;
+    resume: string;
+    progress: string;
+    scopeItems: string;
+    addScopeItem: string;
+    scopeGoal: string;
+    scopeContract: string;
+    scopeAdd: string;
+    scopeStatusPending: string;
+    scopeStatusDone: string;
+    status: string;
+    description: string;
+    updated: string;
+    sessionId: string;
+    name: string;
+  };
+  pollerPanel: {
+    poller: string;
+    status: string;
+    running: string;
+    paused: string;
+    tickCount: string;
+    taskCount: string;
+    interval: string;
+    pause: string;
+    resume: string;
+    trigger: string;
+    triggering: string;
+    noPoller: string;
+    pendingTrigger: string;
+  };
 };
 
 export const en: Translations = {
@@ -142,6 +186,50 @@ export const en: Translations = {
     sessions: "Sessions",
     info: "Info",
   },
+  topicPanel: {
+    topics: "Topics",
+    all: "All",
+    create: "New Topic",
+    createTitle: "Create Topic",
+    createName: "Name",
+    createDesc: "Description",
+    createSubmit: "Create",
+    creating: "Creating...",
+    noTopics: "No topics yet.",
+    deleteConfirm: "Are you sure you want to delete this topic?",
+    cancel: "Cancel",
+    confirm: "Delete",
+    pause: "Pause",
+    resume: "Resume",
+    progress: "Progress",
+    scopeItems: "Scope Items",
+    addScopeItem: "Add Item",
+    scopeGoal: "Goal",
+    scopeContract: "Done Contract",
+    scopeAdd: "Add",
+    scopeStatusPending: "Pending",
+    scopeStatusDone: "Done",
+    status: "Status",
+    description: "Description",
+    updated: "Updated",
+    sessionId: "Session",
+    name: "Name",
+  },
+  pollerPanel: {
+    poller: "Poller",
+    status: "Status",
+    running: "Running",
+    paused: "Paused",
+    tickCount: "Ticks",
+    taskCount: "Tasks",
+    interval: "Interval",
+    pause: "Pause",
+    resume: "Resume",
+    trigger: "Trigger",
+    triggering: "Triggering...",
+    noPoller: "Poller not available.",
+    pendingTrigger: "Pending Trigger",
+  },
 };
 
 export const zh: Translations = {
@@ -217,5 +305,49 @@ export const zh: Translations = {
   drawer: {
     sessions: "会话列表",
     info: "信息",
+  },
+  topicPanel: {
+    topics: "话题",
+    all: "全部",
+    create: "新建话题",
+    createTitle: "创建话题",
+    createName: "名称",
+    createDesc: "描述",
+    createSubmit: "创建",
+    creating: "创建中...",
+    noTopics: "暂无话题。",
+    deleteConfirm: "确定要删除此话题吗？",
+    cancel: "取消",
+    confirm: "删除",
+    pause: "暂停",
+    resume: "恢复",
+    progress: "进度",
+    scopeItems: "范围项",
+    addScopeItem: "添加项",
+    scopeGoal: "目标",
+    scopeContract: "完成条件",
+    scopeAdd: "添加",
+    scopeStatusPending: "待办",
+    scopeStatusDone: "完成",
+    status: "状态",
+    description: "描述",
+    updated: "更新于",
+    sessionId: "会话",
+    name: "名称",
+  },
+  pollerPanel: {
+    poller: "轮询器",
+    status: "状态",
+    running: "运行中",
+    paused: "已暂停",
+    tickCount: "Tick 数",
+    taskCount: "任务数",
+    interval: "间隔",
+    pause: "暂停",
+    resume: "恢复",
+    trigger: "触发",
+    triggering: "触发中...",
+    noPoller: "Poller 不可用。",
+    pendingTrigger: "待触发",
   },
 };
