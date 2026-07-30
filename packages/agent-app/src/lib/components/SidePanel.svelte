@@ -1,5 +1,7 @@
 <script lang="ts">
   import type { ProviderInfo, ModelInfo, SkillInfo } from "$lib/types";
+  import { locale, t, tMap } from "$lib/i18n";
+  $locale;
 
   let {
     providers,
@@ -14,24 +16,17 @@
   let activeTab = $state("providers");
 
   type Tab = { id: string; label: string };
-  const tabs: Tab[] = [
-    { id: "providers", label: "Providers" },
-    { id: "models", label: "Models" },
-    { id: "skills", label: "Skills" },
-  ];
-
-  const capLabels: Record<string, string> = {
-    chat: "Chat",
-    tools: "Tools",
-    streaming: "Stream",
-    structured_output: "JSON",
-    vision: "Vision",
-  };
+  let tabs: Tab[] = $derived([
+    { id: "providers", label: t("sidePanel.providers") },
+    { id: "models", label: t("sidePanel.models") },
+    { id: "skills", label: t("sidePanel.skills") },
+  ]);
 
   function modelCaps(m: ModelInfo): string[] {
     const caps: string[] = [];
-    for (const [key, label] of Object.entries(capLabels)) {
-      if ((m.capabilities as unknown as Record<string, boolean | undefined>)[key]) {
+    for (const key of Object.keys(m.capabilities)) {
+      const label = tMap("sidePanel.caps", key);
+      if (label !== `sidePanel.caps.${key}` && (m.capabilities as unknown as Record<string, boolean | undefined>)[key]) {
         caps.push(label);
       }
     }
@@ -60,25 +55,25 @@
   <div class="tab-content">
     {#if activeTab === "providers"}
       {#if providers.length === 0}
-        <p class="empty">No providers configured.</p>
+        <p class="empty">{t("sidePanel.noProviders")}</p>
       {:else}
         <div class="list">
           {#each providers as p}
             <div class="item">
               <div class="item-title">{p.display_name}</div>
-              <div class="item-detail">ID: {p.id}</div>
-              <div class="item-detail">Auth: {p.auth_env}</div>
+              <div class="item-detail">{t("sidePanel.id")}: {p.id}</div>
+              <div class="item-detail">{t("sidePanel.auth")}: {p.auth_env}</div>
               {#if p.api_base}
-                <div class="item-detail">API: {p.api_base}</div>
+                <div class="item-detail">{t("sidePanel.api")}: {p.api_base}</div>
               {/if}
-              <div class="item-detail">Kind: {p.kind}</div>
+              <div class="item-detail">{t("sidePanel.kind")}: {p.kind}</div>
             </div>
           {/each}
         </div>
       {/if}
     {:else if activeTab === "models"}
       {#if models.length === 0}
-        <p class="empty">No models available.</p>
+        <p class="empty">{t("sidePanel.noModels")}</p>
       {:else}
         <div class="list">
           {#each models as m}
@@ -91,13 +86,12 @@
                 {/each}
               </div>
               <div class="item-detail">
-                Context: {m.context_window?.toLocaleString() ?? "-"} tokens
-                &middot;
-                Output: {m.max_output_tokens?.toLocaleString() ?? "-"} tokens
+                {t("sidePanel.context")}: {m.context_window?.toLocaleString() ?? "-"} {t("sidePanel.tokens")} &middot;
+                {t("sidePanel.output")}: {m.max_output_tokens?.toLocaleString() ?? "-"} {t("sidePanel.tokens")}
               </div>
               <div class="item-detail">
-                {formatPrice(m.pricing_input, "M in")} &middot;
-                {formatPrice(m.pricing_output, "M out")}
+                {formatPrice(m.pricing_input, t("sidePanel.mIn"))} &middot;
+                {formatPrice(m.pricing_output, t("sidePanel.mOut"))}
               </div>
             </div>
           {/each}
@@ -105,7 +99,7 @@
       {/if}
     {:else if activeTab === "skills"}
       {#if skills.length === 0}
-        <p class="empty">No skills available.</p>
+        <p class="empty">{t("sidePanel.noSkills")}</p>
       {:else}
         <div class="list">
           {#each skills as s}
@@ -121,91 +115,17 @@
 </div>
 
 <style>
-  .side-panel {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-  }
-
-  .tabs {
-    display: flex;
-    border-bottom: 1px solid var(--color-border);
-  }
-
-  .tab {
-    flex: 1;
-    padding: 8px;
-    border: none;
-    background: transparent;
-    cursor: pointer;
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--color-text-muted);
-    transition: color 0.15s, border-color 0.15s;
-    border-bottom: 2px solid transparent;
-  }
-
-  .tab.active {
-    color: var(--color-primary);
-    border-bottom-color: var(--color-primary);
-  }
-
-  .tab:hover {
-    color: var(--color-text);
-  }
-
-  .tab-content {
-    flex: 1;
-    overflow-y: auto;
-    padding: 8px;
-  }
-
-  .empty {
-    text-align: center;
-    color: var(--color-text-muted);
-    font-size: 13px;
-    padding: 24px 8px;
-  }
-
-  .list {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .item {
-    padding: 8px 10px;
-    border-radius: 8px;
-    background: var(--color-bg);
-    border: 1px solid var(--color-border);
-  }
-
-  .item-title {
-    font-size: 13px;
-    font-weight: 600;
-    margin-bottom: 4px;
-  }
-
-  .item-detail {
-    font-size: 11px;
-    color: var(--color-text-muted);
-    line-height: 1.5;
-  }
-
-  .caps {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    margin: 4px 0;
-  }
-
-  .cap-tag {
-    font-size: 10px;
-    font-weight: 600;
-    padding: 1px 6px;
-    border-radius: 4px;
-    background: var(--color-primary);
-    color: var(--color-on-primary);
-    opacity: 0.85;
-  }
+  .side-panel { display: flex; flex-direction: column; height: 100%; }
+  .tabs { display: flex; border-bottom: var(--border-width) solid var(--color-border); }
+  .tab { flex: 1; padding: var(--space-2); border: none; background: transparent; cursor: pointer; font-size: var(--fs-sm); font-weight: 500; color: var(--color-text-muted); transition: color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out); border-bottom: 2px solid transparent; }
+  .tab.active { color: var(--color-primary); border-bottom-color: var(--color-primary); }
+  .tab:hover { color: var(--color-text); }
+  .tab-content { flex: 1; overflow-y: auto; padding: var(--space-2); }
+  .empty { text-align: center; color: var(--color-text-muted); font-size: var(--fs-sm); padding: var(--space-6) var(--space-2); }
+  .list { display: flex; flex-direction: column; gap: var(--space-1); }
+  .item { padding: var(--space-2) var(--space-2); border-radius: var(--radius-md); background: var(--color-bg); border: var(--border-width) solid var(--color-border); }
+  .item-title { font-size: var(--fs-sm); font-weight: 600; margin-bottom: var(--space-1); }
+  .item-detail { font-size: var(--fs-xs); color: var(--color-text-muted); line-height: 1.5; }
+  .caps { display: flex; flex-wrap: wrap; gap: var(--space-1); margin: var(--space-1) 0; }
+  .cap-tag { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: var(--radius-sm); background: var(--color-primary); color: var(--color-on-primary); opacity: 0.85; }
 </style>

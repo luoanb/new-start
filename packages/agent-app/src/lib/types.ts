@@ -16,10 +16,20 @@ export type Conversation = {
   updated_at: number;
 };
 
+export type ToolCall = {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+};
+
 export type Message = {
   role: "user" | "assistant" | "system";
   content: string;
   timestamp: number;
+  msg_type?: string;
+  summary_of?: string[];
+  tool_calls?: ToolCall[];
+  tool_call_id?: string;
 };
 
 export type RuntimeStatus = {

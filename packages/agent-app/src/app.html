@@ -6,6 +6,94 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Tauri + SvelteKit + Typescript App</title>
     %sveltekit.head%
+    <style>
+      :root,
+      [data-theme="light"] {
+        /* ── Colors ── */
+        --color-bg:           oklch(0.98 0.003 75);
+        --color-surface:      oklch(0.95 0.005 75);
+        --color-elevated:     oklch(0.92 0.006 75);
+        --color-text:         oklch(0.18 0.008 75);
+        --color-text-muted:   oklch(0.55 0.015 75);
+        --color-border:       oklch(0.88 0.006 75);
+        --color-primary:      oklch(0.55 0.18 255);
+        --color-primary-dim:  oklch(0.45 0.14 255);
+        --color-on-primary:   oklch(0.98 0.002 75);
+        --color-hover:        oklch(0.92 0.006 75);
+        --color-error:        oklch(0.55 0.2 30);
+        --color-error-bg:     oklch(0.9 0.05 30);
+        --color-success:      oklch(0.55 0.15 150);
+        --color-warning:      oklch(0.65 0.18 85);
+
+        /* ── Typography scale ── */
+        --fs-xs:   11px;
+        --fs-sm:   13px;
+        --fs-base: 14px;
+        --fs-lg:   16px;
+        --fs-xl:   20px;
+
+        /* ── Spacing ── */
+        --space-1:  4px;
+        --space-2:  8px;
+        --space-3:  12px;
+        --space-4:  16px;
+        --space-5:  20px;
+        --space-6:  24px;
+        --space-8:  32px;
+        --space-10: 40px;
+        --space-12: 48px;
+        --space-16: 64px;
+
+        /* ── Border & Radius ── */
+        --radius-sm:   6px;
+        --radius-md:   8px;
+        --radius-lg:   12px;
+        --radius-full: 9999px;
+        --border-width: 1px;
+
+        /* ── Motion ── */
+        --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+        --duration-fast:   150ms;
+        --duration-normal: 250ms;
+      }
+
+      [data-theme="dark"] {
+        --color-bg:           oklch(0.13 0.004 75);
+        --color-surface:      oklch(0.17 0.005 75);
+        --color-elevated:     oklch(0.21 0.006 75);
+        --color-text:         oklch(0.92 0.004 75);
+        --color-text-muted:   oklch(0.55 0.01 75);
+        --color-border:       oklch(0.25 0.005 75);
+        --color-primary:      oklch(0.7 0.18 255);
+        --color-primary-dim:  oklch(0.6 0.15 255);
+        --color-on-primary:   oklch(0.13 0.004 75);
+        --color-hover:        oklch(0.25 0.005 75);
+        --color-error:        oklch(0.55 0.2 30);
+        --color-error-bg:     oklch(0.2 0.05 30);
+        --color-success:      oklch(0.55 0.15 150);
+        --color-warning:      oklch(0.65 0.18 85);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]):not([data-theme="dark"]),
+        [data-theme="system"] {
+          --color-bg:           oklch(0.13 0.004 75);
+          --color-surface:      oklch(0.17 0.005 75);
+          --color-elevated:     oklch(0.21 0.006 75);
+          --color-text:         oklch(0.92 0.004 75);
+          --color-text-muted:   oklch(0.55 0.01 75);
+          --color-border:       oklch(0.25 0.005 75);
+          --color-primary:      oklch(0.7 0.18 255);
+          --color-primary-dim:  oklch(0.6 0.15 255);
+          --color-on-primary:   oklch(0.13 0.004 75);
+          --color-hover:        oklch(0.25 0.005 75);
+          --color-error:        oklch(0.55 0.2 30);
+          --color-error-bg:     oklch(0.2 0.05 30);
+          --color-success:      oklch(0.55 0.15 150);
+          --color-warning:      oklch(0.65 0.18 85);
+        }
+      }
+    </style>
   </head>
   <body data-sveltekit-preload-data="hover">
     <div style="display: contents">%sveltekit.body%</div>
