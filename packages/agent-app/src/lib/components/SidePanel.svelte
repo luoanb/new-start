@@ -1,7 +1,6 @@
 <script lang="ts">
   import type { ProviderInfo, ModelInfo, SkillInfo } from "$lib/types";
-  import { locale, t, tMap } from "$lib/i18n";
-  $locale;
+  import { t, tMap } from "$lib/i18n";
 
   let {
     providers,

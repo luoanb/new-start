@@ -2,8 +2,7 @@
   import type { Message } from "$lib/types";
   import MarkdownRenderer from "./MarkdownRenderer.svelte";
   import ToolCallBlock from "./ToolCallBlock.svelte";
-  import { locale, t } from "$lib/i18n";
-  $locale;
+  import { t } from "$lib/i18n";
 
   let { message }: { message: Message } = $props();
 

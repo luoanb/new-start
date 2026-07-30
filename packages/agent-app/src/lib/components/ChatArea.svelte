@@ -2,8 +2,7 @@
   import ChatMessage from "./ChatMessage.svelte";
   import ChatInput from "./ChatInput.svelte";
   import type { Message } from "$lib/types";
-  import { locale, t } from "$lib/i18n";
-  $locale;
+  import { t } from "$lib/i18n";
 
   let {
     messages,

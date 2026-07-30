@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { locale, t } from "$lib/i18n";
-  $locale;
+  import { t } from "$lib/i18n";
 
   let { open, onCreate, onClose }: {
     open: boolean;

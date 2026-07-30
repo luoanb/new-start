@@ -1,7 +1,6 @@
 <script lang="ts">
   import type { Conversation } from "$lib/types";
-  import { locale, t } from "$lib/i18n";
-  $locale;
+  import { t } from "$lib/i18n";
 
   let {
     conversations,

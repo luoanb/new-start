@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { locale, t } from "$lib/i18n";
-  $locale;
+  import { t } from "$lib/i18n";
 
   const STORAGE_KEY = "theme-preference";
 
@@ -42,11 +41,11 @@
 
   $effect(() => { apply(current); });
 
-  const label: Record<Theme, string> = {
+  let label = $derived({
     light: t("themeSwitcher.light"),
     dark: t("themeSwitcher.dark"),
     system: t("themeSwitcher.system"),
-  };
+  });
 </script>
 
 <div class="theme-switcher">

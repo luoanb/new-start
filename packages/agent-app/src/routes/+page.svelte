@@ -16,8 +16,7 @@
   import SidePanel from "$lib/components/SidePanel.svelte";
   import SessionCreateModal from "$lib/components/SessionCreateModal.svelte";
   import ErrorBanner from "$lib/components/ErrorBanner.svelte";
-  import { locale, t } from "$lib/i18n";
-  $locale;
+  import { t } from "$lib/i18n";
 
   // ── Bootstrap state (loaded once) ──
   let providers: ProviderInfo[] = $state([]);

@@ -2,8 +2,7 @@
   import ThemeSwitcher from "./ThemeSwitcher.svelte";
   import LocaleSwitcher from "./LocaleSwitcher.svelte";
   import type { ProviderInfo, ModelInfo } from "$lib/types";
-  import { locale, t } from "$lib/i18n";
-  $locale;
+  import { t } from "$lib/i18n";
 
   let {
     appName,

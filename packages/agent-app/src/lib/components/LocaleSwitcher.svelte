@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { locale, t, setLocale, getLocale } from "$lib/i18n";
-  $locale;
+  import { t, setLocale, getLocale } from "$lib/i18n";
 
   type Locale = "zh" | "en";
 
