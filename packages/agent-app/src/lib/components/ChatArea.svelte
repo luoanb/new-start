@@ -52,8 +52,8 @@
 </div>
 
 <style>
-  .chat-area { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
-  .messages { flex: 1; overflow-y: auto; padding: var(--space-3) 0; scroll-behavior: smooth; }
+  .chat-area { display: flex; flex-direction: column; height: 100%; overflow: hidden; min-height: 0; background: var(--color-bg); }
+  .messages { flex: 1; overflow-y: auto; min-height: 0; padding: var(--space-3) 0; scroll-behavior: smooth; }
   .empty { display: flex; align-items: center; justify-content: center; height: 100%; }
   .empty-content { text-align: center; max-width: 300px; }
   .empty-content h3 { margin: 0 0 var(--space-2); font-size: var(--fs-lg); font-weight: 600; color: var(--color-text); }

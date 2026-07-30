@@ -278,11 +278,11 @@
       "error error error";
     overflow: hidden;
   }
-
+  
   .status-area { grid-area: status; }
-  .sidebar-area { grid-area: sidebar; }
-  .chat-area { grid-area: chat; overflow: hidden; display: flex; flex-direction: column; }
-  .info-area { grid-area: info; width: 280px; border-left: var(--border-width) solid var(--color-border); background: var(--color-surface); overflow-y: auto; }
+  .sidebar-area { grid-area: sidebar; min-height: 0; display: flex; flex-direction: column; }
+  .chat-area { grid-area: chat; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+  .info-area { grid-area: info; width: 280px; border-left: var(--border-width) solid var(--color-border); background: var(--color-surface); overflow-y: auto; min-height: 0; }
   .error-area { grid-area: error; }
 
   .loading-overlay {

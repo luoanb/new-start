@@ -108,7 +108,7 @@
 </aside>
 
 <style>
-  .sidebar { display: flex; flex-direction: column; background: var(--color-surface); border-right: var(--border-width) solid var(--color-border); width: 260px; transition: width var(--duration-fast) var(--ease-out); overflow: hidden; }
+  .sidebar { display: flex; flex-direction: column; background: var(--color-surface); border-right: var(--border-width) solid var(--color-border); width: 260px; height: 100%; transition: width var(--duration-fast) var(--ease-out); overflow: hidden; z-index: 1; box-shadow: 2px 0 8px rgba(0,0,0,0.05); }
   .sidebar.collapsed { width: 48px; }
   .sidebar-header { display: flex; align-items: center; justify-content: space-between; padding: var(--space-3); border-bottom: var(--border-width) solid var(--color-border); min-height: 48px; }
   .sidebar.collapsed .sidebar-header { flex-direction: column; gap: var(--space-2); padding: var(--space-2); }
