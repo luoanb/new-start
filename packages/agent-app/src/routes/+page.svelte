@@ -19,6 +19,13 @@
   import SessionCreateModal from "$lib/components/SessionCreateModal.svelte";
   import ErrorBanner from "$lib/components/ErrorBanner.svelte";
   import NeuronManager from "$lib/components/NeuronManager.svelte";
+  import PollerPanel from "$lib/components/PollerPanel.svelte";
+  import ActivityBar from "$lib/layout/ActivityBar.svelte";
+  import Splitter from "$lib/layout/Splitter.svelte";
+  import DockPane from "$lib/layout/DockPane.svelte";
+  import EditorTabs from "$lib/layout/EditorTabs.svelte";
+  import { layoutStore } from "$lib/layout/LayoutStore.svelte";
+  import { activityItems, panelViews, mainTabs } from "$lib/layout/views";
   import { t } from "$lib/i18n";
 
   // ── Bootstrap state (loaded once) ──
@@ -43,10 +50,33 @@
   // ── UI state ──
   let error = $state("");
   let showCreateModal = $state(false);
-  let showNeuronView = $state(false);
-  let sidebarCollapsed = $state(false);
   let drawerSidebar = $state(false);
   let drawerInfo = $state(false);
+
+  // ── Layout (store-driven) ──
+  let mainRef = $state<HTMLElement | null>(null);
+  // split 状态的唯一真源：main.splits 非空即处于 chat|neurons 分栏
+  let isNeuronSplit = $derived(
+    layoutStore.state.main.splits.length > 0
+  );
+  let splitRatio = $derived(
+    layoutStore.state.main.splits[0]?.ratio ?? 0.5
+  );
+  let sidebarStyle = $derived(
+    layoutStore.state.sidebar.visible
+      ? `width:${layoutStore.state.sidebar.width}px`
+      : "width:0"
+  );
+  let infoStyle = $derived(
+    layoutStore.state.info.visible
+      ? `width:${layoutStore.state.info.width}px`
+      : "width:0"
+  );
+  let panelStyle = $derived(
+    layoutStore.state.panel.visible
+      ? `height:${layoutStore.state.panel.height}px`
+      : "height:0"
+  );
 
   // ── Derived ──
   let activeConversation = $derived(
@@ -156,14 +186,68 @@
     localStorage.setItem("agent-app:modelId", modelId);
   }
 
-  function handleKeydown(e: KeyboardEvent) {
-    if (e.ctrlKey && e.key === "j") {
-      e.preventDefault();
-      showCreateModal = true;
+  // ── Activity Bar / 布局操作 ──
+
+  /** 打开/关闭 neuron split（chat | neurons 并排）。状态真源 = main.splits */
+  function toggleNeuronSplit() {
+    if (layoutStore.state.main.splits.length > 0) {
+      layoutStore.setActivity("chat");
+      layoutStore.setMainSplits([]);
+    } else {
+      layoutStore.setActivity("neurons");
+      layoutStore.setMainSplits([{ id: "chat", orientation: "vertical", ratio: 0.5 }]);
     }
+  }
+
+  function handleActivitySelect(id: string) {
+    const active = layoutStore.state.activity.active;
+    if (id === "sessions") {
+      if (active === id && layoutStore.state.sidebar.visible) { layoutStore.toggleSidebar(); return; }
+      layoutStore.setActivity("sessions");
+      if (!layoutStore.state.sidebar.visible) layoutStore.toggleSidebar();
+      return;
+    }
+    if (id === "info") {
+      if (active === id && layoutStore.state.info.visible) { layoutStore.toggleInfo(); return; }
+      layoutStore.setActivity("info");
+      if (!layoutStore.state.info.visible) layoutStore.toggleInfo();
+      return;
+    }
+    if (id === "neurons") { toggleNeuronSplit(); return; }
+    if (id === "chat") { layoutStore.setActivity("chat"); return; }
+  }
+
+  /** 主区 tab ✕ 关闭：关闭对应面板，恢复单视图（保留另一个） */
+  function handleTabClose(id: string) {
+    layoutStore.setMainSplits([]);
+    layoutStore.setActivity(id === "chat" ? "neurons" : "chat");
+  }
+
+  function handleSplitResize(delta: number) {
+    const containerW = mainRef?.clientWidth ?? 800;
+    layoutStore.updateMainSplitRatio(splitRatio + delta / containerW, false);
+  }
+
+  function handleKeydown(e: KeyboardEvent) {
     if (e.key === "Escape") {
       drawerSidebar = false;
       drawerInfo = false;
+      return;
+    }
+    const ctrl = e.ctrlKey || e.metaKey;
+    if (!ctrl) return;
+    const key = e.key.toLowerCase();
+    e.preventDefault();
+    if (key === "j" && e.shiftKey) {
+      layoutStore.togglePanel();
+    } else if (key === "j") {
+      showCreateModal = true;
+    } else if (key === "b") {
+      layoutStore.toggleSidebar();
+    } else if (key === "i") {
+      layoutStore.toggleInfo();
+    } else if (key === "\\") {
+      toggleNeuronSplit();
     }
   }
 
@@ -176,6 +260,14 @@
 <svelte:window onkeydown={handleKeydown} />
 
 <div class="app-layout">
+  <nav class="activity-area">
+    <ActivityBar
+      items={activityItems}
+      activeId={layoutStore.state.activity.active}
+      onSelect={handleActivitySelect}
+    />
+  </nav>
+
   <header class="status-area">
     <StatusBar
       appName={runtimeStatus?.app_name ?? "Agent App"}
@@ -185,39 +277,110 @@
       {models}
       selectedProviderId={activeProviderId}
       selectedModelId={activeModelId}
-      neuronActive={showNeuronView}
+      neuronActive={isNeuronSplit}
       onChange={handleModelChange}
-      onToggleSidebar={() => (drawerSidebar = !drawerSidebar)}
-      onToggleInfo={() => (drawerInfo = !drawerInfo)}
-      onToggleNeuron={() => (showNeuronView = !showNeuronView)}
+      onToggleSidebar={() => {
+        if (window.innerWidth <= 800) drawerSidebar = !drawerSidebar;
+        else layoutStore.toggleSidebar();
+      }}
+      onToggleInfo={() => {
+        if (window.innerWidth <= 800) drawerInfo = !drawerInfo;
+        else layoutStore.toggleInfo();
+      }}
+      onToggleNeuron={() => handleActivitySelect("neurons")}
     />
   </header>
 
   <!-- Desktop sidebar -->
-  <aside class="sidebar-area desktop-only" class:collapsed={sidebarCollapsed}>
-    <SessionList
-      {conversations}
-      activeId={activeConversationId}
-      collapsed={sidebarCollapsed}
-      onSelect={handleSelectConversation}
-      onCreate={() => (showCreateModal = true)}
-      onClose={handleCloseSession}
-      onToggle={() => (sidebarCollapsed = !sidebarCollapsed)}
+  <div class="main-area">
+    <aside class="sidebar-area desktop-only" style={sidebarStyle}>
+      <SessionList
+        {conversations}
+        activeId={activeConversationId}
+        collapsed={false}
+        onSelect={handleSelectConversation}
+        onCreate={() => (showCreateModal = true)}
+        onClose={handleCloseSession}
+        onToggle={() => layoutStore.toggleSidebar()}
+      />
+    </aside>
+
+    <Splitter
+      orientation="vertical"
+      extraClass="desktop-only"
+      onResize={(delta) => layoutStore.setSidebarWidth(layoutStore.state.sidebar.width + delta, false)}
+      onResizeEnd={() => layoutStore.persistNow()}
     />
-  </aside>
 
-  <main class="chat-area">
-    {#if showNeuronView}
-      <NeuronManager />
-    {:else}
-      <ChatArea {messages} {loading} onSend={handleSend} />
-    {/if}
-  </main>
+    <main class="chat-area" bind:this={mainRef}>
+      <EditorTabs
+        tabs={mainTabs}
+        activeId={layoutStore.state.activity.active}
+        split={isNeuronSplit}
+        onSelect={(id) => layoutStore.setActivity(id)}
+        onClose={handleTabClose}
+      />
+      <div class="chat-content">
+        {#if isNeuronSplit}
+          <div class="main-split" style="--split-ratio: {splitRatio}">
+            <ChatArea {messages} {loading} onSend={handleSend} />
+            <Splitter
+              orientation="vertical"
+              onResize={handleSplitResize}
+              onResizeEnd={() => layoutStore.persistNow()}
+            />
+            <NeuronManager />
+          </div>
+        {:else if layoutStore.state.activity.active === "neurons"}
+          <NeuronManager />
+        {:else}
+          <ChatArea {messages} {loading} onSend={handleSend} />
+        {/if}
+      </div>
+    </main>
 
-  <!-- Desktop info panel -->
-  <aside class="info-area desktop-only">
-    <SidePanel {providers} {models} {skills} {topics} {pollerStatus} />
-  </aside>
+    <Splitter
+      orientation="vertical"
+      extraClass="desktop-only"
+      onResize={(delta) => layoutStore.setInfoWidth(layoutStore.state.info.width - delta, false)}
+      onResizeEnd={() => layoutStore.persistNow()}
+    />
+
+    <!-- Desktop info panel -->
+    <aside class="info-area desktop-only" style={infoStyle}>
+      <SidePanel {providers} {models} {skills} {topics} />
+    </aside>
+  </div>
+
+  <!-- Bottom panel -->
+  <section class="panel-area desktop-only" style={panelStyle}>
+    <Splitter
+      orientation="horizontal"
+      onResize={(delta) => layoutStore.setPanelHeight(layoutStore.state.panel.height - delta, false)}
+      onResizeEnd={() => layoutStore.persistNow()}
+    />
+    <DockPane
+      title={panelViews.find((v) => v.id === layoutStore.state.panel.activeView)?.label ?? "Panel"}
+      onToggle={() => layoutStore.togglePanel()}
+    >
+      <div class="panel-tabs">
+        {#each panelViews as pv}
+          <button
+            class="panel-tab"
+            class:active={layoutStore.state.panel.activeView === pv.id}
+            onclick={() => layoutStore.setPanelView(pv.id)}
+          >
+            {pv.label}
+          </button>
+        {/each}
+      </div>
+      {#if layoutStore.state.panel.activeView === "poller"}
+        <PollerPanel bind:pollerStatus />
+      {:else}
+        <p class="panel-empty">Logs placeholder</p>
+      {/if}
+    </DockPane>
+  </section>
 
   <div class="error-area">
     <ErrorBanner message={error} onDismiss={() => (error = "")} />
@@ -253,7 +416,7 @@
       <h2>{t("drawer.info")}</h2>
       <button class="drawer-close" onclick={closeDrawers}>×</button>
     </div>
-    <SidePanel {providers} {models} {skills} {topics} {pollerStatus} />
+    <SidePanel {providers} {models} {skills} {topics} />
   </aside>
 {/if}
 
@@ -294,20 +457,97 @@
   .app-layout {
     display: grid;
     height: 100vh;
-    grid-template-rows: auto 1fr auto;
-    grid-template-columns: auto 1fr auto;
+    grid-template-columns: auto 1fr;
+    grid-template-rows: auto 1fr auto auto;
     grid-template-areas:
-      "status status status"
-      "sidebar chat info"
-      "error error error";
+      "status status"
+      "activity main"
+      "activity panel"
+      "error error";
     overflow: hidden;
   }
-  
+
+  .activity-area { grid-area: activity; display: flex; min-height: 0; }
   .status-area { grid-area: status; }
-  .sidebar-area { grid-area: sidebar; min-height: 0; display: flex; flex-direction: column; }
-  .chat-area { grid-area: chat; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
-  .info-area { grid-area: info; width: 280px; border-left: var(--border-width) solid var(--color-border); background: var(--color-surface); overflow-y: auto; min-height: 0; }
+
+  .main-area {
+    grid-area: main;
+    display: flex;
+    align-items: stretch;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .sidebar-area {
+    flex: none;
+    width: 260px;
+    overflow: hidden;
+    background: var(--color-surface);
+    border-right: var(--border-width) solid var(--color-border);
+  }
+
+  .chat-area {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .chat-content {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .info-area {
+    flex: none;
+    width: 280px;
+    overflow: hidden;
+    background: var(--color-surface);
+    border-left: var(--border-width) solid var(--color-border);
+  }
+
+  .panel-area {
+    grid-area: panel;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--color-surface);
+    border-top: var(--border-width) solid var(--color-border);
+  }
+
   .error-area { grid-area: error; }
+
+  .main-split {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: grid;
+    grid-template-columns:
+      minmax(0, calc(var(--split-ratio) * (100% - 4px))) auto
+      minmax(0, calc((1 - var(--split-ratio)) * (100% - 4px)));
+  }
+  .main-split > :global(*) { min-width: 0; min-height: 0; }
+
+  .panel-tabs { display: flex; flex-shrink: 0; border-bottom: var(--border-width) solid var(--color-border); padding: 0 var(--space-2); }
+  .panel-tab {
+    padding: var(--space-1) var(--space-3);
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: var(--fs-sm);
+    font-weight: 500;
+    color: var(--color-text-muted);
+    border-bottom: 2px solid transparent;
+  }
+  .panel-tab.active { color: var(--color-primary); border-bottom-color: var(--color-primary); }
+  .panel-tab:hover { color: var(--color-text); }
+  .panel-empty { padding: var(--space-4); color: var(--color-text-muted); font-size: var(--fs-sm); }
 
   .loading-overlay {
     position: fixed; inset: 0;
@@ -377,14 +617,14 @@
     .desktop-only { display: none; }
 
     .app-layout {
-      grid-template-columns: 1fr;
+      grid-template-rows: auto 1fr auto;
       grid-template-areas:
-        "status"
-        "chat"
-        "error";
+        "status status"
+        "activity main"
+        "error error";
     }
 
-    .info-area.desktop-only { display: none; }
+    .main-area { min-width: 0; }
   }
 
   @media (min-width: 801px) {

@@ -7,6 +7,11 @@
     <title>Agent App</title>
     %sveltekit.head%
     <style>
+      html,
+      body {
+        height: 100%;
+      }
+
       :root,
       [data-theme="light"] {
         /* ── Colors (cool palette) ── */
@@ -96,6 +101,11 @@
     </style>
   </head>
   <body data-sveltekit-preload-data="hover">
-    <div style="display: contents">%sveltekit.body%</div>
+    <!--
+      Avoid display:contents around SvelteKit body: on WebKitGTK + Wayland + fcitx5
+      it can break caret client rects, so IME candidate windows offset (~400px) or
+      disappear near the bottom of the window. Block wrapper preserves layout via 100vh app shell.
+    -->
+    <div style="height: 100%;">%sveltekit.body%</div>
   </body>
 </html>
