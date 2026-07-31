@@ -37,6 +37,18 @@ Look for `phase=` among:
 
 Useful keywords: `assistant_select_neuron`, `generate_draft`, `error_code`.
 
+## Assistant converse fields
+
+User-input path (`ConversationMode::Assistant`):
+
+- `send_model_message` → `assistant_converse`
+- steps: `score_feedback` → `match_topic` → `select_neuron` → `run_core` → `complete_scope`
+- nested: `assistant_system_json` (match/score/complete prompts), `match_topic_hook`, `select_neuron_hook`, `assistant_run_core`
+
+If the UI hangs with no reply, filter keyword `assistant_converse` or `assistant_system_json` and see which `step=` last appeared without a following `ok` / `failed`.
+
+On JSON/model failures, look for `user_preview` / `output_preview` (redacted + truncated) next to `error_code`.
+
 ## Entrypoints
 
 - **GUI**: init + emit in Tauri `setup`; also runs `bootstrap_neurons`

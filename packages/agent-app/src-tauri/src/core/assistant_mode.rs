@@ -13,6 +13,7 @@ use super::{
         CandidateQuery, ChatModelSelection, ChatResponse, Message, MessageRole, ModelCallRequest,
         ModelMessage, ModelMessageRole, Neuron, Topic, TopicStatus, TopicUpdate,
     },
+    log_redact::{preview_default, preview_json_for_log},
     neuron_manager::NeuronManager,
     neuron_store::NeuronStore,
     poller::{PollHandler, Poller},
@@ -115,34 +116,128 @@ impl AssistantMode {
         user_input: &str,
         model: &ChatModelSelection,
     ) -> AppResult<ChatResponse> {
+        tracing::info!(
+            phase = "assistant_converse",
+            session_id,
+            provider = %model.provider_id,
+            model = %model.model_id,
+            input_len = user_input.len(),
+            "converse start"
+        );
         let mut ctx = self
             .build_context(session_id, RoundTrigger::UserInput)
             .await?;
         ctx.user_input = Some(user_input.to_string());
+        tracing::info!(
+            phase = "assistant_converse",
+            session_id,
+            topic_id = ctx.topic_id.as_deref().unwrap_or(""),
+            "context built"
+        );
 
-        ScoreFeedbackBeforeHook { assistant: self }
+        tracing::info!(phase = "assistant_converse", step = "score_feedback", "beforehook start");
+        if let Err(error) = (ScoreFeedbackBeforeHook { assistant: self })
             .run(&mut ctx)
-            .await?;
-        MatchTopicBeforeHook { assistant: self }
+            .await
+        {
+            tracing::error!(
+                phase = "assistant_converse",
+                step = "score_feedback",
+                error_code = error.code(),
+                error = %error,
+                "beforehook failed"
+            );
+            return Err(error);
+        }
+        tracing::info!(phase = "assistant_converse", step = "score_feedback", "beforehook ok");
+
+        tracing::info!(phase = "assistant_converse", step = "match_topic", "beforehook start");
+        if let Err(error) = (MatchTopicBeforeHook { assistant: self })
             .run(&mut ctx)
-            .await?;
-        SelectNeuronBeforeHook {
+            .await
+        {
+            tracing::error!(
+                phase = "assistant_converse",
+                step = "match_topic",
+                error_code = error.code(),
+                error = %error,
+                "beforehook failed"
+            );
+            return Err(error);
+        }
+        tracing::info!(
+            phase = "assistant_converse",
+            step = "match_topic",
+            session_id = %ctx.session_id,
+            topic_id = ctx.topic_id.as_deref().unwrap_or(""),
+            switched = ctx.switched_session,
+            "match_topic ok"
+        );
+        tracing::info!(phase = "assistant_converse", step = "select_neuron", "beforehook start");
+        if let Err(error) = (SelectNeuronBeforeHook {
             assistant: self,
             secondary: false,
-        }
+        })
         .run(&mut ctx)
-        .await?;
+        .await
+        {
+            tracing::error!(
+                phase = "assistant_converse",
+                step = "select_neuron",
+                error_code = error.code(),
+                error = %error,
+                "beforehook failed"
+            );
+            return Err(error);
+        }
+        tracing::info!(phase = "assistant_converse", step = "select_neuron", "beforehook ok");
 
         self.authorize_tools(&mut ctx);
-        let response = self.run_core(&mut ctx, model).await?;
+        tracing::info!(
+            phase = "assistant_converse",
+            step = "run_core",
+            neuron_id = ctx
+                .selected_neuron
+                .as_ref()
+                .map(|n| n.id.as_str())
+                .unwrap_or(""),
+            tools = ctx.authorized_tool_ids.len(),
+            "entering run_core"
+        );
+        let response = match self.run_core(&mut ctx, model).await {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::error!(
+                    phase = "assistant_converse",
+                    step = "run_core",
+                    error_code = error.code(),
+                    error = %error,
+                    "run_core failed"
+                );
+                return Err(error);
+            }
+        };
         if let Err(error) = (CompleteScopeAfterHook { assistant: self })
             .run(&mut ctx)
             .await
         {
+            tracing::error!(
+                phase = "assistant_converse",
+                step = "complete_scope",
+                error_code = error.code(),
+                error = %error,
+                "afterhook failed"
+            );
             eprintln!("assistant afterhook failed: {error}");
             return Err(error);
         }
         self.mark_user_intervention(&ctx)?;
+        tracing::info!(
+            phase = "assistant_converse",
+            session_id = %response.conversation_id,
+            response_len = response.response.len(),
+            "converse ok"
+        );
         Ok(response)
     }
 
@@ -151,6 +246,7 @@ impl AssistantMode {
         session_id: &str,
         model: &ChatModelSelection,
     ) -> AppResult<ChatResponse> {
+        tracing::info!(phase = "assistant_step", session_id, "step start");
         let mut ctx = self
             .build_context(session_id, RoundTrigger::ManualStep)
             .await?;
@@ -172,10 +268,17 @@ impl AssistantMode {
             .run(&mut ctx)
             .await
         {
+            tracing::error!(
+                phase = "assistant_step",
+                step = "complete_scope",
+                error = %error,
+                "afterhook failed"
+            );
             eprintln!("assistant afterhook failed: {error}");
             return Err(error);
         }
         self.bump_poll_count(&ctx)?;
+        tracing::info!(phase = "assistant_step", session_id, "step ok");
         Ok(response)
     }
 
@@ -184,6 +287,7 @@ impl AssistantMode {
         session_id: &str,
         model: &ChatModelSelection,
     ) -> AppResult<ChatResponse> {
+        tracing::info!(phase = "assistant_poller", session_id, "poller step start");
         let mut ctx = self.build_context(session_id, RoundTrigger::Poller).await?;
         if ctx.topic_id.is_none() {
             return Err(AppError::InvalidInput(
@@ -198,6 +302,12 @@ impl AssistantMode {
         .run(&mut ctx)
         .await
         {
+            tracing::error!(
+                phase = "assistant_poller",
+                step = "select_neuron",
+                error = %error,
+                "beforehook failed"
+            );
             eprintln!("assistant poller beforehook failed: {error}");
             return Err(error);
         }
@@ -205,6 +315,12 @@ impl AssistantMode {
         let response = match self.run_core(&mut ctx, model).await {
             Ok(response) => response,
             Err(error) => {
+                tracing::error!(
+                    phase = "assistant_poller",
+                    step = "run_core",
+                    error = %error,
+                    "core failed"
+                );
                 eprintln!("assistant poller core failed: {error}");
                 return Err(error);
             }
@@ -344,7 +460,16 @@ impl AssistantMode {
             Some(self.tool_registry.definitions_for(&ctx.authorized_tool_ids))
         };
 
-        let model_response = self
+        tracing::info!(
+            phase = "assistant_run_core",
+            session_id = %ctx.session_id,
+            provider = %model.provider_id,
+            model = %model.model_id,
+            message_count = messages.len(),
+            tool_defs = tools.as_ref().map(|t| t.len()).unwrap_or(0),
+            "model call start"
+        );
+        let model_response = match self
             .providers
             .call_model(ModelCallRequest {
                 provider_id: model.provider_id.clone(),
@@ -352,7 +477,29 @@ impl AssistantMode {
                 messages: messages.clone(),
                 tools,
             })
-            .await?;
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::error!(
+                    phase = "assistant_run_core",
+                    error_code = error.code(),
+                    error = %error,
+                    "model call failed"
+                );
+                return Err(error);
+            }
+        };
+        tracing::info!(
+            phase = "assistant_run_core",
+            output_len = model_response.output.len(),
+            tool_calls = model_response
+                .tool_calls
+                .as_ref()
+                .map(|c| c.len())
+                .unwrap_or(0),
+            "model call ok"
+        );
 
         let mut output = model_response.output.clone();
         let mut tool_result = None;
@@ -365,10 +512,21 @@ impl AssistantMode {
                         first.name
                     )));
                 }
+                tracing::info!(
+                    phase = "assistant_run_core",
+                    tool = %first.name,
+                    "tool execute start"
+                );
                 let result = self
                     .tool_registry
                     .execute(&first.name, first.arguments.clone())
                     .await?;
+                tracing::info!(
+                    phase = "assistant_run_core",
+                    tool = %first.name,
+                    result_len = result.len(),
+                    "tool execute ok"
+                );
                 tool_result = Some(result.clone());
                 let assistant_tool_calls = Some(vec![first.clone()]);
                 let tool_msg = Message {
@@ -426,11 +584,27 @@ impl AssistantMode {
         user_payload: serde_json::Value,
         model: &ChatModelSelection,
     ) -> AppResult<serde_json::Value> {
+        let user_preview = preview_json_for_log(&user_payload, 240);
+        tracing::info!(
+            phase = "assistant_system_json",
+            system_type,
+            provider = %model.provider_id,
+            model = %model.model_id,
+            user_preview = %user_preview,
+            "ensure + model call start"
+        );
         let prompt_neuron = self
             .neuron_manager
             .ensure_system_neuron(system_type, false)
             .await?;
-        let response = self
+        tracing::info!(
+            phase = "assistant_system_json",
+            system_type,
+            neuron_id = %prompt_neuron.id,
+            system_prompt_len = prompt_neuron.content.len(),
+            "system prompt ready; calling model"
+        );
+        let response = match self
             .providers
             .call_model(ModelCallRequest {
                 provider_id: model.provider_id.clone(),
@@ -451,8 +625,50 @@ impl AssistantMode {
                 ],
                 tools: None,
             })
-            .await?;
-        extract_json_object(&response.output)
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::error!(
+                    phase = "assistant_system_json",
+                    system_type,
+                    error_code = error.code(),
+                    error = %error,
+                    user_preview = %user_preview,
+                    "model call failed"
+                );
+                return Err(error);
+            }
+        };
+        match extract_json_object(&response.output) {
+            Ok(value) => {
+                tracing::info!(
+                    phase = "assistant_system_json",
+                    system_type,
+                    output_len = response.output.len(),
+                    "json ok"
+                );
+                Ok(value)
+            }
+            Err(error) => {
+                let output_preview = preview_default(&response.output);
+                tracing::error!(
+                    phase = "assistant_system_json",
+                    system_type,
+                    error_code = error.code(),
+                    error = %error,
+                    provider = %model.provider_id,
+                    model = %model.model_id,
+                    user_preview = %user_preview,
+                    output_len = response.output.len(),
+                    output_preview = %output_preview,
+                    "json parse failed"
+                );
+                Err(AppError::InvalidInput(format!(
+                    "{error} (system_type={system_type}, output_preview={output_preview})"
+                )))
+            }
+        }
     }
 
     fn topics(&self) -> AppResult<std::sync::MutexGuard<'_, TopicStore>> {
@@ -554,6 +770,12 @@ impl BeforeHook for SelectNeuronBeforeHook<'_> {
         } else {
             None
         };
+        tracing::info!(
+            phase = "select_neuron_hook",
+            secondary = self.secondary,
+            source_id = source_id.as_deref().unwrap_or(""),
+            "select_one start"
+        );
         let selected = self
             .assistant
             .neuron_manager
@@ -563,6 +785,11 @@ impl BeforeHook for SelectNeuronBeforeHook<'_> {
                 min_new: 0,
             })
             .await?;
+        tracing::info!(
+            phase = "select_neuron_hook",
+            neuron_id = %selected.id,
+            "select_one ok"
+        );
         ctx.system_prompt = Some(selected.content.clone());
         ctx.selected_neuron = Some(selected);
         Ok(())
@@ -578,6 +805,12 @@ impl BeforeHook for MatchTopicBeforeHook<'_> {
     async fn run(&self, ctx: &mut AssistantRoundContext) -> AppResult<()> {
         let model = self.assistant.default_model_or_error()?;
         let unfinished = self.assistant.topics()?.list_unfinished()?;
+        tracing::info!(
+            phase = "match_topic_hook",
+            unfinished = unfinished.len(),
+            session_id = %ctx.session_id,
+            "calling match-topic model"
+        );
         let decision = self
             .assistant
             .call_system_prompt_json(
@@ -602,6 +835,7 @@ impl BeforeHook for MatchTopicBeforeHook<'_> {
             .get("action")
             .and_then(|v| v.as_str())
             .unwrap_or("create");
+        tracing::info!(phase = "match_topic_hook", action, "match decision");
         match action {
             "switch" => {
                 let topic_id = decision
@@ -614,12 +848,25 @@ impl BeforeHook for MatchTopicBeforeHook<'_> {
                     Some(topic) => topic,
                     None => {
                         let created = self.create_bound_topic(ctx)?;
+                        tracing::warn!(
+                            phase = "match_topic_hook",
+                            requested_topic_id = topic_id,
+                            created_topic_id = %created.id,
+                            "switch target missing; created topic"
+                        );
                         ctx.topic_id = Some(created.id);
                         return Ok(());
                     }
                 };
                 if let Some(bound_session) = topic.session_id.clone() {
                     if bound_session != ctx.session_id {
+                        tracing::info!(
+                            phase = "match_topic_hook",
+                            from_session = %ctx.session_id,
+                            to_session = %bound_session,
+                            topic_id = %topic.id,
+                            "switching session"
+                        );
                         ctx.session_id = bound_session;
                         ctx.switched_session = true;
                         let rebuilt = self
@@ -644,6 +891,11 @@ impl BeforeHook for MatchTopicBeforeHook<'_> {
             _ => {
                 if ctx.topic_id.is_none() {
                     let created = self.create_bound_topic(ctx)?;
+                    tracing::info!(
+                        phase = "match_topic_hook",
+                        topic_id = %created.id,
+                        "created bound topic"
+                    );
                     ctx.topic_id = Some(created.id);
                 }
             }
@@ -689,16 +941,34 @@ struct ScoreFeedbackBeforeHook<'a> {
 impl BeforeHook for ScoreFeedbackBeforeHook<'_> {
     async fn run(&self, ctx: &mut AssistantRoundContext) -> AppResult<()> {
         let Some(topic_id) = ctx.topic_id.clone() else {
+            tracing::info!(
+                phase = "score_feedback_hook",
+                "skip: no topic bound yet"
+            );
             return Ok(());
         };
         let topic = match self.assistant.topics()?.get(&topic_id)? {
             Some(topic) => topic,
-            None => return Ok(()),
+            None => {
+                tracing::info!(phase = "score_feedback_hook", topic_id = %topic_id, "skip: topic missing");
+                return Ok(());
+            }
         };
         let state = read_assistant_state(&topic);
         if state.last_intervention_at.is_none() || state.intervention_neuron_ids.is_empty() {
+            tracing::info!(
+                phase = "score_feedback_hook",
+                topic_id = %topic_id,
+                "skip: no prior intervention window"
+            );
             return Ok(());
         }
+        tracing::info!(
+            phase = "score_feedback_hook",
+            topic_id = %topic_id,
+            neuron_count = state.intervention_neuron_ids.len(),
+            "scoring intervention window"
+        );
         let model = self.assistant.default_model_or_error()?;
         let decision = self
             .assistant
@@ -721,6 +991,7 @@ impl BeforeHook for ScoreFeedbackBeforeHook<'_> {
                 "score must be in -5..=5 and non-zero, got {score}"
             )));
         }
+        tracing::info!(phase = "score_feedback_hook", score, "applying weight delta");
         let delta = score as f64;
         for neuron_id in &state.intervention_neuron_ids {
             let _ = self
@@ -750,15 +1021,30 @@ struct CompleteScopeAfterHook<'a> {
 impl AfterHook for CompleteScopeAfterHook<'_> {
     async fn run(&self, ctx: &mut AssistantRoundContext) -> AppResult<()> {
         let Some(topic_id) = ctx.topic_id.clone() else {
+            tracing::info!(phase = "complete_scope_hook", "skip: no topic");
             return Ok(());
         };
         let topic = match self.assistant.topics()?.get(&topic_id)? {
             Some(topic) => topic,
-            None => return Ok(()),
+            None => {
+                tracing::info!(phase = "complete_scope_hook", topic_id = %topic_id, "skip: topic missing");
+                return Ok(());
+            }
         };
         if topic.scope_in.is_empty() {
+            tracing::info!(
+                phase = "complete_scope_hook",
+                topic_id = %topic_id,
+                "skip: empty scope_in"
+            );
             return Ok(());
         }
+        tracing::info!(
+            phase = "complete_scope_hook",
+            topic_id = %topic_id,
+            scope_items = topic.scope_in.len(),
+            "calling complete-scope model"
+        );
         let model = self.assistant.default_model_or_error()?;
         let decision = self
             .assistant
@@ -779,6 +1065,11 @@ impl AfterHook for CompleteScopeAfterHook<'_> {
             .and_then(|v| v.as_array())
             .cloned()
             .unwrap_or_default();
+        tracing::info!(
+            phase = "complete_scope_hook",
+            completed = ids.len(),
+            "completing scope items"
+        );
         for id in ids {
             let Some(item_id) = id.as_str() else {
                 continue;

@@ -28,6 +28,7 @@
   import { layoutStore } from "$lib/layout/LayoutStore.svelte";
   import { activityItems, panelViews, mainTabs } from "$lib/layout/views";
   import { t } from "$lib/i18n";
+  import { formatInvokeError } from "$lib/utils/formatInvokeError";
 
   // ── Bootstrap state (loaded once) ──
   let providers: ProviderInfo[] = $state([]);
@@ -114,7 +115,7 @@
 
       ready = true;
     } catch (e) {
-      error = `Failed to load: ${e}`;
+      error = `Failed to load: ${formatInvokeError(e)}`;
     }
   });
 
@@ -122,7 +123,7 @@
     if (!activeConversationId) return;
     invoke<Message[]>("history", { conversationId: activeConversationId })
       .then((msgs) => { messages = msgs; })
-      .catch((e) => { error = `Failed to load history: ${e}`; });
+      .catch((e) => { error = `Failed to load history: ${formatInvokeError(e)}`; });
   });
 
   async function handleSend(text: string) {
@@ -145,7 +146,7 @@
       });
       messages = [...messages, { role: "assistant", content: res.response, timestamp: Date.now() }];
     } catch (e) {
-      error = `Send failed: ${e}`;
+      error = `Send failed: ${formatInvokeError(e)}`;
     } finally {
       loading = false;
     }
@@ -158,7 +159,7 @@
       conversations = await invoke<Conversation[]>("list_conversations");
       activeConversationId = id;
     } catch (e) {
-      error = `Failed to create session: ${e}`;
+      error = `Failed to create session: ${formatInvokeError(e)}`;
     }
   }
 
@@ -171,7 +172,7 @@
         if (!activeConversationId) messages = [];
       }
     } catch (e) {
-      error = `Failed to close session: ${e}`;
+      error = `Failed to close session: ${formatInvokeError(e)}`;
     }
   }
 

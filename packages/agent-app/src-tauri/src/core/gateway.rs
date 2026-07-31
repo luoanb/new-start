@@ -249,6 +249,12 @@ impl Gateway {
         self.session_tracker.register(&conversation_id, None)?;
 
         let result = if conversation.mode == ConversationMode::Assistant {
+            tracing::info!(
+                phase = "send_model_message",
+                mode = "assistant",
+                conversation_id = %conversation_id,
+                "routing to assistant.converse"
+            );
             let model = ChatModelSelection {
                 provider_id: options.provider_id.clone(),
                 model_id: options.model_id.clone(),
@@ -257,6 +263,12 @@ impl Gateway {
                 .converse(&conversation_id, input, &model)
                 .await
         } else {
+            tracing::info!(
+                phase = "send_model_message",
+                mode = ?conversation.mode,
+                conversation_id = %conversation_id,
+                "routing to engine.chat"
+            );
             self.engine
                 .chat(input, conversation_id.clone(), options)
                 .await
@@ -264,7 +276,19 @@ impl Gateway {
 
         self.session_tracker.unregister(&conversation_id);
 
-        let response = result?;
+        let response = match result {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::error!(
+                    phase = "send_model_message",
+                    conversation_id = %conversation_id,
+                    error_code = error.code(),
+                    error = %error,
+                    "send_model_message failed"
+                );
+                return Err(error);
+            }
+        };
         self.current_conversation_id = response.conversation_id.clone();
         Ok(response)
     }

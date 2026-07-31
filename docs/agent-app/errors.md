@@ -23,8 +23,9 @@ Core errors have a stable code and user-facing message. Entry layers may add pre
 - TUI renders user-facing errors in the session output.
 - TUI command-time errors are recoverable: print the error and a hint, then return to the prompt.
 - TUI exits only on `/exit`, `/quit`, stdin EOF, or startup initialization failure.
-- Tauri returns serializable error payloads to the frontend.
-- Debug details stay in logs or developer output and are not required for the first milestone.
+- Tauri returns serializable error payloads `{ code, message }` to the frontend.
+- GUI must format invoke errors with `formatInvokeError` (never rely on string coercion of objects, which shows `[object Object]`).
+- Logs may include redacted previews of request/response context (`user_preview` / `output_preview`); secrets (`api_key`, bearer tokens, `sk-…`) are stripped and long text truncated.
 
 ## Exit Codes
 
