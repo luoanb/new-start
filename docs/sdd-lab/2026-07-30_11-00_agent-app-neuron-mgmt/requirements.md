@@ -2,7 +2,7 @@
 
 ## Restated Understanding / 需求复述
 
-- 我理解当前需求是：在 agent-app GUI 中新增 Neuron（知识图节点）管理界面，提供对 Agent 知识图谱的可视化管理能力。Neuron 是 Assistant 模式中知识表达和话题驱动的核心数据结构，以图结构组织（节点 + 连接）。
+- 我理解当前需求是：在 agent-app GUI 中新增 Neuron（知识图节点）管理界面，提供对 Agent 知识图谱的可视化管理能力。Neuron 是 Assistant 模式中知识表达和课题驱动的核心数据结构，以图结构组织（节点 + 连接）。
 - 当前核心目标是：将 TUI 中通过 `/neuron` 命令管理的功能搬到 GUI，提供 Neuron 列表/详情/图结构可视化/连接管理界面。
 - 当前边界是：Rust 后端 NeuronStore / NeuronManager 已完整实现，需新增 Tauri 命令暴露到前端。UI 复杂度较高（涉及图结构展示和节点关系可视化），保留 CLI/TUI 作为备选入口。
 - 暂不处理：Neuron 的自动创建流程（由 Agent 运行时的 `create_downstream_neuron` tool 自动管理）、Neuron 的权重训练/调整算法、知识图谱自动布局算法的高级定制。
@@ -45,7 +45,7 @@
 
 ## User Interaction / 用户交互
 
-- **触发入口**：侧栏面板中新增 "Neurons" 标签页，或在导航中增加入口。也可以在话题详情/Assistant 模式相关界面中添加 Neuron 的快速入口链接。
+- **触发入口**：侧栏面板中新增 "Neurons" 标签页，或在导航中增加入口。也可以在课题详情/Assistant 模式相关界面中添加 Neuron 的快速入口链接。
 - **用户操作路径**：
   1. 点击 "Neurons" 标签 → 展示 Neuron 列表（含权重、system_type、描述摘要）
   2. 点击列表项 → 进入 Neuron 详情视图

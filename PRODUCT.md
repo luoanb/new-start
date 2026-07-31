@@ -18,7 +18,7 @@ product
 一个功能完整的 AI Agent 桌面客户端，提供三种对话模式：
 - **Chat**: 普通对话，一问一答，不调用工具，无自主推进
 - **Agent**: 可调用工具的对话，Engine 按需执行 tool-calling 循环
-- **Assistant**: 自主推进模式，Poller 按 tick 调度，Neuron 驱动话题深入
+- **Assistant**: 自主推进模式，Poller 按 tick 调度，Neuron 驱动课题深入
 
 核心目标是让 GUI 在功能覆盖度上追上 TUI，并在 Web 原生交互（表单、列表、弹窗、视觉层级）上超越终端体验。
 

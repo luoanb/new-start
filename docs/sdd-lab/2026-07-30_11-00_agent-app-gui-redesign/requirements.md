@@ -24,7 +24,7 @@
    - 会话模式标签清晰区分三种模式：
      - **Chat**：普通对话，一问一答，不调用工具，无自主推进
      - **Agent**：可调用工具的对话，Engine 会按需执行 tool-calling 循环
-     - **Assistant**：自主推进模式，Poller 按 tick 调度，Neuron 驱动话题深入
+     - **Assistant**：自主推进模式，Poller 按 tick 调度，Neuron 驱动课题深入
    - 点击切换当前会话，自动加载历史消息
    - 新建会话时弹出模式选择（Chat / Agent / Assistant），附带简要模式说明
    - 会话创建后模式不可变更（Rust 端 Conversation 的 mode 字段创建即固定）

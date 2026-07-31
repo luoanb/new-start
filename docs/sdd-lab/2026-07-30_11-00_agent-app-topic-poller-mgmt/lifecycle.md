@@ -12,7 +12,7 @@ owner: user
 
 - 批准状态：已批准并完成
 - 当前状态：全部实现完成
-- 当前核心目标：在 agent-app GUI 中新增 Topic（话题）管理界面和 Poller（轮询调度器）管理界面
+- 当前核心目标：在 agent-app GUI 中新增 Topic（课题）管理界面和 Poller（轮询调度器）管理界面
 - 本迭代已完成
 
 ## Execution Log / 执行记录
