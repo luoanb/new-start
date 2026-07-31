@@ -395,8 +395,27 @@ impl Gateway {
     }
 
     pub async fn bootstrap_neurons(&self) -> AppResult<()> {
-        let _ = self.neuron_manager.bootstrap_ready().await?;
-        Ok(())
+        tracing::info!(phase = "bootstrap_neurons", "gateway bootstrap_neurons start");
+        match self.neuron_manager.bootstrap_ready().await {
+            Ok(report) => {
+                tracing::info!(
+                    phase = "bootstrap_neurons",
+                    create_neuron_id = %report.create_neuron_id,
+                    assistant_select_neuron_id = %report.assistant_select_neuron_id,
+                    "gateway bootstrap_neurons ok"
+                );
+                Ok(())
+            }
+            Err(error) => {
+                tracing::warn!(
+                    phase = "bootstrap_neurons",
+                    error_code = error.code(),
+                    error = %error,
+                    "gateway bootstrap_neurons failed"
+                );
+                Err(error)
+            }
+        }
     }
 
     pub fn assistant(&self) -> Arc<AssistantMode> {

@@ -1,7 +1,16 @@
-use agent_app_lib::core::Gateway;
+use agent_app_lib::core::{app_log, Gateway};
+use std::env;
 
 #[tokio::main]
 async fn main() {
+    let storage_root = env::current_dir()
+        .unwrap_or_else(|_| ".".into())
+        .join(".agent-app");
+    // File-only logging: avoid corrupting the TUI with stderr fmt after terminal init.
+    if let Err(error) = app_log::init(&storage_root, None, false) {
+        eprintln!("warning: failed to init logging: {error}");
+    }
+
     // Gateway initialization failures are non-recoverable at startup
     let gateway = match Gateway::default() {
         Ok(g) => g,

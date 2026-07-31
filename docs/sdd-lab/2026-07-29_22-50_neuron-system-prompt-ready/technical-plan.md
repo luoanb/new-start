@@ -163,6 +163,8 @@ pub async fn bootstrap_neurons(&self) -> AppResult<()>;
 
 ## Data Flow / 数据流
 
+维护中的完整初始化流程图见：`docs/agent-app/neuron-init.md`。
+
 ```mermaid
 flowchart TD
   start[App start] --> gw[Gateway::new]
@@ -172,7 +174,7 @@ flowchart TD
   selAssist --> pool7[select_candidates under create_neuron]
   pool7 --> one[select_one weight fallback if no selector]
   one --> draft[generate_draft purpose]
-  draft --> root[create system root]
+  draft --> root[create system root weight=0]
 
   biz[Assistant / business] --> ensure[ensure_system_neuron]
   ensure --> root2[return or create]

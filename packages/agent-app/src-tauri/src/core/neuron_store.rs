@@ -44,7 +44,7 @@ impl NeuronStore {
             CREATE TABLE IF NOT EXISTS connections (
                 source TEXT NOT NULL REFERENCES neurons(id) ON DELETE CASCADE,
                 target TEXT NOT NULL REFERENCES neurons(id) ON DELETE CASCADE,
-                weight REAL NOT NULL DEFAULT 1.0,
+                weight REAL NOT NULL DEFAULT 0.0,
                 PRIMARY KEY (source, target)
             );
             PRAGMA foreign_keys = ON;",
@@ -73,11 +73,9 @@ impl NeuronStore {
     }
 
     pub fn create_neuron(&self, create: NeuronCreate) -> AppResult<Neuron> {
-        if !create.weight.is_finite() {
-            return Err(AppError::InvalidInput(
-                "neuron weight must be finite".into(),
-            ));
-        }
+        // Creation always starts at 0; callers may pass weight but it is ignored.
+        // Subsequent changes must go through adjust_weight(delta).
+        let weight = 0.0;
         if create
             .system_type
             .as_deref()
@@ -103,7 +101,7 @@ impl NeuronStore {
                 id,
                 &create.desc,
                 &create.content,
-                create.weight,
+                weight,
                 now as i64,
                 create.system_type.as_deref(),
                 &tool_ids
@@ -115,7 +113,7 @@ impl NeuronStore {
             id,
             desc: create.desc,
             content: create.content,
-            weight: create.weight,
+            weight,
             system_type: create.system_type,
             tool_ids: create.tool_ids,
             created_at: now,
@@ -311,13 +309,11 @@ impl NeuronStore {
         &self,
         source_id: &str,
         create: NeuronCreate,
-        edge_weight: f64,
+        _edge_weight: f64,
     ) -> AppResult<(Neuron, NeuronConnection)> {
-        if !create.weight.is_finite() || !edge_weight.is_finite() {
-            return Err(AppError::InvalidInput(
-                "neuron and edge weights must be finite".into(),
-            ));
-        }
+        // Node and edge weights always start at 0; `_edge_weight` is ignored.
+        let weight = 0.0;
+        let edge_weight = 0.0;
         if create
             .system_type
             .as_deref()
@@ -345,7 +341,7 @@ impl NeuronStore {
                 &id,
                 &create.desc,
                 &create.content,
-                create.weight,
+                weight,
                 now as i64,
                 create.system_type.as_deref(),
                 &tool_ids
@@ -364,7 +360,7 @@ impl NeuronStore {
             id: id.clone(),
             desc: create.desc,
             content: create.content,
-            weight: create.weight,
+            weight,
             system_type: create.system_type,
             tool_ids: create.tool_ids,
             created_at: now,
@@ -380,7 +376,9 @@ impl NeuronStore {
 
     // ── Connection operations ───────────────────────────────────
 
-    pub fn link(&self, source: &str, target: &str, weight: f64) -> AppResult<NeuronConnection> {
+    pub fn link(&self, source: &str, target: &str, _weight: f64) -> AppResult<NeuronConnection> {
+        // New edges always start at 0; change via adjust_connection_weight.
+        let weight = 0.0;
         let conn = self
             .conn
             .lock()
@@ -679,8 +677,39 @@ mod tests {
         let s = test_store();
         let n = create(&s, "test", "hello", 1.0);
         assert_eq!(n.desc, "test");
+        assert!((n.weight - 0.0).abs() < f64::EPSILON);
         let got = s.get_neuron(&n.id).unwrap().unwrap();
         assert_eq!(got.content, "hello");
+        assert!((got.weight - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_create_and_link_force_zero_weight() {
+        let s = test_store();
+        let a = create(&s, "A", "", 9.0);
+        let b = create(&s, "B", "", 8.0);
+        assert!((a.weight - 0.0).abs() < f64::EPSILON);
+        assert!((b.weight - 0.0).abs() < f64::EPSILON);
+
+        let link = s.link(&a.id, &b.id, 0.8).unwrap();
+        assert!((link.weight - 0.0).abs() < f64::EPSILON);
+        let conns = s.get_connections(&a.id).unwrap();
+        assert!((conns[0].weight - 0.0).abs() < f64::EPSILON);
+
+        let (child, edge) = s
+            .create_downstream_neuron(
+                &a.id,
+                NeuronCreate {
+                    desc: "child".into(),
+                    content: "c".into(),
+                    weight: 5.0,
+                    ..Default::default()
+                },
+                3.0,
+            )
+            .unwrap();
+        assert!((child.weight - 0.0).abs() < f64::EPSILON);
+        assert!((edge.weight - 0.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -816,6 +845,7 @@ mod tests {
                 NeuronCreate {
                     desc: "child".into(),
                     content: "content".into(),
+                    weight: 4.0,
                     ..Default::default()
                 },
                 1.0,
@@ -823,6 +853,8 @@ mod tests {
             .unwrap();
         assert_eq!(connection.source, first.id);
         assert_eq!(connection.target, child.id);
+        assert!((child.weight - 0.0).abs() < f64::EPSILON);
+        assert!((connection.weight - 0.0).abs() < f64::EPSILON);
         let downstream = store
             .list_direct_downstream(&first.id, 10, &std::collections::HashSet::new())
             .unwrap();

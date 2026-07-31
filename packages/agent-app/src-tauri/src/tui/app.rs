@@ -1351,15 +1351,11 @@ impl TuiApp {
                     }
                 } else if args.len() >= 3 && args[1] == "connect" {
                     let target = args[2].clone();
-                    let weight = if args.len() >= 4 {
-                        args[3].parse::<f64>().unwrap_or(1.0)
-                    } else {
-                        1.0
-                    };
-                    match manager.link_for_admin(id, &target, weight) {
-                        Ok(_) => self.messages.push(TuiMessage::status(format!(
+                    // Creation edge weight is always 0; use adjust-connection for deltas.
+                    match manager.link_for_admin(id, &target, 0.0) {
+                        Ok(conn) => self.messages.push(TuiMessage::status(format!(
                             "Linked {} --[{}]--> {}",
-                            id, weight, target
+                            id, conn.weight, target
                         ))),
                         Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
                     }

@@ -13,7 +13,11 @@ owner: user
 - 批准状态：Option A 已实现并通过验证
 - 当前状态：done
 - 当前核心目标：神经元前置能力已完成，可供 Assistant 迭代接入
-- 下一步唯一动作：回到 `2026-07-26_21-30_assistant-mode` 生成并确认技术方案
+- 下一步唯一动作：无（权重创建语义纠偏见 `2026-08-01_00-31_neuron-create-weight-zero`）
+
+## Reverse Sync Note / 反写说明
+
+- 2026-08-01：用户确认「创建时节点权重与边权重必须为 0，只允许后续评价 delta」。原方案中「模型 JSON weight 落库 / 创建下游可传 weight·edge_weight」作废，以新迭代为准。
 
 ## Execution Log / 执行记录
 

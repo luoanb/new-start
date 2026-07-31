@@ -44,6 +44,14 @@ The first implementation provides a local deterministic agent runtime:
 
 LLM provider integration is intentionally outside the first Rust core milestone. The core API is shaped so a provider-backed runtime can replace the deterministic runtime later without changing entrypoint ownership.
 
+## Neuron Bootstrap
+
+Startup neuron readiness (`create_neuron` + `assistant_select_neuron`) is documented in [neuron-init.md](./neuron-init.md), including mermaid flowcharts for sync assembly, async bootstrap, candidate fill, and lazy `ensure_system_neuron`.
+
+## Runtime Logging
+
+Rolling files, GUI Logs panel, filters, and verbosity controls are documented in [logging.md](./logging.md).
+
 ## Model Calling
 
 The first LLM integration adds a stateless model call path:

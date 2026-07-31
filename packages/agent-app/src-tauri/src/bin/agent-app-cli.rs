@@ -1,6 +1,6 @@
 use agent_app_lib::core::{
-    AppError, AppResult, Conversation, Gateway, Message, MessageRole, ModelCallRequest, ModelInfo,
-    ModelMessage, ModelMessageRole, ProviderInfo, RuntimeStatus, SkillInfo,
+    app_log, AppError, AppResult, Conversation, Gateway, Message, MessageRole, ModelCallRequest,
+    ModelInfo, ModelMessage, ModelMessageRole, ProviderInfo, RuntimeStatus, SkillInfo,
 };
 use std::{env, process};
 
@@ -19,6 +19,13 @@ async fn run() -> AppResult<()> {
         return Ok(());
     };
     args.remove(0);
+
+    let storage_root = env::current_dir()
+        .unwrap_or_else(|_| ".".into())
+        .join(".agent-app");
+    if let Err(error) = app_log::init(&storage_root, None, true) {
+        eprintln!("warning: failed to init logging: {error}");
+    }
 
     let mut gateway = Gateway::default()?;
     if let Err(error) = gateway.bootstrap_neurons().await {

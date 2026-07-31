@@ -20,6 +20,7 @@
   import ErrorBanner from "$lib/components/ErrorBanner.svelte";
   import NeuronManager from "$lib/components/NeuronManager.svelte";
   import PollerPanel from "$lib/components/PollerPanel.svelte";
+  import LogPanel from "$lib/components/LogPanel.svelte";
   import ActivityBar from "$lib/layout/ActivityBar.svelte";
   import Splitter from "$lib/layout/Splitter.svelte";
   import DockPane from "$lib/layout/DockPane.svelte";
@@ -376,6 +377,8 @@
       </div>
       {#if layoutStore.state.panel.activeView === "poller"}
         <PollerPanel bind:pollerStatus />
+      {:else if layoutStore.state.panel.activeView === "logs"}
+        <LogPanel />
       {:else}
         <p class="panel-empty">Logs placeholder</p>
       {/if}

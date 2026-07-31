@@ -14,6 +14,7 @@ owner: user
 - 当前状态：done
 - 当前核心目标：已完成 — NeuronManager 自举完备 API 接通 Assistant/Gateway
 - 下一步唯一动作：无（可用 `/neuron bootstrap` 或启动 bootstrap；其它 assistant_* 懒 ensure）
+- 初始化流程图（维护入口）：`docs/agent-app/neuron-init.md`
 
 ## Execution Log / 执行记录
 

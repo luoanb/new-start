@@ -2,15 +2,16 @@ pub mod core;
 pub mod tui;
 
 use crate::core::{
-    conversation_store::ConversationStore, error::AppErrorPayload, ChatOptions, ChatResponse,
-    Connection, Conversation, ConversationMode, Gateway, Message, ModelCallRequest,
-    ModelCallResponse, ModelInfo, Neuron, NeuronSubgraph, NeuronUpdate, PollerStatus, ProviderInfo,
-    RuntimeStatus,
-    SkillInfo, Topic, TopicStatus, TopicUpdate,
+    app_log::{self, LogEntry},
+    conversation_store::ConversationStore,
+    error::AppErrorPayload,
+    ChatOptions, ChatResponse, Connection, Conversation, ConversationMode, Gateway, Message,
+    ModelCallRequest, ModelCallResponse, ModelInfo, Neuron, NeuronSubgraph, NeuronUpdate,
+    PollerStatus, ProviderInfo, RuntimeStatus, SkillInfo, Topic, TopicStatus, TopicUpdate,
 };
 use core::topic_store::TopicStore;
-use std::path::PathBuf;
-use tauri::State;
+use std::{path::PathBuf, sync::Arc};
+use tauri::{Emitter, Manager, State};
 use tokio::sync::Mutex;
 
 type TauriResult<T> = Result<T, AppErrorPayload>;
@@ -333,6 +334,35 @@ fn get_network(
     })
 }
 
+// ── Logs ──
+
+#[tauri::command]
+fn logs_snapshot() -> Vec<LogEntry> {
+    app_log::snapshot()
+}
+
+#[tauri::command]
+fn logs_get_level() -> String {
+    app_log::get_level()
+}
+
+#[tauri::command]
+fn logs_set_level(level: String) -> TauriResult<String> {
+    app_log::set_level(&level).map_err(|message| {
+        crate::core::AppError::InvalidInput(message).payload()
+    })
+}
+
+#[tauri::command]
+fn logs_clear_buffer() {
+    app_log::clear_buffer();
+}
+
+#[tauri::command]
+fn logs_dir() -> Option<String> {
+    app_log::log_dir().map(|path| path.display().to_string())
+}
+
 // ── Helpers ──
 
 fn with_gateway<T>(
@@ -376,13 +406,50 @@ pub fn run() {
         .parent()
         .expect("src-tauri has a parent")
         .join(".agent-app");
-    let store = ConversationStore::new(&storage_root)
-        .expect("failed to initialize conversation store");
-    let gateway = Gateway::new(store).expect("failed to initialize agent app gateway");
 
     tauri::Builder::default()
-        .manage(Mutex::new(gateway))
         .plugin(tauri_plugin_opener::init())
+        .setup(move |app| {
+            let handle = app.handle().clone();
+            let emit_handle = handle.clone();
+            let emit = Arc::new(move |entry: LogEntry| {
+                let _ = emit_handle.emit(app_log::LOG_EVENT, entry);
+            });
+            if let Err(error) = app_log::init(&storage_root, Some(emit), true) {
+                eprintln!("warning: failed to init logging: {error}");
+            }
+            tracing::info!(
+                path = %storage_root.display(),
+                "agent-app logging initialized"
+            );
+
+            let store = ConversationStore::new(&storage_root)
+                .map_err(|error| error.to_string())?;
+            let gateway =
+                Gateway::new(store).map_err(|error| error.to_string())?;
+            app.manage(Mutex::new(gateway));
+
+            let boot_handle = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                let state = boot_handle.state::<Mutex<Gateway>>();
+                let gateway = state.lock().await;
+                tracing::info!(phase = "bootstrap_neurons", "starting neuron bootstrap");
+                match gateway.bootstrap_neurons().await {
+                    Ok(()) => {
+                        tracing::info!(phase = "bootstrap_neurons", "neuron bootstrap complete")
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            phase = "bootstrap_neurons",
+                            error_code = error.code(),
+                            error = %error,
+                            "neuron bootstrap incomplete"
+                        );
+                    }
+                }
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             debug_storage_path,
             send_chat_message,
@@ -418,6 +485,12 @@ pub fn run() {
             update_neuron,
             get_connections,
             get_network,
+            // Logs
+            logs_snapshot,
+            logs_get_level,
+            logs_set_level,
+            logs_clear_buffer,
+            logs_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

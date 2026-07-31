@@ -135,3 +135,13 @@ export type PollerStatus = {
   task_count: number;
   pending_trigger: boolean;
 };
+
+export type LogLevel = "error" | "warn" | "info" | "debug" | "trace";
+
+export type LogEntry = {
+  ts_ms: number;
+  level: LogLevel;
+  target: string;
+  message: string;
+  fields?: Record<string, string>;
+};

@@ -227,8 +227,8 @@ pub trait NeuronModelCaller: Send + Sync {
 新增：
 
 - `create_downstream_neuron`
-  - 参数：`source_id`、`desc`、可选 `content/weight/edge_weight`
-  - 不接受 `system_type` 或 `tool_ids`，避免普通 AI 自行扩大新节点权限
+  - 参数：`source_id`、`desc`、可选 `content`
+  - 不接受 `weight` / `edge_weight` / `system_type` / `tool_ids`；落库节点与边权重强制为 `0`
 - `select_neuron_candidates`
   - 参数：`n`、可选 `source_id`、可选 `system_type`、`min_new`
   - 同时传来源时 `source_id` 优先
@@ -270,13 +270,12 @@ pub trait NeuronModelCaller: Send + Sync {
 {
   "desc": "短描述",
   "content": "完整提示词或知识内容",
-  "weight": 0,
   "tool_ids": []
 }
 ```
 
-- 空 desc、空 content、非数组 tool_ids 或非数字 weight 均视为无效结果。
-- 模型输出中的 system_type 字段即使存在也忽略，普通生成节点固定为 `None`。
+- 空 desc、空 content 或非数组 tool_ids 均视为无效结果。
+- 模型输出中的 `weight` / `system_type` 即使存在也忽略；落库节点权重强制 `0`，普通生成节点 `system_type` 固定为 `None`。
 
 ### 数据库迁移
 

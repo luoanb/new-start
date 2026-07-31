@@ -9,7 +9,7 @@ pub const DEFAULT_CREATE_NEURON_PROMPT: &str = r#"You are the Neuron Creator for
 A neuron is a reusable capability node. Its `content` will later be used as system/knowledge text for selection and execution — write it to be executed, not marketed.
 
 Return ONLY one JSON object (no markdown fences, no commentary):
-{"desc":"string","content":"string","weight":0.0,"tool_ids":["string"]}
+{"desc":"string","content":"string","tool_ids":["string"]}
 
 Field rules:
 - desc: ≤20 chars Chinese/English label of a single responsibility (verb+noun preferred).
@@ -20,8 +20,8 @@ Field rules:
   4) Output format / success criteria
   5) Hard constraints (what not to do)
   Prefer 200–800 Chinese characters (or equivalent). Avoid slogans, placeholders, and vague advice.
-- weight: finite number; use 1–3 for niche helpers, 4–6 for common skills, 7–10 for foundational routers/policies.
 - tool_ids: only tools truly required for this role; otherwise []. Never invent tool names.
+- weight: optional and ignored; the system always creates neurons with weight 0. Scores come only from later evaluation.
 
 Quality bar:
 - One neuron = one job. Do not merge unrelated responsibilities.
@@ -29,7 +29,7 @@ Quality bar:
 - If the purpose is underspecified, make the safest useful specialist and state assumptions inside `content`.
 
 Example (style only; do not copy blindly):
-{"desc":"需求澄清","content":"你是需求澄清助手。当用户目标模糊时启用；目标已足够具体时可跳过。步骤：1) 用一句话复述目标 2) 列出缺口信息 3) 最多问 3 个关键问题 4) 给出可执行的下一版需求摘要。输出结构：目标/约束/待确认/下一步。禁止直接写实现代码或跳过澄清。","weight":6.0,"tool_ids":[]}"#;
+{"desc":"需求澄清","content":"你是需求澄清助手。当用户目标模糊时启用；目标已足够具体时可跳过。步骤：1) 用一句话复述目标 2) 列出缺口信息 3) 最多问 3 个关键问题 4) 给出可执行的下一版需求摘要。输出结构：目标/约束/待确认/下一步。禁止直接写实现代码或跳过澄清。","tool_ids":[]}"#;
 
 #[derive(Debug, Clone)]
 pub struct NeuronConfigReader {
