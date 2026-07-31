@@ -94,7 +94,7 @@ Model lists and chat defaults are configured in `.agent-app/config.json` so prov
   },
   "neurons": {
     "bootstrap": {
-      "create_neuron_prompt": "Create one neuron and return only JSON with desc, content, weight, and tool_ids."
+      "create_neuron_prompt": "You are the Neuron Creator for an agent app. ... Return ONLY one JSON object ..."
     }
   }
 }
@@ -107,7 +107,7 @@ Configuration fields:
 - `providers.<id>.api_key`: provider API key. Environment variables override this value.
 - `providers.<id>.api_base`: provider API base. Environment variables override this value.
 - `providers.<id>.models`: provider model list shown by `/models` and accepted by `/use`.
-- `neurons.bootstrap.create_neuron_prompt`: content of the unique `system_type=create_neuron` system neuron. Optional; when missing, the app uses a built-in default seed prompt so bootstrap can still create the first system neuron.
+- `neurons.bootstrap.create_neuron_prompt`: content of the unique `system_type=create_neuron` system neuron. Optional; when missing, the app uses a built-in default seed prompt so bootstrap can still create the first system neuron. The built-in seed asks for single-responsibility neurons with executable `content` (role / when-to-use / steps / output / constraints). Changing this config does not rewrite an already-persisted `create_neuron` row — reset/recreate that system neuron to pick up a new seed.
 - Assistant mode fixed `system_type` prompt neurons are ensured via `NeuronManager::ensure_system_neuron` / `bootstrap_ready` (startup creates at least `assistant_select_neuron`):
   - `assistant_select_neuron`: 7-candidate neuron selection
   - `assistant_match_topic`: topic match / create decision (lazy ensure)

@@ -234,10 +234,27 @@ impl NeuronManager {
             .await?;
         let user_prompt = match &input {
             CreateNeuronInput::Purpose(purpose) => format!(
-                "Create one neuron for this purpose. Return only JSON with desc, content, weight, and tool_ids.\nPurpose: {purpose}"
+                "Create exactly one single-responsibility neuron for the purpose below.\n\
+                 Requirements:\n\
+                 - Focus on one job only; do not bundle unrelated skills.\n\
+                 - `content` must be an executable prompt/knowledge block (role, when to use / not use, steps, output format, hard constraints).\n\
+                 - Prefer 200–800 Chinese characters (or equivalent) in `content`; no slogans or placeholders.\n\
+                 - Set `weight` by importance (1–3 niche, 4–6 common, 7–10 foundational).\n\
+                 - `tool_ids`: only truly needed tools; else []. Do not invent tool names.\n\
+                 - Return ONLY JSON with desc, content, weight, and tool_ids.\n\
+                 Purpose: {purpose}"
             ),
             CreateNeuronInput::Messages(messages) => format!(
-                "Create one neuron from this conversation context. Return only JSON with desc, content, weight, and tool_ids.\nContext: {}",
+                "Create exactly one single-responsibility neuron distilled from the conversation context below.\n\
+                 Requirements:\n\
+                 - Infer the reusable capability the conversation needs next; ignore one-off chatter.\n\
+                 - Focus on one job only; do not bundle unrelated skills.\n\
+                 - `content` must be an executable prompt/knowledge block (role, when to use / not use, steps, output format, hard constraints).\n\
+                 - Prefer 200–800 Chinese characters (or equivalent) in `content`; no slogans or placeholders.\n\
+                 - Set `weight` by importance (1–3 niche, 4–6 common, 7–10 foundational).\n\
+                 - `tool_ids`: only truly needed tools; else []. Do not invent tool names.\n\
+                 - Return ONLY JSON with desc, content, weight, and tool_ids.\n\
+                 Context: {}",
                 serde_json::to_string(messages).unwrap_or_default()
             ),
         };
@@ -283,10 +300,16 @@ impl NeuronManager {
             })
             .await?;
         let user_prompt = format!(
-            "Write a system prompt for a neuron with system_type={system_type}.\n\
+            "Write a system prompt neuron with system_type={system_type}.\n\
              Use the winning candidate as inspiration (do not copy blindly).\n\
-             Winner id={} desc={} content={}\n\
-             Return only JSON with desc, content, weight, and tool_ids. content must be the full system prompt text.",
+             Requirements:\n\
+             - `content` must be a full executable system prompt: role, decision criteria, steps, output contract, hard constraints.\n\
+             - Prefer 200–800 Chinese characters (or equivalent); no slogans or placeholders.\n\
+             - One responsibility aligned with system_type={system_type}.\n\
+             - Set `weight` high for system routers/policies (typically 7–10) unless a lower weight is clearly better.\n\
+             - `tool_ids`: only truly needed tools; else []. Do not invent tool names.\n\
+             - Return ONLY JSON with desc, content, weight, and tool_ids.\n\
+             Winner id={} desc={} content={}",
             winner.id, winner.desc, winner.content
         );
         let draft = self.generate_draft(&creator.content, &user_prompt).await?;
@@ -443,10 +466,24 @@ impl NeuronManager {
         let creator = self.ensure_creator_neuron()?;
         let user_prompt = match source_id {
             Some(source_id) => format!(
-                "Create one downstream neuron for source_id {source_id}. Return only JSON with desc, content, weight, and tool_ids."
+                "Create exactly one single-responsibility downstream neuron under source_id {source_id}.\n\
+                 Requirements:\n\
+                 - Specialize a useful child capability of the source; do not duplicate the parent wholesale.\n\
+                 - `content` must be an executable prompt/knowledge block (role, when to use / not use, steps, output format, hard constraints).\n\
+                 - Prefer 200–800 Chinese characters (or equivalent) in `content`; no slogans or placeholders.\n\
+                 - Set `weight` by importance (1–3 niche, 4–6 common, 7–10 foundational).\n\
+                 - `tool_ids`: only truly needed tools; else []. Do not invent tool names.\n\
+                 - Return ONLY JSON with desc, content, weight, and tool_ids."
             ),
             None => {
-                "Create one neuron. Return only JSON with desc, content, weight, and tool_ids."
+                "Create exactly one single-responsibility neuron.\n\
+                 Requirements:\n\
+                 - Focus on one job only; do not bundle unrelated skills.\n\
+                 - `content` must be an executable prompt/knowledge block (role, when to use / not use, steps, output format, hard constraints).\n\
+                 - Prefer 200–800 Chinese characters (or equivalent) in `content`; no slogans or placeholders.\n\
+                 - Set `weight` by importance (1–3 niche, 4–6 common, 7–10 foundational).\n\
+                 - `tool_ids`: only truly needed tools; else []. Do not invent tool names.\n\
+                 - Return ONLY JSON with desc, content, weight, and tool_ids."
                     .to_string()
             }
         };
