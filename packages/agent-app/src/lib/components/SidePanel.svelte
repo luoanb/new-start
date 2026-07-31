@@ -1,29 +1,24 @@
 <script lang="ts">
-  import type { ProviderInfo, ModelInfo, SkillInfo, Topic, PollerStatus } from "$lib/types";
+  import type { ProviderInfo, ModelInfo, SkillInfo, Topic } from "$lib/types";
   import { t, tMap } from "$lib/i18n";
   import TopicPanel from "./TopicPanel.svelte";
-  import PollerPanel from "./PollerPanel.svelte";
 
   let {
     providers,
     models,
     skills,
     topics = [],
-    pollerStatus = null,
   }: {
     providers: ProviderInfo[];
     models: ModelInfo[];
     skills: SkillInfo[];
     topics?: Topic[];
-    pollerStatus?: PollerStatus | null;
   } = $props();
 
   let localTopics = $state<Topic[]>(topics);
-  let localPollerStatus = $state<PollerStatus | null>(pollerStatus);
 
   // Sync local state when parent updates props after async load
   $effect(() => { localTopics = topics; });
-  $effect(() => { localPollerStatus = pollerStatus; });
 
   let activeTab = $state("providers");
 
@@ -33,7 +28,6 @@
     { id: "models", label: t("sidePanel.models") },
     { id: "skills", label: t("sidePanel.skills") },
     { id: "topics", label: t("topicPanel.topics") },
-    { id: "poller", label: t("pollerPanel.poller") },
   ]);
 
   function modelCaps(m: ModelInfo): string[] {
@@ -126,8 +120,6 @@
       {/if}
     {:else if activeTab === "topics"}
       <TopicPanel bind:topics={localTopics} />
-    {:else if activeTab === "poller"}
-      <PollerPanel bind:pollerStatus={localPollerStatus} />
     {/if}
   </div>
 </div>
