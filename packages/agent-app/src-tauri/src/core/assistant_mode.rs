@@ -10,8 +10,8 @@ use super::{
     conversation_store::{now_ms, ConversationStore},
     error::{AppError, AppResult},
     models::{
-        CandidateQuery, ChatModelSelection, ChatResponse, Message, MessageRole, ModelCallRequest,
-        ModelMessage, ModelMessageRole, Neuron, Topic, TopicStatus, TopicUpdate,
+        CandidateQuery, ChatModelSelection, ChatResponse, EnsureSystemOpts, Message, MessageRole,
+        ModelCallRequest, ModelMessage, ModelMessageRole, Neuron, Topic, TopicStatus, TopicUpdate,
     },
     log_redact::{preview_default, preview_json_for_log},
     neuron_manager::NeuronManager,
@@ -771,7 +771,13 @@ impl BeforeHook for SelectNeuronBeforeHook<'_> {
         let source_id = if self.secondary {
             ctx.last_selected_neuron_id.clone()
         } else {
-            None
+            // First round: pool under assistant_select_neuron (own downstream), not global/creator.
+            let selector = self
+                .assistant
+                .neuron_manager
+                .ensure_system_neuron(SYSTEM_TYPE_SELECT_NEURON, EnsureSystemOpts { reset: false })
+                .await?;
+            Some(selector.id)
         };
         tracing::info!(
             phase = "select_neuron_hook",

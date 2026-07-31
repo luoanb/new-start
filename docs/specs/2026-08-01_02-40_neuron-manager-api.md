@@ -101,19 +101,25 @@ impl NeuronManager {
     /// 确保创建提示词根存在。不调模型；配置/默认种子落库。幂等。
     fn ensure_creator(&self) -> AppResult<Neuron>;
 
-    /// 凑候选：pool → n；不足则经创建流补齐。
+    /// 凑候选：pool → n；不足则经创建流**一次批量**补齐（`generate_drafts(count=缺口)` + 挂到源下），禁止循环单条创建。
+    /// 补齐不经 `create_neuron`→`select_one`（避免空池递归）；写稿 system 用 creator 种子或已有 creator 下游权重选一。
+    /// 有 `source_id`：pool / 补齐目标 = **该源自己的直接下游**（不得借用其它根的下游）。
+    /// 无源：全域；补齐落库为无上游普通节点。
     async fn select_candidates(&self, q: CandidateQuery) -> AppResult<Vec<Neuron>>;
 
-    /// 选一：先凑候选（或已有列表），用 SYSTEM_SELECT 裁决；
+    /// 选一：先按同一 `CandidateQuery` 凑候选，再用 SYSTEM_SELECT 裁决；
     /// 无 selector / LLM 失败 → 权重兜底（同权随机）。
+    /// `source_id` 语义与 `select_candidates` 相同；**不**暗含 creator。
     async fn select_one(&self, q: CandidateQuery) -> AppResult<Neuron>;
     async fn select_one_from(&self, candidates: &[Neuron]) -> AppResult<Neuron>;
 
     // ── 统一创建流 ──────────────────────────────────────────
 
-    /// 普通神经元（批量）：ensure_creator → pool→7→1 → 模型返回列表 → 落库（无 system_type）。
+    /// 普通神经元（批量）：ensure_creator → 取创建用 system（creator 已有下游则选一；否则用 creator 种子，避免递归补齐）
+    /// → 模型一次返回列表 → 落库（无 system_type）。
     /// `count` ∈ 1..=10；模型须返回 JSON 数组（count=1 时也可用单对象）。
     /// link_to=Some 则全部挂为该源直接下游。节点/边初始 weight=0。
+    /// 当 `link_to == creator.id`（正在填充 creator 自己的下游）时，直接用 creator 种子作 system，不再 `select_one`。
     async fn create_neuron(
         &self,
         input: CreateNeuronInput,
@@ -121,9 +127,10 @@ impl NeuronManager {
         count: usize,
     ) -> AppResult<Vec<Neuron>>;
 
-    /// 系统提示词根（任意 system_type，含业务自定义）：已存在且 !reset → 直接返回；
-    /// 否则 ensure_creator → pool→7→1（creator 直接下游）→ 生成专用 content → 落库。
-    /// 禁止用其它 API「贴」system_type；外部扩展只走本方法。
+    /// 系统提示词根（任意 system_type，含业务自定义）：
+    /// - 已存在且 !reset → 在**本根**下 `select_candidates(n=7)` 补齐子池后返回；
+    /// - 否则：用 creator 种子生成专用 content → 落库系统根 → 在**本根**下 `select_candidates(n=7)` 批量补齐直接下游。
+    /// 禁止用其它根的下游充当本系统根的候选池；禁止用其它 API「贴」system_type。
     async fn ensure_system_neuron(
         &self,
         system_type: &str,
@@ -165,20 +172,24 @@ impl NeuronManager {
 bootstrap()                              // 仅两底座
   └─ ensure_creator()
   └─ ensure_system_neuron("assistant_select_neuron")
-        └─ select_one(source=creator)  // 设计：选 creator 直接下游 1/7
-                                       // 无 selector → 权重兜底（非跳过）
-        └─ generate + persist
+        └─ generate(system=creator种子) + persist 系统根
+        └─ select_candidates(source=本根, n=7)  // 不足则 create_neuron 批量补齐本根下游
 
-ensure_system_neuron(任意 system_type)   // 外部/业务可创建自有系统根
-  └─ 同上统一流（存在则 return）
+ensure_system_neuron(任意 system_type)
+  └─ 存在 → select_candidates(source=本根) 后返回
+  └─ 缺失 → 同上：落根后在本根下游凑满 7
 
 create_neuron(purpose|msgs, count=1..=10)
   └─ ensure_creator()
-  └─ select_one(source=creator)        // 同样选 creator 直接下游
-  └─ generate_drafts(count) + persist 各条（无 system_type）
+  └─ 取创建用 system：link_to==creator 或 creator 无下游 → 种子；否则 select_one(source=creator)
+  └─ generate_drafts(count) 一次 + persist（可选 link_to）
+
+select_candidates(source=X)
+  └─ 取 X 直接下游；缺口一次 generate_drafts(count) + persist(link_to=X)
 
 Assistant 选能力神经元
-  └─ select_one(source=…)              // 消费 SYSTEM_SELECT，不创建系统根
+  └─ 首轮 select_one(source=assistant_select_neuron)
+  └─ 次生 select_one(source=上一轮选中神经元)
 ```
 
 ### 消费方允许面
@@ -218,8 +229,10 @@ Assistant 选能力神经元
 
 ## Open Questions
 
-- [x] Q1 首次创建 `SYSTEM_SELECT`：是否跳过 `select_one`？
-  - **否。保留 pool→7→1（选 creator 直接下游）+ 无 selector 时权重兜底。这是设计的一部分，不是缺陷。**
+- [x] Q1 首次创建 `SYSTEM_SELECT` / 任意系统根：候选池在哪？
+  - **2026-08-01 修正**：候选池 = **系统根自己的直接下游**；不足经 `create_neuron` 批量补齐。
+  - 生成系统根 content 用 creator **种子**作写稿 system，不再把 creator 下游当成该系统根的 pool。
+  - `select_one` 无 selector 时仍权重兜底。
 - [x] Q2 旁路：`create_for_admin` / `set_system_type` 等？
   - **收敛**：不进业务正门，删除/收回，不做 deprecated 双轨。
 - [x] Q3 AI `create_downstream_neuron`？
@@ -259,6 +272,7 @@ Assistant 选能力神经元
 - 2026-08-01 03:04: 补充运维 API/TUI：`rebootstrap`（全量 reset 已知 assistant_* + bootstrap）。
 - 2026-08-01 03:38: 方法名改回 `ensure_system_neuron`（不用 ensure_system_prompt）。
 - 2026-08-01 03:41: `create_neuron` 支持 `count` 1..=10，模型返回 JSON 列表，API 返回 `Vec<Neuron>`。
+- 2026-08-01 04:27: Reverse Sync——`select_candidates` 补齐改一次批量 `create_neuron`；`ensure_system_neuron` 在本根下游凑池；Assistant 首轮选神经元 source=`assistant_select_neuron`。
 
 ## Validation
 

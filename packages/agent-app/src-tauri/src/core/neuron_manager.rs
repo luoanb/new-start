@@ -209,11 +209,15 @@ impl NeuronManager {
         let mut selected_ids = HashSet::new();
         let mut created = 0usize;
 
-        for _ in 0..query.min_new {
-            let neuron = self.fill_candidate_neuron(source_id.as_deref()).await?;
-            selected_ids.insert(neuron.id.clone());
-            selected.push(neuron);
-            created += 1;
+        if query.min_new > 0 {
+            let filled = self
+                .fill_candidates_batch(source_id.as_deref(), query.min_new)
+                .await?;
+            created += filled.len();
+            for neuron in filled {
+                selected_ids.insert(neuron.id.clone());
+                selected.push(neuron);
+            }
         }
 
         let remaining = query.n - selected.len();
@@ -235,13 +239,27 @@ impl NeuronManager {
             }
         }
 
-        while selected.len() < query.n {
-            let neuron = self.fill_candidate_neuron(source_id.as_deref()).await?;
-            if selected_ids.insert(neuron.id.clone()) {
-                selected.push(neuron);
-                created += 1;
+        let shortage = query.n.saturating_sub(selected.len());
+        if shortage > 0 {
+            let filled = self
+                .fill_candidates_batch(source_id.as_deref(), shortage)
+                .await?;
+            created += filled.len();
+            for neuron in filled {
+                if selected_ids.insert(neuron.id.clone()) {
+                    selected.push(neuron);
+                }
             }
         }
+
+        if selected.len() < query.n {
+            return Err(AppError::NeuronBootstrapFailed(format!(
+                "select_candidates could not fill pool: need {}, got {}",
+                query.n,
+                selected.len()
+            )));
+        }
+        selected.truncate(query.n);
 
         tracing::info!(
             phase = "select_candidates",
@@ -305,58 +323,21 @@ impl NeuronManager {
         }
 
         let creator = self.ensure_creator()?;
-        let prompt_neuron = self
-            .select_one(CandidateQuery {
+        let filling_creator = link_to == Some(creator.id.as_str());
+        let prompt_content = if filling_creator {
+            creator.content.clone()
+        } else {
+            self.select_one(CandidateQuery {
                 n: DEFAULT_SELECT_N,
                 source_id: Some(creator.id.clone()),
                 min_new: 0,
             })
-            .await?;
-        let count_word = if count == 1 {
-            "exactly 1".to_string()
-        } else {
-            format!("exactly {count}")
+            .await?
+            .content
         };
-        let list_contract = if count == 1 {
-            "Return ONLY a JSON array with exactly 1 object: \
-             [{\"desc\",\"content\",\"tool_ids\"}] (weight optional/ignored). \
-             A single object is also accepted for count=1."
-                .to_string()
-        } else {
-            format!(
-                "Return ONLY a JSON array with exactly {count} objects: \
-                 [{{\"desc\",\"content\",\"tool_ids\"}}, ...] (weight optional/ignored). \
-                 Each neuron must be distinct and single-responsibility."
-            )
-        };
-        let user_prompt = match &input {
-            CreateNeuronInput::Purpose(purpose) => format!(
-                "Create {count_word} single-responsibility neuron(s) for the purpose below.\n\
-                 Requirements:\n\
-                 - Each neuron focuses on one job only; do not bundle unrelated skills.\n\
-                 - `content` must be an executable prompt/knowledge block (role, when to use / not use, steps, output format, hard constraints).\n\
-                 - Prefer 200–800 Chinese characters (or equivalent) in `content`; no slogans or placeholders.\n\
-                 - Do not assign importance scores; system forces initial weight to 0.\n\
-                 - `tool_ids`: only truly needed tools; else []. Do not invent tool names.\n\
-                 - {list_contract}\n\
-                 Purpose: {purpose}"
-            ),
-            CreateNeuronInput::Messages(messages) => format!(
-                "Create {count_word} single-responsibility neuron(s) distilled from the conversation context below.\n\
-                 Requirements:\n\
-                 - Infer reusable capabilities the conversation needs; ignore one-off chatter.\n\
-                 - Each neuron focuses on one job only; do not bundle unrelated skills.\n\
-                 - `content` must be an executable prompt/knowledge block (role, when to use / not use, steps, output format, hard constraints).\n\
-                 - Prefer 200–800 Chinese characters (or equivalent) in `content`; no slogans or placeholders.\n\
-                 - Do not assign importance scores; system forces initial weight to 0.\n\
-                 - `tool_ids`: only truly needed tools; else []. Do not invent tool names.\n\
-                 - {list_contract}\n\
-                 Context: {}",
-                serde_json::to_string(messages).unwrap_or_default()
-            ),
-        };
+        let user_prompt = self.create_neuron_user_prompt(&input, count, link_to)?;
         let drafts = self
-            .generate_drafts(&prompt_neuron.content, &user_prompt, count)
+            .generate_drafts(&prompt_content, &user_prompt, count)
             .await?;
         let mut created = Vec::with_capacity(drafts.len());
         for draft in drafts {
@@ -406,44 +387,28 @@ impl NeuronManager {
                 phase = "ensure_system_neuron",
                 system_type,
                 neuron_id = %existing.id,
-                "ensure_system_neuron hit existing"
+                "ensure_system_neuron hit existing; filling own downstream pool"
             );
+            self.ensure_own_candidate_pool(&existing.id).await?;
             return Ok(existing);
         }
 
         let creator = self.ensure_creator()?;
-        tracing::info!(
-            phase = "ensure_system_neuron",
-            system_type,
-            step = "select_one",
-            "selecting prompt neuron under creator"
-        );
-        let winner = self
-            .select_one(CandidateQuery {
-                n: DEFAULT_SELECT_N,
-                source_id: Some(creator.id.clone()),
-                min_new: 0,
-            })
-            .await?;
         let user_prompt = format!(
             "Write a system prompt neuron with system_type={system_type}.\n\
-             Use the winning candidate as inspiration (do not copy blindly).\n\
              Requirements:\n\
              - `content` must be a full executable system prompt: role, decision criteria, steps, output contract, hard constraints.\n\
              - Prefer 200–800 Chinese characters (or equivalent); no slogans or placeholders.\n\
              - One responsibility aligned with system_type={system_type}.\n\
              - Do not assign importance scores; system forces initial weight to 0.\n\
              - `tool_ids`: only truly needed tools; else []. Do not invent tool names.\n\
-             - Return ONLY JSON with desc, content, and tool_ids (weight optional/ignored).\n\
-             Winner id={} desc={} content={}",
-            winner.id, winner.desc, winner.content
+             - Return ONLY JSON with desc, content, and tool_ids (weight optional/ignored)."
         );
         tracing::info!(
             phase = "ensure_system_neuron",
             system_type,
             step = "generate_draft",
-            winner_id = %winner.id,
-            "generating system neuron draft"
+            "generating system neuron draft from creator seed"
         );
         let draft = match self.generate_draft(&creator.content, &user_prompt).await {
             Ok(draft) => draft,
@@ -474,8 +439,9 @@ impl NeuronManager {
             phase = "ensure_system_neuron",
             system_type,
             neuron_id = %created.id,
-            "ensure_system_neuron created"
+            "ensure_system_neuron created; filling own downstream pool"
         );
+        self.ensure_own_candidate_pool(&created.id).await?;
         Ok(created)
     }
 
@@ -682,45 +648,138 @@ impl NeuronManager {
         Ok(drafts)
     }
 
-    async fn fill_candidate_neuron(&self, source_id: Option<&str>) -> AppResult<Neuron> {
+    /// Fill `count` ordinary neurons under `source_id` in one model call (create-flow guts).
+    /// Does not call `select_one` / `create_neuron` — avoids async recursion when creator pool is empty.
+    async fn fill_candidates_batch(
+        &self,
+        source_id: Option<&str>,
+        count: usize,
+    ) -> AppResult<Vec<Neuron>> {
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        if count > MAX_CREATE_NEURON_COUNT {
+            return Err(AppError::InvalidInput(format!(
+                "fill batch count must be 1..={MAX_CREATE_NEURON_COUNT}, got {count}"
+            )));
+        }
         tracing::info!(
-            phase = "fill_candidate_neuron",
+            phase = "fill_candidates_batch",
             source_id = source_id.unwrap_or(""),
-            "fill_candidate_neuron start"
+            count,
+            "fill_candidates_batch start"
         );
         let creator = self.ensure_creator()?;
-        let user_prompt = match source_id {
-            Some(source_id) => format!(
-                "Create exactly one single-responsibility downstream neuron under source_id {source_id}.\n\
-                 Requirements:\n\
-                 - Specialize a useful child capability of the source; do not duplicate the parent wholesale.\n\
-                 - `content` must be an executable prompt/knowledge block (role, when to use / not use, steps, output format, hard constraints).\n\
-                 - Prefer 200–800 Chinese characters (or equivalent) in `content`; no slogans or placeholders.\n\
-                 - Do not assign importance scores; system forces initial weight to 0.\n\
-                 - `tool_ids`: only truly needed tools; else []. Do not invent tool names.\n\
-                 - Return ONLY JSON with desc, content, and tool_ids (weight optional/ignored)."
-            ),
-            None => {
-                "Create exactly one single-responsibility neuron.\n\
-                 Requirements:\n\
-                 - Focus on one job only; do not bundle unrelated skills.\n\
-                 - `content` must be an executable prompt/knowledge block (role, when to use / not use, steps, output format, hard constraints).\n\
-                 - Prefer 200–800 Chinese characters (or equivalent) in `content`; no slogans or placeholders.\n\
-                 - Do not assign importance scores; system forces initial weight to 0.\n\
-                 - `tool_ids`: only truly needed tools; else []. Do not invent tool names.\n\
-                 - Return ONLY JSON with desc, content, and tool_ids (weight optional/ignored)."
-                    .to_string()
+        // Prefer an existing creator-child as write prompt; never select_one (would re-enter fill).
+        let prompt_content = {
+            let existing = self.store()?.list_direct_downstream(
+                &creator.id,
+                DEFAULT_SELECT_N,
+                &HashSet::new(),
+            )?;
+            if existing.is_empty() {
+                creator.content.clone()
+            } else {
+                pick_by_weight(&existing)?.content
             }
         };
-        let draft = self.generate_draft(&creator.content, &user_prompt).await?;
-        let create = NeuronCreate {
-            desc: draft.desc,
-            content: draft.content,
-            weight: 0.0,
-            system_type: None,
-            tool_ids: draft.tool_ids,
+        let purpose = match source_id {
+            Some(source_id) => format!(
+                "Fill {count} distinct single-responsibility downstream neurons under source_id {source_id}. \
+                 Specialize useful child capabilities of the source; do not duplicate the parent wholesale."
+            ),
+            None => format!(
+                "Fill {count} distinct single-responsibility neurons for a global candidate pool."
+            ),
         };
-        self.persist_plain(create, source_id)
+        let user_prompt = self.create_neuron_user_prompt(
+            &CreateNeuronInput::Purpose(purpose),
+            count,
+            source_id,
+        )?;
+        let drafts = self
+            .generate_drafts(&prompt_content, &user_prompt, count)
+            .await?;
+        let mut created = Vec::with_capacity(drafts.len());
+        for draft in drafts {
+            created.push(self.persist_plain(
+                NeuronCreate {
+                    desc: draft.desc,
+                    content: draft.content,
+                    weight: 0.0,
+                    system_type: None,
+                    tool_ids: draft.tool_ids,
+                },
+                source_id,
+            )?);
+        }
+        Ok(created)
+    }
+
+    async fn ensure_own_candidate_pool(&self, root_id: &str) -> AppResult<()> {
+        let _ = self
+            .select_candidates(CandidateQuery {
+                n: DEFAULT_SELECT_N,
+                source_id: Some(root_id.to_string()),
+                min_new: 0,
+            })
+            .await?;
+        Ok(())
+    }
+
+    fn create_neuron_user_prompt(
+        &self,
+        input: &CreateNeuronInput,
+        count: usize,
+        link_to: Option<&str>,
+    ) -> AppResult<String> {
+        let count_word = if count == 1 {
+            "exactly 1".to_string()
+        } else {
+            format!("exactly {count}")
+        };
+        let list_contract = if count == 1 {
+            "Return ONLY a JSON array with exactly 1 object: \
+             [{\"desc\",\"content\",\"tool_ids\"}] (weight optional/ignored). \
+             A single object is also accepted for count=1."
+                .to_string()
+        } else {
+            format!(
+                "Return ONLY a JSON array with exactly {count} objects: \
+                 [{{\"desc\",\"content\",\"tool_ids\"}}, ...] (weight optional/ignored). \
+                 Each neuron must be distinct and single-responsibility."
+            )
+        };
+        let link_note = match link_to {
+            Some(id) => format!(" These neurons will be direct downstream of {id}."),
+            None => String::new(),
+        };
+        Ok(match input {
+            CreateNeuronInput::Purpose(purpose) => format!(
+                "Create {count_word} single-responsibility neuron(s) for the purpose below.{link_note}\n\
+                 Requirements:\n\
+                 - Each neuron focuses on one job only; do not bundle unrelated skills.\n\
+                 - `content` must be an executable prompt/knowledge block (role, when to use / not use, steps, output format, hard constraints).\n\
+                 - Prefer 200–800 Chinese characters (or equivalent) in `content`; no slogans or placeholders.\n\
+                 - Do not assign importance scores; system forces initial weight to 0.\n\
+                 - `tool_ids`: only truly needed tools; else []. Do not invent tool names.\n\
+                 - {list_contract}\n\
+                 Purpose: {purpose}"
+            ),
+            CreateNeuronInput::Messages(messages) => format!(
+                "Create {count_word} single-responsibility neuron(s) distilled from the conversation context below.{link_note}\n\
+                 Requirements:\n\
+                 - Infer reusable capabilities the conversation needs; ignore one-off chatter.\n\
+                 - Each neuron focuses on one job only; do not bundle unrelated skills.\n\
+                 - `content` must be an executable prompt/knowledge block (role, when to use / not use, steps, output format, hard constraints).\n\
+                 - Prefer 200–800 Chinese characters (or equivalent) in `content`; no slogans or placeholders.\n\
+                 - Do not assign importance scores; system forces initial weight to 0.\n\
+                 - `tool_ids`: only truly needed tools; else []. Do not invent tool names.\n\
+                 - {list_contract}\n\
+                 Context: {}",
+                serde_json::to_string(messages).unwrap_or_default()
+            ),
+        })
     }
 
     fn persist_plain(
@@ -1361,6 +1420,31 @@ mod tests {
             .unwrap();
         assert_eq!(neurons.len(), 3);
         assert!(neurons.iter().all(|n| n.system_type.is_none()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn ensure_system_neuron_fills_own_downstream_not_creator() {
+        let (manager, root) = test_manager();
+        let creator = manager.ensure_creator().unwrap();
+        let selector = manager
+            .ensure_system_neuron(ASSISTANT_SELECT_NEURON, EnsureSystemOpts { reset: false })
+            .await
+            .unwrap();
+        let selector_kids = manager
+            .store()
+            .unwrap()
+            .list_direct_downstream(&selector.id, 20, &HashSet::new())
+            .unwrap();
+        assert_eq!(selector_kids.len(), DEFAULT_SELECT_N);
+        let creator_kids = manager
+            .store()
+            .unwrap()
+            .list_direct_downstream(&creator.id, 20, &HashSet::new())
+            .unwrap();
+        // Creator may gain kids when create_neuron picks a creation prompt; selector pool must be under selector.
+        assert!(selector_kids.iter().all(|n| n.system_type.is_none()));
+        assert!(!selector_kids.iter().any(|n| creator_kids.iter().any(|c| c.id == n.id)));
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -86,23 +86,21 @@ flowchart TD
   A[ensure_system_neuron system_type] --> B{reset?}
   B -->|是| C[断边并删根]
   B -->|否| D{已存在?}
-  D -->|是| E[幂等返回]
+  D -->|是| E[select_candidates source=本根]
   C --> F[ensure_creator]
   D -->|否| F
-  F --> G[select_one: creator 直接下游 pool→7→1]
-  G --> H{assistant_select_neuron 可用?}
-  H -->|是| I[LLM 裁决选 1]
-  H -->|否 / 失败| J[权重兜底 + 同权随机]
-  I --> K[generate_draft]
-  J --> K
-  K --> L[落库系统根 weight=0 无上游边]
+  F --> G[generate_draft system=creator种子]
+  G --> H[落库系统根 weight=0 无上游边]
+  H --> I[select_candidates source=本根 n=7]
+  E --> J[返回根]
+  I --> J
 ```
 
 要点：
 
-- 候选池：`select_candidates(n=7, source_id=creator.id)` —— **只选 creator 直接下游，不含 creator 自身**。
-- 下游不足时 `fill_candidate_neuron` 补齐（调模型，挂到源下，权重 0）。
-- 首次 ensure selector 时无裁决提示词 → `select_one` **权重兜底**（设计的一部分，不跳过 7 选 1）。
+- 候选池 / 子项：`select_candidates(n=7, source_id=**本系统根**.id)` —— **只看自己的直接下游**。
+- 下游不足时一次 `generate_drafts(count=缺口)` + 挂到本根下批量补齐（禁止循环单条；不经 `create_neuron`→`select_one` 以免递归）。
+- 写系统根 content：用 `create_neuron` 种子作 model system，不借用其它根的下游当本根 pool。
 - 赋 `system_type` **只许**本方法；禁止旁路贴标。
 
 ### 2.3 普通神经元：`create_neuron(input, link_to, count)`
@@ -113,16 +111,16 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-  A[select_candidates] --> B[可选 min_new 先新建]
+  A[select_candidates] --> B[可选 min_new: create_neuron 批量]
   B --> C[按 source 取直接下游或全域]
   C --> D{数量 >= n?}
   D -->|是| E[返回恰好 n 个]
-  D -->|否| F[fill_candidate_neuron 补齐]
-  F --> D
+  D -->|否| F["generate_drafts(count=缺口)+persist(link_to) 一次"]
+  F --> E
 ```
 
-- 有 `source_id`：只取直接下游，不递归。
-- 无来源：全域候选（含系统节点）。
+- 有 `source_id`：只取**该源**直接下游，不递归；补齐也挂到该源下。
+- 无来源：全域候选（含系统节点）；补齐为无上游节点。
 - 排序：`weight DESC, RANDOM()`；创建权重恒为 0，差异来自后续评价 delta。
 
 ## 4. 启动后懒加载
