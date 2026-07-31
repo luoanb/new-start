@@ -595,7 +595,10 @@ impl AssistantMode {
         );
         let prompt_neuron = self
             .neuron_manager
-            .ensure_system_neuron(system_type, false)
+            .ensure_system_neuron(
+                system_type,
+                crate::core::models::EnsureSystemOpts { reset: false },
+            )
             .await?;
         tracing::info!(
             phase = "assistant_system_json",

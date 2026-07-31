@@ -30,10 +30,10 @@ Bottom Panel → **Logs**:
 
 Look for `phase=` among:
 
-- `bootstrap_neurons` / `bootstrap_ready`
-- `ensure_creator_neuron` / `ensure_system_neuron`
+- `bootstrap_neurons` / `bootstrap` / `rebootstrap`
+- `ensure_creator` / `ensure_system_neuron`
 - `select_candidates` / `select_one`
-- `generate_draft` / `create_generated_neuron`
+- `generate_draft` / `fill_candidate_neuron`
 
 Useful keywords: `assistant_select_neuron`, `generate_draft`, `error_code`.
 

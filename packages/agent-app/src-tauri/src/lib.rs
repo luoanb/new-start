@@ -311,7 +311,7 @@ fn update_neuron(
     content: Option<String>,
 ) -> TauriResult<Neuron> {
     with_neuron_manager(state, |mgr| {
-        mgr.update_for_admin(&id, NeuronUpdate { desc, content })
+        mgr.update_content_for_admin(&id, NeuronUpdate { desc, content })
     })
 }
 

@@ -332,9 +332,27 @@ pub enum CreateNeuronInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BootstrapReadyReport {
+pub struct EnsureSystemOpts {
+    pub reset: bool,
+}
+
+impl Default for EnsureSystemOpts {
+    fn default() -> Self {
+        Self { reset: false }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BootstrapReport {
     pub create_neuron_id: String,
-    pub assistant_select_neuron_id: String,
+    pub select_neuron_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemPromptStatus {
+    pub system_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub neuron_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

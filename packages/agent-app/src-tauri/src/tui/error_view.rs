@@ -103,7 +103,7 @@ impl From<AppError> for TuiErrorView {
                 ],
                 vec![
                     "Check neurons.bootstrap.create_neuron_prompt in config.json.".into(),
-                    "Run /neuron ensure-creator to diagnose the system neuron.".into(),
+                    "Run /neuron ensure-creator or /neuron bootstrap to diagnose.".into(),
                 ],
             ),
             AppError::SkillNotFound(name) => (

@@ -46,7 +46,7 @@ LLM provider integration is intentionally outside the first Rust core milestone.
 
 ## Neuron Bootstrap
 
-Startup neuron readiness (`create_neuron` + `assistant_select_neuron`) is documented in [neuron-init.md](./neuron-init.md), including mermaid flowcharts for sync assembly, async bootstrap, candidate fill, and lazy `ensure_system_neuron`.
+Startup neuron readiness (`create_neuron` + `assistant_select_neuron`) is documented in [neuron-init.md](./neuron-init.md), including mermaid flowcharts for sync assembly, async bootstrap, candidate fill, and lazy `ensure_system_neuron`. API contract: `docs/specs/2026-08-01_02-40_neuron-manager-api.md`.
 
 ## Runtime Logging
 

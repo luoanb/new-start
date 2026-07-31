@@ -108,7 +108,7 @@ Configuration fields:
 - `providers.<id>.api_base`: provider API base. Environment variables override this value.
 - `providers.<id>.models`: provider model list shown by `/models` and accepted by `/use`.
 - `neurons.bootstrap.create_neuron_prompt`: content of the unique `system_type=create_neuron` system neuron. Optional; when missing, the app uses a built-in default seed prompt so bootstrap can still create the first system neuron. The built-in seed asks for single-responsibility neurons with executable `content` (role / when-to-use / steps / output / constraints). Model-returned `weight` is ignored: new neurons and edges always start at weight `0` and only change via later evaluation deltas. Changing this config does not rewrite an already-persisted `create_neuron` row — reset/recreate that system neuron to pick up a new seed.
-- Assistant mode fixed `system_type` prompt neurons are ensured via `NeuronManager::ensure_system_neuron` / `bootstrap_ready` (startup creates at least `assistant_select_neuron`):
+- Assistant mode fixed `system_type` prompt neurons are ensured via `NeuronManager::ensure_system_neuron` / `bootstrap` (startup creates at least `assistant_select_neuron`):
   - `assistant_select_neuron`: 7-candidate neuron selection
   - `assistant_match_topic`: topic match / create decision (lazy ensure)
   - `assistant_complete_scope`: afterhook scope completion decision (lazy ensure)

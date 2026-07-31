@@ -1,6 +1,9 @@
 # 神经元初始化流程
 
-本文描述 agent-app 启动时与首次按需补齐时的神经元初始化路径。实现真相源：`NeuronManager` / `Gateway`；相关迭代见 `docs/sdd-lab/2026-07-28_23-43_neuron-bootstrap/`、`2026-07-29_22-50_neuron-system-prompt-ready/`、`2026-08-01_00-31_neuron-create-weight-zero/`。
+本文描述 agent-app 启动时与首次按需补齐时的神经元初始化路径。实现真相源：`NeuronManager` / `Gateway`。
+
+- API 契约：`docs/specs/2026-08-01_02-40_neuron-manager-api.md`
+- 相关迭代：`docs/sdd-lab/2026-07-28_23-43_neuron-bootstrap/`、`2026-07-29_22-50_neuron-system-prompt-ready/`、`2026-08-01_00-31_neuron-create-weight-zero/`
 
 诊断时请打开 GUI 底部 **Logs**，或查看 `{storage}/logs/agent-app.log`；字段与过滤说明见 [logging.md](./logging.md)。
 
@@ -9,21 +12,21 @@
 初始化分两段：
 
 1. **同步装配**（`Gateway::new`）：建库、装配 `NeuronManager`，不创建业务神经元。
-2. **异步完备**（`Gateway::bootstrap_neurons` → `bootstrap_ready`）：保证 `create_neuron` 与 `assistant_select_neuron` 可用。
+2. **异步完备**（`Gateway::bootstrap_neurons` → `NeuronManager::bootstrap`）：保证底座 `create_neuron` 与 `assistant_select_neuron` 可用。
 
-其它 `assistant_*` 系统提示词**不在启动时批量创建**，由业务调用 `ensure_system_neuron` 懒补齐。
+其它系统提示词（含未来自定义 `system_type`）**不在启动时批量创建**，由外部调用 `ensure_system_neuron` 懒补齐。除创建种子外，一律走统一创建流。
 
 ```mermaid
 flowchart TD
-  A[TUI / CLI 启动] --> B[Gateway::new 同步装配]
+  A[TUI / CLI / GUI 启动] --> B[Gateway::new 同步装配]
   B --> C[NeuronStore.init_table]
   C --> D[NeuronManager 装配]
   D --> E[bootstrap_neurons]
-  E --> F[bootstrap_ready]
-  F --> G[ensure_creator_neuron]
+  E --> F[bootstrap]
+  F --> G[ensure_creator]
   G --> H[ensure_system_neuron assistant_select_neuron]
-  H --> I[完备完成]
-  J[业务按需] --> K[ensure_system_neuron 其它 system_type]
+  H --> I[底座完备]
+  J[业务/外部按需] --> K[ensure_system_neuron 任意 system_type]
   I -.->|失败仅 warning| L[首次 ensure 仍可阻塞补齐]
 ```
 
@@ -38,60 +41,73 @@ flowchart TD
 
 此时库中可能仍无任何神经元。
 
-## 2. 异步完备：`bootstrap_ready`
+## 2. 异步完备：`bootstrap`
 
-入口：`agent-app-tui` / `agent-app-cli` 在 `Gateway::default()` 之后 `await bootstrap_neurons()`。失败打 warning，不阻断启动。
+入口：`agent-app-tui` / `agent-app-cli` / GUI 在装配后 `await bootstrap_neurons()`。失败打 warning，不阻断启动。
 
-顺序固定：
+顺序固定（仅底座）：
 
-1. `ensure_creator_neuron()` → `system_type = create_neuron`
-2. `ensure_system_neuron("assistant_select_neuron", false)`
+1. `ensure_creator()` → `system_type = create_neuron`
+2. `ensure_system_neuron("assistant_select_neuron", reset=false)`
 
 也可手动：`/neuron bootstrap`。
 
-### 2.1 `ensure_creator_neuron`（不调模型）
+全量重建已知 Assistant 系统提示词（不含 `create_neuron` 种子）：
+
+```text
+/neuron rebootstrap
+```
+
+等价于依次 `reset-system`：`assistant_select_neuron` → `assistant_match_topic` → `assistant_complete_scope` → `assistant_score_feedback`，再 `bootstrap`。会多次调模型，较慢。
+
+### 2.1 `ensure_creator`（不调模型）
 
 ```mermaid
 flowchart TD
-  A[ensure_creator_neuron] --> B{内存缓存 ID 有效?}
+  A[ensure_creator] --> B{内存缓存 ID 有效?}
   B -->|是| C[返回 creator]
   B -->|否| D{DB 已有 system_type=create_neuron?}
   D -->|是| E[写入缓存并返回]
   D -->|否| F[读 config 或 DEFAULT_CREATE_NEURON_PROMPT]
-  F --> G[create_neuron 落库 weight=0]
+  F --> G[Store 落库 weight=0]
   G --> C
 ```
 
 - 种子文案：`.agent-app/config.json` → `neurons.bootstrap.create_neuron_prompt`；缺失用代码默认。
 - 创建时节点权重强制为 `0`（无上游边）。
+- **唯一例外**：不经 pool→7→1。
 
 ### 2.2 `ensure_system_neuron`（可能调模型）
 
-用于 `assistant_select_neuron` 及后续其它系统根。
+用于 `assistant_select_neuron` 及任意其它系统根（业务自定义 `system_type` 亦同）。
 
 ```mermaid
 flowchart TD
   A[ensure_system_neuron system_type] --> B{reset?}
-  B -->|是| C[断一级边并删根]
+  B -->|是| C[断边并删根]
   B -->|否| D{已存在?}
   D -->|是| E[幂等返回]
-  C --> F[ensure_creator_neuron]
+  C --> F[ensure_creator]
   D -->|否| F
-  F --> G[select_one: creator 下游 pool→7→1]
+  F --> G[select_one: creator 直接下游 pool→7→1]
   G --> H{assistant_select_neuron 可用?}
   H -->|是| I[LLM 裁决选 1]
   H -->|否 / 失败| J[权重兜底 + 同权随机]
   I --> K[generate_draft]
   J --> K
-  K --> L[create 系统根 weight=0 无上游边]
+  K --> L[落库系统根 weight=0 无上游边]
 ```
 
 要点：
 
-- 候选池：`select_candidates(n=7, source_id=creator.id, min_new=0)`。
-- 下游不足时逐个 `create_generated_neuron`（调模型，挂到 creator 下，节点/边权重均为 `0`）。
-- 冷启动第一次 ensure selector 时，往往先补齐一批子节点，再生成系统根。
-- 尚无裁决提示词时，选一走权重兜底（新节点权重皆为 0 时等价同权随机）。
+- 候选池：`select_candidates(n=7, source_id=creator.id)` —— **只选 creator 直接下游，不含 creator 自身**。
+- 下游不足时 `fill_candidate_neuron` 补齐（调模型，挂到源下，权重 0）。
+- 首次 ensure selector 时无裁决提示词 → `select_one` **权重兜底**（设计的一部分，不跳过 7 选 1）。
+- 赋 `system_type` **只许**本方法；禁止旁路贴标。
+
+### 2.3 普通神经元：`create_neuron(input, link_to, count)`
+
+统一创建流：`ensure_creator` → pool→7→1（creator 下游）→ 模型一次返回 **JSON 列表**（`count` ∈ 1..=10）→ 逐条落库（无 `system_type`）。可选全部挂为某节点直接下游。AI 工具名同为 `create_neuron`，参数含 `count`（默认 1）。
 
 ## 3. 候选补齐：`select_candidates`
 
@@ -101,7 +117,7 @@ flowchart TD
   B --> C[按 source 取直接下游或全域]
   C --> D{数量 >= n?}
   D -->|是| E[返回恰好 n 个]
-  D -->|否| F[create_generated_neuron 补齐]
+  D -->|否| F[fill_candidate_neuron 补齐]
   F --> D
 ```
 
@@ -114,24 +130,23 @@ flowchart TD
 | 时机 | 行为 |
 | --- | --- |
 | 启动 bootstrap | 只保证 `create_neuron` + `assistant_select_neuron` |
-| Assistant / Hook 需要其它系统提示词 | `ensure_system_neuron(system_type)` |
-| 运维 | `/neuron ensure <type>`、`/neuron reset-system <type>` |
+| Assistant / 外部需要其它系统提示词 | `ensure_system_neuron(system_type)` |
+| 运维 | `/neuron ensure-system <type>`、`/neuron reset-system <type>` |
 
 ## 5. 权重规则（创建）
-
-与初始化强相关：
 
 - 新建节点权重 = `0`
 - 新建边权重 = `0`
 - 忽略模型 JSON / 创建参数中的权重
-- 之后仅通过 `adjust_weight` / `adjust_connection_weight`（评价、Hook、人工）增减
+- 之后仅通过 `adjust_weight` / `adjust_edge_weight`（评价、Hook、人工）增减
 
 详见 `docs/sdd-lab/2026-08-01_00-31_neuron-create-weight-zero/`。
 
-## 6. 关键常量
+## 6. 关键常量 / API
 
-| 常量 | 含义 |
+| 名称 | 含义 |
 | --- | --- |
-| `create_neuron` | 创建器系统根；种子不调模型 |
+| `create_neuron`（system_type） | 创建器系统根；种子不调模型 |
 | `assistant_select_neuron` | 7 选 1 裁决提示词根；bootstrap 必保 |
 | `DEFAULT_SELECT_N = 7` | 候选池默认大小 |
+| `ensure_creator` / `select_*` / `create_neuron` / `ensure_system_neuron` / `bootstrap` | 业务正门五动词 |

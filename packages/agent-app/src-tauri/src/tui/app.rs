@@ -3,8 +3,8 @@ use ratatui_textarea::TextArea;
 
 use crate::core::{
     AppError, AppResult, CandidateQuery, ChatModelSelection, ChatOptions, Conversation,
-    ConversationMode, Gateway, MessageRole, ModelInfo, NeuronCreate, NeuronUpdate, ProviderInfo,
-    RuntimeStatus,
+    ConversationMode, CreateNeuronInput, EnsureSystemOpts, Gateway, MessageRole, ModelInfo,
+    NeuronUpdate, ProviderInfo, RuntimeStatus,
 };
 
 use super::commands::{self, Command};
@@ -1052,16 +1052,16 @@ impl TuiApp {
                 concat!(
                     "Neuron commands:\n",
                     "  /neuron list                          - List all neurons\n",
-                    "  /neuron new <desc> [content]          - Create a new neuron\n",
+                    "  /neuron new [--count N] <purpose>     - Create 1..=10 neurons via unified flow\n",
                     "  /neuron candidates <n> [--source-id <id>] [--min-new <n>]\n",
                     "  /neuron ensure-creator                - Ensure create_neuron system node\n",
                     "  /neuron bootstrap                     - Bootstrap create_neuron + assistant_select_neuron\n",
+                    "  /neuron rebootstrap                   - Reset all known assistant_* prompts + bootstrap\n",
                     "  /neuron ensure-system <type>          - Ensure system prompt neuron\n",
                     "  /neuron reset-system <type>           - Reset system prompt (unlink edges, recreate)\n",
                     "  /neuron <id>                          - View neuron details\n",
                     "  /neuron <id> set <field> <val>        - Update desc/content\n",
                     "  /neuron <id> weight <delta>           - Add or subtract weight\n",
-                    "  /neuron <id> system-type <type|none>  - Set system type\n",
                     "  /neuron <id> tools <id,...>            - Set allowed tool IDs\n",
                     "  /neuron <id> delete                   - Delete a neuron\n",
                     "  /neuron <id> connect <target> [weight]- Create/update a connection\n",
@@ -1149,22 +1149,30 @@ impl TuiApp {
                     Err(error) => self.error_banner = Some(TuiErrorView::from(error)),
                 }
             }
-            "ensure-creator" => match manager.ensure_creator_for_admin() {
+            "ensure-creator" => match manager.ensure_creator() {
                 Ok(neuron) => self.messages.push(TuiMessage::status(format!(
                     "Creator neuron ready: {} (id: {})",
                     neuron.desc, neuron.id
                 ))),
                 Err(error) => self.error_banner = Some(TuiErrorView::from(error)),
             },
-            "bootstrap" => match manager.bootstrap_ready().await {
+            "bootstrap" => match manager.bootstrap().await {
                 Ok(report) => self.messages.push(TuiMessage::status(format!(
                     "Bootstrap ready: create_neuron={}, assistant_select_neuron={}",
-                    report.create_neuron_id, report.assistant_select_neuron_id
+                    report.create_neuron_id, report.select_neuron_id
+                ))),
+                Err(error) => self.error_banner = Some(TuiErrorView::from(error)),
+            },
+            "rebootstrap" => match manager.rebootstrap().await {
+                Ok(report) => self.messages.push(TuiMessage::status(format!(
+                    "Rebootstrap ok: create_neuron={}, assistant_select_neuron={} \
+                     (also reset match_topic/complete_scope/score_feedback)",
+                    report.create_neuron_id, report.select_neuron_id
                 ))),
                 Err(error) => self.error_banner = Some(TuiErrorView::from(error)),
             },
             "ensure-system" if args.len() >= 2 => {
-                match manager.ensure_system_neuron(&args[1], false).await {
+                match manager.ensure_system_neuron(&args[1], EnsureSystemOpts { reset: false }).await {
                     Ok(neuron) => self.messages.push(TuiMessage::status(format!(
                         "System neuron ready: type={} id={}",
                         args[1], neuron.id
@@ -1173,7 +1181,7 @@ impl TuiApp {
                 }
             }
             "reset-system" if args.len() >= 2 => {
-                match manager.ensure_system_neuron(&args[1], true).await {
+                match manager.ensure_system_neuron(&args[1], EnsureSystemOpts { reset: true }).await {
                     Ok(neuron) => self.messages.push(TuiMessage::status(format!(
                         "System neuron reset: type={} id={}",
                         args[1], neuron.id
@@ -1205,21 +1213,47 @@ impl TuiApp {
                 }
             },
             "new" if args.len() >= 2 => {
-                let desc = args[1].clone();
-                let content = if args.len() >= 3 {
-                    args[2..].join(" ")
-                } else {
-                    String::new()
-                };
-                match manager.create_for_admin(NeuronCreate {
-                    desc,
-                    content,
-                    ..Default::default()
-                }) {
-                    Ok(n) => {
+                let mut count = 1usize;
+                let mut purpose_parts = Vec::new();
+                let mut index = 1;
+                while index < args.len() {
+                    if args[index] == "--count" && index + 1 < args.len() {
+                        match args[index + 1].parse::<usize>() {
+                            Ok(value) => count = value,
+                            Err(_) => {
+                                self.error_banner =
+                                    Some(TuiErrorView::from(AppError::InvalidInput(
+                                        "--count requires an integer 1..=10".into(),
+                                    )));
+                                return;
+                            }
+                        }
+                        index += 2;
+                        continue;
+                    }
+                    purpose_parts.push(args[index].clone());
+                    index += 1;
+                }
+                let purpose = purpose_parts.join(" ");
+                if purpose.trim().is_empty() {
+                    self.error_banner = Some(TuiErrorView::from(AppError::InvalidInput(
+                        "new requires a purpose".into(),
+                    )));
+                    return;
+                }
+                match manager
+                    .create_neuron(CreateNeuronInput::Purpose(purpose), None, count)
+                    .await
+                {
+                    Ok(neurons) => {
+                        let lines = neurons
+                            .iter()
+                            .map(|n| format!("  '{}' (id: {})", n.desc, n.id))
+                            .collect::<Vec<_>>()
+                            .join("\n");
                         self.messages.push(TuiMessage::status(format!(
-                            "Created neuron '{}' (id: {})",
-                            n.desc, n.id
+                            "Created {} neuron(s):\n{lines}",
+                            neurons.len()
                         )));
                     }
                     Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
@@ -1293,7 +1327,7 @@ impl TuiApp {
                             return;
                         }
                     };
-                    match manager.update_for_admin(id, update) {
+                    match manager.update_content_for_admin(id, update) {
                         Ok(n) => self
                             .messages
                             .push(TuiMessage::status(format!("Updated neuron '{}'", n.desc))),
@@ -1317,14 +1351,10 @@ impl TuiApp {
                         Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
                     }
                 } else if args.len() >= 3 && args[1] == "system-type" {
-                    let system_type = (args[2] != "none").then_some(args[2].as_str());
-                    match manager.set_system_type_for_admin(id, system_type) {
-                        Ok(n) => self.messages.push(TuiMessage::status(format!(
-                            "Updated neuron '{}' system type",
-                            n.desc
-                        ))),
-                        Err(e) => self.error_banner = Some(TuiErrorView::from(e)),
-                    }
+                    self.error_banner = Some(TuiErrorView::from(AppError::InvalidInput(
+                        "system-type is removed; use /neuron ensure-system <type> or reset-system"
+                            .into(),
+                    )));
                 } else if args.len() >= 3 && args[1] == "tools" {
                     let tool_ids = args[2]
                         .split(',')

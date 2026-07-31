@@ -9,8 +9,9 @@ use serde_json::Value;
 use super::{
     error::{AppError, AppResult},
     models::{
-        BootstrapReadyReport, CandidateQuery, Connection, CreateNeuronInput, GeneratedNeuronDraft,
-        Neuron, NeuronCreate, NeuronSubgraph, NeuronUpdate,
+        BootstrapReport, CandidateQuery, Connection, CreateNeuronInput, EnsureSystemOpts,
+        GeneratedNeuronDraft, Neuron, NeuronCreate, NeuronSubgraph, NeuronUpdate,
+        SystemPromptStatus,
     },
     neuron_config::NeuronConfigReader,
     neuron_model::NeuronModelCaller,
@@ -20,7 +21,20 @@ use super::{
 
 pub const CREATOR_SYSTEM_TYPE: &str = "create_neuron";
 pub const ASSISTANT_SELECT_NEURON: &str = "assistant_select_neuron";
+/// Spec alias for creator system_type.
+pub const SYSTEM_CREATE: &str = CREATOR_SYSTEM_TYPE;
+/// Spec alias for selector system_type.
+pub const SYSTEM_SELECT: &str = ASSISTANT_SELECT_NEURON;
+/// Known Assistant system prompts rebuilt by [`NeuronManager::rebootstrap`].
+/// Does not include `create_neuron` (seed root).
+pub const REBOOTSTRAP_SYSTEM_TYPES: &[&str] = &[
+    ASSISTANT_SELECT_NEURON,
+    "assistant_match_topic",
+    "assistant_complete_scope",
+    "assistant_score_feedback",
+];
 const DEFAULT_SELECT_N: usize = 7;
+const MAX_CREATE_NEURON_COUNT: usize = 10;
 
 pub struct NeuronManager {
     store: Arc<Mutex<NeuronStore>>,
@@ -54,35 +68,56 @@ impl NeuronManager {
         registry.register(ListNeuronsTool::new(Arc::clone(self)));
         registry.register(UpdateNeuronTool::new(Arc::clone(self)));
         registry.register(GetNetworkTool::new(Arc::clone(self)));
-        registry.register(CreateDownstreamNeuronTool::new(Arc::clone(self)));
+        registry.register(CreateNeuronTool::new(Arc::clone(self)));
         registry.register(SelectNeuronCandidatesTool::new(Arc::clone(self)));
     }
 
-    pub fn get_neuron(&self, id: &str) -> AppResult<Option<Neuron>> {
+    pub fn get(&self, id: &str) -> AppResult<Option<Neuron>> {
         self.store()?.get_neuron(id)
     }
 
-    pub fn get_neuron_by_system_type(&self, system_type: &str) -> AppResult<Option<Neuron>> {
+    /// IPC-stable alias for [`Self::get`].
+    pub fn get_neuron(&self, id: &str) -> AppResult<Option<Neuron>> {
+        self.get(id)
+    }
+
+    pub fn get_by_system_type(&self, system_type: &str) -> AppResult<Option<Neuron>> {
         self.store()?.get_neuron_by_system_type(system_type)
     }
 
-    pub fn list_neurons(&self) -> AppResult<Vec<Neuron>> {
+    /// IPC-stable alias for [`Self::get_by_system_type`].
+    pub fn get_neuron_by_system_type(&self, system_type: &str) -> AppResult<Option<Neuron>> {
+        self.get_by_system_type(system_type)
+    }
+
+    pub fn list(&self) -> AppResult<Vec<Neuron>> {
         self.store()?.list_neurons()
     }
 
-    pub fn get_connections(&self, id: &str) -> AppResult<Vec<Connection>> {
+    /// IPC-stable alias for [`Self::list`].
+    pub fn list_neurons(&self) -> AppResult<Vec<Neuron>> {
+        self.list()
+    }
+
+    pub fn connections(&self, id: &str) -> AppResult<Vec<Connection>> {
         self.store()?.get_connections(id)
     }
 
-    pub fn get_network(&self, id: &str, max_depth: usize) -> AppResult<NeuronSubgraph> {
+    /// IPC-stable alias for [`Self::connections`].
+    pub fn get_connections(&self, id: &str) -> AppResult<Vec<Connection>> {
+        self.connections(id)
+    }
+
+    pub fn network(&self, id: &str, max_depth: usize) -> AppResult<NeuronSubgraph> {
         self.store()?.get_network(id, max_depth)
     }
 
-    pub fn create_for_admin(&self, create: NeuronCreate) -> AppResult<Neuron> {
-        self.store()?.create_neuron(create)
+    /// IPC-stable alias for [`Self::network`].
+    pub fn get_network(&self, id: &str, max_depth: usize) -> AppResult<NeuronSubgraph> {
+        self.network(id, max_depth)
     }
 
-    pub fn update_for_ai(&self, id: &str, update: NeuronUpdate) -> AppResult<Neuron> {
+    pub fn update_content_for_ai(&self, id: &str, update: NeuronUpdate) -> AppResult<Neuron> {
         let store = self.store()?;
         let neuron = store
             .get_neuron(id)?
@@ -95,7 +130,7 @@ impl NeuronManager {
         store.update_neuron(id, update)
     }
 
-    pub fn update_for_admin(&self, id: &str, update: NeuronUpdate) -> AppResult<Neuron> {
+    pub fn update_content_for_admin(&self, id: &str, update: NeuronUpdate) -> AppResult<Neuron> {
         self.store()?.update_neuron(id, update)
     }
 
@@ -103,6 +138,31 @@ impl NeuronManager {
         self.store()?.adjust_weight(id, delta)
     }
 
+    pub fn adjust_edge_weight(
+        &self,
+        source: &str,
+        target: &str,
+        delta: f64,
+    ) -> AppResult<Connection> {
+        self.store()?
+            .adjust_connection_weight(source, target, delta)
+    }
+
+    pub fn list_system_prompt_status(&self, types: &[&str]) -> AppResult<Vec<SystemPromptStatus>> {
+        let mut out = Vec::with_capacity(types.len());
+        for system_type in types {
+            let neuron_id = self
+                .get_by_system_type(system_type)?
+                .map(|neuron| neuron.id);
+            out.push(SystemPromptStatus {
+                system_type: (*system_type).to_string(),
+                neuron_id,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Admin graph ops (not part of the unified creation front door).
     pub fn delete_for_admin(&self, id: &str) -> AppResult<bool> {
         let deleted = self.store()?.delete_neuron(id)?;
         if deleted {
@@ -122,33 +182,8 @@ impl NeuronManager {
         self.store()?.unlink(source, target)
     }
 
-    pub fn set_system_type_for_admin(
-        &self,
-        id: &str,
-        system_type: Option<&str>,
-    ) -> AppResult<Neuron> {
-        let neuron = self.store()?.set_system_type(id, system_type)?;
-        let mut creator_id = self.creator_id.lock().map_err(lock_error)?;
-        if system_type == Some(CREATOR_SYSTEM_TYPE) {
-            *creator_id = Some(id.to_string());
-        } else if creator_id.as_deref() == Some(id) {
-            *creator_id = None;
-        }
-        Ok(neuron)
-    }
-
     pub fn set_tool_ids_for_admin(&self, id: &str, tool_ids: Vec<String>) -> AppResult<Neuron> {
         self.store()?.set_tool_ids(id, tool_ids)
-    }
-
-    pub fn create_downstream(
-        &self,
-        source_id: &str,
-        create: NeuronCreate,
-        edge_weight: f64,
-    ) -> AppResult<(Neuron, Connection)> {
-        self.store()?
-            .create_downstream_neuron(source_id, create, edge_weight)
     }
 
     pub async fn select_candidates(&self, query: CandidateQuery) -> AppResult<Vec<Neuron>> {
@@ -175,7 +210,7 @@ impl NeuronManager {
         let mut created = 0usize;
 
         for _ in 0..query.min_new {
-            let neuron = self.create_generated_neuron(source_id.as_deref()).await?;
+            let neuron = self.fill_candidate_neuron(source_id.as_deref()).await?;
             selected_ids.insert(neuron.id.clone());
             selected.push(neuron);
             created += 1;
@@ -201,7 +236,7 @@ impl NeuronManager {
         }
 
         while selected.len() < query.n {
-            let neuron = self.create_generated_neuron(source_id.as_deref()).await?;
+            let neuron = self.fill_candidate_neuron(source_id.as_deref()).await?;
             if selected_ids.insert(neuron.id.clone()) {
                 selected.push(neuron);
                 created += 1;
@@ -255,12 +290,21 @@ impl NeuronManager {
         }
     }
 
-    pub async fn create_generated(
+    /// Ordinary neuron(s) via unified creation flow (pool→7→1 under creator).
+    /// `count` must be in `1..=10`. Model returns a JSON list of drafts; all are persisted.
+    pub async fn create_neuron(
         &self,
         input: CreateNeuronInput,
         link_to: Option<&str>,
-    ) -> AppResult<Neuron> {
-        let creator = self.ensure_creator_neuron()?;
+        count: usize,
+    ) -> AppResult<Vec<Neuron>> {
+        if count == 0 || count > MAX_CREATE_NEURON_COUNT {
+            return Err(AppError::InvalidInput(format!(
+                "create_neuron count must be 1..={MAX_CREATE_NEURON_COUNT}, got {count}"
+            )));
+        }
+
+        let creator = self.ensure_creator()?;
         let prompt_neuron = self
             .select_one(CandidateQuery {
                 n: DEFAULT_SELECT_N,
@@ -268,51 +312,72 @@ impl NeuronManager {
                 min_new: 0,
             })
             .await?;
+        let count_word = if count == 1 {
+            "exactly 1".to_string()
+        } else {
+            format!("exactly {count}")
+        };
+        let list_contract = if count == 1 {
+            "Return ONLY a JSON array with exactly 1 object: \
+             [{\"desc\",\"content\",\"tool_ids\"}] (weight optional/ignored). \
+             A single object is also accepted for count=1."
+                .to_string()
+        } else {
+            format!(
+                "Return ONLY a JSON array with exactly {count} objects: \
+                 [{{\"desc\",\"content\",\"tool_ids\"}}, ...] (weight optional/ignored). \
+                 Each neuron must be distinct and single-responsibility."
+            )
+        };
         let user_prompt = match &input {
             CreateNeuronInput::Purpose(purpose) => format!(
-                "Create exactly one single-responsibility neuron for the purpose below.\n\
+                "Create {count_word} single-responsibility neuron(s) for the purpose below.\n\
                  Requirements:\n\
-                 - Focus on one job only; do not bundle unrelated skills.\n\
+                 - Each neuron focuses on one job only; do not bundle unrelated skills.\n\
                  - `content` must be an executable prompt/knowledge block (role, when to use / not use, steps, output format, hard constraints).\n\
                  - Prefer 200–800 Chinese characters (or equivalent) in `content`; no slogans or placeholders.\n\
                  - Do not assign importance scores; system forces initial weight to 0.\n\
                  - `tool_ids`: only truly needed tools; else []. Do not invent tool names.\n\
-                 - Return ONLY JSON with desc, content, and tool_ids (weight optional/ignored).\n\
+                 - {list_contract}\n\
                  Purpose: {purpose}"
             ),
             CreateNeuronInput::Messages(messages) => format!(
-                "Create exactly one single-responsibility neuron distilled from the conversation context below.\n\
+                "Create {count_word} single-responsibility neuron(s) distilled from the conversation context below.\n\
                  Requirements:\n\
-                 - Infer the reusable capability the conversation needs next; ignore one-off chatter.\n\
-                 - Focus on one job only; do not bundle unrelated skills.\n\
+                 - Infer reusable capabilities the conversation needs; ignore one-off chatter.\n\
+                 - Each neuron focuses on one job only; do not bundle unrelated skills.\n\
                  - `content` must be an executable prompt/knowledge block (role, when to use / not use, steps, output format, hard constraints).\n\
                  - Prefer 200–800 Chinese characters (or equivalent) in `content`; no slogans or placeholders.\n\
                  - Do not assign importance scores; system forces initial weight to 0.\n\
                  - `tool_ids`: only truly needed tools; else []. Do not invent tool names.\n\
-                 - Return ONLY JSON with desc, content, and tool_ids (weight optional/ignored).\n\
+                 - {list_contract}\n\
                  Context: {}",
                 serde_json::to_string(messages).unwrap_or_default()
             ),
         };
-        let draft = self
-            .generate_draft(&prompt_neuron.content, &user_prompt)
+        let drafts = self
+            .generate_drafts(&prompt_neuron.content, &user_prompt, count)
             .await?;
-        let create = NeuronCreate {
-            desc: draft.desc,
-            content: draft.content,
-            weight: 0.0,
-            system_type: None,
-            tool_ids: draft.tool_ids,
-        };
-        match link_to {
-            Some(source_id) => self
-                .create_downstream(source_id, create, 0.0)
-                .map(|(neuron, _)| neuron),
-            None => self.create_for_admin(create),
+        let mut created = Vec::with_capacity(drafts.len());
+        for draft in drafts {
+            let create = NeuronCreate {
+                desc: draft.desc,
+                content: draft.content,
+                weight: 0.0,
+                system_type: None,
+                tool_ids: draft.tool_ids,
+            };
+            created.push(self.persist_plain(create, link_to)?);
         }
+        Ok(created)
     }
 
-    pub async fn ensure_system_neuron(&self, system_type: &str, reset: bool) -> AppResult<Neuron> {
+    /// Ensure a system prompt root (any system_type). Idempotent unless `opts.reset`.
+    pub async fn ensure_system_neuron(
+        &self,
+        system_type: &str,
+        opts: EnsureSystemOpts,
+    ) -> AppResult<Neuron> {
         let system_type = system_type.trim();
         if system_type.is_empty() {
             return Err(AppError::InvalidInput("system_type cannot be empty".into()));
@@ -321,12 +386,12 @@ impl NeuronManager {
         tracing::info!(
             phase = "ensure_system_neuron",
             system_type,
-            reset,
+            reset = opts.reset,
             "ensure_system_neuron start"
         );
 
-        if reset {
-            if let Some(existing) = self.get_neuron_by_system_type(system_type)? {
+        if opts.reset {
+            if let Some(existing) = self.get_by_system_type(system_type)? {
                 let _ = self.store()?.unlink_all_edges_of(&existing.id)?;
                 let _ = self.delete_for_admin(&existing.id)?;
                 tracing::info!(
@@ -336,7 +401,7 @@ impl NeuronManager {
                     "reset deleted existing system neuron"
                 );
             }
-        } else if let Some(existing) = self.get_neuron_by_system_type(system_type)? {
+        } else if let Some(existing) = self.get_by_system_type(system_type)? {
             tracing::info!(
                 phase = "ensure_system_neuron",
                 system_type,
@@ -346,7 +411,7 @@ impl NeuronManager {
             return Ok(existing);
         }
 
-        let creator = self.ensure_creator_neuron()?;
+        let creator = self.ensure_creator()?;
         tracing::info!(
             phase = "ensure_system_neuron",
             system_type,
@@ -394,7 +459,7 @@ impl NeuronManager {
                 return Err(error);
             }
         };
-        let created = self.create_for_admin(NeuronCreate {
+        let created = self.persist_system_root(NeuronCreate {
             desc: if draft.desc.trim().is_empty() {
                 system_type.to_string()
             } else {
@@ -414,57 +479,68 @@ impl NeuronManager {
         Ok(created)
     }
 
-    pub async fn bootstrap_ready(&self) -> AppResult<BootstrapReadyReport> {
-        tracing::info!(phase = "bootstrap_ready", "bootstrap_ready start");
-        let creator = self.ensure_creator_neuron()?;
+    /// Startup readiness: creator + selector only.
+    pub async fn bootstrap(&self) -> AppResult<BootstrapReport> {
+        tracing::info!(phase = "bootstrap", "bootstrap start");
+        let creator = self.ensure_creator()?;
         let selector = match self
-            .ensure_system_neuron(ASSISTANT_SELECT_NEURON, false)
+            .ensure_system_neuron(ASSISTANT_SELECT_NEURON, EnsureSystemOpts { reset: false })
             .await
         {
-            Ok(selector) => selector,
+            Ok(neuron) => neuron,
             Err(error) => {
                 tracing::error!(
-                    phase = "bootstrap_ready",
+                    phase = "bootstrap",
                     error_code = error.code(),
                     error = %error,
-                    "bootstrap_ready failed at assistant_select_neuron"
+                    "bootstrap failed at assistant_select_neuron"
                 );
                 return Err(error);
             }
         };
         tracing::info!(
-            phase = "bootstrap_ready",
+            phase = "bootstrap",
             create_neuron_id = %creator.id,
-            assistant_select_neuron_id = %selector.id,
-            "bootstrap_ready ok"
+            select_neuron_id = %selector.id,
+            "bootstrap ok"
         );
-        Ok(BootstrapReadyReport {
+        Ok(BootstrapReport {
             create_neuron_id: creator.id,
-            assistant_select_neuron_id: selector.id,
+            select_neuron_id: selector.id,
         })
     }
 
-    pub async fn bootstrap_creator_candidates(&self) -> AppResult<Vec<Neuron>> {
-        let creator = self.ensure_creator_neuron()?;
-        self.select_candidates(CandidateQuery {
-            n: DEFAULT_SELECT_N,
-            source_id: Some(creator.id),
-            min_new: 0,
-        })
-        .await
+    /// Ops: reset+recreate all known Assistant system prompts, then bootstrap.
+    /// Does not reset `create_neuron` seed.
+    pub async fn rebootstrap(&self) -> AppResult<BootstrapReport> {
+        tracing::info!(phase = "rebootstrap", "rebootstrap start");
+        let _ = self.ensure_creator()?;
+        for system_type in REBOOTSTRAP_SYSTEM_TYPES {
+            tracing::info!(
+                phase = "rebootstrap",
+                system_type,
+                "resetting system prompt"
+            );
+            self.ensure_system_neuron(system_type, EnsureSystemOpts { reset: true })
+                .await?;
+        }
+        let report = self.bootstrap().await?;
+        tracing::info!(
+            phase = "rebootstrap",
+            create_neuron_id = %report.create_neuron_id,
+            select_neuron_id = %report.select_neuron_id,
+            "rebootstrap ok"
+        );
+        Ok(report)
     }
 
-    pub fn ensure_creator_for_admin(&self) -> AppResult<Neuron> {
-        self.ensure_creator_neuron()
-    }
-
-    pub fn ensure_creator_neuron(&self) -> AppResult<Neuron> {
+    pub fn ensure_creator(&self) -> AppResult<Neuron> {
         let mut cached_id = self.creator_id.lock().map_err(lock_error)?;
         if let Some(id) = cached_id.clone() {
-            if let Some(neuron) = self.get_neuron(&id)? {
+            if let Some(neuron) = self.get(&id)? {
                 if neuron.system_type.as_deref() == Some(CREATOR_SYSTEM_TYPE) {
                     tracing::debug!(
-                        phase = "ensure_creator_neuron",
+                        phase = "ensure_creator",
                         neuron_id = %neuron.id,
                         "creator cache hit"
                     );
@@ -474,13 +550,10 @@ impl NeuronManager {
             *cached_id = None;
         }
 
-        if let Some(neuron) = self
-            .store()?
-            .get_neuron_by_system_type(CREATOR_SYSTEM_TYPE)?
-        {
+        if let Some(neuron) = self.store()?.get_neuron_by_system_type(CREATOR_SYSTEM_TYPE)? {
             *cached_id = Some(neuron.id.clone());
             tracing::info!(
-                phase = "ensure_creator_neuron",
+                phase = "ensure_creator",
                 neuron_id = %neuron.id,
                 "creator loaded from store"
             );
@@ -497,7 +570,7 @@ impl NeuronManager {
         })?;
         *cached_id = Some(neuron.id.clone());
         tracing::info!(
-            phase = "ensure_creator_neuron",
+            phase = "ensure_creator",
             neuron_id = %neuron.id,
             "creator created from seed"
         );
@@ -558,11 +631,24 @@ impl NeuronManager {
         system_prompt: &str,
         user_prompt: &str,
     ) -> AppResult<GeneratedNeuronDraft> {
+        let mut drafts = self.generate_drafts(system_prompt, user_prompt, 1).await?;
+        drafts.pop().ok_or_else(|| {
+            AppError::NeuronBootstrapFailed("Generated neuron list was empty".into())
+        })
+    }
+
+    async fn generate_drafts(
+        &self,
+        system_prompt: &str,
+        user_prompt: &str,
+        expected: usize,
+    ) -> AppResult<Vec<GeneratedNeuronDraft>> {
         tracing::info!(
-            phase = "generate_draft",
+            phase = "generate_drafts",
             system_len = system_prompt.len(),
             user_len = user_prompt.len(),
-            "generate_draft model call start"
+            expected,
+            "generate_drafts model call start"
         );
         let output = match self
             .model_caller
@@ -572,56 +658,37 @@ impl NeuronManager {
             Ok(output) => output,
             Err(error) => {
                 tracing::error!(
-                    phase = "generate_draft",
+                    phase = "generate_drafts",
                     error_code = error.code(),
                     error = %error,
-                    "generate_draft model call failed"
+                    "generate_drafts model call failed"
                 );
                 return Err(error);
             }
         };
-        let draft: GeneratedNeuronDraft = match serde_json::from_str(output.trim()) {
-            Ok(draft) => draft,
-            Err(_) => {
-                let value = extract_json_object(&output).map_err(|error| {
-                    tracing::error!(
-                        phase = "generate_draft",
-                        error = %error,
-                        "generate_draft JSON extract failed"
-                    );
-                    error
-                })?;
-                serde_json::from_value(value).map_err(|error| {
-                    let err = AppError::NeuronBootstrapFailed(format!(
-                        "Invalid generated neuron JSON: {error}"
-                    ));
-                    tracing::error!(
-                        phase = "generate_draft",
-                        error = %err,
-                        "generate_draft JSON parse failed"
-                    );
-                    err
-                })?
-            }
-        };
-        if draft.desc.trim().is_empty() || draft.content.trim().is_empty() {
-            let err = AppError::NeuronBootstrapFailed(
-                "Generated neuron must have non-empty desc/content".into(),
+        let drafts = parse_generated_drafts(&output, expected).map_err(|error| {
+            tracing::error!(
+                phase = "generate_drafts",
+                error = %error,
+                "generate_drafts JSON parse failed"
             );
-            tracing::error!(phase = "generate_draft", error = %err, "generate_draft invalid draft");
-            return Err(err);
-        }
-        tracing::info!(phase = "generate_draft", desc = %draft.desc, "generate_draft ok");
-        Ok(draft)
+            error
+        })?;
+        tracing::info!(
+            phase = "generate_drafts",
+            count = drafts.len(),
+            "generate_drafts ok"
+        );
+        Ok(drafts)
     }
 
-    async fn create_generated_neuron(&self, source_id: Option<&str>) -> AppResult<Neuron> {
+    async fn fill_candidate_neuron(&self, source_id: Option<&str>) -> AppResult<Neuron> {
         tracing::info!(
-            phase = "create_generated_neuron",
+            phase = "fill_candidate_neuron",
             source_id = source_id.unwrap_or(""),
-            "create_generated_neuron start"
+            "fill_candidate_neuron start"
         );
-        let creator = self.ensure_creator_neuron()?;
+        let creator = self.ensure_creator()?;
         let user_prompt = match source_id {
             Some(source_id) => format!(
                 "Create exactly one single-responsibility downstream neuron under source_id {source_id}.\n\
@@ -653,12 +720,33 @@ impl NeuronManager {
             system_type: None,
             tool_ids: draft.tool_ids,
         };
-        match source_id {
+        self.persist_plain(create, source_id)
+    }
+
+    fn persist_plain(
+        &self,
+        mut create: NeuronCreate,
+        link_to: Option<&str>,
+    ) -> AppResult<Neuron> {
+        create.system_type = None;
+        create.weight = 0.0;
+        match link_to {
             Some(source_id) => self
-                .create_downstream(source_id, create, 0.0)
+                .store()?
+                .create_downstream_neuron(source_id, create, 0.0)
                 .map(|(neuron, _)| neuron),
-            None => self.create_for_admin(create),
+            None => self.store()?.create_neuron(create),
         }
+    }
+
+    fn persist_system_root(&self, mut create: NeuronCreate) -> AppResult<Neuron> {
+        if create.system_type.as_deref().unwrap_or("").trim().is_empty() {
+            return Err(AppError::InvalidInput(
+                "persist_system_root requires system_type".into(),
+            ));
+        }
+        create.weight = 0.0;
+        self.store()?.create_neuron(create)
     }
 
     fn store(&self) -> AppResult<std::sync::MutexGuard<'_, NeuronStore>> {
@@ -704,6 +792,105 @@ fn extract_json_object(text: &str) -> AppResult<serde_json::Value> {
     }
     serde_json::from_str(&trimmed[start..=end])
         .map_err(|e| AppError::InvalidInput(format!("Failed to parse LLM JSON: {e}")))
+}
+
+fn extract_json_array(text: &str) -> AppResult<serde_json::Value> {
+    let trimmed = text.trim();
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if value.is_array() {
+            return Ok(value);
+        }
+        if let Some(neurons) = value.get("neurons").filter(|v| v.is_array()) {
+            return Ok(neurons.clone());
+        }
+    }
+    let start = trimmed
+        .find('[')
+        .ok_or_else(|| AppError::InvalidInput("LLM response missing JSON array".into()))?;
+    let end = trimmed
+        .rfind(']')
+        .ok_or_else(|| AppError::InvalidInput("LLM response missing JSON array end".into()))?;
+    if end < start {
+        return Err(AppError::InvalidInput(
+            "LLM response has invalid JSON array bounds".into(),
+        ));
+    }
+    serde_json::from_str(&trimmed[start..=end])
+        .map_err(|e| AppError::InvalidInput(format!("Failed to parse LLM JSON array: {e}")))
+}
+
+fn parse_generated_drafts(text: &str, expected: usize) -> AppResult<Vec<GeneratedNeuronDraft>> {
+    if expected == 0 {
+        return Err(AppError::InvalidInput(
+            "expected draft count must be >= 1".into(),
+        ));
+    }
+
+    let trimmed = text.trim();
+    let mut drafts: Vec<GeneratedNeuronDraft> = Vec::new();
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        drafts = drafts_from_json_value(value)?;
+    }
+    // Prefer a real list before falling back; ignore empty `[]` false-positives
+    // (e.g. `"tool_ids":[]` inside a single object).
+    if drafts.is_empty() {
+        if let Ok(array) = extract_json_array(trimmed) {
+            drafts = drafts_from_json_value(array)?;
+        }
+    }
+    if drafts.is_empty() && expected == 1 {
+        let value = extract_json_object(trimmed)?;
+        drafts = drafts_from_json_value(value)?;
+    }
+    if drafts.is_empty() {
+        return Err(AppError::NeuronBootstrapFailed(
+            "Generated neuron list was empty".into(),
+        ));
+    }
+    if drafts.len() > expected {
+        drafts.truncate(expected);
+    }
+    if drafts.len() != expected {
+        return Err(AppError::NeuronBootstrapFailed(format!(
+            "Expected {expected} generated neuron(s), got {}",
+            drafts.len()
+        )));
+    }
+    for draft in &drafts {
+        if draft.desc.trim().is_empty() || draft.content.trim().is_empty() {
+            return Err(AppError::NeuronBootstrapFailed(
+                "Generated neuron must have non-empty desc/content".into(),
+            ));
+        }
+    }
+    Ok(drafts)
+}
+
+fn drafts_from_json_value(value: serde_json::Value) -> AppResult<Vec<GeneratedNeuronDraft>> {
+    match value {
+        serde_json::Value::Array(items) => serde_json::from_value(serde_json::Value::Array(items))
+            .map_err(|error| {
+                AppError::NeuronBootstrapFailed(format!(
+                    "Invalid generated neuron list JSON: {error}"
+                ))
+            }),
+        serde_json::Value::Object(map) => {
+            if let Some(neurons) = map.get("neurons").cloned() {
+                if neurons.is_array() {
+                    return drafts_from_json_value(neurons);
+                }
+            }
+            let draft: GeneratedNeuronDraft =
+                serde_json::from_value(serde_json::Value::Object(map)).map_err(|error| {
+                    AppError::NeuronBootstrapFailed(format!(
+                        "Invalid generated neuron JSON: {error}"
+                    ))
+                })?;
+            Ok(vec![draft])
+        }
+        _ => Ok(Vec::new()),
+    }
 }
 
 fn now_ms() -> u128 {
@@ -832,7 +1019,7 @@ impl Tool for UpdateNeuronTool {
                 .and_then(Value::as_str)
                 .map(str::to_string),
         };
-        let neuron = self.manager.update_for_ai(id, update)?;
+        let neuron = self.manager.update_content_for_ai(id, update)?;
         serde_json::to_string(&neuron).map_err(|e| AppError::StorageError(e.to_string()))
     }
 }
@@ -876,55 +1063,51 @@ impl Tool for GetNetworkTool {
     }
 }
 
-struct CreateDownstreamNeuronTool {
+struct CreateNeuronTool {
     manager: Arc<NeuronManager>,
 }
 
-impl CreateDownstreamNeuronTool {
+impl CreateNeuronTool {
     fn new(manager: Arc<NeuronManager>) -> Self {
         Self { manager }
     }
 }
 
 #[async_trait]
-impl Tool for CreateDownstreamNeuronTool {
+impl Tool for CreateNeuronTool {
     fn name(&self) -> &str {
-        "create_downstream_neuron"
+        "create_neuron"
     }
 
     fn description(&self) -> &str {
-        "Create a regular neuron and connect it as a direct downstream neuron"
+        "Create 1..=10 regular neurons via the unified creation flow (pool→7→1). Model returns a list. Optionally link all as direct downstream of source_id."
     }
 
     fn parameters(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "source_id": {"type": "string"},
-                "desc": {"type": "string"},
-                "content": {"type": "string"}
+                "purpose": {"type": "string", "description": "Purpose for the new neuron(s)"},
+                "count": {"type": "integer", "minimum": 1, "maximum": 10, "default": 1},
+                "source_id": {"type": "string", "description": "Optional parent to link as direct downstream"}
             },
-            "required": ["source_id", "desc"]
+            "required": ["purpose"]
         })
     }
 
     async fn execute(&self, args: Value) -> AppResult<String> {
-        let source_id = required_str(&args, "source_id")?;
-        let desc = required_str(&args, "desc")?;
-        let create = NeuronCreate {
-            desc: desc.to_string(),
-            content: args
-                .get("content")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            weight: 0.0,
-            system_type: None,
-            tool_ids: Vec::new(),
-        };
-        let (neuron, connection) = self.manager.create_downstream(source_id, create, 0.0)?;
-        serde_json::to_string(&(neuron, connection))
-            .map_err(|e| AppError::StorageError(e.to_string()))
+        let purpose = required_str(&args, "purpose")?;
+        let link_to = args.get("source_id").and_then(Value::as_str);
+        let count = args.get("count").and_then(Value::as_u64).unwrap_or(1) as usize;
+        let neurons = self
+            .manager
+            .create_neuron(
+                CreateNeuronInput::Purpose(purpose.to_string()),
+                link_to,
+                count,
+            )
+            .await?;
+        serde_json::to_string(&neurons).map_err(|e| AppError::StorageError(e.to_string()))
     }
 }
 
@@ -1003,11 +1186,30 @@ mod tests {
 
     #[async_trait]
     impl NeuronModelCaller for MockModelCaller {
-        async fn call_model(&self, _system_prompt: &str, _user_prompt: &str) -> AppResult<String> {
+        async fn call_model(&self, _system_prompt: &str, user_prompt: &str) -> AppResult<String> {
             let call = self.calls.fetch_add(1, Ordering::Relaxed);
-            Ok(format!(
-                r#"{{"desc":"generated-{call}","content":"content-{call}","weight":1.0,"tool_ids":[]}}"#
-            ))
+            let count = user_prompt
+                .split("exactly ")
+                .nth(1)
+                .and_then(|rest| {
+                    rest.split_whitespace()
+                        .next()
+                        .and_then(|token| token.trim_matches(|c: char| !c.is_ascii_digit()).parse().ok())
+                })
+                .unwrap_or(1usize);
+            if count <= 1 {
+                return Ok(format!(
+                    r#"{{"desc":"generated-{call}","content":"content-{call}","weight":1.0,"tool_ids":[]}}"#
+                ));
+            }
+            let items: Vec<String> = (0..count)
+                .map(|i| {
+                    format!(
+                        r#"{{"desc":"generated-{call}-{i}","content":"content-{call}-{i}","weight":1.0,"tool_ids":[]}}"#
+                    )
+                })
+                .collect();
+            Ok(format!("[{}]", items.join(",")))
         }
     }
 
@@ -1038,16 +1240,22 @@ mod tests {
         (manager, root)
     }
 
+    fn insert_plain(manager: &NeuronManager, desc: &str, content: &str) -> Neuron {
+        manager
+            .store()
+            .unwrap()
+            .create_neuron(NeuronCreate {
+                desc: desc.into(),
+                content: content.into(),
+                ..Default::default()
+            })
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn select_candidates_prefers_source_id_and_fills_to_n() {
         let (manager, root) = test_manager();
-        let source = manager
-            .create_for_admin(NeuronCreate {
-                desc: "source".into(),
-                content: "source content".into(),
-                ..Default::default()
-            })
-            .unwrap();
+        let source = insert_plain(&manager, "source", "source content");
         let candidates = manager
             .select_candidates(CandidateQuery {
                 n: 3,
@@ -1067,11 +1275,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bootstrap_creator_candidates_returns_seven_direct_children() {
+    async fn select_candidates_under_creator_returns_seven() {
         let (manager, root) = test_manager();
-        let candidates = manager.bootstrap_creator_candidates().await.unwrap();
+        let creator = manager.ensure_creator().unwrap();
+        let candidates = manager
+            .select_candidates(CandidateQuery {
+                n: DEFAULT_SELECT_N,
+                source_id: Some(creator.id.clone()),
+                min_new: 0,
+            })
+            .await
+            .unwrap();
         assert_eq!(candidates.len(), 7);
-        let creator = manager.ensure_creator_for_admin().unwrap();
         let downstream = manager
             .store()
             .unwrap()
@@ -1084,8 +1299,8 @@ mod tests {
     #[test]
     fn ai_update_rejects_system_neuron() {
         let (manager, root) = test_manager();
-        let creator = manager.ensure_creator_for_admin().unwrap();
-        let result = manager.update_for_ai(
+        let creator = manager.ensure_creator().unwrap();
+        let result = manager.update_content_for_ai(
             &creator.id,
             NeuronUpdate {
                 desc: Some("changed".into()),
@@ -1099,20 +1314,8 @@ mod tests {
     #[tokio::test]
     async fn select_one_from_falls_back_to_weight_without_selector() {
         let (manager, root) = test_manager();
-        let low = manager
-            .create_for_admin(NeuronCreate {
-                desc: "low".into(),
-                content: "low".into(),
-                ..Default::default()
-            })
-            .unwrap();
-        let high = manager
-            .create_for_admin(NeuronCreate {
-                desc: "high".into(),
-                content: "high".into(),
-                ..Default::default()
-            })
-            .unwrap();
+        let low = insert_plain(&manager, "low", "low");
+        let high = insert_plain(&manager, "high", "high");
         let low = manager.adjust_weight(&low.id, 1.0).unwrap();
         let high = manager.adjust_weight(&high.id, 9.0).unwrap();
         let selected = manager.select_one_from(&[low, high.clone()]).await.unwrap();
@@ -1121,25 +1324,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_generated_ignores_model_weight_and_uses_zero() {
+    async fn create_neuron_ignores_model_weight_and_uses_zero() {
         let (manager, root) = test_manager();
-        let source = manager
-            .create_for_admin(NeuronCreate {
-                desc: "source".into(),
-                content: "source".into(),
-                ..Default::default()
-            })
-            .unwrap();
-        let child = manager
-            .create_generated(
+        let source = insert_plain(&manager, "source", "source");
+        let children = manager
+            .create_neuron(
                 CreateNeuronInput::Purpose("test purpose".into()),
                 Some(&source.id),
+                1,
             )
             .await
             .unwrap();
+        assert_eq!(children.len(), 1);
+        let child = &children[0];
         assert!((child.weight - 0.0).abs() < f64::EPSILON);
         let edge = manager
-            .get_connections(&source.id)
+            .connections(&source.id)
             .unwrap()
             .into_iter()
             .find(|c| c.target == child.id)
@@ -1148,10 +1348,26 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[tokio::test]
+    async fn create_neuron_batch_returns_requested_count() {
+        let (manager, root) = test_manager();
+        let neurons = manager
+            .create_neuron(
+                CreateNeuronInput::Purpose("batch purpose".into()),
+                None,
+                3,
+            )
+            .await
+            .unwrap();
+        assert_eq!(neurons.len(), 3);
+        assert!(neurons.iter().all(|n| n.system_type.is_none()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn ensure_creator_uses_default_prompt_without_config() {
         let (manager, root) = test_manager();
-        let creator = manager.ensure_creator_for_admin().unwrap();
+        let creator = manager.ensure_creator().unwrap();
         assert_eq!(creator.system_type.as_deref(), Some(CREATOR_SYSTEM_TYPE));
         assert!(!creator.content.trim().is_empty());
         fs::remove_dir_all(root).unwrap();

@@ -22,13 +22,13 @@ pub use assistant_mode::AssistantMode;
 pub use error::{AppError, AppResult};
 pub use gateway::Gateway;
 pub use models::{
-    BootstrapReadyReport, CandidateQuery, ChatModelSelection, ChatOptions, ChatResponse,
+    BootstrapReport, CandidateQuery, ChatModelSelection, ChatOptions, ChatResponse,
     CompactionConfig, Connection, Conversation, ConversationMode, CreateNeuronInput,
-    GeneratedNeuronDraft, Message, MessageRole, ModelCallRequest, ModelCallResponse,
-    ModelCapabilities, ModelInfo, ModelMessage, ModelMessageRole, Neuron, NeuronCreate,
-    NeuronSubgraph, NeuronUpdate, ProviderInfo, ProviderKind, RuntimeStatus, ScopeInItem, SkillInfo,
-    ToolCall,
-    ToolDefinition, Topic, TopicStatus, TopicUpdate,
+    EnsureSystemOpts, GeneratedNeuronDraft, Message, MessageRole, ModelCallRequest,
+    ModelCallResponse, ModelCapabilities, ModelInfo, ModelMessage, ModelMessageRole, Neuron,
+    NeuronCreate, NeuronSubgraph, NeuronUpdate, ProviderInfo, ProviderKind, RuntimeStatus,
+    ScopeInItem, SkillInfo, SystemPromptStatus, ToolCall, ToolDefinition, Topic, TopicStatus,
+    TopicUpdate,
 };
 pub use poller::{PollHandler, Poller, PollerRunState, PollerStatus};
 pub use session_tracker::{register_session_tracker_tools, RunningSession, SessionTracker};

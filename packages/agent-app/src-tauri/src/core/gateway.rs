@@ -420,12 +420,12 @@ impl Gateway {
 
     pub async fn bootstrap_neurons(&self) -> AppResult<()> {
         tracing::info!(phase = "bootstrap_neurons", "gateway bootstrap_neurons start");
-        match self.neuron_manager.bootstrap_ready().await {
+        match self.neuron_manager.bootstrap().await {
             Ok(report) => {
                 tracing::info!(
                     phase = "bootstrap_neurons",
                     create_neuron_id = %report.create_neuron_id,
-                    assistant_select_neuron_id = %report.assistant_select_neuron_id,
+                    select_neuron_id = %report.select_neuron_id,
                     "gateway bootstrap_neurons ok"
                 );
                 Ok(())
@@ -552,9 +552,9 @@ mod tests {
         );
         assert!(skill_names.contains(&"get_current_time".to_string()));
         assert!(skill_names.contains(&"echo".to_string()));
-        assert!(skill_names.contains(&"create_downstream_neuron".to_string()));
+        assert!(skill_names.contains(&"create_neuron".to_string()));
         assert!(skill_names.contains(&"select_neuron_candidates".to_string()));
-        assert!(!skill_names.contains(&"create_neuron".to_string()));
+        assert!(!skill_names.contains(&"create_downstream_neuron".to_string()));
         assert!(skill_names.contains(&"add_topic_scope_item".to_string()));
         assert!(skill_names.contains(&"delete_topic_scope_item".to_string()));
         assert!(skill_names.contains(&"complete_topic_scope_item".to_string()));
