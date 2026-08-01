@@ -7,6 +7,7 @@
     type Node,
     type Edge,
   } from "@xyflow/svelte";
+  import { untrack } from "svelte";
   import "@xyflow/svelte/dist/style.css";
   import type { NeuronSubgraph } from "$lib/types";
   import { layoutFlowNodes } from "$lib/features/neuron/networkLayout";
@@ -15,9 +16,11 @@
   let {
     subgraph,
     onJumpTo,
+    selectedId = null,
   }: {
     subgraph: NeuronSubgraph;
     onJumpTo: (id: string) => void;
+    selectedId?: string | null;
   } = $props();
 
   const nodeTypes = { neuron: NeuronFlowNode };
@@ -33,6 +36,7 @@
       position: n.position,
       data: n.data,
       draggable: true,
+      selected: n.id === selectedId,
     }));
 
     const weights = sg.connections.map((c) => c.weight);
@@ -58,6 +62,14 @@
   $effect(() => {
     rebuild(subgraph);
   });
+
+  // 外部选中态 → 仅更新节点的 selected，且不追踪 nodes 以避免读写闭环
+  $effect(() => {
+    const sel = selectedId;
+    untrack(() => {
+      nodes = nodes.map((n) => ({ ...n, selected: n.id === sel }));
+    });
+  });
 </script>
 
 <div class="graph-wrap">
@@ -79,7 +91,7 @@
 <style>
   .graph-wrap {
     width: 100%;
-    height: min(70vh, 560px);
+    height: 100%;
     min-height: 320px;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);

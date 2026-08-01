@@ -141,6 +141,15 @@ export type Translations = {
     viewNetwork: string;
     jumpTo: string;
     loading: string;
+    search: string;
+    filterAll: string;
+    connectionsCount: string;
+    emptyTitle: string;
+    emptyHint: string;
+    startAssistant: string;
+    focusNode: string;
+    drawerTitle: string;
+    close: string;
   };
 };
 
@@ -293,6 +302,15 @@ export const en: Translations = {
     viewNetwork: "View Network",
     jumpTo: "View",
     loading: "Loading...",
+    search: "Search neurons...",
+    filterAll: "All",
+    connectionsCount: "{count} links",
+    emptyTitle: "No neurons yet",
+    emptyHint: "Talk in Assistant mode to grow your neuron network.",
+    startAssistant: "Start in Assistant mode",
+    focusNode: "Focus",
+    drawerTitle: "Neuron",
+    close: "Close",
   },
 };
 
@@ -445,5 +463,14 @@ export const zh: Translations = {
     viewNetwork: "查看网络",
     jumpTo: "查看",
     loading: "加载中...",
+    search: "搜索神经元...",
+    filterAll: "全部",
+    connectionsCount: "{count} 条连接",
+    emptyTitle: "暂无神经元",
+    emptyHint: "在 Assistant 模式下对话，让神经元网络生长。",
+    startAssistant: "进入 Assistant 模式",
+    focusNode: "聚焦",
+    drawerTitle: "神经元",
+    close: "关闭",
   },
 };
