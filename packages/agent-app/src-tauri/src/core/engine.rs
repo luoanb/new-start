@@ -57,7 +57,7 @@ impl Engine {
     /// - Chat  → single model call, no tools
     /// - Agent → tool-calling loop
     pub async fn chat(
-        &mut self,
+        &self,
         input: &str,
         conversation_id: String,
         options: ChatOptions,

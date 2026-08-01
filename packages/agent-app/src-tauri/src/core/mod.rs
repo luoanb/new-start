@@ -17,6 +17,7 @@ pub mod session_tracker;
 pub mod tool_registry;
 pub mod topic_manager;
 pub mod topic_store;
+pub use topic_store::TopicStore;
 
 pub use assistant_mode::AssistantMode;
 pub use error::{AppError, AppResult};

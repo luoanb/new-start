@@ -5,14 +5,20 @@ use crate::core::{
     app_log::{self, LogEntry},
     conversation_store::ConversationStore,
     error::AppErrorPayload,
+    neuron_manager::NeuronManager,
+    poller::Poller,
+    providers::ProviderRegistry,
+    session_tracker::SessionTracker,
+    topic_store::TopicStore,
     ChatOptions, ChatResponse, Connection, Conversation, ConversationMode, Gateway, Message,
     ModelCallRequest, ModelCallResponse, ModelInfo, Neuron, NeuronSubgraph, NeuronUpdate,
     PollerStatus, ProviderInfo, RuntimeStatus, SkillInfo, Topic, TopicStatus, TopicUpdate,
 };
-use core::topic_store::TopicStore;
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex as StdMutex},
+};
 use tauri::{Emitter, Manager, State};
-use tokio::sync::Mutex;
 
 type TauriResult<T> = Result<T, AppErrorPayload>;
 
@@ -34,14 +40,16 @@ fn debug_storage_path() -> String {
 
 #[tauri::command]
 async fn send_chat_message(
-    state: State<'_, Mutex<Gateway>>,
+    gateway: State<'_, Gateway>,
     message: String,
     provider_id: String,
     model_id: String,
     conversation_id: Option<String>,
 ) -> TauriResult<ChatResponse> {
-    let mut gateway = state.lock().await;
+    // Gateway is shared via Tauri State (Arc); send_model_message is &self and
+    // clone-outs before network await — no outer Mutex held across I/O.
     gateway
+        .inner()
         .send_model_message(
             message,
             ChatOptions {
@@ -55,26 +63,28 @@ async fn send_chat_message(
 }
 
 #[tauri::command]
-fn create_conversation(state: State<'_, Mutex<Gateway>>, mode: String) -> TauriResult<String> {
+async fn create_conversation(
+    gateway: State<'_, Gateway>,
+    mode: String,
+) -> TauriResult<String> {
     let conv_mode = match mode.to_lowercase().as_str() {
         "agent" => ConversationMode::Agent,
         "assistant" => ConversationMode::Assistant,
         _ => ConversationMode::Chat,
     };
-    let mut gateway = state.blocking_lock();
     gateway
+        .inner()
         .create_new_conversation(conv_mode)
         .map_err(|error| error.payload())
 }
 
 #[tauri::command]
-fn close_session(
-    state: State<'_, Mutex<Gateway>>,
+async fn close_session(
+    sessions: State<'_, SessionTracker>,
     session_id: String,
 ) -> TauriResult<String> {
-    let gateway = state.blocking_lock();
-    gateway
-        .session_tracker()
+    sessions
+        .inner()
         .close(&session_id)
         .map_err(|error| error.payload())
 }
@@ -82,116 +92,126 @@ fn close_session(
 // ── Info ──
 
 #[tauri::command]
-fn list_skills(state: State<'_, Mutex<Gateway>>) -> TauriResult<Vec<SkillInfo>> {
-    with_gateway(state, |gateway| Ok(gateway.list_skills()))
+async fn list_skills(gateway: State<'_, Gateway>) -> TauriResult<Vec<SkillInfo>> {
+    Ok(gateway.inner().list_skills())
 }
 
 #[tauri::command]
-fn list_providers(state: State<'_, Mutex<Gateway>>) -> TauriResult<Vec<ProviderInfo>> {
-    with_gateway(state, |gateway| Ok(gateway.list_providers()))
+async fn list_providers(providers: State<'_, ProviderRegistry>) -> TauriResult<Vec<ProviderInfo>> {
+    Ok(providers.inner().list_providers())
 }
 
 #[tauri::command]
-fn list_models(
-    state: State<'_, Mutex<Gateway>>,
+async fn list_models(
+    providers: State<'_, ProviderRegistry>,
     provider_id: Option<String>,
 ) -> TauriResult<Vec<ModelInfo>> {
-    with_gateway(state, |gateway| gateway.list_models(provider_id))
+    providers
+        .inner()
+        .list_models(provider_id.as_deref())
+        .map_err(|error| error.payload())
 }
 
 #[tauri::command]
 async fn call_model(
-    state: State<'_, Mutex<Gateway>>,
+    providers: State<'_, ProviderRegistry>,
     request: ModelCallRequest,
 ) -> TauriResult<ModelCallResponse> {
-    let gateway = state.lock().await;
-    gateway
+    providers
+        .inner()
         .call_model(request)
         .await
         .map_err(|error| error.payload())
 }
 
 #[tauri::command]
-fn list_conversations(state: State<'_, Mutex<Gateway>>) -> TauriResult<Vec<Conversation>> {
-    with_gateway(state, |gateway| gateway.list_conversations())
+async fn list_conversations(store: State<'_, ConversationStore>) -> TauriResult<Vec<Conversation>> {
+    store
+        .inner()
+        .list_conversations()
+        .map_err(|error| error.payload())
 }
 
 #[tauri::command]
-fn history(
-    state: State<'_, Mutex<Gateway>>,
+async fn history(
+    gateway: State<'_, Gateway>,
     conversation_id: Option<String>,
 ) -> TauriResult<Vec<Message>> {
-    with_gateway(state, |gateway| gateway.history(conversation_id))
+    gateway
+        .inner()
+        .history(conversation_id)
+        .map_err(|error| error.payload())
 }
 
 #[tauri::command]
-fn clear_conversation(
-    state: State<'_, Mutex<Gateway>>,
+async fn clear_conversation(
+    gateway: State<'_, Gateway>,
     conversation_id: Option<String>,
 ) -> TauriResult<String> {
-    with_gateway(state, |gateway| gateway.clear_conversation(conversation_id))
+    gateway
+        .inner()
+        .clear_conversation(conversation_id)
+        .map_err(|error| error.payload())
 }
 
 #[tauri::command]
-fn status(state: State<'_, Mutex<Gateway>>) -> TauriResult<RuntimeStatus> {
-    with_gateway(state, |gateway| gateway.status())
+async fn status(gateway: State<'_, Gateway>) -> TauriResult<RuntimeStatus> {
+    gateway.inner().status().map_err(|error| error.payload())
 }
 
 // ── Topic ──
 
+fn topic_status_filter(status: Option<&str>) -> Option<TopicStatus> {
+    status.and_then(|s| match s {
+        "todo" => Some(TopicStatus::Todo),
+        "in_progress" => Some(TopicStatus::InProgress),
+        "paused" => Some(TopicStatus::Paused),
+        "done" => Some(TopicStatus::Done),
+        "cancelled" => Some(TopicStatus::Cancelled),
+        _ => None,
+    })
+}
+
 #[tauri::command]
-fn list_topics(
-    state: State<'_, Mutex<Gateway>>,
+async fn list_topics(
+    topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
     status: Option<String>,
 ) -> TauriResult<Vec<Topic>> {
-    with_topic_store(state, |store| {
-        let filter = status
-            .as_deref()
-            .and_then(|s| match s {
-                "todo" => Some(TopicStatus::Todo),
-                "in_progress" => Some(TopicStatus::InProgress),
-                "paused" => Some(TopicStatus::Paused),
-                "done" => Some(TopicStatus::Done),
-                "cancelled" => Some(TopicStatus::Cancelled),
-                _ => None,
-            });
-        store.list(filter)
-    })
+    let filter = topic_status_filter(status.as_deref());
+    with_topic_store(&topic_store, |store| store.list(filter))
 }
 
 #[tauri::command]
-fn get_topic(
-    state: State<'_, Mutex<Gateway>>,
+async fn get_topic(
+    topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
     id: String,
 ) -> TauriResult<Topic> {
-    with_topic_store(state, |store| {
-        store
-            .get(&id)?
-            .ok_or_else(|| {
-                crate::core::AppError::ConversationNotFound(format!("Topic not found: {id}"))
-            })
+    with_topic_store(&topic_store, |store| {
+        store.get(&id)?.ok_or_else(|| {
+            crate::core::AppError::ConversationNotFound(format!("Topic not found: {id}"))
+        })
     })
 }
 
 #[tauri::command]
-fn create_topic(
-    state: State<'_, Mutex<Gateway>>,
+async fn create_topic(
+    topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
     name: String,
     description: String,
 ) -> TauriResult<Topic> {
-    with_topic_store(state, |store| {
+    with_topic_store(&topic_store, |store| {
         store.create(&name, &description, TopicStatus::Todo, vec![], None)
     })
 }
 
 #[tauri::command]
-fn update_topic(
-    state: State<'_, Mutex<Gateway>>,
+async fn update_topic(
+    topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
     id: String,
     name: Option<String>,
     description: Option<String>,
 ) -> TauriResult<Topic> {
-    with_topic_store(state, |store| {
+    with_topic_store(&topic_store, |store| {
         store.update(
             &id,
             TopicUpdate {
@@ -204,134 +224,140 @@ fn update_topic(
 }
 
 #[tauri::command]
-fn delete_topic(
-    state: State<'_, Mutex<Gateway>>,
+async fn delete_topic(
+    topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
     id: String,
 ) -> TauriResult<bool> {
-    with_topic_store(state, |store| store.delete(&id))
+    with_topic_store(&topic_store, |store| store.delete(&id))
 }
 
 #[tauri::command]
-fn add_topic_scope_item(
-    state: State<'_, Mutex<Gateway>>,
+async fn add_topic_scope_item(
+    topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
     topic_id: String,
     goal: String,
     done_contract: String,
 ) -> TauriResult<Topic> {
-    with_topic_store(state, |store| {
+    with_topic_store(&topic_store, |store| {
         store.add_scope_item(&topic_id, &goal, &done_contract)
     })
 }
 
 #[tauri::command]
-fn delete_topic_scope_item(
-    state: State<'_, Mutex<Gateway>>,
+async fn delete_topic_scope_item(
+    topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
     topic_id: String,
     item_id: String,
 ) -> TauriResult<Topic> {
-    with_topic_store(state, |store| {
+    with_topic_store(&topic_store, |store| {
         store.delete_scope_item(&topic_id, &item_id)
     })
 }
 
 #[tauri::command]
-fn complete_topic_scope_item(
-    state: State<'_, Mutex<Gateway>>,
+async fn complete_topic_scope_item(
+    topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
     topic_id: String,
     item_id: String,
 ) -> TauriResult<Topic> {
-    with_topic_store(state, |store| {
+    with_topic_store(&topic_store, |store| {
         store.complete_scope_item(&topic_id, &item_id)
     })
 }
 
 #[tauri::command]
-fn pause_topic(
-    state: State<'_, Mutex<Gateway>>,
+async fn pause_topic(
+    topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
     id: String,
 ) -> TauriResult<Topic> {
-    with_topic_store(state, |store| store.pause(&id))
+    with_topic_store(&topic_store, |store| store.pause(&id))
 }
 
 #[tauri::command]
-fn resume_topic(
-    state: State<'_, Mutex<Gateway>>,
+async fn resume_topic(
+    topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
     id: String,
 ) -> TauriResult<Topic> {
-    with_topic_store(state, |store| store.resume(&id))
+    with_topic_store(&topic_store, |store| store.resume(&id))
 }
 
 // ── Poller ──
 
 #[tauri::command]
-fn poll_status(state: State<'_, Mutex<Gateway>>) -> TauriResult<PollerStatus> {
-    with_gateway(state, |gateway| gateway.poll_status())
+async fn poll_status(poller: State<'_, Arc<StdMutex<Poller>>>) -> TauriResult<PollerStatus> {
+    with_poller(&poller, |p| Ok(p.status()))
 }
 
 #[tauri::command]
-fn poll_pause(state: State<'_, Mutex<Gateway>>) -> TauriResult<()> {
-    with_gateway(state, |gateway| gateway.poll_pause())
+async fn poll_pause(poller: State<'_, Arc<StdMutex<Poller>>>) -> TauriResult<()> {
+    with_poller(&poller, |p| {
+        p.pause();
+        Ok(())
+    })
 }
 
 #[tauri::command]
-fn poll_resume(state: State<'_, Mutex<Gateway>>) -> TauriResult<()> {
-    with_gateway(state, |gateway| gateway.poll_resume())
+async fn poll_resume(poller: State<'_, Arc<StdMutex<Poller>>>) -> TauriResult<()> {
+    with_poller(&poller, |p| {
+        p.resume();
+        Ok(())
+    })
 }
 
 #[tauri::command]
-fn poll_trigger(state: State<'_, Mutex<Gateway>>) -> TauriResult<()> {
-    with_gateway(state, |gateway| gateway.poll_trigger())
+async fn poll_trigger(poller: State<'_, Arc<StdMutex<Poller>>>) -> TauriResult<()> {
+    with_poller(&poller, |p| {
+        p.trigger();
+        Ok(())
+    })
 }
 
 // ── Neuron ──
 
 #[tauri::command]
-fn list_neurons(state: State<'_, Mutex<Gateway>>) -> TauriResult<Vec<Neuron>> {
-    with_neuron_manager(state, |mgr| mgr.list_neurons())
+async fn list_neurons(mgr: State<'_, Arc<NeuronManager>>) -> TauriResult<Vec<Neuron>> {
+    mgr.inner().list_neurons().map_err(|error| error.payload())
 }
 
 #[tauri::command]
-fn get_neuron(
-    state: State<'_, Mutex<Gateway>>,
-    id: String,
-) -> TauriResult<Neuron> {
-    with_neuron_manager(state, |mgr| {
-        mgr.get_neuron(&id)?
-            .ok_or_else(|| {
-                crate::core::AppError::NeuronNotFound(id)
-            })
-    })
+async fn get_neuron(mgr: State<'_, Arc<NeuronManager>>, id: String) -> TauriResult<Neuron> {
+    mgr.inner()
+        .get_neuron(&id)
+        .map_err(|error| error.payload())?
+        .ok_or_else(|| crate::core::AppError::NeuronNotFound(id).payload())
 }
 
 #[tauri::command]
-fn update_neuron(
-    state: State<'_, Mutex<Gateway>>,
+async fn update_neuron(
+    mgr: State<'_, Arc<NeuronManager>>,
     id: String,
     desc: Option<String>,
     content: Option<String>,
 ) -> TauriResult<Neuron> {
-    with_neuron_manager(state, |mgr| {
-        mgr.update_content_for_admin(&id, NeuronUpdate { desc, content })
-    })
+    mgr.inner()
+        .update_content_for_admin(&id, NeuronUpdate { desc, content })
+        .map_err(|error| error.payload())
 }
 
 #[tauri::command]
-fn get_connections(
-    state: State<'_, Mutex<Gateway>>,
+async fn get_connections(
+    mgr: State<'_, Arc<NeuronManager>>,
     id: String,
 ) -> TauriResult<Vec<Connection>> {
-    with_neuron_manager(state, |mgr| mgr.get_connections(&id))
+    mgr.inner()
+        .get_connections(&id)
+        .map_err(|error| error.payload())
 }
 
 #[tauri::command]
-fn get_network(
-    state: State<'_, Mutex<Gateway>>,
+async fn get_network(
+    mgr: State<'_, Arc<NeuronManager>>,
     id: String,
     max_depth: Option<usize>,
 ) -> TauriResult<NeuronSubgraph> {
-    with_neuron_manager(state, |mgr| {
-        mgr.get_network(&id, max_depth.unwrap_or(2))
-    })
+    mgr.inner()
+        .get_network(&id, max_depth.unwrap_or(2))
+        .map_err(|error| error.payload())
 }
 
 // ── Logs ──
@@ -365,37 +391,24 @@ fn logs_dir() -> Option<String> {
 
 // ── Helpers ──
 
-fn with_gateway<T>(
-    state: State<'_, Mutex<Gateway>>,
-    action: impl FnOnce(&mut Gateway) -> crate::core::AppResult<T>,
-) -> TauriResult<T> {
-    let mut gateway = state.blocking_lock();
-    action(&mut gateway).map_err(|error| error.payload())
-}
-
 fn with_topic_store<T>(
-    state: State<'_, Mutex<Gateway>>,
+    topic_store: &Arc<StdMutex<TopicStore>>,
     action: impl FnOnce(&TopicStore) -> crate::core::AppResult<T>,
 ) -> TauriResult<T> {
-    let gateway = state.blocking_lock();
-    let topic_store_arc = gateway
-        .topic_store()
-        .map_err(|error| error.payload())?;
-    let store = topic_store_arc
-        .lock()
-        .map_err(|_| {
-            crate::core::AppError::RuntimeError("TopicStore lock failed".into()).payload()
-        })?;
+    let store = topic_store.lock().map_err(|_| {
+        crate::core::AppError::RuntimeError("TopicStore lock failed".into()).payload()
+    })?;
     action(&store).map_err(|error| error.payload())
 }
 
-fn with_neuron_manager<T>(
-    state: State<'_, Mutex<Gateway>>,
-    action: impl FnOnce(&crate::core::neuron_manager::NeuronManager) -> crate::core::AppResult<T>,
+fn with_poller<T>(
+    poller: &Arc<StdMutex<Poller>>,
+    action: impl FnOnce(&mut Poller) -> crate::core::AppResult<T>,
 ) -> TauriResult<T> {
-    let gateway = state.blocking_lock();
-    let mgr = gateway.neuron_manager();
-    action(&mgr).map_err(|error| error.payload())
+    let mut guard = poller.lock().map_err(|e| {
+        crate::core::AppError::StorageError(format!("Poller lock error: {e}")).payload()
+    })?;
+    action(&mut guard).map_err(|error| error.payload())
 }
 
 // ── App Entry ──
@@ -425,18 +438,37 @@ pub fn run() {
 
             let store = ConversationStore::new(&storage_root)
                 .map_err(|error| error.to_string())?;
-            let gateway =
-                Gateway::new(store).map_err(|error| error.to_string())?;
-            app.manage(Mutex::new(gateway));
+            let gateway = Gateway::new(store).map_err(|error| error.to_string())?;
 
-            let boot_handle = handle.clone();
+            // Domain states (no outer Mutex across network).
+            let neuron_manager = gateway.neuron_manager();
+            let topic_store = gateway.topic_store().map_err(|e| e.to_string())?;
+            let assistant = gateway.assistant();
+            let poller = gateway.poller();
+            let sessions = gateway.session_tracker();
+            let providers = gateway.providers();
+            let conversation_store = gateway.conversation_store();
+
+            app.manage(neuron_manager.clone());
+            app.manage(topic_store);
+            app.manage(assistant);
+            app.manage(poller);
+            app.manage(sessions);
+            app.manage(providers);
+            app.manage(conversation_store);
+            app.manage(gateway);
+
+            // Bootstrap without holding any Gateway lock across model calls.
             tauri::async_runtime::spawn(async move {
-                let state = boot_handle.state::<Mutex<Gateway>>();
-                let gateway = state.lock().await;
                 tracing::info!(phase = "bootstrap_neurons", "starting neuron bootstrap");
-                match gateway.bootstrap_neurons().await {
-                    Ok(()) => {
-                        tracing::info!(phase = "bootstrap_neurons", "neuron bootstrap complete")
+                match neuron_manager.bootstrap().await {
+                    Ok(report) => {
+                        tracing::info!(
+                            phase = "bootstrap_neurons",
+                            create_neuron_id = %report.create_neuron_id,
+                            select_neuron_id = %report.select_neuron_id,
+                            "neuron bootstrap complete"
+                        );
                     }
                     Err(error) => {
                         tracing::warn!(

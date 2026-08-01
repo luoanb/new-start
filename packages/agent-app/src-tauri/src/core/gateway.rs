@@ -37,7 +37,8 @@ pub struct Gateway {
     assistant: Arc<AssistantMode>,
     poller: Arc<Mutex<Poller>>,
     session_tracker: SessionTracker,
-    current_conversation_id: String,
+    /// Shared so Gateway can be used via `&self` / Tauri State without holding an outer lock across await.
+    current_conversation_id: Arc<Mutex<String>>,
 }
 
 impl Gateway {
@@ -141,12 +142,12 @@ impl Gateway {
             assistant,
             poller,
             session_tracker,
-            current_conversation_id,
+            current_conversation_id: Arc::new(Mutex::new(current_conversation_id)),
         })
     }
 
     pub fn send_message(
-        &mut self,
+        &self,
         input: impl AsRef<str>,
         conversation_id: Option<String>,
     ) -> AppResult<ChatResponse> {
@@ -171,7 +172,7 @@ impl Gateway {
         let response = assistant_message.content.clone();
         self.store
             .add_message(&conversation_id, assistant_message)?;
-        self.current_conversation_id = conversation_id.clone();
+        self.set_current_conversation_id(conversation_id.clone())?;
 
         Ok(ChatResponse {
             conversation_id,
@@ -243,7 +244,7 @@ impl Gateway {
     }
 
     pub async fn send_model_message(
-        &mut self,
+        &self,
         input: impl AsRef<str>,
         options: ChatOptions,
     ) -> AppResult<ChatResponse> {
@@ -257,10 +258,15 @@ impl Gateway {
 
         let conversation_id = self.resolve_conversation_id(options.conversation_id.clone())?;
         let conversation = self.store.require_conversation(&conversation_id)?;
+        let mode = conversation.mode;
 
-        self.session_tracker.register(&conversation_id, None)?;
+        // Clone handles before any network await — callers must not hold an outer Gateway lock.
+        let assistant = Arc::clone(&self.assistant);
+        let engine = self.engine.clone();
+        let session_tracker = self.session_tracker.clone();
+        session_tracker.register(&conversation_id, None)?;
 
-        let result = if conversation.mode == ConversationMode::Assistant {
+        let result = if mode == ConversationMode::Assistant {
             tracing::info!(
                 phase = "send_model_message",
                 mode = "assistant",
@@ -271,22 +277,20 @@ impl Gateway {
                 provider_id: options.provider_id.clone(),
                 model_id: options.model_id.clone(),
             };
-            self.assistant
-                .converse(&conversation_id, input, &model)
-                .await
+            assistant.converse(&conversation_id, input, &model).await
         } else {
             tracing::info!(
                 phase = "send_model_message",
-                mode = ?conversation.mode,
+                mode = ?mode,
                 conversation_id = %conversation_id,
                 "routing to engine.chat"
             );
-            self.engine
+            engine
                 .chat(input, conversation_id.clone(), options)
                 .await
         };
 
-        self.session_tracker.unregister(&conversation_id);
+        session_tracker.unregister(&conversation_id);
 
         let response = match result {
             Ok(response) => response,
@@ -301,12 +305,12 @@ impl Gateway {
                 return Err(error);
             }
         };
-        self.current_conversation_id = response.conversation_id.clone();
+        self.set_current_conversation_id(response.conversation_id.clone())?;
         Ok(response)
     }
 
     pub async fn assistant_step(
-        &mut self,
+        &self,
         conversation_id: Option<String>,
         model: &ChatModelSelection,
     ) -> AppResult<ChatResponse> {
@@ -317,9 +321,11 @@ impl Gateway {
                 "assistant step requires an Assistant session".into(),
             ));
         }
-        self.session_tracker.register(&conversation_id, None)?;
-        let result = self.assistant.step(&conversation_id, model).await;
-        self.session_tracker.unregister(&conversation_id);
+        let assistant = Arc::clone(&self.assistant);
+        let session_tracker = self.session_tracker.clone();
+        session_tracker.register(&conversation_id, None)?;
+        let result = assistant.step(&conversation_id, model).await;
+        session_tracker.unregister(&conversation_id);
         result
     }
 
@@ -357,7 +363,7 @@ impl Gateway {
 
     /// Manually trigger compaction for the current conversation.
     pub async fn compact_conversation(
-        &mut self,
+        &self,
         conversation_id: Option<String>,
     ) -> AppResult<String> {
         let id = self.resolve_existing_conversation_id(conversation_id)?;
@@ -377,15 +383,17 @@ impl Gateway {
         Ok(self.store.require_conversation(&conversation_id)?.messages)
     }
 
-    pub fn clear_conversation(&mut self, conversation_id: Option<String>) -> AppResult<String> {
+    pub fn clear_conversation(&self, conversation_id: Option<String>) -> AppResult<String> {
         let conversation_id = self.resolve_existing_conversation_id(conversation_id)?;
         self.store.clear_conversation(&conversation_id)?;
 
-        if self.current_conversation_id == conversation_id {
-            self.current_conversation_id = self
+        let current = self.get_current_conversation_id()?;
+        if current == conversation_id {
+            let new_id = self
                 .store
                 .create_conversation(None, ConversationMode::Chat)?
                 .id;
+            self.set_current_conversation_id(new_id)?;
         }
 
         Ok(conversation_id)
@@ -393,7 +401,7 @@ impl Gateway {
 
     /// Create a new blank conversation with the given mode and return its id.
     /// The current conversation is left unchanged.
-    pub fn create_new_conversation(&mut self, mode: ConversationMode) -> AppResult<String> {
+    pub fn create_new_conversation(&self, mode: ConversationMode) -> AppResult<String> {
         let conv = self.store.create_conversation(None, mode)?;
         Ok(conv.id)
     }
@@ -402,7 +410,7 @@ impl Gateway {
         Ok(RuntimeStatus {
             app_name: "agent-app".to_string(),
             storage_path: self.store.root().display().to_string(),
-            current_conversation_id: self.current_conversation_id.clone(),
+            current_conversation_id: self.get_current_conversation_id()?,
             skill_count: self
                 .tool_registry
                 .as_ref()
@@ -458,12 +466,40 @@ impl Gateway {
         Arc::clone(&self.assistant)
     }
 
+    pub fn poller(&self) -> Arc<Mutex<Poller>> {
+        Arc::clone(&self.poller)
+    }
+
+    pub fn providers(&self) -> ProviderRegistry {
+        self.providers.clone()
+    }
+
+    pub fn conversation_store(&self) -> ConversationStore {
+        self.store.clone()
+    }
+
     /// Access the SessionTracker for TUI commands.
     pub fn session_tracker(&self) -> SessionTracker {
         self.session_tracker.clone()
     }
 
-    fn resolve_conversation_id(&mut self, conversation_id: Option<String>) -> AppResult<String> {
+    fn get_current_conversation_id(&self) -> AppResult<String> {
+        self.current_conversation_id
+            .lock()
+            .map(|guard| guard.clone())
+            .map_err(|e| AppError::RuntimeError(format!("current_conversation_id lock: {e}")))
+    }
+
+    fn set_current_conversation_id(&self, id: String) -> AppResult<()> {
+        let mut guard = self
+            .current_conversation_id
+            .lock()
+            .map_err(|e| AppError::RuntimeError(format!("current_conversation_id lock: {e}")))?;
+        *guard = id;
+        Ok(())
+    }
+
+    fn resolve_conversation_id(&self, conversation_id: Option<String>) -> AppResult<String> {
         match conversation_id {
             Some(id) if id.trim().is_empty() => Err(AppError::InvalidInput(
                 "Conversation id cannot be empty".into(),
@@ -475,7 +511,7 @@ impl Gateway {
                 }
                 Ok(id)
             }
-            None => Ok(self.current_conversation_id.clone()),
+            None => self.get_current_conversation_id(),
         }
     }
 
@@ -483,7 +519,10 @@ impl Gateway {
         &self,
         conversation_id: Option<String>,
     ) -> AppResult<String> {
-        let id = conversation_id.unwrap_or_else(|| self.current_conversation_id.clone());
+        let id = match conversation_id {
+            Some(id) => id,
+            None => self.get_current_conversation_id()?,
+        };
         if id.trim().is_empty() {
             return Err(AppError::InvalidInput(
                 "Conversation id cannot be empty".into(),
@@ -533,7 +572,7 @@ mod tests {
 
     #[test]
     fn send_message_persists_user_and_assistant_messages() {
-        let mut gateway = test_gateway("send_message_persists_user_and_assistant_messages");
+        let gateway = test_gateway("send_message_persists_user_and_assistant_messages");
 
         let response = gateway
             .send_message("hello", None)
@@ -577,7 +616,7 @@ mod tests {
 
     #[test]
     fn clear_conversation_removes_selected_session() {
-        let mut gateway = test_gateway("clear_conversation_removes_selected_session");
+        let gateway = test_gateway("clear_conversation_removes_selected_session");
         let response = gateway
             .send_message("hello", None)
             .expect("message should be accepted");
@@ -605,9 +644,11 @@ mod tests {
 
     #[tokio::test]
     async fn send_model_message_rejects_missing_model_without_history_write() {
-        let mut gateway =
+        let gateway =
             test_gateway("send_model_message_rejects_missing_model_without_history_write");
-        let conversation_id = gateway.current_conversation_id.clone();
+        let conversation_id = gateway
+            .get_current_conversation_id()
+            .expect("current conversation id");
 
         let error = gateway
             .send_model_message(
