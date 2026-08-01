@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use tauri;
 use tokio::sync::mpsc;
 
 use super::{
@@ -541,10 +542,12 @@ fn spawn_poller_runtime(
     mut step_rx: mpsc::UnboundedReceiver<AssistantStepRequest>,
     base_interval_ms: u64,
 ) {
-    let Ok(handle) = tokio::runtime::Handle::try_current() else {
-        return;
-    };
-    handle.spawn(async move {
+    tracing::info!(
+        phase = "poller_runtime",
+        base_interval_ms,
+        "poller runtime loop starting via tauri async runtime"
+    );
+    tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(base_interval_ms));
         loop {
             tokio::select! {
@@ -554,6 +557,7 @@ fn spawn_poller_runtime(
                     }
                 }
                 Some(request) = step_rx.recv() => {
+                    tracing::info!(phase = "poller_runtime", kind = "step_request", "received step request from channel");
                     let model = match providers.default_model_selection() {
                         Ok(Some(model)) => model,
                         _ => continue,

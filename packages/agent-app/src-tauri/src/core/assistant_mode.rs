@@ -352,6 +352,7 @@ impl AssistantMode {
     ) {
         match request {
             AssistantStepRequest::PollAll => {
+                tracing::info!(phase = "assistant_poll_handler", "PollAll received in process_step_request");
                 let topics = match self.topics().and_then(|store| store.list_unfinished()) {
                     Ok(topics) => topics,
                     Err(error) => {
@@ -359,6 +360,7 @@ impl AssistantMode {
                         return;
                     }
                 };
+                tracing::info!(phase = "assistant_poll_handler", topic_count = topics.len(), "PollAll topic list resolved");
                 for topic in topics {
                     let Some(session_id) = topic.session_id else {
                         continue;
@@ -757,6 +759,7 @@ struct AssistantPollHandler {
 
 impl PollHandler for AssistantPollHandler {
     fn on_tick(&mut self) {
+        tracing::info!(phase = "assistant_poll_handler", "on_tick fired, sending PollAll");
         let _ = self.tx.send(AssistantStepRequest::PollAll);
     }
 }

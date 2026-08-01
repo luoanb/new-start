@@ -133,7 +133,7 @@
   .error-banner { background: var(--color-danger, #ef4444); color: #fff; padding: var(--space-1) var(--space-2); border-radius: var(--radius-md); font-size: var(--fs-xs); cursor: pointer; }
   .empty { text-align: center; color: var(--color-text-muted); font-size: var(--fs-sm); padding: var(--space-4); }
   .status-card { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-2); background: var(--color-bg); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-md); }
-  .status-row { display: flex; justify-content: space-between; align-items: center; font-size: var(--fs-sm); }
+  .status-row { display: flex; justify-content: flex-start; align-items: center; gap: var(--space-2); font-size: var(--fs-sm); }
   .status-row .label { color: var(--color-text-muted); }
   .status-row .value { font-weight: 600; font-family: monospace; }
   .status-row .value.pending { color: var(--color-warning, #f59e0b); }
