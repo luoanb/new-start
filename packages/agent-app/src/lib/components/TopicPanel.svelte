@@ -254,7 +254,7 @@
               <div class="scope-section">
                 <div class="scope-header">
                   <span class="detail-label">{t("topicPanel.scopeItems")}</span>
-                  <span>({topic.scope_in.filter((s) => s.status === "done").length}/{topic.scope_in.length})</span>
+                  <span>({topic.scope_in.filter((s) => s.status === "completed").length}/{topic.scope_in.length})</span>
                 </div>
 
                 {#if topic.status !== "paused"}
@@ -283,13 +283,13 @@
 
                 <div class="scope-list">
                   {#each topic.scope_in as item (item.id)}
-                    <div class="scope-item" class:done={item.status === "done"}>
+                    <div class="scope-item" class:done={item.status === "completed"}>
                       <div class="scope-item-text">
                         <div class="scope-goal">{item.goal}</div>
                         <div class="scope-contract">{item.done_contract}</div>
                       </div>
                       <div class="scope-item-actions">
-                        {#if item.status !== "done"}
+                        {#if item.status !== "completed"}
                           <button
                             class="btn btn-sm btn-done"
                             onclick={() => handleCompleteScopeItem(topic.id, item.id)}

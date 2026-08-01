@@ -87,7 +87,7 @@ export type ScopeInItem = {
   id: string;
   goal: string;
   done_contract: string;
-  status: string; // "pending" | "done"
+  status: string; // "pending" | "completed"
 };
 
 export type Topic = {
