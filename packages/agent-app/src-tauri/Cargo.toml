@@ -33,4 +33,5 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "registry"] }
 parking_lot = "0.12"
+rust-embed = "8"
 

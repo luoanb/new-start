@@ -5,6 +5,7 @@ use serde_json;
 
 use super::{
     error::{AppError, AppResult},
+    insert_catalog::InsertCatalog,
     models::ToolDefinition,
 };
 use std::sync::{Arc, Mutex};
@@ -50,41 +51,31 @@ impl ToolRegistry {
         }
     }
 
-    /// Create with the three default built-in tools.
+    /// Empty registry (external tools are opt-in with inserts).
     pub fn with_defaults() -> Self {
-        let mut reg = Self::new();
-        reg.register(GetCurrentTimeTool);
-        reg.register(EchoTool);
-        reg.register(CalculateTool);
-        reg
+        Self::new()
     }
 
-    /// Create with default tools plus topic management tools.
+    /// Empty registry — topic tools are not pre-registered.
     pub fn with_defaults_and_topics(
-        topic_store: Arc<Mutex<super::topic_store::TopicStore>>,
+        _topic_store: Arc<Mutex<super::topic_store::TopicStore>>,
     ) -> Self {
-        let mut reg = Self::with_defaults();
-        let manager = super::topic_manager::TopicManager::new(topic_store);
-        manager.register_all(&mut reg);
-        reg
+        Self::new()
     }
 
-    /// Create with default tools plus topic, neuron, and runtime management tools.
+    /// Empty registry — production assembly does not pre-register tools.
     pub fn with_defaults_and_topics_and_neurons(
-        topic_store: Arc<Mutex<super::topic_store::TopicStore>>,
-        neuron_manager: Arc<super::neuron_manager::NeuronManager>,
-        session_tracker: super::session_tracker::SessionTracker,
+        _topic_store: Arc<Mutex<super::topic_store::TopicStore>>,
+        _neuron_manager: Arc<super::neuron_manager::NeuronManager>,
+        _session_tracker: super::session_tracker::SessionTracker,
     ) -> Self {
-        let mut reg = Self::with_defaults();
-        let topic_manager = super::topic_manager::TopicManager::new(topic_store);
-        topic_manager.register_all(&mut reg);
-        neuron_manager.register_ai_tools(&mut reg);
-        super::session_tracker::register_session_tracker_tools(&mut reg, session_tracker);
-        reg
+        Self::new()
     }
 
+    /// Register a tool. Requires `inserts/<name>.md` (self-describing gate).
     pub fn register(&mut self, tool: impl Tool + 'static) {
         let name = tool.name().to_string();
+        let _insert = InsertCatalog::require(&name);
         self.tools.insert(name, ToolBox(Arc::new(tool)));
     }
 
@@ -121,9 +112,10 @@ impl ToolRegistry {
     }
 }
 
-// ─── Built-in tools ───────────────────────────────────────────────
+// ─── Built-in tools (unregistered until inserts exist) ─────────────
 
 /// Return the current Unix-millisecond timestamp.
+#[allow(dead_code)]
 struct GetCurrentTimeTool;
 
 #[async_trait]
@@ -151,6 +143,7 @@ impl Tool for GetCurrentTimeTool {
 }
 
 /// Echo back the input message.
+#[allow(dead_code)]
 struct EchoTool;
 
 #[async_trait]
@@ -183,6 +176,7 @@ impl Tool for EchoTool {
 }
 
 /// Placeholder calculator.
+#[allow(dead_code)]
 struct CalculateTool;
 
 #[async_trait]
@@ -220,42 +214,42 @@ impl Tool for CalculateTool {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn with_defaults_registers_three_tools() {
+    struct ProbeTool;
+
+    #[async_trait]
+    impl Tool for ProbeTool {
+        fn name(&self) -> &str {
+            "neuron.select_one"
+        }
+        fn description(&self) -> &str {
+            "probe"
+        }
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object", "properties": {}})
+        }
+        async fn execute(&self, _args: serde_json::Value) -> AppResult<String> {
+            Ok("ok".into())
+        }
+    }
+
+    #[test]
+    fn with_defaults_is_empty() {
         let registry = ToolRegistry::with_defaults();
+        assert!(registry.list_definitions().is_empty());
+    }
+
+    #[test]
+    fn register_requires_insert() {
+        let mut registry = ToolRegistry::new();
+        registry.register(ProbeTool);
         let defs = registry.list_definitions();
-        let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
-        assert_eq!(names.len(), 3);
-        assert!(names.contains(&"get_current_time"));
-        assert!(names.contains(&"echo"));
-        assert!(names.contains(&"calculate"));
-    }
-
-    #[tokio::test]
-    async fn execute_get_current_time_returns_timestamp() {
-        let registry = ToolRegistry::with_defaults();
-        let result = registry
-            .execute("get_current_time", serde_json::json!({}))
-            .await
-            .expect("get_current_time should succeed");
-        // Should be a numeric string
-        assert!(!result.is_empty());
-        assert!(result.chars().all(|c| c.is_ascii_digit()));
-    }
-
-    #[tokio::test]
-    async fn execute_echo_returns_input() {
-        let registry = ToolRegistry::with_defaults();
-        let result = registry
-            .execute("echo", serde_json::json!({"message": "hello world"}))
-            .await
-            .expect("echo should succeed");
-        assert_eq!(result, "hello world");
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].name, "neuron.select_one");
     }
 
     #[tokio::test]
     async fn execute_unknown_tool_returns_error() {
-        let registry = ToolRegistry::with_defaults();
+        let registry = ToolRegistry::new();
         let result = registry.execute("nonexistent", serde_json::json!({})).await;
         assert!(result.is_err());
     }

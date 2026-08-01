@@ -1,3 +1,6 @@
+//! Topic tool adapters — not registered until self-describing inserts exist.
+#![allow(dead_code)]
+
 use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
@@ -19,19 +22,8 @@ impl TopicManager {
         Self { store }
     }
 
-    /// Register all topic tools into a ToolRegistry.
-    pub fn register_all(&self, registry: &mut ToolRegistry) {
-        registry.register(ListTopicsTool::new(Arc::clone(&self.store)));
-        registry.register(GetTopicTool::new(Arc::clone(&self.store)));
-        registry.register(CreateTopicTool::new(Arc::clone(&self.store)));
-        registry.register(UpdateTopicTool::new(Arc::clone(&self.store)));
-        registry.register(AddTopicScopeItemTool::new(Arc::clone(&self.store)));
-        registry.register(DeleteTopicScopeItemTool::new(Arc::clone(&self.store)));
-        registry.register(CompleteTopicScopeItemTool::new(Arc::clone(&self.store)));
-        registry.register(PauseTopicTool::new(Arc::clone(&self.store)));
-        registry.register(ResumeTopicTool::new(Arc::clone(&self.store)));
-        registry.register(DeleteTopicTool::new(Arc::clone(&self.store)));
-    }
+    /// Topic tools are not pre-registered (await self-describing inserts).
+    pub fn register_all(&self, _registry: &mut ToolRegistry) {}
 }
 
 // ── Helper to parse TopicStatus from JSON string value ─────────────

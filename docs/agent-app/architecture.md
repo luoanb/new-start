@@ -69,6 +69,21 @@ GUI 卡死 / 系统「无响应」的根因与目标契约见正式 spec：[`doc
 
 Rolling files, GUI Logs panel, filters, and verbosity controls are documented in [logging.md](./logging.md).
 
+## Self-Describing Atoms (Insert Catalog)
+
+Tool manuals for **decision-making model readers** live under `packages/agent-app/src-tauri/inserts/<id>.md` (scheme 2), loaded by `InsertCatalog` (`rust-embed`).
+
+Rules:
+
+1. **Readers only**: an insert exists only when a model (or a human choosing a tool) must decide/output against a contract. Internal auto wiring (`ensure_*`, bootstrap) has **no** insert.
+2. **Tool manual content**: focus on the tool itself and **expectations of the model** (standard output). Not implementation notes.
+3. **Consumption**: before `call_model`, `system = neuron.content + "\n\n" + insert` via `InsertCatalog::system_with_insert`.
+4. **Hook atoms**: `assistant.score_feedback` / `assistant.match_topic` / `assistant.complete_scope` spliced in `call_system_prompt_json`; `neuron.select_one` in LLM select; `neuron.draft_from_model` in draft generation.
+5. **Topic create**: `assistant.match_topic` expects `scope_in[]` with `goal` + `done_contract` (Done Contract) for task breakdown.
+6. **Tool register gate**: `ToolRegistry::register` requires `inserts/<tool.name>.md`. Production registry stays empty until useful tools are documented.
+
+Spec: [`docs/specs/2026-08-01_20-46_self-describing-inserts.md`](../specs/2026-08-01_20-46_self-describing-inserts.md).
+
 ## Model Calling
 
 The first LLM integration adds a stateless model call path:

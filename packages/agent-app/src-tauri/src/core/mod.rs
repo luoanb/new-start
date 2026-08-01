@@ -6,6 +6,7 @@ pub mod conversation_store;
 pub mod engine;
 pub mod error;
 pub mod gateway;
+pub mod insert_catalog;
 pub mod models;
 pub mod neuron_config;
 pub mod neuron_manager;
@@ -22,6 +23,7 @@ pub use topic_store::TopicStore;
 pub use assistant_mode::AssistantMode;
 pub use error::{AppError, AppResult};
 pub use gateway::Gateway;
+pub use insert_catalog::InsertCatalog;
 pub use models::{
     BootstrapReport, CandidateQuery, ChatModelSelection, ChatOptions, ChatResponse,
     CompactionConfig, Connection, Conversation, ConversationMode, CreateNeuronInput,

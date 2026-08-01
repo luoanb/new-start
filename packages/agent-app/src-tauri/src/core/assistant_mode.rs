@@ -9,9 +9,11 @@ use tokio::sync::mpsc::UnboundedSender;
 use super::{
     conversation_store::{now_ms, ConversationStore},
     error::{AppError, AppResult},
+    insert_catalog::InsertCatalog,
     models::{
         CandidateQuery, ChatModelSelection, ChatResponse, EnsureSystemOpts, Message, MessageRole,
-        ModelCallRequest, ModelMessage, ModelMessageRole, Neuron, Topic, TopicStatus, TopicUpdate,
+        ModelCallRequest, ModelMessage, ModelMessageRole, Neuron, ScopeInItem, Topic, TopicStatus,
+        TopicUpdate,
     },
     log_redact::{preview_default, preview_json_for_log},
     neuron_manager::NeuronManager,
@@ -27,8 +29,24 @@ pub const SYSTEM_TYPE_MATCH_TOPIC: &str = "assistant_match_topic";
 pub const SYSTEM_TYPE_COMPLETE_SCOPE: &str = "assistant_complete_scope";
 pub const SYSTEM_TYPE_SCORE_FEEDBACK: &str = "assistant_score_feedback";
 pub const ASSISTANT_POLL_TASK: &str = "assistant_advance";
+
+pub const INSERT_SCORE_FEEDBACK: &str = "assistant.score_feedback";
+pub const INSERT_MATCH_TOPIC: &str = "assistant.match_topic";
+pub const INSERT_COMPLETE_SCOPE: &str = "assistant.complete_scope";
+
 /// Re-export default interval ticks (overridable via `config.json` → `poller`).
 pub use super::poller::DEFAULT_ASSISTANT_POLL_TICKS;
+
+fn insert_id_for_system_type(system_type: &str) -> AppResult<&'static str> {
+    match system_type {
+        SYSTEM_TYPE_SCORE_FEEDBACK => Ok(INSERT_SCORE_FEEDBACK),
+        SYSTEM_TYPE_MATCH_TOPIC => Ok(INSERT_MATCH_TOPIC),
+        SYSTEM_TYPE_COMPLETE_SCOPE => Ok(INSERT_COMPLETE_SCOPE),
+        other => Err(AppError::InvalidInput(format!(
+            "no tool insert mapped for system_type={other}"
+        ))),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoundTrigger {
@@ -603,11 +621,15 @@ impl AssistantMode {
                 crate::core::models::EnsureSystemOpts { reset: false },
             )
             .await?;
+        let insert_id = insert_id_for_system_type(system_type)?;
+        let system_prompt =
+            InsertCatalog::system_with_insert(&prompt_neuron.content, insert_id);
         tracing::info!(
             phase = "assistant_system_json",
             system_type,
+            insert_id,
             neuron_id = %prompt_neuron.id,
-            system_prompt_len = prompt_neuron.content.len(),
+            system_prompt_len = system_prompt.len(),
             "system prompt ready; calling model"
         );
         let response = match self
@@ -618,7 +640,7 @@ impl AssistantMode {
                 messages: vec![
                     ModelMessage {
                         role: ModelMessageRole::System,
-                        content: prompt_neuron.content,
+                        content: system_prompt,
                         tool_calls: None,
                         tool_call_id: None,
                     },
@@ -838,6 +860,7 @@ impl BeforeHook for MatchTopicBeforeHook<'_> {
                         "status": t.status,
                         "session_id": t.session_id,
                         "progress": t.progress,
+                        "scope_in": t.scope_in,
                     })).collect::<Vec<_>>(),
                 }),
                 &model,
@@ -860,7 +883,21 @@ impl BeforeHook for MatchTopicBeforeHook<'_> {
                 let topic = match self.assistant.topics()?.get(topic_id)? {
                     Some(topic) => topic,
                     None => {
-                        let created = self.create_bound_topic(ctx)?;
+                        let created = self
+                            .create_bound_topic_from_decision(ctx, &decision, true)
+                            .or_else(|error| {
+                                tracing::warn!(
+                                    phase = "match_topic_hook",
+                                    error = %error,
+                                    "switch missing and decision lacked scope_in; using emergency scope"
+                                );
+                                self.create_bound_topic_with_scope(
+                                    ctx,
+                                    None,
+                                    None,
+                                    emergency_scope_in(ctx),
+                                )
+                            })?;
                         tracing::warn!(
                             phase = "match_topic_hook",
                             requested_topic_id = topic_id,
@@ -903,11 +940,12 @@ impl BeforeHook for MatchTopicBeforeHook<'_> {
             }
             _ => {
                 if ctx.topic_id.is_none() {
-                    let created = self.create_bound_topic(ctx)?;
+                    let created = self.create_bound_topic_from_decision(ctx, &decision, false)?;
                     tracing::info!(
                         phase = "match_topic_hook",
                         topic_id = %created.id,
-                        "created bound topic"
+                        scope_items = created.scope_in.len(),
+                        "created bound topic with scope_in"
                     );
                     ctx.topic_id = Some(created.id);
                 }
@@ -918,32 +956,105 @@ impl BeforeHook for MatchTopicBeforeHook<'_> {
 }
 
 impl MatchTopicBeforeHook<'_> {
-    fn create_bound_topic(&self, ctx: &AssistantRoundContext) -> AppResult<Topic> {
-        let name = ctx
-            .user_input
-            .as_deref()
-            .map(|s| {
-                let trimmed = s.trim();
-                if trimmed.chars().count() > 40 {
-                    format!("{}…", trimmed.chars().take(40).collect::<String>())
-                } else if trimmed.is_empty() {
-                    "Assistant Topic".to_string()
-                } else {
-                    trimmed.to_string()
-                }
-            })
-            .unwrap_or_else(|| "Assistant Topic".to_string());
+    fn create_bound_topic_from_decision(
+        &self,
+        ctx: &AssistantRoundContext,
+        decision: &serde_json::Value,
+        allow_empty_scope_fallback: bool,
+    ) -> AppResult<Topic> {
+        let fallback_name = default_topic_name(ctx);
+        let name = decision
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(fallback_name.as_str())
+            .to_string();
+        let description = decision
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| ctx.user_input.as_deref().unwrap_or(""))
+            .to_string();
+        let mut scope_in = parse_scope_in_from_decision(decision)?;
+        if scope_in.is_empty() {
+            if allow_empty_scope_fallback {
+                scope_in = emergency_scope_in(ctx);
+            } else {
+                return Err(AppError::InvalidInput(
+                    "match topic create requires non-empty scope_in with goal and done_contract"
+                        .into(),
+                ));
+            }
+        }
+        self.create_bound_topic_with_scope(ctx, Some(name), Some(description), scope_in)
+    }
+
+    fn create_bound_topic_with_scope(
+        &self,
+        ctx: &AssistantRoundContext,
+        name: Option<String>,
+        description: Option<String>,
+        scope_in: Vec<ScopeInItem>,
+    ) -> AppResult<Topic> {
+        let name = name.unwrap_or_else(|| default_topic_name(ctx));
+        let description =
+            description.unwrap_or_else(|| ctx.user_input.clone().unwrap_or_default());
         let created = self.assistant.topics()?.create(
             &name,
-            ctx.user_input.as_deref().unwrap_or(""),
+            &description,
             TopicStatus::Todo,
-            Vec::new(),
+            scope_in,
             None,
         )?;
         self.assistant
             .topics()?
             .bind_session(&created.id, &ctx.session_id)
     }
+}
+
+fn default_topic_name(ctx: &AssistantRoundContext) -> String {
+    ctx.user_input
+        .as_deref()
+        .map(|s| {
+            let trimmed = s.trim();
+            if trimmed.chars().count() > 40 {
+                format!("{}…", trimmed.chars().take(40).collect::<String>())
+            } else if trimmed.is_empty() {
+                "Assistant Topic".to_string()
+            } else {
+                trimmed.to_string()
+            }
+        })
+        .unwrap_or_else(|| "Assistant Topic".to_string())
+}
+
+fn emergency_scope_in(ctx: &AssistantRoundContext) -> Vec<ScopeInItem> {
+    let goal = ctx
+        .user_input
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Clarify the topic goal")
+        .to_string();
+    vec![ScopeInItem {
+        id: String::new(),
+        goal,
+        done_contract: "User confirms the goal and acceptance criteria are clear enough to proceed"
+            .into(),
+        status: "pending".into(),
+    }]
+}
+
+fn parse_scope_in_from_decision(decision: &serde_json::Value) -> AppResult<Vec<ScopeInItem>> {
+    let Some(value) = decision.get("scope_in") else {
+        return Ok(Vec::new());
+    };
+    let items: Vec<ScopeInItem> = serde_json::from_value(value.clone()).map_err(|e| {
+        AppError::InvalidInput(format!("match topic invalid scope_in: {e}"))
+    })?;
+    Ok(items)
 }
 
 struct ScoreFeedbackBeforeHook<'a> {
@@ -1207,12 +1318,12 @@ mod tests {
 
     #[test]
     fn filter_drops_unknown_tool_ids() {
-        let registry = ToolRegistry::with_defaults();
+        let registry = ToolRegistry::new();
         let filtered = filter_authorized_tool_ids(
             &registry,
             &["echo".into(), "missing_tool".into(), "calculate".into()],
         );
-        assert_eq!(filtered, vec!["echo".to_string(), "calculate".to_string()]);
+        assert!(filtered.is_empty());
     }
 
     #[test]

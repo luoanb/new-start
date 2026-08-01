@@ -140,18 +140,17 @@ impl Default for SessionTracker {
     }
 }
 
-/// Register session tracker tools into the given registry.
-pub fn register_session_tracker_tools(registry: &mut ToolRegistry, tracker: SessionTracker) {
-    registry.register(GetRunningSessionsTool::new(tracker.clone()));
-    registry.register(CloseSessionTool::new(tracker));
-}
+/// Session tools are not pre-registered (await self-describing inserts).
+pub fn register_session_tracker_tools(_registry: &mut ToolRegistry, _tracker: SessionTracker) {}
 
-// ── GetRunningSessionsTool ─────────────────────────────────────
+// ── GetRunningSessionsTool (unregistered until inserts exist) ──
 
+#[allow(dead_code)]
 struct GetRunningSessionsTool {
     tracker: SessionTracker,
 }
 
+#[allow(dead_code)]
 impl GetRunningSessionsTool {
     fn new(tracker: SessionTracker) -> Self {
         Self { tracker }
@@ -189,10 +188,12 @@ impl Tool for GetRunningSessionsTool {
 
 // ── CloseSessionTool ───────────────────────────────────────────
 
+#[allow(dead_code)]
 struct CloseSessionTool {
     tracker: SessionTracker,
 }
 
+#[allow(dead_code)]
 impl CloseSessionTool {
     fn new(tracker: SessionTracker) -> Self {
         Self { tracker }

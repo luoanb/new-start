@@ -79,11 +79,9 @@ impl Gateway {
             NeuronConfigReader::new(store.root().to_path_buf()),
         ));
 
-        let tool_registry = ToolRegistry::with_defaults_and_topics_and_neurons(
-            Arc::clone(&topic_store),
-            Arc::clone(&neuron_manager),
-            session_tracker.clone(),
-        );
+        // External tools intentionally unregistered until self-describing inserts exist.
+        // `ToolRegistry::register` still requires `inserts/<name>.md`.
+        let tool_registry = ToolRegistry::new();
         let engine = Engine::with_tools(
             store.clone(),
             providers.clone(),
@@ -592,30 +590,14 @@ mod tests {
     }
 
     #[test]
-    fn list_skills_returns_tool_registry() {
-        let gateway = test_gateway("list_skills_returns_tool_registry");
-        let skill_names = gateway
-            .list_skills()
-            .into_iter()
-            .map(|skill| skill.name)
-            .collect::<Vec<_>>();
-
+    fn list_skills_returns_empty_without_registered_tools() {
+        let gateway = test_gateway("list_skills_returns_empty_without_registered_tools");
+        let skills = gateway.list_skills();
         assert!(
-            skill_names.len() > 3,
-            "expected many tools, got: {:?}",
-            skill_names
+            skills.is_empty(),
+            "expected empty tool registry, got: {:?}",
+            skills
         );
-        assert!(skill_names.contains(&"get_current_time".to_string()));
-        assert!(skill_names.contains(&"echo".to_string()));
-        assert!(skill_names.contains(&"create_neuron".to_string()));
-        assert!(skill_names.contains(&"select_neuron_candidates".to_string()));
-        assert!(!skill_names.contains(&"create_downstream_neuron".to_string()));
-        assert!(skill_names.contains(&"add_topic_scope_item".to_string()));
-        assert!(skill_names.contains(&"delete_topic_scope_item".to_string()));
-        assert!(skill_names.contains(&"complete_topic_scope_item".to_string()));
-        assert!(skill_names.contains(&"pause_topic".to_string()));
-        assert!(skill_names.contains(&"resume_topic".to_string()));
-        assert!(skill_names.contains(&"get_running_sessions".to_string()));
     }
 
     #[test]

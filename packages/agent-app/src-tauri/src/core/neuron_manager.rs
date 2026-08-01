@@ -15,6 +15,7 @@ use super::{
     },
     neuron_config::NeuronConfigReader,
     neuron_model::NeuronModelCaller,
+    insert_catalog::InsertCatalog,
     neuron_store::NeuronStore,
     tool_registry::{Tool, ToolRegistry},
 };
@@ -63,14 +64,8 @@ impl NeuronManager {
         }
     }
 
-    pub fn register_ai_tools(self: &Arc<Self>, registry: &mut ToolRegistry) {
-        registry.register(GetNeuronTool::new(Arc::clone(self)));
-        registry.register(ListNeuronsTool::new(Arc::clone(self)));
-        registry.register(UpdateNeuronTool::new(Arc::clone(self)));
-        registry.register(GetNetworkTool::new(Arc::clone(self)));
-        registry.register(CreateNeuronTool::new(Arc::clone(self)));
-        registry.register(SelectNeuronCandidatesTool::new(Arc::clone(self)));
-    }
+    /// Previously registered AI tools; kept as no-op until tools are reintroduced with inserts.
+    pub fn register_ai_tools(self: &Arc<Self>, _registry: &mut ToolRegistry) {}
 
     pub fn get(&self, id: &str) -> AppResult<Option<Neuron>> {
         self.store()?.get_neuron(id)
@@ -570,9 +565,10 @@ impl NeuronManager {
                 "tool_ids": n.tool_ids,
             })).collect::<Vec<_>>(),
         });
+        let system = InsertCatalog::system_with_insert(&selector.content, "neuron.select_one");
         let output = self
             .model_caller
-            .call_model(&selector.content, &payload.to_string())
+            .call_model(&system, &payload.to_string())
             .await?;
         let decision = extract_json_object(&output)?;
         let neuron_id = decision
@@ -609,18 +605,15 @@ impl NeuronManager {
         user_prompt: &str,
         expected: usize,
     ) -> AppResult<Vec<GeneratedNeuronDraft>> {
+        let system = InsertCatalog::system_with_insert(system_prompt, "neuron.draft_from_model");
         tracing::info!(
             phase = "generate_drafts",
-            system_len = system_prompt.len(),
+            system_len = system.len(),
             user_len = user_prompt.len(),
             expected,
             "generate_drafts model call start"
         );
-        let output = match self
-            .model_caller
-            .call_model(system_prompt, user_prompt)
-            .await
-        {
+        let output = match self.model_caller.call_model(&system, user_prompt).await {
             Ok(output) => output,
             Err(error) => {
                 tracing::error!(
@@ -963,10 +956,13 @@ fn lock_error<T: std::fmt::Display>(error: T) -> AppError {
     AppError::StorageError(format!("Lock error: {error}"))
 }
 
+// AI tool adapters retained but unregistered until inserts exist.
+#[allow(dead_code)]
 struct GetNeuronTool {
     manager: Arc<NeuronManager>,
 }
 
+#[allow(dead_code)]
 impl GetNeuronTool {
     fn new(manager: Arc<NeuronManager>) -> Self {
         Self { manager }
@@ -1007,10 +1003,12 @@ impl Tool for GetNeuronTool {
     }
 }
 
+#[allow(dead_code)]
 struct ListNeuronsTool {
     manager: Arc<NeuronManager>,
 }
 
+#[allow(dead_code)]
 impl ListNeuronsTool {
     fn new(manager: Arc<NeuronManager>) -> Self {
         Self { manager }
@@ -1037,10 +1035,12 @@ impl Tool for ListNeuronsTool {
     }
 }
 
+#[allow(dead_code)]
 struct UpdateNeuronTool {
     manager: Arc<NeuronManager>,
 }
 
+#[allow(dead_code)]
 impl UpdateNeuronTool {
     fn new(manager: Arc<NeuronManager>) -> Self {
         Self { manager }
@@ -1083,10 +1083,12 @@ impl Tool for UpdateNeuronTool {
     }
 }
 
+#[allow(dead_code)]
 struct GetNetworkTool {
     manager: Arc<NeuronManager>,
 }
 
+#[allow(dead_code)]
 impl GetNetworkTool {
     fn new(manager: Arc<NeuronManager>) -> Self {
         Self { manager }
@@ -1122,10 +1124,12 @@ impl Tool for GetNetworkTool {
     }
 }
 
+#[allow(dead_code)]
 struct CreateNeuronTool {
     manager: Arc<NeuronManager>,
 }
 
+#[allow(dead_code)]
 impl CreateNeuronTool {
     fn new(manager: Arc<NeuronManager>) -> Self {
         Self { manager }
@@ -1170,10 +1174,12 @@ impl Tool for CreateNeuronTool {
     }
 }
 
+#[allow(dead_code)]
 struct SelectNeuronCandidatesTool {
     manager: Arc<NeuronManager>,
 }
 
+#[allow(dead_code)]
 impl SelectNeuronCandidatesTool {
     fn new(manager: Arc<NeuronManager>) -> Self {
         Self { manager }
@@ -1221,6 +1227,7 @@ impl Tool for SelectNeuronCandidatesTool {
     }
 }
 
+#[allow(dead_code)]
 fn required_str<'a>(args: &'a Value, key: &str) -> AppResult<&'a str> {
     args.get(key)
         .and_then(Value::as_str)
