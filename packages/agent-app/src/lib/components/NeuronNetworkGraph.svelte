@@ -12,6 +12,9 @@
   import type { NeuronSubgraph } from "$lib/types";
   import { layoutForceNodes } from "$lib/features/neuron/networkLayout";
   import NeuronFlowNode from "./NeuronFlowNode.svelte";
+  import FloatingEdge from "./FloatingEdge.svelte";
+
+  type EdgeType = "bezier" | "smoothstep" | "step" | "straight" | "floating";
 
   let {
     subgraph,
@@ -22,10 +25,11 @@
     subgraph: NeuronSubgraph;
     onJumpTo: (id: string) => void;
     selectedId?: string | null;
-    edgeType?: "bezier" | "smoothstep" | "step" | "straight";
+    edgeType?: EdgeType;
   } = $props();
 
   const nodeTypes = { neuron: NeuronFlowNode };
+  const edgeTypes = { floating: FloatingEdge };
 
   let nodes = $state.raw<Node[]>([]);
   let edges = $state.raw<Edge[]>([]);
@@ -48,12 +52,14 @@
 
     edges = sg.connections.map((c) => {
       const norm = (c.weight - minW) / span;
+      const isFloating = edgeType === "floating";
       return {
         id: `${c.source}->${c.target}`,
         source: c.source,
         target: c.target,
         label: c.weight.toFixed(2),
-        type: edgeType,
+        type: isFloating ? "floating" : edgeType,
+        data: isFloating ? { variant: "bezier" } : undefined,
         animated: false,
         style: `stroke-width: ${1 + norm * 2.5}px`,
         markerEnd: { type: MarkerType.ArrowClosed },
@@ -79,6 +85,7 @@
     bind:nodes
     bind:edges
     {nodeTypes}
+    {edgeTypes}
     fitView
     nodesConnectable={false}
     elementsSelectable={true}

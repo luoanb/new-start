@@ -25,9 +25,9 @@
   let activeTypes = $state<string[]>([]); // 空 = 全部
   let depth = $state(2);
 
-  // 连线类型（力导向布局默认 bezier）
-  type EdgeType = "bezier" | "smoothstep" | "step" | "straight";
-  let edgeType = $state<EdgeType>("bezier");
+  // 连线类型（力导向布局默认 floating：自动吸附卡片最近边缘点）
+  type EdgeType = "bezier" | "smoothstep" | "step" | "straight" | "floating";
+  let edgeType = $state<EdgeType>("floating");
 
   let allTypes = $derived(
     Array.from(new Set(neurons.map((n) => n.system_type || "uncategorized"))).sort()
@@ -223,6 +223,7 @@
     <div class="edge-type">
       <span class="depth-label">{t("neuronPanel.edgeTypeLabel")}</span>
       <select bind:value={edgeType} class="edge-select">
+        <option value="floating">{t("neuronPanel.edgeFloating")}</option>
         <option value="bezier">{t("neuronPanel.edgeBezier")}</option>
         <option value="smoothstep">{t("neuronPanel.edgeSmoothstep")}</option>
         <option value="step">{t("neuronPanel.edgeStep")}</option>

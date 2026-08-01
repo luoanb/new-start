@@ -138,6 +138,7 @@ export type Translations = {
     edgeWeight: string;
     depthLabel: string;
     edgeTypeLabel: string;
+    edgeFloating: string;
     edgeBezier: string;
     edgeSmoothstep: string;
     edgeStep: string;
@@ -304,6 +305,7 @@ export const en: Translations = {
     edgeWeight: "Edge",
     depthLabel: "Depth",
     edgeTypeLabel: "Edge",
+    edgeFloating: "Auto",
     edgeBezier: "Bezier",
     edgeSmoothstep: "Smooth",
     edgeStep: "Step",
@@ -470,6 +472,7 @@ export const zh: Translations = {
     edgeWeight: "边权",
     depthLabel: "深度",
     edgeTypeLabel: "连线",
+    edgeFloating: "自动",
     edgeBezier: "曲线",
     edgeSmoothstep: "圆角",
     edgeStep: "直角",

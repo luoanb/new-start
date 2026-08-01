@@ -14,12 +14,14 @@
 </script>
 
 <div class="neuron-flow-node" class:is-seed={data.isSeed}>
-  <Handle type="target" position={Position.Left} />
+  <Handle id="t" type="target" position={Position.Top} />
+  <Handle id="r" type="source" position={Position.Right} />
+  <Handle id="b" type="target" position={Position.Bottom} />
+  <Handle id="l" type="source" position={Position.Left} />
   <div class="node-label">{data.label}</div>
   <div class="node-meta">
     <span>w={data.weight.toFixed(1)}</span>
   </div>
-  <Handle type="source" position={Position.Right} />
 </div>
 
 <style>
@@ -51,5 +53,14 @@
     align-items: center;
     color: var(--color-text-muted, #999);
     font-size: 10px;
+  }
+  /* floating edge: hide visible handles but keep them functional */
+  .neuron-flow-node :global(.svelte-flow__handle) {
+    opacity: 0;
+    width: 1px;
+    height: 1px;
+    min-width: 1px;
+    min-height: 1px;
+    border: none;
   }
 </style>
