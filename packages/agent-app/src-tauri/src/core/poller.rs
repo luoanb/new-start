@@ -1,8 +1,79 @@
-use std::fmt;
+use std::{fmt, fs, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::error::AppResult;
+use super::error::{AppError, AppResult};
+
+/// Defaults when `config.json` omits `poller` fields.
+pub const DEFAULT_POLLER_BASE_INTERVAL_MS: u64 = 1000;
+pub const DEFAULT_ASSISTANT_POLL_TICKS: u64 = 30;
+
+/// Startup settings loaded from `.agent-app/config.json` → `poller`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PollerSettings {
+    /// When true, scheduler starts in Running; otherwise Paused.
+    pub enabled: bool,
+    pub base_interval_ms: u64,
+    pub assistant_interval_ticks: u64,
+}
+
+impl Default for PollerSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            base_interval_ms: DEFAULT_POLLER_BASE_INTERVAL_MS,
+            assistant_interval_ticks: DEFAULT_ASSISTANT_POLL_TICKS,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct PollerConfigFile {
+    poller: Option<PollerConfigSection>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct PollerConfigSection {
+    enabled: Option<bool>,
+    base_interval_ms: Option<u64>,
+    assistant_interval_ticks: Option<u64>,
+}
+
+/// Reads poller settings from `{storage_root}/config.json`.
+pub struct PollerConfigReader {
+    storage_root: PathBuf,
+}
+
+impl PollerConfigReader {
+    pub fn new(storage_root: PathBuf) -> Self {
+        Self { storage_root }
+    }
+
+    pub fn load(&self) -> AppResult<PollerSettings> {
+        let path = self.storage_root.join("config.json");
+        if !path.exists() {
+            return Ok(PollerSettings::default());
+        }
+        let content = fs::read_to_string(&path).map_err(|e| {
+            AppError::StorageError(format!("Failed to read {}: {e}", path.display()))
+        })?;
+        let file: PollerConfigFile = serde_json::from_str(&content).map_err(|e| {
+            AppError::StorageError(format!("Invalid config.json poller section: {e}"))
+        })?;
+        let section = file.poller.unwrap_or_default();
+        Ok(PollerSettings {
+            enabled: section.enabled.unwrap_or(false),
+            base_interval_ms: section
+                .base_interval_ms
+                .unwrap_or(DEFAULT_POLLER_BASE_INTERVAL_MS)
+                .max(1),
+            assistant_interval_ticks: section
+                .assistant_interval_ticks
+                .unwrap_or(DEFAULT_ASSISTANT_POLL_TICKS)
+                .max(1),
+        })
+    }
+}
 
 /// Handler invoked by the generic Poller when a task is due.
 pub trait PollHandler: Send {
@@ -57,7 +128,8 @@ impl Poller {
         Self {
             base_interval_ms: base_interval_ms.max(1),
             tick_count: 0,
-            state: PollerRunState::Running,
+            // Default off: user advances via manual step / poll_trigger; resume to enable auto.
+            state: PollerRunState::Paused,
             pending_trigger: false,
             tasks: Vec::new(),
         }
@@ -151,6 +223,7 @@ mod tests {
     fn fires_on_interval_and_respects_pause() {
         let counter = Arc::new(Mutex::new(0u64));
         let mut poller = Poller::new(1000);
+        poller.resume();
         poller
             .register(
                 "assistant",
@@ -181,6 +254,50 @@ mod tests {
     }
 
     #[test]
+    fn config_reader_defaults_and_overrides() {
+        let root = std::env::temp_dir().join(format!(
+            "agent-app-poller-config-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let reader = PollerConfigReader::new(root.clone());
+        assert_eq!(reader.load().unwrap(), PollerSettings::default());
+
+        fs::write(
+            root.join("config.json"),
+            r#"{"poller":{"enabled":true,"base_interval_ms":500,"assistant_interval_ticks":10}}"#,
+        )
+        .unwrap();
+        let loaded = reader.load().unwrap();
+        assert!(loaded.enabled);
+        assert_eq!(loaded.base_interval_ms, 500);
+        assert_eq!(loaded.assistant_interval_ticks, 10);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn default_new_is_paused_until_resume() {
+        let counter = Arc::new(Mutex::new(0u64));
+        let mut poller = Poller::new(1000);
+        poller
+            .register(
+                "assistant",
+                1,
+                Box::new(CountingHandler {
+                    counter: Arc::clone(&counter),
+                }),
+            )
+            .unwrap();
+        poller.tick();
+        poller.tick();
+        assert_eq!(*counter.lock().unwrap(), 0);
+        assert_eq!(poller.status().state, PollerRunState::Paused);
+    }
+
+    #[test]
     fn trigger_fires_all_on_next_tick() {
         let counter = Arc::new(Mutex::new(0u64));
         let mut poller = Poller::new(1000);
@@ -194,6 +311,7 @@ mod tests {
             )
             .unwrap();
 
+        // Default paused: trigger still forces a run on next tick.
         poller.trigger();
         assert_eq!(*counter.lock().unwrap(), 0);
         poller.tick();

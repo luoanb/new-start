@@ -16,6 +16,7 @@ Assistant 内部每轮流程统一为：**beforehook → Assistant 对话/步进
 
 - **一次工具调用即结束**：与 Agent 模式的迭代循环不同，Assistant 模式每轮调一次 LLM + 一次工具执行后即结束，不继续轮询 LLM。
 - **外层轮询驱动**：系统级 Poller 只负责调度到期任务；Assistant 注册自己的 handler，在触发时自行判断课题、会话和轮次推进。
+- **默认不自动轮询（2026-08-01）**：Poller 启动即为 `Paused`；日常由用户手动步进（会话 `assistant step` / `poll_trigger`）。需要自动推进时再 `poll_resume`。
 - **神经元动态选为 system prompt**：beforehook 先用 `select_candidates` 按权重准备固定数量候选（默认 7），再用固定 `system_type` 取出并缓存提示词神经元，构造提示词后调用大模型在候选中选 1 个；选中 neuron 的 content 作为本轮 Assistant 对话 system prompt。
 - **神经元持有工具权限**：系统工具注册表仍负责登记工具能力，但 Assistant 每轮可见、可调用的工具集由本轮选中的神经元决定；神经元持久化记录自己获准使用的工具 ID 集合。
 - **课题与会话绑定**：Assistant 会话必须绑定课题，一个课题一个绑定会话。

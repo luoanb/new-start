@@ -27,7 +27,8 @@ pub const SYSTEM_TYPE_MATCH_TOPIC: &str = "assistant_match_topic";
 pub const SYSTEM_TYPE_COMPLETE_SCOPE: &str = "assistant_complete_scope";
 pub const SYSTEM_TYPE_SCORE_FEEDBACK: &str = "assistant_score_feedback";
 pub const ASSISTANT_POLL_TASK: &str = "assistant_advance";
-pub const DEFAULT_ASSISTANT_POLL_TICKS: u64 = 30;
+/// Re-export default interval ticks (overridable via `config.json` → `poller`).
+pub use super::poller::DEFAULT_ASSISTANT_POLL_TICKS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoundTrigger {

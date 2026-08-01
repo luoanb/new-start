@@ -4,7 +4,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use super::{
-    assistant_mode::{AssistantMode, AssistantStepRequest, DEFAULT_ASSISTANT_POLL_TICKS},
+    assistant_mode::{AssistantMode, AssistantStepRequest},
     conversation_store::{now_ms, ConversationStore},
     engine::Engine,
     error::{AppError, AppResult},
@@ -17,15 +17,13 @@ use super::{
     neuron_manager::NeuronManager,
     neuron_model::DefaultNeuronModelCaller,
     neuron_store::NeuronStore,
-    poller::{Poller, PollerStatus},
+    poller::{Poller, PollerConfigReader, PollerStatus},
     providers::ProviderRegistry,
     session_tracker::SessionTracker,
     tool_registry::ToolRegistry,
     topic_store::TopicStore,
     CompactionConfig,
 };
-
-const DEFAULT_POLLER_BASE_INTERVAL_MS: u64 = 1000;
 
 #[derive(Debug, Clone)]
 pub struct Gateway {
@@ -102,12 +100,26 @@ impl Gateway {
             step_tx,
         ));
 
-        let poller = Arc::new(Mutex::new(Poller::new(DEFAULT_POLLER_BASE_INTERVAL_MS)));
+        let poller_settings = PollerConfigReader::new(store.root().to_path_buf()).load()?;
+        tracing::info!(
+            phase = "poller_config",
+            enabled = poller_settings.enabled,
+            base_interval_ms = poller_settings.base_interval_ms,
+            assistant_interval_ticks = poller_settings.assistant_interval_ticks,
+            "loaded poller settings from config"
+        );
+
+        let poller = Arc::new(Mutex::new(Poller::new(poller_settings.base_interval_ms)));
         {
             let mut guard = poller
                 .lock()
                 .map_err(|e| AppError::StorageError(format!("Poller lock error: {}", e)))?;
-            assistant.register_polling(&mut guard, DEFAULT_ASSISTANT_POLL_TICKS)?;
+            assistant.register_polling(&mut guard, poller_settings.assistant_interval_ticks)?;
+            if poller_settings.enabled {
+                guard.resume();
+            } else {
+                guard.pause();
+            }
         }
 
         spawn_poller_runtime(
@@ -115,7 +127,7 @@ impl Gateway {
             Arc::clone(&assistant),
             providers.clone(),
             step_rx,
-            DEFAULT_POLLER_BASE_INTERVAL_MS,
+            poller_settings.base_interval_ms,
         );
 
         Ok(Self {
@@ -582,8 +594,13 @@ mod tests {
     fn poller_status_available() {
         let gateway = test_gateway("poller_status_available");
         let status = gateway.poll_status().expect("poll status");
-        assert_eq!(status.base_interval_ms, DEFAULT_POLLER_BASE_INTERVAL_MS);
+        assert_eq!(
+            status.base_interval_ms,
+            crate::core::poller::DEFAULT_POLLER_BASE_INTERVAL_MS
+        );
         assert!(status.task_count >= 1);
+        // Default / missing poller.enabled → paused
+        assert_eq!(status.state, crate::core::poller::PollerRunState::Paused);
     }
 
     #[tokio::test]

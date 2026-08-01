@@ -30,5 +30,8 @@ pub use models::{
     ScopeInItem, SkillInfo, SystemPromptStatus, ToolCall, ToolDefinition, Topic, TopicStatus,
     TopicUpdate,
 };
-pub use poller::{PollHandler, Poller, PollerRunState, PollerStatus};
+pub use poller::{
+    PollHandler, Poller, PollerConfigReader, PollerRunState, PollerSettings, PollerStatus,
+    DEFAULT_ASSISTANT_POLL_TICKS, DEFAULT_POLLER_BASE_INTERVAL_MS,
+};
 pub use session_tracker::{register_session_tracker_tools, RunningSession, SessionTracker};
