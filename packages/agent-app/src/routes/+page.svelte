@@ -280,6 +280,9 @@
       selectedProviderId={activeProviderId}
       selectedModelId={activeModelId}
       neuronActive={isNeuronSplit}
+      sidebarVisible={layoutStore.state.sidebar.visible}
+      infoVisible={layoutStore.state.info.visible}
+      panelVisible={layoutStore.state.panel.visible}
       onChange={handleModelChange}
       onToggleSidebar={() => {
         if (window.innerWidth <= 800) drawerSidebar = !drawerSidebar;
@@ -289,6 +292,7 @@
         if (window.innerWidth <= 800) drawerInfo = !drawerInfo;
         else layoutStore.toggleInfo();
       }}
+      onTogglePanel={() => layoutStore.togglePanel()}
       onToggleNeuron={() => handleActivitySelect("neurons")}
     />
   </header>
@@ -314,32 +318,67 @@
       onResizeEnd={() => layoutStore.persistNow()}
     />
 
-    <main class="chat-area" bind:this={mainRef}>
-      <EditorTabs
-        tabs={mainTabs}
-        activeId={layoutStore.state.activity.active}
-        split={isNeuronSplit}
-        onSelect={(id) => layoutStore.setActivity(id)}
-        onClose={handleTabClose}
-      />
-      <div class="chat-content">
-        {#if isNeuronSplit}
-          <div class="main-split" style="--split-ratio: {splitRatio}">
-            <ChatArea {messages} {loading} onSend={handleSend} />
-            <Splitter
-              orientation="vertical"
-              onResize={handleSplitResize}
-              onResizeEnd={() => layoutStore.persistNow()}
-            />
+    <!-- Center column: editor + bottom panel -->
+    <div class="center-column">
+      <main class="chat-area" bind:this={mainRef}>
+        <EditorTabs
+          tabs={mainTabs}
+          activeId={layoutStore.state.activity.active}
+          split={isNeuronSplit}
+          onSelect={(id) => layoutStore.setActivity(id)}
+          onClose={handleTabClose}
+        />
+        <div class="chat-content">
+          {#if isNeuronSplit}
+            <div class="main-split" style="--split-ratio: {splitRatio}">
+              <ChatArea {messages} {loading} onSend={handleSend} />
+              <Splitter
+                orientation="vertical"
+                onResize={handleSplitResize}
+                onResizeEnd={() => layoutStore.persistNow()}
+              />
+              <NeuronManager />
+            </div>
+          {:else if layoutStore.state.activity.active === "neurons"}
             <NeuronManager />
+          {:else}
+            <ChatArea {messages} {loading} onSend={handleSend} />
+          {/if}
+        </div>
+      </main>
+
+      <!-- Bottom panel: only under the center main area -->
+      <section class="panel-area desktop-only" style={panelStyle}>
+        <Splitter
+          orientation="horizontal"
+          onResize={(delta) => layoutStore.setPanelHeight(layoutStore.state.panel.height - delta, false)}
+          onResizeEnd={() => layoutStore.persistNow()}
+        />
+        <DockPane
+          title={panelViews.find((v) => v.id === layoutStore.state.panel.activeView)?.label ?? "Panel"}
+          onToggle={() => layoutStore.togglePanel()}
+        >
+          <div class="panel-tabs">
+            {#each panelViews as pv}
+              <button
+                class="panel-tab"
+                class:active={layoutStore.state.panel.activeView === pv.id}
+                onclick={() => layoutStore.setPanelView(pv.id)}
+              >
+                {pv.label}
+              </button>
+            {/each}
           </div>
-        {:else if layoutStore.state.activity.active === "neurons"}
-          <NeuronManager />
-        {:else}
-          <ChatArea {messages} {loading} onSend={handleSend} />
-        {/if}
-      </div>
-    </main>
+          {#if layoutStore.state.panel.activeView === "poller"}
+            <PollerPanel bind:pollerStatus />
+          {:else if layoutStore.state.panel.activeView === "logs"}
+            <LogPanel />
+          {:else}
+            <p class="panel-empty">Logs placeholder</p>
+          {/if}
+        </DockPane>
+      </section>
+    </div>
 
     <Splitter
       orientation="vertical"
@@ -353,38 +392,6 @@
       <SidePanel {providers} {models} {skills} {topics} />
     </aside>
   </div>
-
-  <!-- Bottom panel -->
-  <section class="panel-area desktop-only" style={panelStyle}>
-    <Splitter
-      orientation="horizontal"
-      onResize={(delta) => layoutStore.setPanelHeight(layoutStore.state.panel.height - delta, false)}
-      onResizeEnd={() => layoutStore.persistNow()}
-    />
-    <DockPane
-      title={panelViews.find((v) => v.id === layoutStore.state.panel.activeView)?.label ?? "Panel"}
-      onToggle={() => layoutStore.togglePanel()}
-    >
-      <div class="panel-tabs">
-        {#each panelViews as pv}
-          <button
-            class="panel-tab"
-            class:active={layoutStore.state.panel.activeView === pv.id}
-            onclick={() => layoutStore.setPanelView(pv.id)}
-          >
-            {pv.label}
-          </button>
-        {/each}
-      </div>
-      {#if layoutStore.state.panel.activeView === "poller"}
-        <PollerPanel bind:pollerStatus />
-      {:else if layoutStore.state.panel.activeView === "logs"}
-        <LogPanel />
-      {:else}
-        <p class="panel-empty">Logs placeholder</p>
-      {/if}
-    </DockPane>
-  </section>
 
   <div class="error-area">
     <ErrorBanner message={error} onDismiss={() => (error = "")} />
@@ -462,11 +469,10 @@
     display: grid;
     height: 100vh;
     grid-template-columns: auto 1fr;
-    grid-template-rows: auto 1fr auto auto;
+    grid-template-rows: auto 1fr auto;
     grid-template-areas:
       "status status"
       "activity main"
-      "activity panel"
       "error error";
     overflow: hidden;
   }
@@ -478,6 +484,15 @@
     grid-area: main;
     display: flex;
     align-items: stretch;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  /* 中间列：编辑区 + 底部面板（左右栏保持整高，不被底栏截断） */
+  .center-column {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
     min-width: 0;
     min-height: 0;
   }
@@ -516,7 +531,7 @@
   }
 
   .panel-area {
-    grid-area: panel;
+    flex: none;
     display: flex;
     flex-direction: column;
     min-height: 0;

@@ -9,6 +9,9 @@ export type Translations = {
   };
   statusBar: {
     appName: string;
+    toggleSidebar: string;
+    toggleInfo: string;
+    togglePanel: string;
   };
   sessionList: {
     title: string;
@@ -170,6 +173,9 @@ export const en: Translations = {
   },
   statusBar: {
     appName: "Agent App",
+    toggleSidebar: "Toggle sidebar",
+    toggleInfo: "Toggle info panel",
+    togglePanel: "Toggle bottom panel",
   },
   sessionList: {
     title: "Sessions",
@@ -337,6 +343,9 @@ export const zh: Translations = {
   },
   statusBar: {
     appName: "智能体应用",
+    toggleSidebar: "切换左栏",
+    toggleInfo: "切换右栏",
+    togglePanel: "切换底栏",
   },
   sessionList: {
     title: "会话列表",

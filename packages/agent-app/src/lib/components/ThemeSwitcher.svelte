@@ -1,5 +1,6 @@
 <script lang="ts">
   import { t } from "$lib/i18n";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
 
   const STORAGE_KEY = "theme-preference";
 
@@ -13,7 +14,18 @@
     return (localStorage.getItem(STORAGE_KEY) as Theme) ?? "system";
   }
 
-  function apply(theme: Theme) {
+  function isTauri(): boolean {
+    return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  }
+
+  function resolveOsTheme(theme: Theme): "light" | "dark" {
+    if (theme === "system") {
+      return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    }
+    return theme;
+  }
+
+  async function apply(theme: Theme) {
     current = theme;
     localStorage.setItem(STORAGE_KEY, theme);
     const el = document.documentElement;
@@ -21,6 +33,14 @@
       el.removeAttribute("data-theme");
     } else {
       el.dataset.theme = theme;
+    }
+    // 让原生 OS 窗口标题栏跟随主题
+    if (isTauri()) {
+      try {
+        await getCurrentWindow().setTheme(resolveOsTheme(theme));
+      } catch {
+        /* 某些平台/版本不支持 setTheme，忽略 */
+      }
     }
   }
 
@@ -34,7 +54,13 @@
   $effect(() => {
     if (current !== "system") return;
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const handler = () => {};
+    const handler = () => {
+      if (isTauri()) {
+        getCurrentWindow()
+          .setTheme(mq.matches ? "dark" : "light")
+          .catch(() => {});
+      }
+    };
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
   });
