@@ -18,9 +18,6 @@
   <div class="node-label">{data.label}</div>
   <div class="node-meta">
     <span>w={data.weight.toFixed(1)}</span>
-    {#if data.systemType}
-      <span class="sys">{data.systemType}</span>
-    {/if}
   </div>
   <Handle type="source" position={Position.Right} />
 </div>
@@ -54,12 +51,5 @@
     align-items: center;
     color: var(--color-text-muted, #999);
     font-size: 10px;
-  }
-  .sys {
-    padding: 0 4px;
-    border-radius: 4px;
-    background: var(--color-primary, #3b82f6);
-    color: var(--color-on-primary, #fff);
-    font-weight: 600;
   }
 </style>

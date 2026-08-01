@@ -10,17 +10,19 @@
   import { untrack } from "svelte";
   import "@xyflow/svelte/dist/style.css";
   import type { NeuronSubgraph } from "$lib/types";
-  import { layoutFlowNodes } from "$lib/features/neuron/networkLayout";
+  import { layoutForceNodes } from "$lib/features/neuron/networkLayout";
   import NeuronFlowNode from "./NeuronFlowNode.svelte";
 
   let {
     subgraph,
     onJumpTo,
     selectedId = null,
+    edgeType = "bezier",
   }: {
     subgraph: NeuronSubgraph;
     onJumpTo: (id: string) => void;
     selectedId?: string | null;
+    edgeType?: "bezier" | "smoothstep" | "step" | "straight";
   } = $props();
 
   const nodeTypes = { neuron: NeuronFlowNode };
@@ -29,7 +31,7 @@
   let edges = $state.raw<Edge[]>([]);
 
   function rebuild(sg: NeuronSubgraph) {
-    const laid = layoutFlowNodes(sg);
+    const laid = layoutForceNodes(sg);
     nodes = laid.map((n) => ({
       id: n.id,
       type: "neuron",
@@ -51,7 +53,7 @@
         source: c.source,
         target: c.target,
         label: c.weight.toFixed(2),
-        type: "smoothstep",
+        type: edgeType,
         animated: false,
         style: `stroke-width: ${1 + norm * 2.5}px`,
         markerEnd: { type: MarkerType.ArrowClosed },

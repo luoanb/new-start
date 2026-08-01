@@ -137,6 +137,11 @@ export type Translations = {
     viewModeTree: string;
     edgeWeight: string;
     depthLabel: string;
+    edgeTypeLabel: string;
+    edgeBezier: string;
+    edgeSmoothstep: string;
+    edgeStep: string;
+    edgeStraight: string;
     back: string;
     viewNetwork: string;
     jumpTo: string;
@@ -298,6 +303,11 @@ export const en: Translations = {
     viewModeTree: "Tree",
     edgeWeight: "Edge",
     depthLabel: "Depth",
+    edgeTypeLabel: "Edge",
+    edgeBezier: "Bezier",
+    edgeSmoothstep: "Smooth",
+    edgeStep: "Step",
+    edgeStraight: "Straight",
     back: "Back",
     viewNetwork: "View Network",
     jumpTo: "View",
@@ -459,6 +469,11 @@ export const zh: Translations = {
     viewModeTree: "树",
     edgeWeight: "边权",
     depthLabel: "深度",
+    edgeTypeLabel: "连线",
+    edgeBezier: "曲线",
+    edgeSmoothstep: "圆角",
+    edgeStep: "直角",
+    edgeStraight: "直线",
     back: "返回",
     viewNetwork: "查看网络",
     jumpTo: "查看",

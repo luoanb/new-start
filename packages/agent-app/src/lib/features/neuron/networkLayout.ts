@@ -141,3 +141,122 @@ export function layoutFlowNodes(subgraph: NeuronSubgraph): LayoutNode[] {
   }
   return nodes;
 }
+
+/**
+ * Force-directed layout (deterministic). Models the neuron graph as a directed
+ * graph, NOT a tree: nodes are freely placed via repulsion + spring forces over
+ * fixed iterations. The seeded PRNG keeps coordinates stable across re-renders.
+ */
+export function layoutForceNodes(
+  subgraph: NeuronSubgraph,
+  options?: { iterations?: number; seed?: number },
+): LayoutNode[] {
+  const iterations = options?.iterations ?? 300;
+  const seed = options?.seed ?? 1337;
+
+  const ids = subgraph.neurons.map((n) => n.id);
+  const n = ids.length;
+  if (n === 0) return [];
+
+  // Deterministic PRNG (mulberry32) → stable initial positions
+  let s = seed >>> 0;
+  const rand = () => {
+    s |= 0;
+    s = (s + 0x6d2b79f5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+
+  const pos = new Map<string, { x: number; y: number }>();
+  ids.forEach((id, i) => {
+    const angle = (i / n) * Math.PI * 2;
+    const radius = 260 + (rand() - 0.5) * 120;
+    pos.set(id, {
+      x: Math.cos(angle) * radius + (rand() - 0.5) * 40,
+      y: Math.sin(angle) * radius + (rand() - 0.5) * 40,
+    });
+  });
+
+  // adjacency for spring forces
+  const adj = new Map<string, Set<string>>();
+  ids.forEach((id) => adj.set(id, new Set()));
+  for (const c of subgraph.connections) {
+    if (adj.has(c.source) && adj.has(c.target)) {
+      adj.get(c.source)!.add(c.target);
+      adj.get(c.target)!.add(c.source);
+    }
+  }
+
+  const area = Math.max(90000, n * 1600);
+  const k = Math.sqrt(area / n); // ideal distance
+  const repulse = 6000;
+  const spring = 0.05;
+  const damping = 0.85;
+
+  const disp = new Map<string, { x: number; y: number }>();
+  for (let it = 0; it < iterations; it++) {
+    ids.forEach((id) => disp.set(id, { x: 0, y: 0 }));
+
+    // repulsion (all pairs)
+    for (let i = 0; i < n; i++) {
+      const a = ids[i];
+      const pa = pos.get(a)!;
+      for (let j = i + 1; j < n; j++) {
+        const b = ids[j];
+        const pb = pos.get(b)!;
+        let dx = pa.x - pb.x;
+        let dy = pa.y - pb.y;
+        let dist = Math.hypot(dx, dy) || 0.01;
+        const f = repulse / (dist * dist);
+        const ux = (dx / dist) * f;
+        const uy = (dy / dist) * f;
+        const da = disp.get(a)!;
+        const db = disp.get(b)!;
+        da.x += ux;
+        da.y += uy;
+        db.x -= ux;
+        db.y -= uy;
+      }
+    }
+
+    // attraction (edges)
+    for (const [a, neighbors] of adj) {
+      const pa = pos.get(a)!;
+      const da = disp.get(a)!;
+      for (const b of neighbors) {
+        const pb = pos.get(b)!;
+        const dx = pa.x - pb.x;
+        const dy = pa.y - pb.y;
+        const dist = Math.hypot(dx, dy) || 0.01;
+        const f = (dist - k) * spring;
+        const ux = (dx / dist) * f;
+        const uy = (dy / dist) * f;
+        da.x -= ux;
+        da.y -= uy;
+      }
+    }
+
+    // apply with length limit + damping
+    const limit = 80 * damping ** (it / 30);
+    ids.forEach((id) => {
+      const d = disp.get(id)!;
+      const len = Math.hypot(d.x, d.y) || 0.01;
+      const scale = Math.min(len, limit) / len;
+      const p = pos.get(id)!;
+      p.x += d.x * scale;
+      p.y += d.y * scale;
+    });
+  }
+
+  return subgraph.neurons.map((neuron) => ({
+    id: neuron.id,
+    position: pos.get(neuron.id)!,
+    data: {
+      label: neuron.desc || neuron.id.slice(0, 8),
+      weight: neuron.weight,
+      systemType: neuron.system_type,
+      isSeed: neuron.id === subgraph.seed_id,
+    },
+  }));
+}

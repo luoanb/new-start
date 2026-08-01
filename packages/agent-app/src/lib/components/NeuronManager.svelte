@@ -25,6 +25,10 @@
   let activeTypes = $state<string[]>([]); // 空 = 全部
   let depth = $state(2);
 
+  // 连线类型（力导向布局默认 bezier）
+  type EdgeType = "bezier" | "smoothstep" | "step" | "straight";
+  let edgeType = $state<EdgeType>("bezier");
+
   let allTypes = $derived(
     Array.from(new Set(neurons.map((n) => n.system_type || "uncategorized"))).sort()
   );
@@ -129,7 +133,18 @@
         })
       );
       linkCounts = counts;
-      allConnections = conns;
+
+      // 方向敏感去重：保留 A→B 与 B→A 共存，仅丢弃 source+target 完全相同的重复连接
+      const seen = new Set<string>();
+      const deduped: Connection[] = [];
+      for (const c of conns) {
+        const key = c.source + "->" + c.target;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        deduped.push(c);
+      }
+      allConnections = deduped;
+
       subgraph = buildSubgraph();
     } catch (e) {
       error = String(e);
@@ -205,6 +220,15 @@
       <input type="range" min="1" max="5" step="1" bind:value={depth} />
       <span class="depth-val">{depth}</span>
     </div>
+    <div class="edge-type">
+      <span class="depth-label">{t("neuronPanel.edgeTypeLabel")}</span>
+      <select bind:value={edgeType} class="edge-select">
+        <option value="bezier">{t("neuronPanel.edgeBezier")}</option>
+        <option value="smoothstep">{t("neuronPanel.edgeSmoothstep")}</option>
+        <option value="step">{t("neuronPanel.edgeStep")}</option>
+        <option value="straight">{t("neuronPanel.edgeStraight")}</option>
+      </select>
+    </div>
     {#if search || activeTypes.length}
       <button class="clear" on:click={clearFilters}>✕</button>
     {/if}
@@ -235,6 +259,7 @@
           <NeuronNetworkGraph
             {subgraph}
             {selectedId}
+            {edgeType}
             onJumpTo={selectNeuron}
           />
         </div>
@@ -325,6 +350,25 @@
     color: var(--color-text);
     width: 10px;
     text-align: center;
+  }
+
+  .edge-type {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .edge-select {
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 4px 8px;
+    color: var(--color-text);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .edge-select:focus {
+    outline: none;
+    border-color: var(--color-primary);
   }
 
   .clear {
