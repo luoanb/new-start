@@ -1094,7 +1094,7 @@ impl BeforeHook for ScoreFeedbackBeforeHook<'_> {
             "scoring intervention window"
         );
         let model = self.assistant.default_model_or_error()?;
-        let decision = self
+        let decision = match self
             .assistant
             .call_system_prompt_json(
                 SYSTEM_TYPE_SCORE_FEEDBACK,
@@ -1105,7 +1105,21 @@ impl BeforeHook for ScoreFeedbackBeforeHook<'_> {
                 }),
                 &model,
             )
-            .await?;
+            .await
+        {
+            Ok(decision) => decision,
+            Err(e) => {
+                // 程序强制规范兜底：模型未返回合法 JSON 时，跳过打分，
+                // 不让评分副作用阻断主对话（见 assistant.score_feedback.md）。
+                tracing::warn!(
+                    phase = "score_feedback_hook",
+                    topic_id = %topic_id,
+                    error = %e,
+                    "json parse failed; skip scoring instead of failing the round"
+                );
+                return Ok(());
+            }
+        };
         let score = decision
             .get("score")
             .and_then(|v| v.as_i64())
