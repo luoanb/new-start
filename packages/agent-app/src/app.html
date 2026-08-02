@@ -72,6 +72,8 @@
         --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
         --duration-fast:   150ms;
         --duration-normal: 250ms;
+
+        color-scheme: light;
       }
 
       [data-theme="dark"] {
@@ -101,6 +103,8 @@
         --color-system-topic:        oklch(0.74 0.19 350);
         --color-system-memory:      oklch(0.7 0.14 30);
         --color-system-note:        oklch(0.68 0.02 265);
+
+        color-scheme: dark;
       }
 
       @media (prefers-color-scheme: dark) {
@@ -132,7 +136,21 @@
           --color-system-topic:        oklch(0.74 0.19 350);
           --color-system-memory:      oklch(0.7 0.14 30);
           --color-system-note:        oklch(0.68 0.02 265);
+
+          color-scheme: dark;
         }
+      }
+
+      /* ── Native <select> / <option> 主题适配（下拉列表由原生渲染，需 color-scheme + 显式配色）── */
+      select {
+        background-color: var(--color-surface);
+        color: var(--color-text);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-sm);
+      }
+      select option {
+        background-color: var(--color-elevated);
+        color: var(--color-text);
       }
     </style>
   </head>

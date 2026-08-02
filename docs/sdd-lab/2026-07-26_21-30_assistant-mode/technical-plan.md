@@ -139,9 +139,9 @@ pub trait PollHandler: Send {
 
 * Poller 默认 `base_interval_ms = 1000`，Assistant 任务默认 `interval_ticks = 30`（可配置后调）。
 
-* 首次选神经元：`select_candidates(n=7, source_id=None, system_type=None, min_new=0)`；若业务希望从 `create_neuron` 下游取候选，可在配置中改成 `system_type=create_neuron`。
+* 首次选神经元（主对话轮）：`select_candidates(n=7, source_id=None, system_type=None, min_new=0)` → 走 `list_global_candidates` 全局候选池（不限定 `assistant_select_neuron` 下游）。`assistant_select_neuron` 仍作为选 1 的执行体（其 content 为系统提示词），但只决定"选谁"，不决定候选范围。
 
-* 次生轮次：`select_candidates(n=7, source_id=last_selected_neuron_id, …)`。
+* 次生轮次（Poller / step 第 2 次及以后）：`select_candidates(n=7, source_id=last_selected_neuron_id, …)`。
 
 * 满意度打分 LLM 输出严格 JSON：`{"score": <int>}`，校验范围后应用。
 

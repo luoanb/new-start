@@ -4,7 +4,7 @@
 status: done
 result: completed
 created_at: 2026-07-26 21:30
-updated_at: 2026-07-29 21:30
+updated_at: 2026-08-02 21:30
 owner: user
 ```
 
@@ -28,6 +28,7 @@ owner: user
 - 9. 2026-07-29 21:01: 生成 `technical-plan.md`，状态进入 planned；推荐 Option A，Decision Owner 为用户。
 - 10. 2026-07-29 21:17: 用户确认执行 Option A，状态进入 executing。
 - 11. 2026-07-29 21:30: 实现完成并通过验证：`cargo fmt --check`、`cargo check`、`cargo test`（55 passed）。状态进入 done。
+- 12. 2026-08-02 21:30: Reverse Sync。修正对话神经元候选来源：主对话轮（`SelectNeuronBeforeHook` `secondary=false`）由原先 `source_id=assistant_select_neuron`（选择器下游）改回 `source_id=None` 全局候选池（`list_global_candidates`），对齐本方案原契约；`assistant_select_neuron` 仍作选 1 执行体。次生轮次保持 `source_id=last_selected_neuron_id`（直接子节点）。代码改动见 `assistant_mode.rs:783-793`。`cargo check` 通过。
 
 ## Validation / 验证
 

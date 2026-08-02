@@ -783,13 +783,8 @@ impl BeforeHook for SelectNeuronBeforeHook<'_> {
         let source_id = if self.secondary {
             ctx.last_selected_neuron_id.clone()
         } else {
-            // First round: pool under assistant_select_neuron (own downstream), not global/creator.
-            let selector = self
-                .assistant
-                .neuron_manager
-                .ensure_system_neuron(SYSTEM_TYPE_SELECT_NEURON, EnsureSystemOpts { reset: false })
-                .await?;
-            Some(selector.id)
+            // First round: global candidate pool (all neurons), not selector's downstream.
+            None
         };
         tracing::info!(
             phase = "select_neuron_hook",

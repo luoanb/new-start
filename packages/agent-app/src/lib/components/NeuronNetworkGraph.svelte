@@ -110,4 +110,23 @@
   .graph-wrap :global(.svelte-flow) {
     background: var(--color-bg);
   }
+  /* ── xyflow Controls 主题适配（库自带 CSS 为浅色硬编码，需覆盖主题变量）── */
+  .graph-wrap :global(.svelte-flow__controls) {
+    box-shadow: 0 0 0 1px var(--color-border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+  .graph-wrap :global(.svelte-flow__controls-button) {
+    background: var(--color-surface);
+    border-bottom: 1px solid var(--color-border);
+    color: var(--color-text);
+    width: 26px;
+    height: 26px;
+  }
+  .graph-wrap :global(.svelte-flow__controls-button:hover) {
+    background: var(--color-hover);
+  }
+  .graph-wrap :global(.svelte-flow__controls-button svg) {
+    fill: var(--color-text);
+  }
 </style>

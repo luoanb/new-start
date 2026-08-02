@@ -64,7 +64,10 @@ Assistant 内部每轮流程统一为：**beforehook → Assistant 对话/步进
 - 课题匹配 beforehook：与神经元 7 选 1 同一处理方式，仅 `system_type` 不同；匹配到已有未完成课题则切换到绑定会话，无匹配则创建新课题并关联当前会话。
 - 用户介入 beforehook：根据用户输入猜测满意度分数，范围 `-5..=5` 且不可为 `0`；分数作用在“上一轮用户介入到本次用户介入”区间内的上游神经元及其关联单向边，执行权重增减。不做对话回滚。
 - 轮后 afterhook：用固定 `system_type` 取系统提示词，调用大模型确认本轮实际做了什么，再调用既有 `scope_in` 单条完成能力更新条目；进度与课题状态由条目管理能力重算，全部完成则自动标记 Done。
-- 次生轮次候选池：Poller 对该课题第 2 次及以后的推进，以上一轮选中神经元为 `source_id`，只取其直接子节点（`source → target` 下游，不取父节点、不递归更深后代）；再按同一套 7 选 1 流程（不足由 `select_candidates` 补齐后交给大模型选 1）。
+- 对话神经元候选池（2026-08-02 明确）：
+  - **主对话轮（用户输入新会话 / 非 secondary）**：对话神经元候选取自**全局候选池**。`SelectNeuronBeforeHook` 在 `secondary=false` 时传 `source_id=None`，由 `select_candidates` 走 `list_global_candidates`（全库 `FROM neurons` 按权重降序 + 随机取 7），**不限定在 `assistant_select_neuron` 下游**。
+  - **次生轮次（Poller / step 第 2 次及以后）**：以上一轮选中神经元为 `source_id`，只取其直接子节点（`source → target` 下游，不取父节点、不递归更深后代）；再按同一套 7 选 1 流程（不足由 `select_candidates` 补齐后交给大模型选 1）。
+  - 两种轮次都只决定**候选来源范围**；具体选 1 仍由 `assistant_select_neuron`（选择器神经元）作为执行体调一次大模型裁决，其 content 始终是选 1 的系统提示词。
 - 系统级 `Poller`：作为通用轮询调度器，允许多个业务按不同间隔注册 handler；Poller 只调度并调用 handler，不理解 Assistant 业务，也不返回 handler 结果。
 - TUI 命令：`/new_assistant`、`/poll`（status/pause/resume/trigger）。
 - 会话列表显示 `[Assistant]` 标签。
