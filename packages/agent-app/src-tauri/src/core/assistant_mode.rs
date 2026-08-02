@@ -10,12 +10,13 @@ use super::{
     conversation_store::{now_ms, ConversationStore},
     error::{AppError, AppResult},
     insert_catalog::InsertCatalog,
+    log_redact::{preview_default, preview_json_for_log},
+    model_call_input::{ModelAppendTemplate, ModelCallInput},
     models::{
         CandidateQuery, ChatModelSelection, ChatResponse, EnsureSystemOpts, Message, MessageRole,
         ModelCallRequest, ModelMessage, ModelMessageRole, Neuron, ScopeInItem, Topic, TopicStatus,
         TopicUpdate,
     },
-    log_redact::{preview_default, preview_json_for_log},
     neuron_manager::NeuronManager,
     neuron_store::NeuronStore,
     poller::{PollHandler, Poller},
@@ -437,17 +438,8 @@ impl AssistantMode {
         ctx: &mut AssistantRoundContext,
         model: &ChatModelSelection,
     ) -> AppResult<ChatResponse> {
-        let mut messages = Vec::new();
-        if let Some(system_prompt) = ctx.system_prompt.clone() {
-            messages.push(ModelMessage {
-                role: ModelMessageRole::System,
-                content: system_prompt,
-                tool_calls: None,
-                tool_call_id: None,
-            });
-        }
-        messages.extend(ctx.messages.clone());
-        if let Some(user_input) = ctx.user_input.clone() {
+        let role_system = ctx.system_prompt.clone().unwrap_or_default();
+        let user_input = if let Some(user_input) = ctx.user_input.clone() {
             let user_message = Message {
                 role: MessageRole::User,
                 content: user_input.clone(),
@@ -458,22 +450,20 @@ impl AssistantMode {
                 tool_call_id: None,
             };
             self.store.add_message(&ctx.session_id, user_message)?;
-            messages.push(ModelMessage {
-                role: ModelMessageRole::User,
-                content: user_input,
-                tool_calls: None,
-                tool_call_id: None,
-            });
+            user_input
         } else if matches!(ctx.trigger, RoundTrigger::ManualStep | RoundTrigger::Poller) {
-            let nudge =
-                "Continue advancing the bound topic using available tools if needed.".to_string();
-            messages.push(ModelMessage {
-                role: ModelMessageRole::User,
-                content: nudge,
-                tool_calls: None,
-                tool_call_id: None,
-            });
-        }
+            "Continue advancing the bound topic using available tools if needed.".to_string()
+        } else {
+            String::new()
+        };
+
+        let messages = ModelCallInput::assemble(
+            &ctx.messages,
+            &role_system,
+            "",
+            &user_input,
+            ModelAppendTemplate::Neuron,
+        );
 
         let tools = if ctx.authorized_tool_ids.is_empty() {
             None
@@ -604,6 +594,7 @@ impl AssistantMode {
         system_type: &str,
         user_payload: serde_json::Value,
         model: &ChatModelSelection,
+        history: &[ModelMessage],
     ) -> AppResult<serde_json::Value> {
         let user_preview = preview_json_for_log(&user_payload, 240);
         tracing::info!(
@@ -611,6 +602,7 @@ impl AssistantMode {
             system_type,
             provider = %model.provider_id,
             model = %model.model_id,
+            history_len = history.len(),
             user_preview = %user_preview,
             "ensure + model call start"
         );
@@ -622,35 +614,29 @@ impl AssistantMode {
             )
             .await?;
         let insert_id = insert_id_for_system_type(system_type)?;
-        let system_prompt =
-            InsertCatalog::system_with_insert(&prompt_neuron.content, insert_id);
+        let insert = InsertCatalog::require(insert_id);
+        // Manual append subject = insert; neuron stays in role_system. Does not add_message.
+        let messages = ModelCallInput::assemble(
+            history,
+            &prompt_neuron.content,
+            insert,
+            &user_payload.to_string(),
+            ModelAppendTemplate::Manual,
+        );
         tracing::info!(
             phase = "assistant_system_json",
             system_type,
             insert_id,
             neuron_id = %prompt_neuron.id,
-            system_prompt_len = system_prompt.len(),
-            "system prompt ready; calling model"
+            message_count = messages.len(),
+            "messages assembled; calling model"
         );
         let response = match self
             .providers
             .call_model(ModelCallRequest {
                 provider_id: model.provider_id.clone(),
                 model_id: model.model_id.clone(),
-                messages: vec![
-                    ModelMessage {
-                        role: ModelMessageRole::System,
-                        content: system_prompt,
-                        tool_calls: None,
-                        tool_call_id: None,
-                    },
-                    ModelMessage {
-                        role: ModelMessageRole::User,
-                        content: user_payload.to_string(),
-                        tool_calls: None,
-                        tool_call_id: None,
-                    },
-                ],
+                messages,
                 tools: None,
             })
             .await
@@ -814,11 +800,14 @@ impl BeforeHook for SelectNeuronBeforeHook<'_> {
         let selected = self
             .assistant
             .neuron_manager
-            .select_one(CandidateQuery {
-                n: 7,
-                source_id,
-                min_new: 0,
-            })
+            .select_one_with_history(
+                CandidateQuery {
+                    n: 7,
+                    source_id,
+                    min_new: 0,
+                },
+                &ctx.messages,
+            )
             .await?;
         tracing::info!(
             phase = "select_neuron_hook",
@@ -864,6 +853,7 @@ impl BeforeHook for MatchTopicBeforeHook<'_> {
                     })).collect::<Vec<_>>(),
                 }),
                 &model,
+                &ctx.messages,
             )
             .await?;
 
@@ -1104,6 +1094,7 @@ impl BeforeHook for ScoreFeedbackBeforeHook<'_> {
                     "neuron_ids": state.intervention_neuron_ids,
                 }),
                 &model,
+                &ctx.messages,
             )
             .await
         {
@@ -1196,6 +1187,7 @@ impl AfterHook for CompleteScopeAfterHook<'_> {
                     "user_input": ctx.user_input,
                 }),
                 &model,
+                &ctx.messages,
             )
             .await?;
         let ids = decision

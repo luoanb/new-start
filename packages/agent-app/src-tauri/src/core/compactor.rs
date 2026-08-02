@@ -1,8 +1,8 @@
 use super::{
     error::{AppError, AppResult},
+    model_call_input::{ModelAppendTemplate, ModelCallInput},
     models::{
         CompactionConfig, Conversation, ConversationMode, Message, MessageRole, ModelCallRequest,
-        ModelMessage, ModelMessageRole,
     },
     providers::ProviderRegistry,
 };
@@ -202,16 +202,18 @@ impl Compactor {
         model: &super::models::ChatModelSelection,
         prompt: &str,
     ) -> AppResult<String> {
+        let messages = ModelCallInput::assemble(
+            &[],
+            prompt,
+            "",
+            "",
+            ModelAppendTemplate::Neuron,
+        );
         let response = providers
             .call_model(ModelCallRequest {
                 provider_id: model.provider_id.clone(),
                 model_id: model.model_id.clone(),
-                messages: vec![ModelMessage {
-                    role: ModelMessageRole::System,
-                    content: prompt.to_string(),
-                    tool_calls: None,
-                    tool_call_id: None,
-                }],
+                messages,
                 tools: None,
             })
             .await

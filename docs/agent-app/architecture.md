@@ -69,6 +69,10 @@ GUI 卡死 / 系统「无响应」的根因与目标契约见正式 spec：[`doc
 
 Rolling files, GUI Logs panel, filters, and verbosity controls are documented in [logging.md](./logging.md).
 
+## Assistant Prompt Synthesis
+
+助手模式各模型调度点（hooks / select_one / generate_drafts / run_core）的 system·user 拼装对照见 [assistant-prompt-synthesis.md](./assistant-prompt-synthesis.md)。
+
 ## Self-Describing Atoms (Insert Catalog)
 
 Tool manuals for **decision-making model readers** live under `packages/agent-app/src-tauri/inserts/<id>.md` (scheme 2), loaded by `InsertCatalog` (`rust-embed`).

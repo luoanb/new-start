@@ -8,14 +8,15 @@ use serde_json::Value;
 
 use super::{
     error::{AppError, AppResult},
+    insert_catalog::InsertCatalog,
+    model_call_input::{ModelAppendTemplate, ModelCallInput},
     models::{
         BootstrapReport, CandidateQuery, Connection, CreateNeuronInput, EnsureSystemOpts,
-        GeneratedNeuronDraft, Neuron, NeuronCreate, NeuronSubgraph, NeuronUpdate,
-        SystemPromptStatus,
+        GeneratedNeuronDraft, ModelMessage, ModelMessageRole, Neuron, NeuronCreate, NeuronSubgraph,
+        NeuronUpdate, SystemPromptStatus,
     },
     neuron_config::NeuronConfigReader,
     neuron_model::NeuronModelCaller,
-    insert_catalog::InsertCatalog,
     neuron_store::NeuronStore,
     tool_registry::{Tool, ToolRegistry},
 };
@@ -267,21 +268,39 @@ impl NeuronManager {
     }
 
     pub async fn select_one(&self, query: CandidateQuery) -> AppResult<Neuron> {
+        self.select_one_with_history(query, &[]).await
+    }
+
+    /// Select one neuron; `history` is read-only conversation context (not persisted by this call).
+    pub async fn select_one_with_history(
+        &self,
+        query: CandidateQuery,
+        history: &[ModelMessage],
+    ) -> AppResult<Neuron> {
         let mut query = query;
         if query.n == 0 {
             query.n = DEFAULT_SELECT_N;
         }
         let candidates = self.select_candidates(query).await?;
-        self.select_one_from(&candidates).await
+        self.select_one_from_with_history(&candidates, history)
+            .await
     }
 
     pub async fn select_one_from(&self, candidates: &[Neuron]) -> AppResult<Neuron> {
+        self.select_one_from_with_history(candidates, &[]).await
+    }
+
+    pub async fn select_one_from_with_history(
+        &self,
+        candidates: &[Neuron],
+        history: &[ModelMessage],
+    ) -> AppResult<Neuron> {
         if candidates.is_empty() {
             return Err(AppError::InvalidInput(
                 "No neuron candidates available for selection".into(),
             ));
         }
-        match self.try_llm_select(candidates).await {
+        match self.try_llm_select(candidates, history).await {
             Ok(neuron) => {
                 tracing::info!(
                     phase = "select_one",
@@ -332,7 +351,7 @@ impl NeuronManager {
         };
         let user_prompt = self.create_neuron_user_prompt(&input, count, link_to)?;
         let drafts = self
-            .generate_drafts(&prompt_content, &user_prompt, count)
+            .generate_drafts(&prompt_content, &user_prompt, count, &[])
             .await?;
         let mut created = Vec::with_capacity(drafts.len());
         for draft in drafts {
@@ -548,7 +567,11 @@ impl NeuronManager {
         Ok(Some(source_id.to_string()))
     }
 
-    async fn try_llm_select(&self, candidates: &[Neuron]) -> AppResult<Neuron> {
+    async fn try_llm_select(
+        &self,
+        candidates: &[Neuron],
+        history: &[ModelMessage],
+    ) -> AppResult<Neuron> {
         let selector = self
             .get_neuron_by_system_type(ASSISTANT_SELECT_NEURON)?
             .ok_or_else(|| {
@@ -565,11 +588,16 @@ impl NeuronManager {
                 "tool_ids": n.tool_ids,
             })).collect::<Vec<_>>(),
         });
-        let system = InsertCatalog::system_with_insert(&selector.content, "neuron.select_one");
-        let output = self
-            .model_caller
-            .call_model(&system, &payload.to_string())
-            .await?;
+        // Append subject is the select-one manual; neuron content stays in role_system.
+        let insert = InsertCatalog::require("neuron.select_one");
+        let messages = ModelCallInput::assemble(
+            history,
+            &selector.content,
+            insert,
+            &payload.to_string(),
+            ModelAppendTemplate::Manual,
+        );
+        let output = self.model_caller.call_model(messages).await?;
         let decision = extract_json_object(&output)?;
         let neuron_id = decision
             .get("neuron_id")
@@ -593,7 +621,9 @@ impl NeuronManager {
         system_prompt: &str,
         user_prompt: &str,
     ) -> AppResult<GeneratedNeuronDraft> {
-        let mut drafts = self.generate_drafts(system_prompt, user_prompt, 1).await?;
+        let mut drafts = self
+            .generate_drafts(system_prompt, user_prompt, 1, &[])
+            .await?;
         drafts.pop().ok_or_else(|| {
             AppError::NeuronBootstrapFailed("Generated neuron list was empty".into())
         })
@@ -604,16 +634,25 @@ impl NeuronManager {
         system_prompt: &str,
         user_prompt: &str,
         expected: usize,
+        history: &[ModelMessage],
     ) -> AppResult<Vec<GeneratedNeuronDraft>> {
-        let system = InsertCatalog::system_with_insert(system_prompt, "neuron.draft_from_model");
+        // Append subject is the draft manual; creator/prompt neuron stays in role_system.
+        let insert = InsertCatalog::require("neuron.draft_from_model");
+        let messages = ModelCallInput::assemble(
+            history,
+            system_prompt,
+            insert,
+            user_prompt,
+            ModelAppendTemplate::Manual,
+        );
         tracing::info!(
             phase = "generate_drafts",
-            system_len = system.len(),
+            message_count = messages.len(),
             user_len = user_prompt.len(),
             expected,
             "generate_drafts model call start"
         );
-        let output = match self.model_caller.call_model(&system, user_prompt).await {
+        let output = match self.model_caller.call_model(messages).await {
             Ok(output) => output,
             Err(error) => {
                 tracing::error!(
@@ -691,7 +730,7 @@ impl NeuronManager {
             source_id,
         )?;
         let drafts = self
-            .generate_drafts(&prompt_content, &user_prompt, count)
+            .generate_drafts(&prompt_content, &user_prompt, count, &[])
             .await?;
         let mut created = Vec::with_capacity(drafts.len());
         for draft in drafts {
@@ -1250,10 +1289,25 @@ mod tests {
         calls: AtomicUsize,
     }
 
+    fn prompt_blob_from_messages(messages: &[ModelMessage]) -> String {
+        messages
+            .iter()
+            .filter(|m| {
+                matches!(
+                    m.role,
+                    ModelMessageRole::System | ModelMessageRole::User
+                )
+            })
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[async_trait]
     impl NeuronModelCaller for MockModelCaller {
-        async fn call_model(&self, _system_prompt: &str, user_prompt: &str) -> AppResult<String> {
+        async fn call_model(&self, messages: Vec<ModelMessage>) -> AppResult<String> {
             let call = self.calls.fetch_add(1, Ordering::Relaxed);
+            let user_prompt = prompt_blob_from_messages(&messages);
             let count = user_prompt
                 .split("exactly ")
                 .nth(1)

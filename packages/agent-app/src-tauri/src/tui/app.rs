@@ -3,8 +3,8 @@ use ratatui_textarea::TextArea;
 
 use crate::core::{
     AppError, AppResult, CandidateQuery, ChatModelSelection, ChatOptions, Conversation,
-    ConversationMode, CreateNeuronInput, EnsureSystemOpts, Gateway, MessageRole, ModelInfo,
-    NeuronUpdate, ProviderInfo, RuntimeStatus,
+    ConversationMode, CreateNeuronInput, EnsureSystemOpts, Gateway, MessageRole,
+    ModelAppendTemplate, ModelCallInput, ModelInfo, NeuronUpdate, ProviderInfo, RuntimeStatus,
 };
 
 use super::commands::{self, Command};
@@ -538,12 +538,13 @@ impl TuiApp {
                     .call_model(crate::core::ModelCallRequest {
                         provider_id,
                         model_id,
-                        messages: vec![crate::core::ModelMessage {
-                            role: crate::core::ModelMessageRole::User,
-                            content: message,
-                            tool_calls: None,
-                            tool_call_id: None,
-                        }],
+                        messages: ModelCallInput::assemble(
+                            &[],
+                            "",
+                            "",
+                            &message,
+                            ModelAppendTemplate::Neuron,
+                        ),
                         tools: None,
                     })
                     .await

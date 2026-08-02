@@ -4,6 +4,7 @@ use super::{
     compactor::Compactor,
     conversation_store::{now_ms, ConversationStore},
     error::{AppError, AppResult},
+    model_call_input::{ModelAppendTemplate, ModelCallInput},
     models::{
         ChatModelSelection, ChatOptions, ChatResponse, CompactionConfig, ConversationMode, Message,
         MessageRole, ModelCallRequest, ModelMessage, ModelMessageRole,
@@ -87,8 +88,20 @@ impl Engine {
             .ensure_fits(&mut conversation, &self.providers, &model, context_window)
             .await?;
 
-        // Build model context (mode-aware filtering)
-        let mut context_messages = build_context(&conversation, &conversation.mode);
+        // Build model context (mode-aware filtering); user turn assembled via ModelCallInput.
+        let context_messages = build_context(&conversation, &conversation.mode);
+        let role_system = context_messages
+            .iter()
+            .find(|m| m.role == ModelMessageRole::System)
+            .map(|m| m.content.clone())
+            .unwrap_or_default();
+        let context_messages = ModelCallInput::assemble(
+            &context_messages,
+            &role_system,
+            "",
+            input,
+            ModelAppendTemplate::Neuron,
+        );
 
         // Save user message (separate timestamp from model response)
         let user_ts = now_ms();
@@ -102,14 +115,6 @@ impl Engine {
             tool_call_id: None,
         };
         self.store.add_message(&conversation_id, user_message)?;
-
-        // Add user input to context
-        context_messages.push(ModelMessage {
-            role: ModelMessageRole::User,
-            content: input.to_string(),
-            tool_calls: None,
-            tool_call_id: None,
-        });
 
         // ── Dispatch by mode ────────────────────────────────────
         let response = match conversation.mode {
@@ -223,12 +228,15 @@ impl Engine {
                 self.store.add_message(conversation_id, assistant_msg)?;
 
                 // Add assistant response to context
-                context_messages.push(ModelMessage {
-                    role: ModelMessageRole::Assistant,
-                    content: model_response.output.clone(),
-                    tool_calls: model_response.tool_calls.clone(),
-                    tool_call_id: None,
-                });
+                context_messages = ModelCallInput::append(
+                    &context_messages,
+                    ModelMessage {
+                        role: ModelMessageRole::Assistant,
+                        content: model_response.output.clone(),
+                        tool_calls: model_response.tool_calls.clone(),
+                        tool_call_id: None,
+                    },
+                );
 
                 // Execute each tool call
                 let tcs = model_response.tool_calls.unwrap_or_default();
@@ -239,12 +247,15 @@ impl Engine {
                     };
                     let result_str = result.unwrap_or_else(|e| format!("Error: {}", e));
 
-                    context_messages.push(ModelMessage {
-                        role: ModelMessageRole::Tool,
-                        content: result_str.clone(),
-                        tool_calls: None,
-                        tool_call_id: Some(tc.id.clone()),
-                    });
+                    context_messages = ModelCallInput::append(
+                        &context_messages,
+                        ModelMessage {
+                            role: ModelMessageRole::Tool,
+                            content: result_str.clone(),
+                            tool_calls: None,
+                            tool_call_id: Some(tc.id.clone()),
+                        },
+                    );
 
                     let tool_result_msg = Message {
                         role: MessageRole::Assistant,

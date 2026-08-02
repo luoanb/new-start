@@ -1,6 +1,6 @@
 use agent_app_lib::core::{
-    app_log, AppError, AppResult, Conversation, Gateway, Message, MessageRole, ModelCallRequest,
-    ModelInfo, ModelMessage, ModelMessageRole, ProviderInfo, RuntimeStatus, SkillInfo,
+    app_log, AppError, AppResult, Conversation, Gateway, Message, MessageRole, ModelAppendTemplate,
+    ModelCallInput, ModelCallRequest, ModelInfo, ProviderInfo, RuntimeStatus, SkillInfo,
 };
 use std::{env, process};
 
@@ -56,12 +56,13 @@ async fn run() -> AppResult<()> {
                 .call_model(ModelCallRequest {
                     provider_id,
                     model_id,
-                    messages: vec![ModelMessage {
-                        role: ModelMessageRole::User,
-                        content: message,
-                        tool_calls: None,
-                        tool_call_id: None,
-                    }],
+                    messages: ModelCallInput::assemble(
+                        &[],
+                        "",
+                        "",
+                        &message,
+                        ModelAppendTemplate::Neuron,
+                    ),
                     tools: None,
                 })
                 .await?;
