@@ -79,7 +79,7 @@
               <span class="dot">●</span>
             </div>
             <div class="session-info">
-              <span class="session-id">{shortId(conv.id)}</span>
+              <span class="session-id" title={conv.id}>{shortId(conv.id)}</span>
               <span class="session-meta">
                 <span class="mode-badge {conv.mode}">{modeLabel[conv.mode] ?? conv.mode}</span>
                 <span class="session-count">{conv.messages.length} {t("sessionList.msgs")}</span>
@@ -89,6 +89,14 @@
               </span>
             </div>
             <div class="session-actions">
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <span
+                class="copy-btn"
+                role="button"
+                tabindex="-1"
+                onclick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(conv.id); }}
+                title="Copy session id"
+              >⧉</span>
               {#if conv.mode === "assistant"}
                 <!-- svelte-ignore a11y_click_events_have_key_events -->
                 <span
@@ -136,7 +144,10 @@
   .mode-badge.agent { background: color-mix(in srgb, var(--color-success) 15%, transparent); color: var(--color-success); }
   .mode-badge.assistant { background: color-mix(in srgb, var(--color-warning) 15%, transparent); color: var(--color-warning); }
   .session-time { margin-left: auto; }
-  .session-actions { flex-shrink: 0; }
+  .session-actions { flex-shrink: 0; display: flex; align-items: center; gap: 2px; }
+  .copy-btn { background: none; border: none; cursor: pointer; font-size: 14px; color: inherit; opacity: 0; padding: 2px 4px; border-radius: var(--radius-sm); line-height: 1; transition: opacity var(--duration-fast) var(--ease-out); }
+  .session-item:hover .copy-btn { opacity: 0.6; }
+  .copy-btn:hover { opacity: 1 !important; background: rgba(0, 0, 0, 0.1); }
   .close-btn { background: none; border: none; cursor: pointer; font-size: 16px; color: inherit; opacity: 0; padding: 2px 4px; border-radius: var(--radius-sm); line-height: 1; transition: opacity var(--duration-fast) var(--ease-out); }
   .session-item:hover .close-btn { opacity: 0.6; }
   .close-btn:hover { opacity: 1 !important; background: rgba(0, 0, 0, 0.1); }

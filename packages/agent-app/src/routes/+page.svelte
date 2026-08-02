@@ -29,6 +29,7 @@
   import { activityItems, panelViews, mainTabs } from "$lib/layout/views";
   import { t } from "$lib/i18n";
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
+  import { hotkeyService } from "$lib/hotkey/hotkeyService";
 
   // ── Bootstrap state (loaded once) ──
   let providers: ProviderInfo[] = $state([]);
@@ -114,6 +115,7 @@
       }
 
       ready = true;
+      setupHotkeys();
     } catch (e) {
       error = `Failed to load: ${formatInvokeError(e)}`;
     }
@@ -230,26 +232,38 @@
     layoutStore.updateMainSplitRatio(splitRatio + delta / containerW, false);
   }
 
+  // ── 快捷键服务（单例）──
+  // 初始化时一次性约定绑定的 DOM 根 + 忽略规则；运行时仅注册 combo + 回调。
+  // 未命中任何 combo 时服务不 preventDefault，系统/浏览器快捷键（Ctrl+T/W/R 等）恢复正常。
+  function setupHotkeys() {
+    hotkeyService.initHotkeyService({
+      bindRoot: document.body, // 覆盖全局含 drawer
+      ignoreInput: true, // 可输入区内按键默认放行
+    });
+
+    // 原硬代码快捷键迁移为声明式注册（绑定到全局根）
+    hotkeyService.registerHotkey({ key: "j", ctrl: true, shift: true }, () =>
+      layoutStore.togglePanel()
+    );
+    hotkeyService.registerHotkey({ key: "j", ctrl: true }, () => {
+      showCreateModal = true;
+    });
+    hotkeyService.registerHotkey({ key: "b", ctrl: true }, () =>
+      layoutStore.toggleSidebar()
+    );
+    hotkeyService.registerHotkey({ key: "i", ctrl: true }, () =>
+      layoutStore.toggleInfo()
+    );
+    hotkeyService.registerHotkey({ key: "\\", ctrl: true }, () => {
+      toggleNeuronSplit();
+    });
+  }
+
+  // Esc 单独处理（保持原 drawer 关闭行为），不进服务
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === "Escape") {
       drawerSidebar = false;
       drawerInfo = false;
-      return;
-    }
-    const ctrl = e.ctrlKey || e.metaKey;
-    if (!ctrl) return;
-    const key = e.key.toLowerCase();
-    e.preventDefault();
-    if (key === "j" && e.shiftKey) {
-      layoutStore.togglePanel();
-    } else if (key === "j") {
-      showCreateModal = true;
-    } else if (key === "b") {
-      layoutStore.toggleSidebar();
-    } else if (key === "i") {
-      layoutStore.toggleInfo();
-    } else if (key === "\\") {
-      toggleNeuronSplit();
     }
   }
 
