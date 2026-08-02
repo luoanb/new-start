@@ -5,6 +5,7 @@
   import { t } from "$lib/i18n";
   import NeuronNetworkGraph from "./NeuronNetworkGraph.svelte";
   import NeuronDetailDrawer from "./NeuronDetailDrawer.svelte";
+  import Select from "./Select.svelte";
 
   let neurons = $state<Neuron[]>([]);
   let loading = $state(true);
@@ -277,13 +278,16 @@
     </div>
     <div class="edge-type">
       <span class="depth-label">{t("neuronPanel.edgeTypeLabel")}</span>
-      <select bind:value={edgeType} class="edge-select">
-        <option value="floating">{t("neuronPanel.edgeFloating")}</option>
-        <option value="bezier">{t("neuronPanel.edgeBezier")}</option>
-        <option value="smoothstep">{t("neuronPanel.edgeSmoothstep")}</option>
-        <option value="step">{t("neuronPanel.edgeStep")}</option>
-        <option value="straight">{t("neuronPanel.edgeStraight")}</option>
-      </select>
+      <Select
+        bind:value={edgeType}
+        options={[
+          { value: "floating", label: t("neuronPanel.edgeFloating") },
+          { value: "bezier", label: t("neuronPanel.edgeBezier") },
+          { value: "smoothstep", label: t("neuronPanel.edgeSmoothstep") },
+          { value: "step", label: t("neuronPanel.edgeStep") },
+          { value: "straight", label: t("neuronPanel.edgeStraight") },
+        ]}
+      />
     </div>
     {#if search}
       <button class="clear" on:click={clearFilters}>✕</button>
@@ -348,12 +352,11 @@
         {#if createMode === "downstream"}
           <div class="modal-row">
             <label class="modal-label">{t("neuronPanel.createSource")}</label>
-            <select class="modal-input" bind:value={createSource}>
-              <option value="">{t("neuronPanel.createSourcePlaceholder")}</option>
-              {#each neurons as n (n.id)}
-                <option value={n.id}>{n.desc || n.id}</option>
-              {/each}
-            </select>
+            <Select
+              bind:value={createSource}
+              placeholder={t("neuronPanel.createSourcePlaceholder")}
+              options={neurons.map((n) => ({ value: n.id, label: n.desc || n.id }))}
+            />
           </div>
         {/if}
 
@@ -472,19 +475,6 @@
     display: flex;
     align-items: center;
     gap: 6px;
-  }
-  .edge-select {
-    background: var(--color-bg);
-    border: 1px solid var(--color-border);
-    border-radius: 8px;
-    padding: 4px 8px;
-    color: var(--color-text);
-    font-size: 12px;
-    cursor: pointer;
-  }
-  .edge-select:focus {
-    outline: none;
-    border-color: var(--color-primary);
   }
 
   .clear {

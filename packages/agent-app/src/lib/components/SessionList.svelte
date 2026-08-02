@@ -45,18 +45,18 @@
       <h2>{t("sessionList.title")}</h2>
       <div class="header-actions">
         <button class="icon-btn" onclick={onCreate} title={t("sessionList.create")}>
-          <span class="plus-icon">+</span>
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         </button>
         <button class="icon-btn" onclick={onToggle} title="Collapse sidebar">
-          <span class="collapse-icon">◀</span>
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
       </div>
     {:else}
       <button class="icon-btn expand-btn" onclick={onToggle} title="Expand sidebar">
-        <span>▶</span>
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
       </button>
       <button class="icon-btn" onclick={onCreate} title={t("sessionList.create")}>
-        <span class="plus-icon">+</span>
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       </button>
     {/if}
   </div>
@@ -75,9 +75,7 @@
             class:active={conv.id === activeId}
             onclick={() => onSelect(conv.id)}
           >
-            <div class="session-indicator" class:active={conv.id === activeId}>
-              <span class="dot">●</span>
-            </div>
+            <div class="session-indicator" class:active={conv.id === activeId}></div>
             <div class="session-info">
               <span class="session-id" title={conv.id}>{shortId(conv.id)}</span>
               <span class="session-meta">
@@ -124,8 +122,7 @@
   .header-actions { display: flex; gap: var(--space-1); }
   .icon-btn { background: none; border: var(--border-width) solid var(--color-border); border-radius: var(--radius-sm); cursor: pointer; padding: var(--space-1) var(--space-2); font-size: var(--fs-base); color: var(--color-text); display: flex; align-items: center; justify-content: center; min-width: 28px; min-height: 28px; transition: background var(--duration-fast) var(--ease-out); }
   .icon-btn:hover { background: var(--color-hover); }
-  .expand-btn { writing-mode: vertical-lr; }
-  .plus-icon { font-weight: 700; font-size: 16px; }
+  .ic { width: 16px; height: 16px; }
   .session-list { flex: 1; overflow-y: auto; padding: var(--space-2); }
   .empty { text-align: center; padding: var(--space-6) var(--space-2); color: var(--color-text-muted); font-size: var(--fs-sm); }
   .create-btn { margin-top: var(--space-2); padding: var(--space-1) var(--space-4); border-radius: var(--radius-sm); border: var(--border-width) solid var(--color-primary); background: transparent; color: var(--color-primary); cursor: pointer; font-size: var(--fs-sm); }
@@ -133,9 +130,8 @@
   .session-item { display: flex; align-items: center; gap: var(--space-2); width: 100%; padding: var(--space-2) var(--space-2); margin-bottom: 2px; border-radius: var(--radius-md); border: none; background: transparent; cursor: pointer; text-align: left; transition: background var(--duration-fast) var(--ease-out); color: var(--color-text); }
   .session-item:hover { background: var(--color-hover); }
   .session-item.active { background: var(--color-hover); }
-  .session-indicator { flex-shrink: 0; width: 12px; display: flex; align-items: center; }
-  .dot { font-size: 10px; color: transparent; transition: color var(--duration-fast) var(--ease-out); }
-  .session-indicator.active .dot { color: var(--color-primary); }
+  .session-indicator { flex-shrink: 0; width: 3px; align-self: stretch; border-radius: 2px; background: transparent; }
+  .session-indicator.active { background: var(--color-primary); }
   .session-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
   .session-id { font-size: var(--fs-sm); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .session-meta { display: flex; align-items: center; gap: var(--space-2); font-size: var(--fs-xs); color: var(--color-text-muted); }

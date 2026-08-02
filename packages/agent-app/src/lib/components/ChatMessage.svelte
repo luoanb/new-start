@@ -64,7 +64,7 @@
   .message.assistant, .message.system { justify-content: flex-start; }
   .bubble { max-width: 75%; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--color-surface); border: var(--border-width) solid var(--color-border); }
   .message.user .bubble { background: var(--color-primary); color: var(--color-on-primary); border-color: var(--color-primary); border-bottom-right-radius: var(--space-1); }
-  .message.assistant .bubble { border-bottom-left-radius: var(--space-1); }
+  .message.assistant .bubble { border-bottom-left-radius: var(--space-1); border: none; max-width: 100%; }
   .message.system .bubble { background: transparent; border: none; text-align: center; max-width: 100%; padding: var(--space-1) var(--space-3); }
   .role-bar { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-1); }
   .role-label { font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.6; }

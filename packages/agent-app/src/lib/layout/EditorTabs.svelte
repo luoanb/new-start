@@ -24,7 +24,7 @@
         class:active={activeId === tab.id}
         onclick={() => onSelect(tab.id)}
       >
-        {#if tab.icon}<span class="icon">{tab.icon}</span>{/if}
+        {#if tab.icon}<span class="icon">{@html tab.icon}</span>{/if}
         <span class="label">{tab.label}</span>
         <span
           class="close"
@@ -39,7 +39,7 @@
     {@const active = tabs.find((t) => t.id === activeId) ?? tabs[0]}
     {#if active}
       <button class="tab" class:active>
-        {#if active.icon}<span class="icon">{active.icon}</span>{/if}
+        {#if active.icon}<span class="icon">{@html active.icon}</span>{/if}
         <span class="label">{active.label}</span>
         {#if active.id !== "chat"}
           <span
@@ -97,7 +97,7 @@
     border-top-color: var(--color-primary);
   }
 
-  .icon { font-size: 12px; line-height: 1; }
+  .icon { display: inline-flex; align-items: center; font-size: 12px; line-height: 1; }
   .label { font-size: var(--fs-xs); font-weight: 500; }
 
   .close {

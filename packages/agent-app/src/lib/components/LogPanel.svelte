@@ -3,6 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import type { LogEntry, LogLevel } from "$lib/types";
+  import Select from "./Select.svelte";
 
   const LEVELS: LogLevel[] = ["error", "warn", "info", "debug", "trace"];
   const LEVEL_RANK: Record<LogLevel, number> = {
@@ -116,22 +117,18 @@
   <div class="toolbar">
     <label>
       Verbosity
-      <select
+      <Select
         value={verbosity}
-        onchange={(e) => setVerbosity((e.currentTarget as HTMLSelectElement).value as LogLevel)}
-      >
-        {#each LEVELS as level}
-          <option value={level}>{level}</option>
-        {/each}
-      </select>
+        options={LEVELS.map((level) => ({ value: level, label: level }))}
+        onchange={(v) => setVerbosity(v as LogLevel)}
+      />
     </label>
     <label>
       Min level
-      <select bind:value={filterLevel}>
-        {#each LEVELS as level}
-          <option value={level}>{level}</option>
-        {/each}
-      </select>
+      <Select
+        bind:value={filterLevel}
+        options={LEVELS.map((level) => ({ value: level, label: level }))}
+      />
     </label>
     <label class="grow">
       Target
@@ -186,11 +183,11 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+    min-width: 120px;
     font-size: var(--fs-xs);
     color: var(--color-text-muted);
   }
   .toolbar label.grow { flex: 1; min-width: 120px; }
-  .toolbar select,
   .toolbar input,
   .toolbar button {
     font-size: var(--fs-xs);

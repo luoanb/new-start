@@ -4,6 +4,7 @@
   import { t } from "$lib/i18n";
   import NeuronNetworkTree from "./NeuronNetworkTree.svelte";
   import NeuronNetworkGraph from "./NeuronNetworkGraph.svelte";
+  import Select from "./Select.svelte";
 
   let {
     rootId,
@@ -60,16 +61,10 @@
     <div class="toolbar-right">
       <label class="depth-ctrl">
         <span>{t("neuronPanel.depthLabel")}</span>
-        <select
-          value={maxDepth}
-          onchange={(e) => {
-            maxDepth = Number(e.currentTarget.value);
-          }}
-        >
-          {#each DEPTHS as d}
-            <option value={d}>{d}</option>
-          {/each}
-        </select>
+        <Select
+          bind:value={maxDepth}
+          options={DEPTHS.map((d) => ({ value: d, label: String(d) }))}
+        />
       </label>
       <div class="mode-toggle">
         <button

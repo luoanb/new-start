@@ -143,7 +143,13 @@
       onclick={onToggleNeuron}
       title="Neuron Manager"
     >
-      🧠
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="5" cy="6" r="2" />
+        <circle cx="19" cy="7" r="2" />
+        <circle cx="12" cy="18" r="2" />
+        <line x1="6.5" y1="7" x2="11" y2="16" />
+        <line x1="17.5" y1="8" x2="13" y2="16" />
+      </svg>
     </button>
 
     <span class="layout-sep"></span>
@@ -249,7 +255,7 @@
     transition: background var(--duration-fast) var(--ease-out);
   }
 
-  .neuron-btn { font-size: 16px; padding: 0 var(--space-1); background: none; border: none; cursor: pointer; line-height: 1; opacity: 0.5; transition: opacity var(--duration-fast) var(--ease-out); }
+  .neuron-btn { display: inline-flex; align-items: center; padding: 0 var(--space-1); background: none; border: none; cursor: pointer; line-height: 1; opacity: 0.5; transition: opacity var(--duration-fast) var(--ease-out); }
   .neuron-btn.active { opacity: 1; }
   .neuron-btn:hover { opacity: 0.8; }
 
