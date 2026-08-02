@@ -262,8 +262,21 @@ impl NeuronManager {
             reused,
             created,
             total = selected.len(),
+            candidate_ids = ?selected.iter().map(|n| n.id.clone()).collect::<Vec<_>>(),
             "select_candidates ok"
         );
+        for (i, n) in selected.iter().enumerate() {
+            tracing::info!(
+                phase = "select_candidates.detail",
+                index = i,
+                id = %n.id,
+                desc = %n.desc,
+                weight = n.weight,
+                tool_ids = ?n.tool_ids,
+                content_len = n.content.len(),
+                "select_candidates candidate entry"
+            );
+        }
         Ok(selected)
     }
 
@@ -597,7 +610,27 @@ impl NeuronManager {
             &payload.to_string(),
             ModelAppendTemplate::Manual,
         );
+        tracing::info!(
+            phase = "select_neuron.model_input",
+            selector_id = %selector.id,
+            system_prompt_len = selector.content.len(),
+            insert_id = "neuron.select_one",
+            history_len = history.len(),
+            candidate_payload = %payload,
+            "select_neuron model input assembled"
+        );
+        tracing::debug!(
+            phase = "select_neuron.model_input.full",
+            system_prompt = %selector.content,
+            insert_text = %insert,
+            "select_neuron full model input (debug)"
+        );
         let output = self.model_caller.call_model(messages).await?;
+        tracing::info!(
+            phase = "select_neuron.model_output",
+            raw_output = %output,
+            "select_neuron model raw output"
+        );
         let decision = extract_json_object(&output)?;
         let neuron_id = decision
             .get("neuron_id")
@@ -605,6 +638,12 @@ impl NeuronManager {
             .ok_or_else(|| {
                 AppError::InvalidInput("select neuron response missing neuron_id".into())
             })?;
+        tracing::info!(
+            phase = "select_neuron.model_decision",
+            neuron_id = %neuron_id,
+            in_candidates = candidates.iter().any(|n| n.id == neuron_id),
+            "select_neuron llm decision"
+        );
         candidates
             .iter()
             .find(|n| n.id == neuron_id)
@@ -812,6 +851,16 @@ impl NeuronManager {
                 serde_json::to_string(messages).unwrap_or_default()
             ),
         })
+    }
+
+    /// 前端手动创建：store 直持久化，不触发 LLM 草稿生成。
+    /// link_to = None => 孤立神经元；Some(id) => 该神经元的下游神经元（自动建边，边权重 0）。
+    pub fn create_plain(
+        &self,
+        create: NeuronCreate,
+        link_to: Option<&str>,
+    ) -> AppResult<Neuron> {
+        self.persist_plain(create, link_to)
     }
 
     fn persist_plain(

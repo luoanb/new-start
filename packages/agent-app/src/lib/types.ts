@@ -126,6 +126,12 @@ export type NeuronSubgraph = {
   connections: Connection[];
 };
 
+export type CreateNeuronPlainInput = {
+  desc: string;
+  content?: string;
+  link_to?: string | null;
+};
+
 export type PollerRunState = "running" | "paused";
 
 export type PollerStatus = {

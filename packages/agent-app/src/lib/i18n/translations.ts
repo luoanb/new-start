@@ -120,6 +120,8 @@ export type Translations = {
     network: string;
     noNeurons: string;
     weight: string;
+    delta: string;
+    apply: string;
     systemType: string;
     description: string;
     content: string;
@@ -159,6 +161,21 @@ export type Translations = {
     focusNode: string;
     drawerTitle: string;
     close: string;
+    create: string;
+    createTitle: string;
+    createOrphan: string;
+    createDownstream: string;
+    createSource: string;
+    createSourcePlaceholder: string;
+    createDescLabel: string;
+    createDescPlaceholder: string;
+    createContentLabel: string;
+    createContentPlaceholder: string;
+    createDescRequired: string;
+    createSourceRequired: string;
+    createConfirm: string;
+    creating: string;
+    createDownstreamFromHere: string;
   };
 };
 
@@ -290,6 +307,8 @@ export const en: Translations = {
     network: "Network View",
     noNeurons: "No neurons yet.",
     weight: "Weight",
+    delta: "Delta",
+    apply: "Apply",
     systemType: "System Type",
     description: "Description",
     content: "Content",
@@ -329,6 +348,21 @@ export const en: Translations = {
     focusNode: "Focus",
     drawerTitle: "Neuron",
     close: "Close",
+    create: "New Neuron",
+    createTitle: "Create Neuron",
+    createOrphan: "Orphan",
+    createDownstream: "Downstream",
+    createSource: "Upstream neuron",
+    createSourcePlaceholder: "Select upstream neuron...",
+    createDescLabel: "Description",
+    createDescPlaceholder: "Short description of the neuron",
+    createContentLabel: "Content",
+    createContentPlaceholder: "Knowledge / content of the neuron (optional)",
+    createDescRequired: "Description is required.",
+    createSourceRequired: "Please select an upstream neuron.",
+    createConfirm: "Create",
+    creating: "Creating...",
+    createDownstreamFromHere: "Create downstream neuron",
   },
 };
 
@@ -460,6 +494,8 @@ export const zh: Translations = {
     network: "网络视图",
     noNeurons: "暂无神经元。",
     weight: "权重",
+    delta: "增量",
+    apply: "应用",
     systemType: "系统类型",
     description: "描述",
     content: "内容",
@@ -499,5 +535,20 @@ export const zh: Translations = {
     focusNode: "聚焦",
     drawerTitle: "神经元",
     close: "关闭",
+    create: "创建神经元",
+    createTitle: "创建神经元",
+    createOrphan: "孤立",
+    createDownstream: "下游",
+    createSource: "上游神经元",
+    createSourcePlaceholder: "选择上游神经元...",
+    createDescLabel: "描述",
+    createDescPlaceholder: "神经元的简短描述",
+    createContentLabel: "内容",
+    createContentPlaceholder: "神经元承载的知识 / 内容（可选）",
+    createDescRequired: "描述为必填项。",
+    createSourceRequired: "请选择上游神经元。",
+    createConfirm: "创建",
+    creating: "创建中...",
+    createDownstreamFromHere: "创建下游神经元",
   },
 };

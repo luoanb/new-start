@@ -3,12 +3,10 @@
   import { invoke } from "@tauri-apps/api/core";
   import type { Connection, Neuron, NeuronSubgraph } from "$lib/types";
   import { t } from "$lib/i18n";
-  import NeuronIndex from "./NeuronIndex.svelte";
   import NeuronNetworkGraph from "./NeuronNetworkGraph.svelte";
   import NeuronDetailDrawer from "./NeuronDetailDrawer.svelte";
 
   let neurons = $state<Neuron[]>([]);
-  let linkCounts = $state<Record<string, number>>({});
   let loading = $state(true);
   let error = $state<string | null>(null);
 
@@ -22,21 +20,14 @@
 
   // 过滤 / 搜索
   let search = $state("");
-  let activeTypes = $state<string[]>([]); // 空 = 全部
   let depth = $state(2);
 
   // 连线类型（力导向布局默认 floating：自动吸附卡片最近边缘点）
   type EdgeType = "bezier" | "smoothstep" | "step" | "straight" | "floating";
   let edgeType = $state<EdgeType>("floating");
 
-  let allTypes = $derived(
-    Array.from(new Set(neurons.map((n) => n.system_type || "uncategorized"))).sort()
-  );
-
   let filteredNeurons = $derived(
     neurons.filter((n) => {
-      const type = n.system_type || "uncategorized";
-      if (activeTypes.length && !activeTypes.includes(type)) return false;
       if (search && !`${n.desc} ${n.id}`.toLowerCase().includes(search.toLowerCase()))
         return false;
       return true;
@@ -118,21 +109,18 @@
       const list = (await invoke("list_neurons")) as Neuron[];
       neurons = list.sort((a, b) => b.weight - a.weight);
 
-      // 拉取连接数（用于索引侧栏徽章）
-      const counts: Record<string, number> = {};
+      // 拉取全部连接（用于图）
       const conns: Connection[] = [];
       await Promise.all(
         neurons.map(async (n) => {
           try {
             const cs = (await invoke("get_connections", { id: n.id })) as Connection[];
-            counts[n.id] = cs.length;
             conns.push(...cs);
           } catch {
-            counts[n.id] = 0;
+            // 忽略单节点拉取失败
           }
         })
       );
-      linkCounts = counts;
 
       // 方向敏感去重：保留 A→B 与 B→A 共存，仅丢弃 source+target 完全相同的重复连接
       const seen = new Set<string>();
@@ -158,6 +146,28 @@
     openDrawer(id);
   }
 
+  // 抽屉权重调整后：刷新该神经元的连接与全局连接快照（用于图与侧栏徽标）
+  async function refreshDrawerAndGraph() {
+    if (!drawerNeuron) return;
+    const id = drawerNeuron.id;
+    try {
+      const cs = (await invoke("get_connections", { id })) as Connection[];
+      drawerConns = cs;
+      // 更新全局连接快照中该节点相关的边
+      allConnections = [
+        ...allConnections.filter((c) => c.source !== id && c.target !== id),
+        ...cs,
+      ];
+      const n = neurons.find((x) => x.id === id);
+      if (n) {
+        drawerNeuron = { ...n };
+      }
+      subgraph = buildSubgraph();
+    } catch {
+      // 忽略刷新失败，抽屉已显示最新返回值
+    }
+  }
+
   async function openDrawer(id: string) {
     const n = neurons.find((x) => x.id === id);
     if (!n) return;
@@ -170,18 +180,79 @@
     selectedId = null;
   }
 
-  function toggleType(type: string) {
-    if (activeTypes.includes(type)) {
-      activeTypes = activeTypes.filter((x) => x !== type);
-    } else {
-      activeTypes = [...activeTypes, type];
+  function clearFilters() {
+    search = "";
+    depth = 2;
+  }
+
+  // 创建神经元弹窗
+  let showCreate = $state(false);
+  let createMode = $state<"orphan" | "downstream">("orphan");
+  let createDesc = $state("");
+  let createContent = $state("");
+  let createSource = $state<string>("");
+  let creating = $state(false);
+  let createError = $state<string | null>(null);
+
+  // 顶栏：直接进入孤立模式
+  function openCreateOrphan() {
+    createMode = "orphan";
+    createSource = "";
+    createDesc = "";
+    createContent = "";
+    createError = null;
+    showCreate = true;
+  }
+
+  // 节点抽屉：以当前神经元为上游，进入下游模式
+  function requestCreateDownstream(sourceId: string) {
+    createMode = "downstream";
+    createSource = sourceId;
+    createDesc = "";
+    createContent = "";
+    createError = null;
+    showCreate = true;
+  }
+
+  async function submitCreate() {
+    const desc = createDesc.trim();
+    if (!desc) {
+      createError = t("neuronPanel.createDescRequired");
+      return;
+    }
+    if (createMode === "downstream" && !createSource) {
+      createError = t("neuronPanel.createSourceRequired");
+      return;
+    }
+    creating = true;
+    createError = null;
+    try {
+      const created = (await invoke("create_neuron_plain", {
+        desc,
+        content: createContent,
+        link_to: createMode === "downstream" ? createSource : null,
+      })) as Neuron;
+      showCreate = false;
+      createDesc = "";
+      createContent = "";
+      createSource = "";
+      createMode = "orphan";
+      await load();
+      selectNeuron(created.id);
+    } catch (e) {
+      createError = String(e);
+    } finally {
+      creating = false;
     }
   }
 
-  function clearFilters() {
-    search = "";
-    activeTypes = [];
-    depth = 2;
+  function cancelCreate() {
+    showCreate = false;
+    createError = null;
+    createDesc = "";
+    createContent = "";
+    createSource = "";
+    createMode = "orphan";
   }
 
   onMount(() => {
@@ -196,25 +267,9 @@
       placeholder={t("neuronPanel.search")}
       bind:value={search}
     />
-    <div class="filters">
-      <button
-        class="chip"
-        class:active={activeTypes.length === 0}
-        on:click={() => (activeTypes = [])}
-      >
-        {t("neuronPanel.filterAll")}
-      </button>
-      {#each allTypes as type (type)}
-        <button
-          class="chip"
-          class:active={activeTypes.includes(type)}
-          style:--chip-color={`var(--color-system-${type}, var(--color-system-default))`}
-          on:click={() => toggleType(type)}
-        >
-          {type}
-        </button>
-      {/each}
-    </div>
+    <button class="create-btn" on:click={openCreateOrphan}>
+      ＋ {t("neuronPanel.create")}
+    </button>
     <div class="depth">
       <span class="depth-label">{t("neuronPanel.depthLabel")}</span>
       <input type="range" min="1" max="5" step="1" bind:value={depth} />
@@ -230,21 +285,12 @@
         <option value="straight">{t("neuronPanel.edgeStraight")}</option>
       </select>
     </div>
-    {#if search || activeTypes.length}
+    {#if search}
       <button class="clear" on:click={clearFilters}>✕</button>
     {/if}
   </div>
 
   <div class="body">
-    <aside class="sidebar">
-      <NeuronIndex
-        neurons={filteredNeurons}
-        {selectedId}
-        {linkCounts}
-        onSelect={selectNeuron}
-      />
-    </aside>
-
     <main class="canvas">
       {#if loading}
         <div class="state">{t("neuronPanel.loading")}</div>
@@ -272,8 +318,77 @@
       connections={drawerConns}
       onClose={closeDrawer}
       onJumpTo={selectNeuron}
+      onChanged={() => refreshDrawerAndGraph()}
+      onRequestCreateDownstream={requestCreateDownstream}
     />
   </div>
+
+  {#if showCreate}
+    <div class="modal-mask" role="presentation" on:click={cancelCreate}>
+      <div class="modal" role="dialog" aria-modal="true" on:click|stopPropagation>
+        <div class="modal-title">{t("neuronPanel.createTitle")}</div>
+
+        <div class="modal-row modes">
+          <button
+            class="mode-btn"
+            class:active={createMode === "orphan"}
+            on:click={() => (createMode = "orphan")}
+          >
+            {t("neuronPanel.createOrphan")}
+          </button>
+          <button
+            class="mode-btn"
+            class:active={createMode === "downstream"}
+            on:click={() => (createMode = "downstream")}
+          >
+            {t("neuronPanel.createDownstream")}
+          </button>
+        </div>
+
+        {#if createMode === "downstream"}
+          <div class="modal-row">
+            <label class="modal-label">{t("neuronPanel.createSource")}</label>
+            <select class="modal-input" bind:value={createSource}>
+              <option value="">{t("neuronPanel.createSourcePlaceholder")}</option>
+              {#each neurons as n (n.id)}
+                <option value={n.id}>{n.desc || n.id}</option>
+              {/each}
+            </select>
+          </div>
+        {/if}
+
+        <div class="modal-row">
+          <label class="modal-label">{t("neuronPanel.createDescLabel")}</label>
+          <input
+            class="modal-input"
+            placeholder={t("neuronPanel.createDescPlaceholder")}
+            bind:value={createDesc}
+          />
+        </div>
+
+        <div class="modal-row">
+          <label class="modal-label">{t("neuronPanel.createContentLabel")}</label>
+          <textarea
+            class="modal-input"
+            rows="4"
+            placeholder={t("neuronPanel.createContentPlaceholder")}
+            bind:value={createContent}
+          ></textarea>
+        </div>
+
+        {#if createError}
+          <div class="modal-error">{createError}</div>
+        {/if}
+
+        <div class="modal-actions">
+          <button class="btn-ghost" on:click={cancelCreate}>{t("neuronPanel.cancel")}</button>
+          <button class="btn-primary" on:click={submitCreate} disabled={creating}>
+            {creating ? t("neuronPanel.creating") : t("neuronPanel.createConfirm")}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -383,18 +498,141 @@
     color: var(--color-text);
   }
 
+  .create-btn {
+    border: 1px solid var(--color-primary);
+    background: var(--color-primary);
+    color: var(--color-on-primary);
+    border-radius: 8px;
+    padding: 5px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition:
+      background 0.15s ease,
+      filter 0.15s ease;
+  }
+  .create-btn:hover {
+    filter: brightness(1.08);
+  }
+
+  /* 创建弹窗 */
+  .modal-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+  .modal {
+    width: 420px;
+    max-width: 92vw;
+    max-height: 88vh;
+    overflow: auto;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 14px;
+    padding: 18px 20px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+  }
+  .modal-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--color-text);
+    margin-bottom: 14px;
+  }
+  .modal-row {
+    margin-bottom: 12px;
+  }
+  .modes {
+    display: flex;
+    gap: 8px;
+  }
+  .mode-btn {
+    flex: 1;
+    border: 1px solid var(--color-border);
+    background: var(--color-bg);
+    color: var(--color-text-muted);
+    border-radius: 8px;
+    padding: 7px 10px;
+    font-size: 12.5px;
+    cursor: pointer;
+    transition:
+      background 0.15s ease,
+      color 0.15s ease,
+      border-color 0.15s ease;
+  }
+  .mode-btn.active {
+    color: var(--color-on-primary);
+    background: var(--color-primary);
+    border-color: var(--color-primary);
+  }
+  .modal-label {
+    display: block;
+    font-size: 11.5px;
+    color: var(--color-text-muted);
+    margin-bottom: 5px;
+  }
+  .modal-input {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 7px 10px;
+    color: var(--color-text);
+    font-size: 12.5px;
+    font-family: inherit;
+    resize: vertical;
+  }
+  .modal-input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+  }
+  .modal-error {
+    color: var(--color-error);
+    font-size: 12px;
+    margin-bottom: 10px;
+  }
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 6px;
+  }
+  .btn-ghost {
+    border: 1px solid var(--color-border);
+    background: transparent;
+    color: var(--color-text-muted);
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-size: 12.5px;
+    cursor: pointer;
+  }
+  .btn-ghost:hover {
+    color: var(--color-text);
+  }
+  .btn-primary {
+    border: 1px solid var(--color-primary);
+    background: var(--color-primary);
+    color: var(--color-on-primary);
+    border-radius: 8px;
+    padding: 6px 16px;
+    font-size: 12.5px;
+    cursor: pointer;
+  }
+  .btn-primary:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+
   .body {
     flex: 1;
     display: grid;
-    grid-template-columns: 248px 1fr;
+    grid-template-columns: 1fr;
     min-height: 0;
     position: relative;
-  }
-
-  .sidebar {
-    border-right: 1px solid var(--color-border);
-    min-height: 0;
-    overflow: hidden;
   }
 
   .canvas {
@@ -437,9 +675,6 @@
   @media (max-width: 800px) {
     .body {
       grid-template-columns: 1fr;
-    }
-    .sidebar {
-      display: none;
     }
   }
 </style>

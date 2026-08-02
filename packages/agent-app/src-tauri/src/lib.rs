@@ -11,7 +11,8 @@ use crate::core::{
     session_tracker::SessionTracker,
     topic_store::TopicStore,
     ChatOptions, ChatResponse, Connection, Conversation, ConversationMode, Gateway, Message,
-    ModelCallRequest, ModelCallResponse, ModelInfo, Neuron, NeuronSubgraph, NeuronUpdate,
+    ModelCallRequest, ModelCallResponse, ModelInfo, Neuron, NeuronCreate, NeuronSubgraph,
+    NeuronUpdate,
     PollerStatus, ProviderInfo, RuntimeStatus, SkillInfo, Topic, TopicStatus, TopicUpdate,
 };
 use std::{
@@ -360,6 +361,48 @@ async fn get_network(
         .map_err(|error| error.payload())
 }
 
+#[tauri::command]
+async fn create_neuron_plain(
+    mgr: State<'_, Arc<NeuronManager>>,
+    desc: String,
+    content: Option<String>,
+    link_to: Option<String>,
+) -> TauriResult<Neuron> {
+    let create = NeuronCreate {
+        desc,
+        content: content.unwrap_or_default(),
+        weight: 0.0,
+        system_type: None,
+        tool_ids: vec![],
+    };
+    mgr.inner()
+        .create_plain(create, link_to.as_deref())
+        .map_err(|error| error.payload())
+}
+
+#[tauri::command]
+async fn adjust_neuron_weight(
+    mgr: State<'_, Arc<NeuronManager>>,
+    id: String,
+    delta: f64,
+) -> TauriResult<Neuron> {
+    mgr.inner()
+        .adjust_weight(&id, delta)
+        .map_err(|error| error.payload())
+}
+
+#[tauri::command]
+async fn adjust_edge_weight(
+    mgr: State<'_, Arc<NeuronManager>>,
+    source: String,
+    target: String,
+    delta: f64,
+) -> TauriResult<Connection> {
+    mgr.inner()
+        .adjust_edge_weight(&source, &target, delta)
+        .map_err(|error| error.payload())
+}
+
 // ── Logs ──
 
 #[tauri::command]
@@ -517,6 +560,9 @@ pub fn run() {
             update_neuron,
             get_connections,
             get_network,
+            create_neuron_plain,
+            adjust_neuron_weight,
+            adjust_edge_weight,
             // Logs
             logs_snapshot,
             logs_get_level,
