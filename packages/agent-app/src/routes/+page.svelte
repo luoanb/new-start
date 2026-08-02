@@ -481,7 +481,7 @@
 
   .app-layout {
     display: grid;
-    height: 100vh;
+    height: 100%;
     grid-template-columns: auto 1fr;
     grid-template-rows: auto 1fr auto;
     grid-template-areas:

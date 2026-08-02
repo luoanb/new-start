@@ -10,6 +10,18 @@
       html,
       body {
         height: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+      }
+
+      /* 最外层包裹层用 fixed + inset:0 绝对贴合窗口，不随内容撑高，
+         彻底避免 WebKitGTK 下 100% / 100vh 换算缝隙导致的最外层滚动条。
+         注意：不能用 height:100vh（WebKitGTK 会把滚动条宽度计入视口）。 */
+      html > body > div {
+        position: fixed;
+        inset: 0;
+        overflow: hidden;
       }
 
       :root,
@@ -160,6 +172,6 @@
       it can break caret client rects, so IME candidate windows offset (~400px) or
       disappear near the bottom of the window. Block wrapper preserves layout via 100vh app shell.
     -->
-    <div style="height: 100%;">%sveltekit.body%</div>
+    <div>%sveltekit.body%</div>
   </body>
 </html>
