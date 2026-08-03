@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import type { Neuron, Connection } from "$lib/types";
   import { t } from "$lib/i18n";
+  import { errorMessage } from "$lib/errorMessage";
 
   let {
     neuronId,
@@ -39,7 +40,7 @@
       editDesc = n.desc;
       editContent = n.content;
     } catch (e) {
-      errorMsg = `Load failed: ${e}`;
+      errorMsg = `Load failed: ${errorMessage(e)}`;
     } finally {
       loading = false;
     }
@@ -62,7 +63,7 @@
       neuron = updated;
       editing = false;
     } catch (e) {
-      errorMsg = `Save failed: ${e}`;
+      errorMsg = `Save failed: ${errorMessage(e)}`;
     } finally {
       saving = false;
     }

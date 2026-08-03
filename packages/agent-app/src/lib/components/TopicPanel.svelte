@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import type { Topic, TopicStatus } from "$lib/types";
   import { t } from "$lib/i18n";
+  import { errorMessage } from "$lib/errorMessage";
 
   let {
     topics = $bindable([]),
@@ -76,7 +77,7 @@
       showCreateForm = false;
       expandedId = topic.id;
     } catch (e) {
-      errorMsg = `Create failed: ${e}`;
+      errorMsg = `Create failed: ${errorMessage(e)}`;
     } finally {
       creating = false;
     }
@@ -88,7 +89,7 @@
       const updated = await invoke<Topic>("pause_topic", { id });
       topics = topics.map((t) => (t.id === id ? updated : t));
     } catch (e) {
-      errorMsg = `Pause failed: ${e}`;
+      errorMsg = `Pause failed: ${errorMessage(e)}`;
     }
   }
 
@@ -98,7 +99,7 @@
       const updated = await invoke<Topic>("resume_topic", { id });
       topics = topics.map((t) => (t.id === id ? updated : t));
     } catch (e) {
-      errorMsg = `Resume failed: ${e}`;
+      errorMsg = `Resume failed: ${errorMessage(e)}`;
     }
   }
 
@@ -110,7 +111,7 @@
       topics = topics.filter((t) => t.id !== id);
       if (expandedId === id) expandedId = null;
     } catch (e) {
-      errorMsg = `Delete failed: ${e}`;
+      errorMsg = `Delete failed: ${errorMessage(e)}`;
     }
   }
 
@@ -128,7 +129,7 @@
       newScopeGoal = "";
       newScopeContract = "";
     } catch (e) {
-      errorMsg = `Add scope item failed: ${e}`;
+      errorMsg = `Add scope item failed: ${errorMessage(e)}`;
     } finally {
       addingScope = false;
     }
@@ -143,7 +144,7 @@
       });
       topics = topics.map((t) => (t.id === topicId ? updated : t));
     } catch (e) {
-      errorMsg = `Complete scope item failed: ${e}`;
+      errorMsg = `Complete scope item failed: ${errorMessage(e)}`;
     }
   }
 
@@ -156,7 +157,7 @@
       });
       topics = topics.map((t) => (t.id === topicId ? updated : t));
     } catch (e) {
-      errorMsg = `Delete scope item failed: ${e}`;
+      errorMsg = `Delete scope item failed: ${errorMessage(e)}`;
     }
   }
 </script>

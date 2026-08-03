@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import type { Neuron } from "$lib/types";
   import { t } from "$lib/i18n";
+  import { errorMessage } from "$lib/errorMessage";
   import NeuronList from "./NeuronList.svelte";
   import NeuronDetail from "./NeuronDetail.svelte";
   import NeuronNetwork from "./NeuronNetwork.svelte";
@@ -22,7 +23,7 @@
       // Sort by weight descending
       neurons.sort((a, b) => b.weight - a.weight);
     } catch (e) {
-      errorMsg = `Failed to load neurons: ${e}`;
+      errorMsg = `Failed to load neurons: ${errorMessage(e)}`;
     } finally {
       loading = false;
     }
