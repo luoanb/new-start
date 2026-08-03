@@ -27,13 +27,13 @@ pub use gateway::Gateway;
 pub use insert_catalog::InsertCatalog;
 pub use model_call_input::{ModelAppendTemplate, ModelCallInput};
 pub use models::{
-    BootstrapReport, CandidateQuery, ChatModelSelection, ChatOptions, ChatResponse,
-    CompactionConfig, Connection, Conversation, ConversationMode, CreateNeuronInput,
+    AssistantCandidateScope, BootstrapReport, CandidateQuery, ChatModelSelection, ChatOptions,
+    ChatResponse, CompactionConfig, Connection, Conversation, ConversationMode, CreateNeuronInput,
     EnsureSystemOpts, GeneratedNeuronDraft, Message, MessageRole, ModelCallRequest,
-    ModelCallResponse, ModelCapabilities, ModelInfo, ModelMessage, ModelMessageRole, Neuron,
-    NeuronCreate, NeuronSubgraph, NeuronUpdate, ProviderInfo, ProviderKind, RuntimeStatus,
-    ScopeInItem, SkillInfo, SystemPromptStatus, ToolCall, ToolDefinition, Topic, TopicStatus,
-    TopicUpdate,
+    ModelCallResponse, ModelCapabilities, ModelInfo, ModelMessage, ModelMessageRole,
+    NeighborhoodPoolPolicy, Neuron, NeuronCreate, NeuronSubgraph, NeuronUpdate, ProviderInfo,
+    ProviderKind, RuntimeStatus, ScopeInItem, SkillInfo, SystemPromptStatus, ToolCall,
+    ToolDefinition, Topic, TopicStatus, TopicUpdate, DEFAULT_ASSISTANT_GLOBAL_LIMIT,
 };
 pub use poller::{
     PollHandler, Poller, PollerConfigReader, PollerRunState, PollerSettings, PollerStatus,

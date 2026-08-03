@@ -325,6 +325,57 @@ pub struct CandidateQuery {
     pub min_new: usize,
 }
 
+pub const DEFAULT_ASSISTANT_GLOBAL_LIMIT: usize = 7;
+
+/// Controllable quotas for an Assistant neighborhood candidate pool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NeighborhoodPoolPolicy {
+    pub existing_downstream: usize,
+    pub new_downstream: usize,
+    pub fill_downstream_shortage: bool,
+    pub siblings: usize,
+    pub upstream_depth: usize,
+}
+
+impl Default for NeighborhoodPoolPolicy {
+    fn default() -> Self {
+        Self {
+            existing_downstream: 4,
+            new_downstream: 2,
+            fill_downstream_shortage: true,
+            siblings: 2,
+            upstream_depth: 3,
+        }
+    }
+}
+
+/// Scope and quotas for the first phase of Assistant neuron selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AssistantCandidateScope {
+    Global {
+        limit: usize,
+    },
+    Neighborhood {
+        self_id: String,
+        policy: NeighborhoodPoolPolicy,
+    },
+}
+
+impl AssistantCandidateScope {
+    pub fn global_default() -> Self {
+        Self::Global {
+            limit: DEFAULT_ASSISTANT_GLOBAL_LIMIT,
+        }
+    }
+
+    pub fn neighborhood_default(self_id: impl Into<String>) -> Self {
+        Self::Neighborhood {
+            self_id: self_id.into(),
+            policy: NeighborhoodPoolPolicy::default(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum CreateNeuronInput {
     Purpose(String),

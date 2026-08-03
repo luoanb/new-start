@@ -13,7 +13,7 @@ use super::{
     log_redact::{preview_default, preview_json_for_log},
     model_call_input::{ModelAppendTemplate, ModelCallInput},
     models::{
-        CandidateQuery, ChatModelSelection, ChatResponse, EnsureSystemOpts, Message, MessageRole,
+        AssistantCandidateScope, ChatModelSelection, ChatResponse, Message, MessageRole,
         ModelCallRequest, ModelMessage, ModelMessageRole, Neuron, ScopeInItem, Topic, TopicStatus,
         TopicUpdate,
     },
@@ -194,12 +194,9 @@ impl AssistantMode {
             "match_topic ok"
         );
         tracing::info!(phase = "assistant_converse", step = "select_neuron", "beforehook start");
-        if let Err(error) = (SelectNeuronBeforeHook {
-            assistant: self,
-            secondary: false,
-        })
-        .run(&mut ctx)
-        .await
+        if let Err(error) = (SelectNeuronBeforeHook { assistant: self })
+            .run(&mut ctx)
+            .await
         {
             tracing::error!(
                 phase = "assistant_converse",
@@ -275,13 +272,9 @@ impl AssistantMode {
                 "Assistant step requires a topic bound to the session".into(),
             ));
         }
-        let secondary = ctx.poll_count_for_topic >= 1;
-        SelectNeuronBeforeHook {
-            assistant: self,
-            secondary,
-        }
-        .run(&mut ctx)
-        .await?;
+        SelectNeuronBeforeHook { assistant: self }
+            .run(&mut ctx)
+            .await?;
         self.authorize_tools(&mut ctx);
         let response = self.run_core(&mut ctx, model).await?;
         if let Err(error) = (CompleteScopeAfterHook { assistant: self })
@@ -314,13 +307,9 @@ impl AssistantMode {
                 "Assistant poller step requires a topic bound to the session".into(),
             ));
         }
-        let secondary = ctx.poll_count_for_topic >= 1;
-        if let Err(error) = (SelectNeuronBeforeHook {
-            assistant: self,
-            secondary,
-        })
-        .run(&mut ctx)
-        .await
+        if let Err(error) = (SelectNeuronBeforeHook { assistant: self })
+            .run(&mut ctx)
+            .await
         {
             tracing::error!(
                 phase = "assistant_poller",
@@ -774,35 +763,35 @@ impl PollHandler for AssistantPollHandler {
 
 struct SelectNeuronBeforeHook<'a> {
     assistant: &'a AssistantMode,
-    secondary: bool,
 }
 
 #[async_trait]
 impl BeforeHook for SelectNeuronBeforeHook<'_> {
     async fn run(&self, ctx: &mut AssistantRoundContext) -> AppResult<()> {
-        let source_id = if self.secondary {
-            ctx.last_selected_neuron_id.clone()
-        } else {
-            // First round: global candidate pool (all neurons), not selector's downstream.
-            None
-        };
+        let self_id = ctx.last_selected_neuron_id.clone();
         tracing::info!(
             phase = "select_neuron_hook",
-            secondary = self.secondary,
-            source_id = source_id.as_deref().unwrap_or(""),
-            "select_one start"
+            self_id = self_id.as_deref().unwrap_or(""),
+            "candidate assembly start"
+        );
+        let scope = match self_id {
+            Some(self_id) => AssistantCandidateScope::neighborhood_default(self_id),
+            None => AssistantCandidateScope::global_default(),
+        };
+        let candidates = self
+            .assistant
+            .neuron_manager
+            .select_assistant_candidates(scope)
+            .await?;
+        tracing::info!(
+            phase = "select_neuron_hook",
+            candidate_count = candidates.len(),
+            "candidate assembly ok; select_one start"
         );
         let selected = self
             .assistant
             .neuron_manager
-            .select_one_with_history(
-                CandidateQuery {
-                    n: 7,
-                    source_id,
-                    min_new: 0,
-                },
-                &ctx.messages,
-            )
+            .select_one_from_with_history(&candidates, &ctx.messages)
             .await?;
         tracing::info!(
             phase = "select_neuron_hook",

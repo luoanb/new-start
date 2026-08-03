@@ -522,6 +522,27 @@ impl NeuronStore {
         Ok(neurons)
     }
 
+    /// Select one direct upstream neuron by node weight; ties are randomized.
+    pub fn select_direct_upstream(&self, target_id: &str) -> AppResult<Option<Neuron>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        conn.query_row(
+            "SELECT n.id, n.desc, n.content, n.weight, n.system_type, n.tool_ids,
+                    n.created_at, n.updated_at
+             FROM connections c
+             JOIN neurons n ON n.id = c.source
+             WHERE c.target = ?1
+             ORDER BY n.weight DESC, RANDOM()
+             LIMIT 1",
+            params![target_id],
+            row_to_neuron,
+        )
+        .optional()
+        .map_err(|e| AppError::StorageError(format!("Failed to query direct upstream: {}", e)))
+    }
+
     pub fn list_global_candidates(
         &self,
         limit: usize,
@@ -756,6 +777,27 @@ mod tests {
         let conns = s.get_connections(&a.id).unwrap();
         assert_eq!(conns.len(), 1);
         assert_eq!(conns[0].target, b.id);
+    }
+
+    #[test]
+    fn select_direct_upstream_prefers_highest_node_weight_and_randomizes_ties() {
+        let s = test_store();
+        let low = create(&s, "low", "", 0.0);
+        let high_a = create(&s, "high-a", "", 0.0);
+        let high_b = create(&s, "high-b", "", 0.0);
+        let child = create(&s, "child", "", 0.0);
+        s.adjust_weight(&low.id, 1.0).unwrap();
+        s.adjust_weight(&high_a.id, 5.0).unwrap();
+        s.adjust_weight(&high_b.id, 5.0).unwrap();
+        s.link(&low.id, &child.id, 0.0).unwrap();
+        s.link(&high_a.id, &child.id, 0.0).unwrap();
+        s.link(&high_b.id, &child.id, 0.0).unwrap();
+
+        for _ in 0..20 {
+            let selected = s.select_direct_upstream(&child.id).unwrap().unwrap();
+            assert!(selected.id == high_a.id || selected.id == high_b.id);
+        }
+        assert!(s.select_direct_upstream(&low.id).unwrap().is_none());
     }
 
     #[test]

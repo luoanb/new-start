@@ -1,7 +1,7 @@
 # Assistant 模式：模型调度与提示词合成报告
 
 > 状态：实现态快照（代码为准）  
-> 日期：2026-08-02  
+> 日期：2026-08-03
 > 范围：`packages/agent-app` 助手一轮流程中会触发的全部模型调用，及其 system / user 提示词如何拼装  
 > 相关：[`architecture.md`](./architecture.md) · [`docs/specs/2026-08-01_20-46_self-describing-inserts.md`](../specs/2026-08-01_20-46_self-describing-inserts.md) · [`docs/specs/2026-08-02_model-call-input.md`](../specs/2026-08-02_model-call-input.md) · [`docs/specs/2026-08-02_19-29_model-call-input-call-sites.md`](../specs/2026-08-02_19-29_model-call-input-call-sites.md) · `docs/sdd-lab/2026-07-26_21-30_assistant-mode/`
 
@@ -42,9 +42,11 @@ Insert 文件目录：`packages/agent-app/src-tauri/inserts/<id>.md`（`rust-emb
 ```text
 1. ScoreFeedbackBeforeHook      → call_system_prompt_json (条件触发；history=ctx.messages)
 2. MatchTopicBeforeHook         → call_system_prompt_json (history=ctx.messages)
-3. SelectNeuronBeforeHook       → select_one_with_history(..., ctx.messages)
-      ├─ (缺候选时) fill_candidates_batch → generate_drafts (history=[])
-      └─ try_llm_select                  → 选型模型 (history 透传)
+3. SelectNeuronBeforeHook
+      ├─ 第一步 select_assistant_candidates(scope)
+      │    ├─ 首轮（无 last_selected）→ Global（默认 7，可覆盖）
+      │    └─ 后续轮 → Neighborhood（默认下游 6 + self/兄弟最多 3 + 三层上游最多 3，可覆盖）
+      └─ 第二步 select_one_from_with_history(candidates, ctx.messages) → 选型模型
 4. authorize_tools
 5. run_core                     → 主对话模型（可 tools；Neuron 模板）
 6. CompleteScopeAfterHook       → call_system_prompt_json (history=ctx.messages)
@@ -54,7 +56,7 @@ Insert 文件目录：`packages/agent-app/src-tauri/inserts/<id>.md`（`rust-emb
 ### 2.2 `step` / Poller
 
 ```text
-1. SelectNeuronBeforeHook (secondary=true 时按 last_selected 下游池)
+1. SelectNeuronBeforeHook（有 last_selected 时统一按 self 邻域池）
 2. run_core
 3. CompleteScopeAfterHook
 ```
@@ -114,7 +116,8 @@ messages = assemble(history, selector.content, insert, JSON{candidates}, Manual)
 失败则 weight fallback（无第二次模型调用）
 ```
 
-助手路径经 `select_one_with_history` 传入 `ctx.messages`；管理/bootstrap 无会话时 `history=[]`。
+助手路径先由 `select_assistant_candidates(scope)` 构造候选，再经
+`select_one_from_with_history(candidates, ctx.messages)` 传入历史；管理/bootstrap 的其它选型路径无会话时 `history=[]`。
 
 ### 3.3 `generate_drafts(system_prompt, user_prompt, expected, history)`
 
@@ -180,9 +183,13 @@ tools = ToolRegistry.definitions_for(authorized_tool_ids) 或 None
 | 项 | 内容 |
 |----|------|
 | 时机 | converse / step / poller |
-| 选型 | `select_one_with_history(..., ctx.messages)`；`Manual` + `neuron.select_one` |
+| 选型源 | 仅无 `last_selected_neuron_id` 时取全局 7；否则三种入口均以 last selected 为 self |
+| 第一步：候选池 | `select_assistant_candidates(scope)`；Global/Neighborhood 强类型作用域；Policy 可控制既有下游、新建下游、缺口补齐、兄弟数和上游深度 |
+| 默认邻域池 | 下游 6（既有最多 4，固定新建 2，既有缺口也新建补齐）+ self/兄弟最多 3 + 父/爷/爷的父最多 3；按 id 去重 |
+| 多父规则 | 每层选节点 weight 最高的直接父节点；最高权重并列随机；兄弟取第一层父节点的其他直接子节点 |
+| 第二步：选 1 | `select_one_from_with_history(candidates, ctx.messages)`；`Manual` + `neuron.select_one`；失败按 weight 回退 |
 | 写入 ctx | `selected_neuron`；`system_prompt = selected.content` |
-| 补齐草稿 | `generate_drafts(..., history=[])`；`Manual` + `neuron.draft_from_model` |
+| 补齐草稿 | 非首轮至少生成 2 个 self 直接下游；既有下游不足 4 时一并补缺口；`history=[]` |
 
 ### 4.4 run_core（助手主对话）
 
@@ -278,7 +285,7 @@ tools = ToolRegistry.definitions_for(authorized_tool_ids) 或 None
 |------|------|
 | 消息装配 / 模板 | `packages/agent-app/src-tauri/src/core/model_call_input.rs` |
 | 编排 / hooks / `call_system_prompt_json` / `run_core` | `packages/agent-app/src-tauri/src/core/assistant_mode.rs` |
-| `select_one_with_history` / `try_llm_select` / `generate_drafts` | `packages/agent-app/src-tauri/src/core/neuron_manager.rs` |
+| `select_assistant_candidates` / `select_one_from_with_history` / `try_llm_select` / `generate_drafts` | `packages/agent-app/src-tauri/src/core/neuron_manager.rs` |
 | `NeuronModelCaller`（收 messages） | `packages/agent-app/src-tauri/src/core/neuron_model.rs` |
 | Insert 正文 / `require` | `packages/agent-app/src-tauri/src/core/insert_catalog.rs` · `inserts/*.md` |
 
@@ -290,3 +297,5 @@ tools = ToolRegistry.definitions_for(authorized_tool_ids) 或 None
 |------|------|
 | 2026-08-02 | 初版：按当时实现梳理助手模式全部模型调度与提示词合成路径 |
 | 2026-08-02 | 接入 `ModelCallInput`：Hook 只读拼历史；`Neuron`/`Manual` 模板；insert 进 assemble `content`；反写本报告 |
+| 2026-08-03 | 助手选型改为首轮全局、后续统一使用 last selected 邻域池；记录 6+3+3 配额与三层上游规则 |
+| 2026-08-03 | 恢复候选池构造与 LLM 选 1 两个显式阶段；新增强类型 Scope/Policy 控制配额，默认值暂不进入 config |

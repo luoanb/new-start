@@ -11,9 +11,10 @@ use super::{
     insert_catalog::InsertCatalog,
     model_call_input::{ModelAppendTemplate, ModelCallInput},
     models::{
-        BootstrapReport, CandidateQuery, Connection, CreateNeuronInput, EnsureSystemOpts,
-        GeneratedNeuronDraft, ModelMessage, ModelMessageRole, Neuron, NeuronCreate, NeuronSubgraph,
-        NeuronUpdate, SystemPromptStatus,
+        AssistantCandidateScope, BootstrapReport, CandidateQuery, Connection, CreateNeuronInput,
+        EnsureSystemOpts, GeneratedNeuronDraft, ModelMessage, NeighborhoodPoolPolicy, Neuron,
+        NeuronCreate, NeuronSubgraph, NeuronUpdate, SystemPromptStatus,
+        DEFAULT_ASSISTANT_GLOBAL_LIMIT,
     },
     neuron_config::NeuronConfigReader,
     neuron_model::NeuronModelCaller,
@@ -35,7 +36,7 @@ pub const REBOOTSTRAP_SYSTEM_TYPES: &[&str] = &[
     "assistant_complete_scope",
     "assistant_score_feedback",
 ];
-const DEFAULT_SELECT_N: usize = 7;
+const DEFAULT_SELECT_N: usize = DEFAULT_ASSISTANT_GLOBAL_LIMIT;
 const MAX_CREATE_NEURON_COUNT: usize = 10;
 
 pub struct NeuronManager {
@@ -297,6 +298,128 @@ impl NeuronManager {
         let candidates = self.select_candidates(query).await?;
         self.select_one_from_with_history(&candidates, history)
             .await
+    }
+
+    /// Build Assistant candidates without invoking the selection model.
+    pub async fn select_assistant_candidates(
+        &self,
+        scope: AssistantCandidateScope,
+    ) -> AppResult<Vec<Neuron>> {
+        match scope {
+            AssistantCandidateScope::Global { limit } => {
+                if limit == 0 {
+                    return Err(AppError::InvalidInput(
+                        "assistant global candidate limit must be >= 1".into(),
+                    ));
+                }
+                self.select_candidates(CandidateQuery {
+                    n: limit,
+                    source_id: None,
+                    min_new: 0,
+                })
+                .await
+            }
+            AssistantCandidateScope::Neighborhood { self_id, policy } => {
+                self.select_neighborhood_candidates(&self_id, policy).await
+            }
+        }
+    }
+
+    async fn select_neighborhood_candidates(
+        &self,
+        self_id: &str,
+        policy: NeighborhoodPoolPolicy,
+    ) -> AppResult<Vec<Neuron>> {
+        let _maximum_pool_size = policy
+            .existing_downstream
+            .checked_add(policy.new_downstream)
+            .and_then(|total| total.checked_add(1))
+            .and_then(|total| total.checked_add(policy.siblings))
+            .and_then(|total| total.checked_add(policy.upstream_depth))
+            .ok_or_else(|| {
+                AppError::InvalidInput("assistant candidate quotas overflow usize".into())
+            })?;
+        let self_neuron = self
+            .get_neuron(self_id)?
+            .ok_or_else(|| AppError::NeuronNotFound(self_id.to_string()))?;
+
+        let mut selected = Vec::new();
+        let mut selected_ids = HashSet::new();
+        let child_exclusions = HashSet::from([self_id.to_string()]);
+        let existing_children = self.store()?.list_direct_downstream(
+            self_id,
+            policy.existing_downstream,
+            &child_exclusions,
+        )?;
+        let child_shortage = if policy.fill_downstream_shortage {
+            policy
+                .existing_downstream
+                .saturating_sub(existing_children.len())
+        } else {
+            0
+        };
+        let new_child_count = policy
+            .new_downstream
+            .checked_add(child_shortage)
+            .ok_or_else(|| {
+                AppError::InvalidInput("assistant new downstream quota overflows usize".into())
+            })?;
+        if new_child_count > MAX_CREATE_NEURON_COUNT {
+            return Err(AppError::InvalidInput(format!(
+                "assistant new downstream count must be <={MAX_CREATE_NEURON_COUNT}, got {new_child_count}"
+            )));
+        }
+        let new_children = self
+            .fill_candidates_batch(Some(self_id), new_child_count)
+            .await?;
+
+        for neuron in existing_children.into_iter().chain(new_children) {
+            if selected_ids.insert(neuron.id.clone()) {
+                selected.push(neuron);
+            }
+        }
+        if selected_ids.insert(self_neuron.id.clone()) {
+            selected.push(self_neuron);
+        }
+
+        let direct_parent = self.store()?.select_direct_upstream(self_id)?;
+        if let Some(parent) = direct_parent {
+            let siblings = self.store()?.list_direct_downstream(
+                &parent.id,
+                policy.siblings,
+                &selected_ids,
+            )?;
+            for sibling in siblings {
+                if selected_ids.insert(sibling.id.clone()) {
+                    selected.push(sibling);
+                }
+            }
+
+            let mut ancestor = Some(parent);
+            for _ in 0..policy.upstream_depth {
+                let Some(current) = ancestor else {
+                    break;
+                };
+                if selected_ids.insert(current.id.clone()) {
+                    selected.push(current.clone());
+                }
+                ancestor = self.store()?.select_direct_upstream(&current.id)?;
+            }
+        }
+
+        tracing::info!(
+            phase = "select_assistant_candidates",
+            self_id,
+            existing_downstream = policy.existing_downstream,
+            new_downstream = policy.new_downstream,
+            fill_downstream_shortage = policy.fill_downstream_shortage,
+            siblings = policy.siblings,
+            upstream_depth = policy.upstream_depth,
+            total = selected.len(),
+            candidate_ids = ?selected.iter().map(|n| n.id.clone()).collect::<Vec<_>>(),
+            "assistant neighborhood candidates assembled"
+        );
+        Ok(selected)
     }
 
     pub async fn select_one_from(&self, candidates: &[Neuron]) -> AppResult<Neuron> {
@@ -1333,6 +1456,7 @@ mod tests {
     use rusqlite::Connection as SqliteConnection;
 
     use super::*;
+    use crate::core::models::ModelMessageRole;
 
     struct MockModelCaller {
         calls: AtomicUsize,
@@ -1421,6 +1545,19 @@ mod tests {
             .unwrap()
     }
 
+    fn insert_downstream(manager: &NeuronManager, parent_id: &str, desc: &str) -> Neuron {
+        manager
+            .create_plain(
+                NeuronCreate {
+                    desc: desc.into(),
+                    content: format!("{desc} content"),
+                    ..Default::default()
+                },
+                Some(parent_id),
+            )
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn select_candidates_prefers_source_id_and_fills_to_n() {
         let (manager, root) = test_manager();
@@ -1440,6 +1577,155 @@ mod tests {
             .list_direct_downstream(&source.id, 10, &HashSet::new())
             .unwrap();
         assert_eq!(downstream.len(), 3);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn assistant_candidates_builds_children_self_siblings_and_three_ancestors() {
+        let (manager, root) = test_manager();
+        let great_grandparent = insert_plain(&manager, "great-grandparent", "great");
+        let grandparent = insert_downstream(&manager, &great_grandparent.id, "grandparent");
+        let parent = insert_downstream(&manager, &grandparent.id, "parent");
+        let self_neuron = insert_downstream(&manager, &parent.id, "self");
+        let sibling = insert_downstream(&manager, &parent.id, "sibling");
+        let existing_child_a = insert_downstream(&manager, &self_neuron.id, "child-a");
+        let existing_child_b = insert_downstream(&manager, &self_neuron.id, "child-b");
+
+        let candidates = manager
+            .select_assistant_candidates(AssistantCandidateScope::neighborhood_default(
+                self_neuron.id.clone(),
+            ))
+            .await
+            .unwrap();
+        let candidate_ids: HashSet<&str> = candidates.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(candidate_ids.len(), candidates.len());
+        assert!(candidate_ids.contains(self_neuron.id.as_str()));
+        assert!(candidate_ids.contains(sibling.id.as_str()));
+        assert!(candidate_ids.contains(parent.id.as_str()));
+        assert!(candidate_ids.contains(grandparent.id.as_str()));
+        assert!(candidate_ids.contains(great_grandparent.id.as_str()));
+        assert!(candidate_ids.contains(existing_child_a.id.as_str()));
+        assert!(candidate_ids.contains(existing_child_b.id.as_str()));
+
+        let downstream = manager
+            .store()
+            .unwrap()
+            .list_direct_downstream(&self_neuron.id, 20, &HashSet::new())
+            .unwrap();
+        assert_eq!(downstream.len(), 6);
+        assert_eq!(candidates.len(), 11);
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn assistant_candidates_adds_two_new_children_when_four_exist() {
+        let (manager, root) = test_manager();
+        let self_neuron = insert_plain(&manager, "self", "self");
+        for index in 0..4 {
+            insert_downstream(&manager, &self_neuron.id, &format!("child-{index}"));
+        }
+
+        let candidates = manager
+            .select_assistant_candidates(AssistantCandidateScope::neighborhood_default(
+                self_neuron.id.clone(),
+            ))
+            .await
+            .unwrap();
+        let downstream = manager
+            .store()
+            .unwrap()
+            .list_direct_downstream(&self_neuron.id, 20, &HashSet::new())
+            .unwrap();
+        assert_eq!(downstream.len(), 6);
+        assert_eq!(candidates.len(), 7);
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn assistant_candidates_global_default_uses_existing_seven() {
+        let (manager, root) = test_manager();
+        for index in 0..7 {
+            insert_plain(&manager, &format!("global-{index}"), "global");
+        }
+        let count_before = manager.list().unwrap().len();
+
+        let candidates = manager
+            .select_assistant_candidates(AssistantCandidateScope::global_default())
+            .await
+            .unwrap();
+
+        assert_eq!(candidates.len(), DEFAULT_SELECT_N);
+        assert_eq!(manager.list().unwrap().len(), count_before);
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn assistant_candidates_honors_custom_neighborhood_policy() {
+        let (manager, root) = test_manager();
+        let self_neuron = insert_plain(&manager, "self", "self");
+        let existing_child = insert_downstream(&manager, &self_neuron.id, "existing-child");
+        let policy = NeighborhoodPoolPolicy {
+            existing_downstream: 2,
+            new_downstream: 1,
+            fill_downstream_shortage: false,
+            siblings: 0,
+            upstream_depth: 0,
+        };
+
+        let candidates = manager
+            .select_assistant_candidates(AssistantCandidateScope::Neighborhood {
+                self_id: self_neuron.id.clone(),
+                policy,
+            })
+            .await
+            .unwrap();
+        let candidate_ids: HashSet<&str> = candidates.iter().map(|n| n.id.as_str()).collect();
+        let downstream = manager
+            .store()
+            .unwrap()
+            .list_direct_downstream(&self_neuron.id, 20, &HashSet::new())
+            .unwrap();
+
+        assert_eq!(downstream.len(), 2);
+        assert_eq!(candidates.len(), 3);
+        assert!(candidate_ids.contains(self_neuron.id.as_str()));
+        assert!(candidate_ids.contains(existing_child.id.as_str()));
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn assistant_candidates_rejects_zero_global_limit() {
+        let (manager, root) = test_manager();
+        let result = manager
+            .select_assistant_candidates(AssistantCandidateScope::Global { limit: 0 })
+            .await;
+        assert!(result.is_err());
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn assistant_candidates_rejects_new_downstream_above_batch_limit() {
+        let (manager, root) = test_manager();
+        let self_neuron = insert_plain(&manager, "self", "self");
+        let result = manager
+            .select_assistant_candidates(AssistantCandidateScope::Neighborhood {
+                self_id: self_neuron.id,
+                policy: NeighborhoodPoolPolicy {
+                    existing_downstream: 0,
+                    new_downstream: MAX_CREATE_NEURON_COUNT + 1,
+                    fill_downstream_shortage: false,
+                    siblings: 0,
+                    upstream_depth: 0,
+                },
+            })
+            .await;
+        assert!(result.is_err());
+        drop(manager);
         fs::remove_dir_all(root).unwrap();
     }
 
