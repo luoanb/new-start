@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import type { NeuronSubgraph } from "$lib/types";
   import { t } from "$lib/i18n";
+  import { errorMessage } from "$lib/errorMessage";
   import NeuronNetworkTree from "./NeuronNetworkTree.svelte";
   import NeuronNetworkGraph from "./NeuronNetworkGraph.svelte";
   import Select from "./Select.svelte";
@@ -35,7 +36,7 @@
         max_depth: maxDepth,
       });
     } catch (e) {
-      errorMsg = `Load network failed: ${e}`;
+      errorMsg = `Load network failed: ${errorMessage(e)}`;
       subgraph = null;
     } finally {
       loading = false;

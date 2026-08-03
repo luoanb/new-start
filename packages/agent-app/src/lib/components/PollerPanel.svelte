@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import type { PollerStatus } from "$lib/types";
   import { t } from "$lib/i18n";
+  import { errorMessage } from "$lib/errorMessage";
 
   let {
     pollerStatus = $bindable(null),
@@ -15,7 +16,7 @@
     try {
       pollerStatus = await invoke<PollerStatus>("poll_status");
     } catch (e) {
-      errorMsg = `Refresh failed: ${e}`;
+      errorMsg = `Refresh failed: ${errorMessage(e)}`;
     }
   }
 
@@ -26,7 +27,7 @@
       await invoke<void>("poll_pause");
       await refresh();
     } catch (e) {
-      errorMsg = `Pause failed: ${e}`;
+      errorMsg = `Pause failed: ${errorMessage(e)}`;
     } finally {
       operating = false;
     }
@@ -39,7 +40,7 @@
       await invoke<void>("poll_resume");
       await refresh();
     } catch (e) {
-      errorMsg = `Resume failed: ${e}`;
+      errorMsg = `Resume failed: ${errorMessage(e)}`;
     } finally {
       operating = false;
     }
@@ -52,7 +53,7 @@
       await invoke<void>("poll_trigger");
       await refresh();
     } catch (e) {
-      errorMsg = `Trigger failed: ${e}`;
+      errorMsg = `Trigger failed: ${errorMessage(e)}`;
     } finally {
       operating = false;
     }

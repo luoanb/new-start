@@ -6,6 +6,10 @@
   import NeuronNetworkGraph from "./NeuronNetworkGraph.svelte";
   import NeuronDetailDrawer from "./NeuronDetailDrawer.svelte";
   import Select from "./Select.svelte";
+  import { errorMessage } from "$lib/errorMessage";
+  import NeuronList from "./NeuronList.svelte";
+  import NeuronDetail from "./NeuronDetail.svelte";
+  import NeuronNetwork from "./NeuronNetwork.svelte";
 
   let neurons = $state<Neuron[]>([]);
   let loading = $state(true);
@@ -136,7 +140,7 @@
 
       subgraph = buildSubgraph();
     } catch (e) {
-      error = String(e);
+      errorMsg = `Failed to load neurons: ${errorMessage(e)}`;
     } finally {
       loading = false;
     }
