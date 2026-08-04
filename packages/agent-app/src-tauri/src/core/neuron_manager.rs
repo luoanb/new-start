@@ -13,7 +13,7 @@ use super::{
     models::{
         AssistantCandidateScope, BootstrapReport, CandidateQuery, Connection, CreateNeuronInput,
         EnsureSystemOpts, GeneratedNeuronDraft, ModelMessage, NeighborhoodPoolPolicy, Neuron,
-        NeuronCreate, NeuronSubgraph, NeuronUpdate, SystemPromptStatus,
+        NeuronCreate, NeuronSubgraph, NeuronUpdate, NeuronVariant, SystemPromptStatus,
         DEFAULT_ASSISTANT_GLOBAL_LIMIT,
     },
     neuron_config::NeuronConfigReader,
@@ -128,7 +128,11 @@ impl NeuronManager {
     }
 
     pub fn update_content_for_admin(&self, id: &str, update: NeuronUpdate) -> AppResult<Neuron> {
-        self.store()?.update_neuron(id, update)
+        let store = self.store()?;
+        let updated = store.update_neuron(id, update)?;
+        // Manual edits lock the neuron out of auto-rewrite / elimination.
+        store.set_manual_edited(id, true)?;
+        Ok(updated)
     }
 
     pub fn adjust_weight(&self, id: &str, delta: f64) -> AppResult<Neuron> {
@@ -474,16 +478,20 @@ impl NeuronManager {
 
         let creator = self.ensure_creator()?;
         let filling_creator = link_to == Some(creator.id.as_str());
-        let prompt_content = if filling_creator {
-            creator.content.clone()
+        let (prompt_content, lineage_parent_id) = if filling_creator {
+            // Seed-born: lineage points at the creator itself.
+            (creator.content.clone(), Some(creator.id.clone()))
         } else {
-            self.select_one(CandidateQuery {
-                n: DEFAULT_SELECT_N,
-                source_id: Some(creator.id.clone()),
-                min_new: 0,
-            })
-            .await?
-            .content
+            let variant = self
+                .select_one(CandidateQuery {
+                    n: DEFAULT_SELECT_N,
+                    source_id: Some(creator.id.clone()),
+                    min_new: 0,
+                })
+                .await?;
+            // Attribute usage back to the chosen variant.
+            self.record_variant_usage(&variant.id)?;
+            (variant.content.clone(), Some(variant.id.clone()))
         };
         let user_prompt = self.create_neuron_user_prompt(&input, count, link_to)?;
         let drafts = self
@@ -497,6 +505,8 @@ impl NeuronManager {
                 weight: 0.0,
                 system_type: None,
                 tool_ids: draft.tool_ids,
+                lineage_parent_id: lineage_parent_id.clone(),
+                variant_state: None,
             };
             created.push(self.persist_plain(create, link_to)?);
         }
@@ -584,6 +594,8 @@ impl NeuronManager {
             weight: 0.0,
             system_type: Some(system_type.to_string()),
             tool_ids: draft.tool_ids,
+            lineage_parent_id: None,
+            variant_state: None,
         })?;
         tracing::info!(
             phase = "ensure_system_neuron",
@@ -599,6 +611,8 @@ impl NeuronManager {
     pub async fn bootstrap(&self) -> AppResult<BootstrapReport> {
         tracing::info!(phase = "bootstrap", "bootstrap start");
         let creator = self.ensure_creator()?;
+        // First-boot: ensure the creator owns its candidate pool (7 active slots).
+        self.ensure_own_candidate_pool(&creator.id).await?;
         let selector = match self
             .ensure_system_neuron(ASSISTANT_SELECT_NEURON, EnsureSystemOpts { reset: false })
             .await
@@ -683,6 +697,8 @@ impl NeuronManager {
             weight: 0.0,
             system_type: Some(CREATOR_SYSTEM_TYPE.into()),
             tool_ids: Vec::new(),
+            lineage_parent_id: None,
+            variant_state: None,
         })?;
         *cached_id = Some(neuron.id.clone());
         tracing::info!(
@@ -691,6 +707,199 @@ impl NeuronManager {
             "creator created from seed"
         );
         Ok(neuron)
+    }
+
+    // ── Creator self-iteration ─────────────────────────────────
+
+    /// Bump `use_count` / `last_used_at` for a variant that was just used to
+    /// generate a child neuron.
+    pub fn record_variant_usage(&self, variant_id: &str) -> AppResult<Neuron> {
+        self.store()?.increment_variant_usage(variant_id)
+    }
+
+    /// Accumulate a signed score delta onto a variant (lineage attribution).
+    pub fn accumulate_variant_delta(&self, variant_id: &str, delta: f64) -> AppResult<Neuron> {
+        self.store()?.accumulate_variant_delta(variant_id, delta)
+    }
+
+    /// Evaluate the creator variant pool after a score feedback round.
+    /// Steps (each call acts on at most ONE variant):
+    /// 1. Observing slots: promote when `use_count >= 1`, rollback when delta < 0.
+    /// 2. Elimination candidates (delta <= -3, or use_count >= 10 with delta < 0).
+    /// 3. Rewrite candidates (use_count >= 3 and |delta| >= 2): differential rewrite.
+    pub async fn maybe_evolve_creator_variants(&self) -> AppResult<()> {
+        let creator = self.ensure_creator()?;
+        let variants = self.store()?.get_variants(&creator.id, false)?;
+        if variants.is_empty() {
+            return Ok(());
+        }
+
+        // 1. Observing slots.
+        for variant in variants
+            .iter()
+            .filter(|v| v.variant_state.as_deref() == Some("observing"))
+        {
+            if variant.accumulated_delta < 0.0 {
+                self.rollback_variant_if_regressed(&variant.neuron.id)?;
+                return Ok(());
+            }
+            if variant.use_count >= 1 {
+                self.store()?
+                    .set_variant_state(&variant.neuron.id, Some("active"))?;
+                tracing::info!(
+                    phase = "maybe_evolve_creator_variants",
+                    variant_id = %variant.neuron.id,
+                    use_count = variant.use_count,
+                    "observing variant promoted to active"
+                );
+                return Ok(());
+            }
+        }
+
+        // 2. Elimination candidates.
+        for variant in variants
+            .iter()
+            .filter(|v| v.variant_state.as_deref() != Some("observing"))
+        {
+            if variant.manual_edited {
+                continue;
+            }
+            let eliminated = variant.accumulated_delta <= -3.0
+                || (variant.use_count >= 10 && variant.accumulated_delta < 0.0);
+            if eliminated {
+                self.rollback_variant_if_regressed(&variant.neuron.id)?;
+                tracing::info!(
+                    phase = "maybe_evolve_creator_variants",
+                    variant_id = %variant.neuron.id,
+                    accumulated_delta = variant.accumulated_delta,
+                    use_count = variant.use_count,
+                    "variant eliminated; rolling back"
+                );
+                return Ok(());
+            }
+        }
+
+        // 3. Rewrite candidate (at most one per call).
+        for variant in variants
+            .iter()
+            .filter(|v| v.variant_state.as_deref() != Some("observing"))
+        {
+            if variant.manual_edited {
+                continue;
+            }
+            if variant.use_count >= 3 && variant.accumulated_delta.abs() >= 2.0 {
+                match self.rewrite_variant(&creator, variant).await {
+                    Ok(()) => {
+                        tracing::info!(
+                            phase = "maybe_evolve_creator_variants",
+                            variant_id = %variant.neuron.id,
+                            "variant differentially rewritten; moved to observing"
+                        );
+                        return Ok(());
+                    }
+                    Err(error) => {
+                        // Failure keeps the old version; never blocks the create flow.
+                        tracing::warn!(
+                            phase = "maybe_evolve_creator_variants",
+                            variant_id = %variant.neuron.id,
+                            error = %error,
+                            "rewrite failed; keeping old version"
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Restore a variant to its most recent archived version.
+    /// With no history, demote the variant to observing so it exits the active pool.
+    fn rollback_variant_if_regressed(&self, variant_id: &str) -> AppResult<()> {
+        let store = self.store()?;
+        let Some(version) = store.latest_version_of(variant_id)? else {
+            store.set_variant_state(variant_id, Some("observing"))?;
+            tracing::info!(
+                phase = "rollback_variant_if_regressed",
+                variant_id,
+                "no archived version; demoted to observing"
+            );
+            return Ok(());
+        };
+        store.update_neuron(
+            variant_id,
+            NeuronUpdate {
+                desc: None,
+                content: Some(version.content.clone()),
+            },
+        )?;
+        store.insert_neuron_version(
+            variant_id,
+            &version.content,
+            "rollback",
+            Some(&version.id),
+        )?;
+        store.set_variant_state(variant_id, Some("active"))?;
+        tracing::info!(
+            phase = "rollback_variant_if_regressed",
+            variant_id,
+            version_id = %version.id,
+            "rolled back to archived version"
+        );
+        Ok(())
+    }
+
+    /// Differential rewrite of one variant via the `creator.variant_evolve` contract.
+    /// On success the variant is updated with the new content and moved to the
+    /// observing slot; the previous content is archived in `neuron_versions`.
+    async fn rewrite_variant(&self, creator: &Neuron, variant: &NeuronVariant) -> AppResult<()> {
+        let payload = serde_json::json!({
+            "current_desc": variant.neuron.desc,
+            "current_content": variant.neuron.content,
+            "current_tool_ids": variant.neuron.tool_ids,
+            "use_count": variant.use_count,
+            "accumulated_delta": variant.accumulated_delta,
+            "last_used_at": variant.last_used_at,
+            "parent_creator_content": creator.content,
+        });
+        let insert = InsertCatalog::require("creator.variant_evolve");
+        let messages = ModelCallInput::assemble(
+            &[],
+            &creator.content,
+            insert,
+            &payload.to_string(),
+            ModelAppendTemplate::Manual,
+        );
+        let output = self.model_caller.call_model(messages).await?;
+        let decision = extract_json_object(&output)?;
+        let desc = decision
+            .get("desc")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .unwrap_or_else(|| variant.neuron.desc.clone());
+        let content = decision
+            .get("content")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| AppError::InvalidInput("rewrite response missing content".into()))?;
+
+        let store = self.store()?;
+        // Archive the current version before mutating.
+        let prev = store.latest_version_of(&variant.neuron.id)?;
+        store.insert_neuron_version(
+            &variant.neuron.id,
+            &variant.neuron.content,
+            "evolve",
+            prev.as_ref().map(|p| p.id.as_str()),
+        )?;
+        store.update_neuron(
+            &variant.neuron.id,
+            NeuronUpdate {
+                desc: Some(desc),
+                content: Some(content.to_string()),
+            },
+        )?;
+        store.set_variant_state(&variant.neuron.id, Some("observing"))?;
+        Ok(())
     }
 
     fn resolve_source_id(&self, source_id: Option<&str>) -> AppResult<Option<String>> {
@@ -903,6 +1112,8 @@ impl NeuronManager {
                     weight: 0.0,
                     system_type: None,
                     tool_ids: draft.tool_ids,
+                    lineage_parent_id: None,
+                    variant_state: None,
                 },
                 source_id,
             )?);
@@ -1850,6 +2061,342 @@ mod tests {
         let creator = manager.ensure_creator().unwrap();
         assert_eq!(creator.system_type.as_deref(), Some(CREATOR_SYSTEM_TYPE));
         assert!(!creator.content.trim().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    // ── Creator self-iteration pool ─────────────────────────
+
+    /// Build the creator plus its 7-variant pool.
+    async fn seed_creator_pool(manager: &NeuronManager) -> String {
+        let creator = manager.ensure_creator().unwrap();
+        manager
+            .select_candidates(CandidateQuery {
+                n: DEFAULT_SELECT_N,
+                source_id: Some(creator.id.clone()),
+                min_new: 0,
+            })
+            .await
+            .unwrap();
+        creator.id
+    }
+
+    #[tokio::test]
+    async fn create_neuron_attributes_lineage_and_usage() {
+        let (manager, root) = test_manager();
+        let creator_id = seed_creator_pool(&manager).await;
+        let before_len = {
+            let store = manager.store().unwrap();
+            store.get_variants(&creator_id, false).unwrap().len()
+        };
+        assert_eq!(before_len, DEFAULT_SELECT_N);
+
+        let children = manager
+            .create_neuron(CreateNeuronInput::Purpose("lineage test".into()), None, 1)
+            .await
+            .unwrap();
+        assert_eq!(children.len(), 1);
+        let parent_id = manager
+            .store()
+            .unwrap()
+            .lineage_parent_id_of(&children[0].id)
+            .unwrap()
+            .expect("child must carry lineage");
+        assert_ne!(parent_id, creator_id);
+
+        let used = {
+            let store = manager.store().unwrap();
+            store
+                .get_variants(&creator_id, false)
+                .unwrap()
+                .into_iter()
+                .find(|v| v.neuron.id == parent_id)
+                .expect("parent variant must exist")
+        };
+        assert_eq!(used.use_count, 1);
+        assert!(used.last_used_at.is_some());
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn create_neuron_filling_creator_links_lineage_to_creator() {
+        let (manager, root) = test_manager();
+        let creator_id = seed_creator_pool(&manager).await;
+        let children = manager
+            .create_neuron(
+                CreateNeuronInput::Purpose("fill test".into()),
+                Some(&creator_id),
+                1,
+            )
+            .await
+            .unwrap();
+        let parent_id = manager
+            .store()
+            .unwrap()
+            .lineage_parent_id_of(&children[0].id)
+            .unwrap()
+            .expect("seed-born child must carry lineage");
+        assert_eq!(parent_id, creator_id);
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn observing_variant_promotes_after_use_and_rolls_back_on_regression() {
+        let (manager, root) = test_manager();
+        let creator_id = seed_creator_pool(&manager).await;
+        let (a, b) = {
+            let store = manager.store().unwrap();
+            let variants = store.get_variants(&creator_id, false).unwrap();
+            let a = variants[0].neuron.id.clone();
+            let b = variants[1].neuron.id.clone();
+            store.set_variant_state(&a, Some("observing")).unwrap();
+            store.set_variant_state(&b, Some("observing")).unwrap();
+            (a, b)
+        };
+
+        // Idle observing slot stays put.
+        manager.maybe_evolve_creator_variants().await.unwrap();
+        let idle_state = {
+            let store = manager.store().unwrap();
+            store
+                .get_variants(&creator_id, false)
+                .unwrap()
+                .into_iter()
+                .find(|v| v.neuron.id == a)
+                .unwrap()
+                .variant_state
+        };
+        assert_eq!(idle_state.as_deref(), Some("observing"));
+
+        // Regression (negative delta) without history: stays observing.
+        manager.store().unwrap().accumulate_variant_delta(&a, -1.0).unwrap();
+        manager.maybe_evolve_creator_variants().await.unwrap();
+        let a_state = {
+            let store = manager.store().unwrap();
+            store
+                .get_variants(&creator_id, false)
+                .unwrap()
+                .into_iter()
+                .find(|v| v.neuron.id == a)
+                .unwrap()
+                .variant_state
+        };
+        assert_eq!(a_state.as_deref(), Some("observing"));
+
+        // Clear the regression, then a used observing variant gets promoted.
+        manager.store().unwrap().accumulate_variant_delta(&a, 1.0).unwrap();
+        manager.store().unwrap().increment_variant_usage(&b).unwrap();
+        manager.maybe_evolve_creator_variants().await.unwrap();
+        let b_state = {
+            let store = manager.store().unwrap();
+            store
+                .get_variants(&creator_id, false)
+                .unwrap()
+                .into_iter()
+                .find(|v| v.neuron.id == b)
+                .unwrap()
+                .variant_state
+        };
+        assert_eq!(b_state.as_deref(), Some("active"));
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn active_variant_rewrites_at_threshold_and_moves_to_observing() {
+        let (manager, root) = test_manager();
+        let creator_id = seed_creator_pool(&manager).await;
+        let (target, original_content) = {
+            let store = manager.store().unwrap();
+            let variants = store.get_variants(&creator_id, false).unwrap();
+            let target = variants[0].neuron.id.clone();
+            let original_content = variants[0].neuron.content.clone();
+            for _ in 0..3 {
+                store.increment_variant_usage(&target).unwrap();
+            }
+            store.accumulate_variant_delta(&target, 2.0).unwrap();
+            (target, original_content)
+        };
+
+        manager.maybe_evolve_creator_variants().await.unwrap();
+
+        let (state, content) = {
+            let store = manager.store().unwrap();
+            let rewritten = store
+                .get_variants(&creator_id, false)
+                .unwrap()
+                .into_iter()
+                .find(|v| v.neuron.id == target)
+                .unwrap();
+            (rewritten.variant_state, rewritten.neuron.content)
+        };
+        assert_eq!(state.as_deref(), Some("observing"));
+        assert_ne!(content, original_content);
+        let version = manager
+            .store()
+            .unwrap()
+            .latest_version_of(&target)
+            .unwrap()
+            .expect("evolve must archive a version");
+        assert_eq!(version.source, "evolve");
+        assert_eq!(version.content, original_content);
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn manual_edited_variant_is_locked_from_rewrite_and_elimination() {
+        let (manager, root) = test_manager();
+        let creator_id = seed_creator_pool(&manager).await;
+        let (target, original_content) = {
+            let store = manager.store().unwrap();
+            let variants = store.get_variants(&creator_id, false).unwrap();
+            let target = variants[0].neuron.id.clone();
+            let original_content = variants[0].neuron.content.clone();
+            for _ in 0..3 {
+                store.increment_variant_usage(&target).unwrap();
+            }
+            store.accumulate_variant_delta(&target, 2.0).unwrap();
+            store.set_manual_edited(&target, true).unwrap();
+            (target, original_content)
+        };
+
+        manager.maybe_evolve_creator_variants().await.unwrap();
+
+        let (state, content, has_version) = {
+            let store = manager.store().unwrap();
+            let locked = store
+                .get_variants(&creator_id, false)
+                .unwrap()
+                .into_iter()
+                .find(|v| v.neuron.id == target)
+                .unwrap();
+            (
+                locked.variant_state,
+                locked.neuron.content,
+                store.latest_version_of(&target).unwrap().is_some(),
+            )
+        };
+        // Seed variants carry NULL state, which means active (not observing).
+        assert_ne!(state.as_deref(), Some("observing"));
+        assert_eq!(content, original_content);
+        assert!(!has_version);
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn eliminated_variant_rolls_back_to_archived_version() {
+        let (manager, root) = test_manager();
+        let creator_id = seed_creator_pool(&manager).await;
+        let target = {
+            let store = manager.store().unwrap();
+            let variants = store.get_variants(&creator_id, false).unwrap();
+            let target = variants[0].neuron.id.clone();
+            store
+                .insert_neuron_version(&target, "archived-v1", "seed", None)
+                .unwrap();
+            store
+                .update_neuron(
+                    &target,
+                    NeuronUpdate {
+                        desc: None,
+                        content: Some("current-v2".into()),
+                    },
+                )
+                .unwrap();
+            for _ in 0..3 {
+                store.accumulate_variant_delta(&target, -1.0).unwrap();
+            }
+            target
+        };
+
+        manager.maybe_evolve_creator_variants().await.unwrap();
+
+        let rolled_content = {
+            let store = manager.store().unwrap();
+            store
+                .get_variants(&creator_id, false)
+                .unwrap()
+                .into_iter()
+                .find(|v| v.neuron.id == target)
+                .unwrap()
+                .neuron
+                .content
+        };
+        assert_eq!(rolled_content, "archived-v1");
+        let version = manager
+            .store()
+            .unwrap()
+            .latest_version_of(&target)
+            .unwrap()
+            .expect("rollback must be recorded");
+        assert_eq!(version.source, "rollback");
+        assert_eq!(version.content, "archived-v1");
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn legacy_null_variant_state_is_treated_as_active() {
+        let (manager, root) = test_manager();
+        let creator_id = seed_creator_pool(&manager).await;
+        {
+            let store = manager.store().unwrap();
+            assert_eq!(
+                store.get_variants(&creator_id, true).unwrap().len(),
+                DEFAULT_SELECT_N
+            );
+        }
+
+        manager.maybe_evolve_creator_variants().await.unwrap();
+
+        let after = {
+            let store = manager.store().unwrap();
+            store.get_variants(&creator_id, false).unwrap()
+        };
+        assert_eq!(after.len(), DEFAULT_SELECT_N);
+        assert!(after.iter().all(|v| v.variant_state.is_none()));
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn admin_update_marks_variant_manual_edited() {
+        let (manager, root) = test_manager();
+        let creator = manager.ensure_creator().unwrap();
+        let variant = manager
+            .create_plain(
+                NeuronCreate {
+                    desc: "v".into(),
+                    content: "original".into(),
+                    ..Default::default()
+                },
+                Some(&creator.id),
+            )
+            .unwrap();
+        manager
+            .update_content_for_admin(
+                &variant.id,
+                NeuronUpdate {
+                    desc: None,
+                    content: Some("edited".into()),
+                },
+            )
+            .unwrap();
+        let edited = {
+            let store = manager.store().unwrap();
+            store
+                .get_variants(&creator.id, false)
+                .unwrap()
+                .into_iter()
+                .find(|v| v.neuron.id == variant.id)
+                .unwrap()
+        };
+        assert!(edited.manual_edited);
+        assert_eq!(edited.neuron.content, "edited");
+        drop(manager);
         fs::remove_dir_all(root).unwrap();
     }
 }

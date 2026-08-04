@@ -1121,6 +1121,28 @@ impl BeforeHook for ScoreFeedbackBeforeHook<'_> {
                     );
                 }
             }
+            // Lineage attribution: the score also flows back to the creator
+            // variant that generated this neuron, feeding the self-iteration pool.
+            if let Some(parent_id) = self.assistant.neurons()?.lineage_parent_id_of(neuron_id)? {
+                let _ = self
+                    .assistant
+                    .neuron_manager
+                    .accumulate_variant_delta(&parent_id, delta)?;
+            }
+        }
+        // Creator pool self-iteration after a scoring round. Never allowed to
+        // break the feedback flow: failures keep the pool unchanged.
+        if let Err(error) = self
+            .assistant
+            .neuron_manager
+            .maybe_evolve_creator_variants()
+            .await
+        {
+            tracing::warn!(
+                phase = "score_feedback_hook",
+                error = %error,
+                "maybe_evolve_creator_variants failed; keeping pool unchanged"
+            );
         }
         Ok(())
     }

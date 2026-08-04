@@ -374,6 +374,8 @@ async fn create_neuron_plain(
         weight: 0.0,
         system_type: None,
         tool_ids: vec![],
+        lineage_parent_id: None,
+        variant_state: None,
     };
     mgr.inner()
         .create_plain(create, link_to.as_deref())

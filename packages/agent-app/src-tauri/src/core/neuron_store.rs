@@ -7,6 +7,7 @@ use super::{
     error::{AppError, AppResult},
     models::{
         Connection as NeuronConnection, Neuron, NeuronCreate, NeuronSubgraph, NeuronUpdate,
+        NeuronVariant, NeuronVersion,
     },
 };
 
@@ -69,6 +70,81 @@ impl NeuronStore {
         .map_err(|e| {
             AppError::StorageError(format!("Failed to index neuron system_type: {}", e))
         })?;
+        // ── Creator self-iteration columns (nullable/defaulted for legacy rows) ──
+        if !has_column(&conn, "neurons", "lineage_parent_id")? {
+            conn.execute(
+                "ALTER TABLE neurons ADD COLUMN lineage_parent_id TEXT",
+                [],
+            )
+            .map_err(|e| {
+                AppError::StorageError(format!("Failed to add lineage_parent_id: {}", e))
+            })?;
+        }
+        if !has_column(&conn, "neurons", "use_count")? {
+            conn.execute(
+                "ALTER TABLE neurons ADD COLUMN use_count INTEGER NOT NULL DEFAULT 0",
+                [],
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to add use_count: {}", e)))?;
+        }
+        if !has_column(&conn, "neurons", "accumulated_delta")? {
+            conn.execute(
+                "ALTER TABLE neurons ADD COLUMN accumulated_delta REAL NOT NULL DEFAULT 0",
+                [],
+            )
+            .map_err(|e| {
+                AppError::StorageError(format!("Failed to add accumulated_delta: {}", e))
+            })?;
+        }
+        if !has_column(&conn, "neurons", "last_used_at")? {
+            conn.execute(
+                "ALTER TABLE neurons ADD COLUMN last_used_at INTEGER",
+                [],
+            )
+            .map_err(|e| {
+                AppError::StorageError(format!("Failed to add last_used_at: {}", e))
+            })?;
+        }
+        if !has_column(&conn, "neurons", "variant_state")? {
+            conn.execute(
+                "ALTER TABLE neurons ADD COLUMN variant_state TEXT",
+                [],
+            )
+            .map_err(|e| {
+                AppError::StorageError(format!("Failed to add variant_state: {}", e))
+            })?;
+        }
+        if !has_column(&conn, "neurons", "manual_edited")? {
+            conn.execute(
+                "ALTER TABLE neurons ADD COLUMN manual_edited INTEGER NOT NULL DEFAULT 0",
+                [],
+            )
+            .map_err(|e| {
+                AppError::StorageError(format!("Failed to add manual_edited: {}", e))
+            })?;
+        }
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS neuron_versions (
+                id              TEXT PRIMARY KEY,
+                neuron_id       TEXT NOT NULL REFERENCES neurons(id) ON DELETE CASCADE,
+                content         TEXT NOT NULL DEFAULT '',
+                source          TEXT NOT NULL,
+                created_at      INTEGER NOT NULL,
+                prev_version_id TEXT
+            )",
+            [],
+        )
+        .map_err(|e| {
+            AppError::StorageError(format!("Failed to init neuron_versions: {}", e))
+        })?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_neuron_versions_neuron
+             ON neuron_versions(neuron_id, created_at DESC)",
+            [],
+        )
+        .map_err(|e| {
+            AppError::StorageError(format!("Failed to index neuron_versions: {}", e))
+        })?;
         Ok(())
     }
 
@@ -95,8 +171,9 @@ impl NeuronStore {
             .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         conn.execute(
             "INSERT INTO neurons
-             (id, desc, content, weight, created_at, updated_at, system_type, tool_ids)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7)",
+             (id, desc, content, weight, created_at, updated_at, system_type, tool_ids,
+              lineage_parent_id, variant_state)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, ?8, ?9)",
             params![
                 id,
                 &create.desc,
@@ -104,7 +181,9 @@ impl NeuronStore {
                 weight,
                 now as i64,
                 create.system_type.as_deref(),
-                &tool_ids
+                &tool_ids,
+                create.lineage_parent_id.as_deref(),
+                create.variant_state.as_deref()
             ],
         )
         .map_err(|e| AppError::StorageError(format!("Failed to create neuron: {}", e)))?;
@@ -335,8 +414,9 @@ impl NeuronStore {
             .map_err(|e| AppError::StorageError(format!("Failed to start transaction: {}", e)))?;
         tx.execute(
             "INSERT INTO neurons
-             (id, desc, content, weight, created_at, updated_at, system_type, tool_ids)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7)",
+             (id, desc, content, weight, created_at, updated_at, system_type, tool_ids,
+              lineage_parent_id, variant_state)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, ?8, ?9)",
             params![
                 &id,
                 &create.desc,
@@ -344,7 +424,9 @@ impl NeuronStore {
                 weight,
                 now as i64,
                 create.system_type.as_deref(),
-                &tool_ids
+                &tool_ids,
+                create.lineage_parent_id.as_deref(),
+                create.variant_state.as_deref()
             ],
         )
         .map_err(|e| AppError::StorageError(format!("Failed to create neuron: {}", e)))?;
@@ -502,6 +584,7 @@ impl NeuronStore {
                  FROM connections c
                  JOIN neurons n ON n.id = c.target
                  WHERE c.source = ?1
+                   AND (n.variant_state IS NULL OR n.variant_state != 'observing')
                  ORDER BY n.weight DESC, RANDOM()",
             )
             .map_err(|e| AppError::StorageError(format!("Failed to prepare: {}", e)))?;
@@ -520,6 +603,223 @@ impl NeuronStore {
             }
         }
         Ok(neurons)
+    }
+
+    // ── Creator variant pool operations ─────────────────────────
+
+    /// List variants downstream of a creator with their usage/score accumulators.
+    /// When `active_only` is true, observing variants are excluded
+    /// (legacy rows with NULL variant_state are treated as active).
+    pub fn get_variants(
+        &self,
+        creator_id: &str,
+        active_only: bool,
+    ) -> AppResult<Vec<NeuronVariant>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT n.id, n.desc, n.content, n.weight, n.system_type, n.tool_ids,
+                        n.created_at, n.updated_at, n.lineage_parent_id,
+                        n.use_count, n.accumulated_delta, n.last_used_at,
+                        n.variant_state, n.manual_edited
+                 FROM connections c
+                 JOIN neurons n ON n.id = c.target
+                 WHERE c.source = ?1
+                 ORDER BY n.weight DESC, RANDOM()",
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to prepare: {}", e)))?;
+        let rows = stmt
+            .query_map(params![creator_id], row_to_neuron_variant)
+            .map_err(|e| AppError::StorageError(format!("Failed to query: {}", e)))?;
+        let mut variants = Vec::new();
+        for row in rows {
+            let variant =
+                row.map_err(|e| AppError::StorageError(format!("Failed to read: {}", e)))?;
+            if active_only && variant.variant_state.as_deref() == Some("observing") {
+                continue;
+            }
+            variants.push(variant);
+        }
+        Ok(variants)
+    }
+
+    /// Bump a variant's usage counter and last_used_at.
+    pub fn increment_variant_usage(&self, variant_id: &str) -> AppResult<Neuron> {
+        let now = now_ms();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let affected = conn
+            .execute(
+                "UPDATE neurons
+                 SET use_count = use_count + 1, last_used_at = ?1, updated_at = ?1
+                 WHERE id = ?2",
+                params![now as i64, variant_id],
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to bump usage: {}", e)))?;
+        drop(conn);
+        if affected == 0 {
+            return Err(AppError::NeuronNotFound(variant_id.to_string()));
+        }
+        self.get_neuron(variant_id)?.ok_or_else(|| {
+            AppError::NeuronNotFound(variant_id.to_string())
+        })
+    }
+
+    /// Accumulate a signed delta onto a variant's accumulated score.
+    pub fn accumulate_variant_delta(&self, variant_id: &str, delta: f64) -> AppResult<Neuron> {
+        if !delta.is_finite() {
+            return Err(AppError::InvalidInput("delta must be finite".into()));
+        }
+        let now = now_ms();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let affected = conn
+            .execute(
+                "UPDATE neurons
+                 SET accumulated_delta = accumulated_delta + ?1, updated_at = ?2
+                 WHERE id = ?3",
+                params![delta, now as i64, variant_id],
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to accumulate delta: {}", e)))?;
+        drop(conn);
+        if affected == 0 {
+            return Err(AppError::NeuronNotFound(variant_id.to_string()));
+        }
+        self.get_neuron(variant_id)?.ok_or_else(|| {
+            AppError::NeuronNotFound(variant_id.to_string())
+        })
+    }
+
+    /// Set a variant's pool state (`active` / `observing`); NULL clears it.
+    pub fn set_variant_state(&self, variant_id: &str, state: Option<&str>) -> AppResult<Neuron> {
+        let now = now_ms();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let affected = conn
+            .execute(
+                "UPDATE neurons
+                 SET variant_state = ?1, updated_at = ?2
+                 WHERE id = ?3",
+                params![state, now as i64, variant_id],
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to set variant state: {}", e)))?;
+        drop(conn);
+        if affected == 0 {
+            return Err(AppError::NeuronNotFound(variant_id.to_string()));
+        }
+        self.get_neuron(variant_id)?.ok_or_else(|| {
+            AppError::NeuronNotFound(variant_id.to_string())
+        })
+    }
+
+    /// Mark a neuron as manually edited (locked out of auto-rewrite).
+    pub fn set_manual_edited(&self, neuron_id: &str, edited: bool) -> AppResult<Neuron> {
+        let now = now_ms();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let affected = conn
+            .execute(
+                "UPDATE neurons
+                 SET manual_edited = ?1, updated_at = ?2
+                 WHERE id = ?3",
+                params![if edited { 1 } else { 0 }, now as i64, neuron_id],
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to set manual_edited: {}", e)))?;
+        drop(conn);
+        if affected == 0 {
+            return Err(AppError::NeuronNotFound(neuron_id.to_string()));
+        }
+        self.get_neuron(neuron_id)?.ok_or_else(|| {
+            AppError::NeuronNotFound(neuron_id.to_string())
+        })
+    }
+
+    /// Record an immutable version entry (seed / evolve / rollback).
+    pub fn insert_neuron_version(
+        &self,
+        neuron_id: &str,
+        content: &str,
+        source: &str,
+        prev_version_id: Option<&str>,
+    ) -> AppResult<NeuronVersion> {
+        let now = now_ms();
+        let seq = NEURON_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let id = format!("v_{now}_{seq}");
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        conn.execute(
+            "INSERT INTO neuron_versions
+             (id, neuron_id, content, source, created_at, prev_version_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, neuron_id, content, source, now as i64, prev_version_id],
+        )
+        .map_err(|e| AppError::StorageError(format!("Failed to insert neuron version: {}", e)))?;
+        Ok(NeuronVersion {
+            id,
+            neuron_id: neuron_id.to_string(),
+            content: content.to_string(),
+            source: source.to_string(),
+            created_at: now,
+            prev_version_id: prev_version_id.map(String::from),
+        })
+    }
+
+    /// Lineage parent id of a neuron (the variant/creator that generated it), if any.
+    pub fn lineage_parent_id_of(&self, neuron_id: &str) -> AppResult<Option<String>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        Ok(conn
+            .query_row(
+                "SELECT lineage_parent_id FROM neurons WHERE id = ?1",
+                params![neuron_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(|e| AppError::StorageError(format!("Failed to query lineage: {}", e)))?
+            .flatten())
+    }
+
+    /// Latest version record of a neuron, if any.
+    pub fn latest_version_of(&self, neuron_id: &str) -> AppResult<Option<NeuronVersion>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        conn.query_row(
+            "SELECT id, neuron_id, content, source, created_at, prev_version_id
+             FROM neuron_versions
+             WHERE neuron_id = ?1
+             ORDER BY created_at DESC, rowid DESC
+             LIMIT 1",
+            params![neuron_id],
+            |row| {
+                Ok(NeuronVersion {
+                    id: row.get(0)?,
+                    neuron_id: row.get(1)?,
+                    content: row.get(2)?,
+                    source: row.get(3)?,
+                    created_at: row.get::<_, i64>(4)? as u128,
+                    prev_version_id: row.get(5)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| AppError::StorageError(format!("Failed to query latest version: {}", e)))
     }
 
     /// Select one direct upstream neuron by node weight; ties are randomized.
@@ -645,6 +945,31 @@ fn row_to_neuron(row: &rusqlite::Row) -> rusqlite::Result<Neuron> {
         tool_ids,
         created_at: row.get::<_, i64>(6)? as u128,
         updated_at: row.get::<_, i64>(7)? as u128,
+    })
+}
+
+fn row_to_neuron_variant(row: &rusqlite::Row) -> rusqlite::Result<NeuronVariant> {
+    let tool_ids_json: String = row.get(5)?;
+    let tool_ids = serde_json::from_str(&tool_ids_json).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(error))
+    })?;
+    Ok(NeuronVariant {
+        neuron: Neuron {
+            id: row.get(0)?,
+            desc: row.get(1)?,
+            content: row.get(2)?,
+            weight: row.get(3)?,
+            system_type: row.get(4)?,
+            tool_ids,
+            created_at: row.get::<_, i64>(6)? as u128,
+            updated_at: row.get::<_, i64>(7)? as u128,
+        },
+        lineage_parent_id: row.get(8)?,
+        use_count: row.get(9)?,
+        accumulated_delta: row.get(10)?,
+        last_used_at: row.get::<_, Option<i64>>(11)?.map(|v| v as u128),
+        variant_state: row.get(12)?,
+        manual_edited: row.get::<_, i64>(13)? != 0,
     })
 }
 

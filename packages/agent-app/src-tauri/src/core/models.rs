@@ -293,6 +293,33 @@ pub struct NeuronCreate {
     pub weight: f64,
     pub system_type: Option<String>,
     pub tool_ids: Vec<String>,
+    /// Source neuron whose content generated this neuron (creator or variant id).
+    pub lineage_parent_id: Option<String>,
+    /// Variant pool state: `Some("active")` / `Some("observing")`; NULL means active.
+    pub variant_state: Option<String>,
+}
+
+/// A variant neuron in a creator's candidate pool, with usage/score accumulators.
+#[derive(Debug, Clone)]
+pub struct NeuronVariant {
+    pub neuron: Neuron,
+    pub lineage_parent_id: Option<String>,
+    pub use_count: i64,
+    pub accumulated_delta: f64,
+    pub last_used_at: Option<u128>,
+    pub variant_state: Option<String>,
+    pub manual_edited: bool,
+}
+
+/// Immutable version record of a neuron; `source` ∈ {seed, evolve, rollback}.
+#[derive(Debug, Clone)]
+pub struct NeuronVersion {
+    pub id: String,
+    pub neuron_id: String,
+    pub content: String,
+    pub source: String,
+    pub created_at: u128,
+    pub prev_version_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
