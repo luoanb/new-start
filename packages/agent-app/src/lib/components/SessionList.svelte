@@ -1,9 +1,8 @@
 <script lang="ts">
-  import type { Conversation } from "$lib/types";
   import { t } from "$lib/i18n";
+  import { dataStore } from "$lib/stores/dataStore.svelte";
 
   let {
-    conversations,
     activeId,
     collapsed,
     onSelect,
@@ -11,7 +10,6 @@
     onClose,
     onToggle,
   }: {
-    conversations: Conversation[];
     activeId: string;
     collapsed: boolean;
     onSelect: (id: string) => void;
@@ -19,6 +17,8 @@
     onClose: (id: string) => void;
     onToggle: () => void;
   } = $props();
+
+  let conversations = $derived(dataStore.state.conversations);
 
   const modeLabel: Record<string, string> = {
     chat: "Chat",

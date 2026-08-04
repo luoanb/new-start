@@ -1,31 +1,18 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
-  import type { PollerStatus } from "$lib/types";
   import { t } from "$lib/i18n";
   import { errorMessage } from "$lib/errorMessage";
+  import { dataStore } from "$lib/stores/dataStore.svelte";
 
-  let {
-    pollerStatus = $bindable(null),
-  }: { pollerStatus: PollerStatus | null } = $props();
+  let pollerStatus = $derived(dataStore.state.poller);
 
   let operating = $state(false);
   let errorMsg = $state("");
-
-  async function refresh() {
-    errorMsg = "";
-    try {
-      pollerStatus = await invoke<PollerStatus>("poll_status");
-    } catch (e) {
-      errorMsg = `Refresh failed: ${errorMessage(e)}`;
-    }
-  }
 
   async function handlePause() {
     operating = true;
     errorMsg = "";
     try {
-      await invoke<void>("poll_pause");
-      await refresh();
+      await dataStore.pausePoller();
     } catch (e) {
       errorMsg = `Pause failed: ${errorMessage(e)}`;
     } finally {
@@ -37,8 +24,7 @@
     operating = true;
     errorMsg = "";
     try {
-      await invoke<void>("poll_resume");
-      await refresh();
+      await dataStore.resumePoller();
     } catch (e) {
       errorMsg = `Resume failed: ${errorMessage(e)}`;
     } finally {
@@ -50,8 +36,7 @@
     operating = true;
     errorMsg = "";
     try {
-      await invoke<void>("poll_trigger");
-      await refresh();
+      await dataStore.triggerPoller();
     } catch (e) {
       errorMsg = `Trigger failed: ${errorMessage(e)}`;
     } finally {

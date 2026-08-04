@@ -1,12 +1,11 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
-  import type { Topic, TopicStatus } from "$lib/types";
+  import type { TopicStatus } from "$lib/types";
   import { t } from "$lib/i18n";
   import { errorMessage } from "$lib/errorMessage";
+  import { dataStore } from "$lib/stores/dataStore.svelte";
 
-  let {
-    topics = $bindable([]),
-  }: { topics: Topic[] } = $props();
+  // 统一从 dataStore 读取 topics，不再由父组件 bind 传入。
+  let topics = $derived(dataStore.state.topics);
 
   // ── State ──
   let filterStatus: TopicStatus | "" = $state("");
@@ -67,11 +66,7 @@
     creating = true;
     errorMsg = "";
     try {
-      const topic = await invoke<Topic>("create_topic", {
-        name: createName.trim(),
-        description: createDesc.trim(),
-      });
-      topics = [...topics, topic];
+      const topic = await dataStore.createTopic(createName.trim(), createDesc.trim());
       createName = "";
       createDesc = "";
       showCreateForm = false;
@@ -86,8 +81,7 @@
   async function handlePause(id: string) {
     errorMsg = "";
     try {
-      const updated = await invoke<Topic>("pause_topic", { id });
-      topics = topics.map((t) => (t.id === id ? updated : t));
+      await dataStore.pauseTopic(id);
     } catch (e) {
       errorMsg = `Pause failed: ${errorMessage(e)}`;
     }
@@ -96,8 +90,7 @@
   async function handleResume(id: string) {
     errorMsg = "";
     try {
-      const updated = await invoke<Topic>("resume_topic", { id });
-      topics = topics.map((t) => (t.id === id ? updated : t));
+      await dataStore.resumeTopic(id);
     } catch (e) {
       errorMsg = `Resume failed: ${errorMessage(e)}`;
     }
@@ -107,8 +100,7 @@
     errorMsg = "";
     deleteConfirmId = null;
     try {
-      await invoke<boolean>("delete_topic", { id });
-      topics = topics.filter((t) => t.id !== id);
+      await dataStore.deleteTopic(id);
       if (expandedId === id) expandedId = null;
     } catch (e) {
       errorMsg = `Delete failed: ${errorMessage(e)}`;
@@ -120,12 +112,7 @@
     addingScope = true;
     errorMsg = "";
     try {
-      const updated = await invoke<Topic>("add_topic_scope_item", {
-        topicId,
-        goal: newScopeGoal.trim(),
-        doneContract: newScopeContract.trim(),
-      });
-      topics = topics.map((t) => (t.id === topicId ? updated : t));
+      await dataStore.addScopeItem(topicId, newScopeGoal.trim(), newScopeContract.trim());
       newScopeGoal = "";
       newScopeContract = "";
     } catch (e) {
@@ -138,11 +125,7 @@
   async function handleCompleteScopeItem(topicId: string, itemId: string) {
     errorMsg = "";
     try {
-      const updated = await invoke<Topic>("complete_topic_scope_item", {
-        topicId,
-        itemId,
-      });
-      topics = topics.map((t) => (t.id === topicId ? updated : t));
+      await dataStore.completeScopeItem(topicId, itemId);
     } catch (e) {
       errorMsg = `Complete scope item failed: ${errorMessage(e)}`;
     }
@@ -151,11 +134,7 @@
   async function handleDeleteScopeItem(topicId: string, itemId: string) {
     errorMsg = "";
     try {
-      const updated = await invoke<Topic>("delete_topic_scope_item", {
-        topicId,
-        itemId,
-      });
-      topics = topics.map((t) => (t.id === topicId ? updated : t));
+      await dataStore.deleteScopeItem(topicId, itemId);
     } catch (e) {
       errorMsg = `Delete scope item failed: ${errorMessage(e)}`;
     }

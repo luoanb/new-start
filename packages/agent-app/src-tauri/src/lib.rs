@@ -12,7 +12,7 @@ use crate::core::{
     topic_store::TopicStore,
     ChatOptions, ChatResponse, Connection, Conversation, ConversationMode, Gateway, Message,
     ModelCallRequest, ModelCallResponse, ModelInfo, Neuron, NeuronCreate, NeuronSubgraph,
-    NeuronUpdate,
+    NeuronUpdate, StateChange, StateEmitter, STATE_CHANGED_EVENT,
     PollerStatus, ProviderInfo, RuntimeStatus, SkillInfo, Topic, TopicStatus, TopicUpdate,
 };
 use std::{
@@ -42,6 +42,7 @@ fn debug_storage_path() -> String {
 #[tauri::command]
 async fn send_chat_message(
     gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
     message: String,
     provider_id: String,
     model_id: String,
@@ -49,7 +50,7 @@ async fn send_chat_message(
 ) -> TauriResult<ChatResponse> {
     // Gateway is shared via Tauri State (Arc); send_model_message is &self and
     // clone-outs before network await — no outer Mutex held across I/O.
-    gateway
+    let response = gateway
         .inner()
         .send_model_message(
             message,
@@ -60,12 +61,15 @@ async fn send_chat_message(
             },
         )
         .await
-        .map_err(|error| error.payload())
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Conversations);
+    Ok(response)
 }
 
 #[tauri::command]
 async fn create_conversation(
     gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
     mode: String,
 ) -> TauriResult<String> {
     let conv_mode = match mode.to_lowercase().as_str() {
@@ -73,21 +77,26 @@ async fn create_conversation(
         "assistant" => ConversationMode::Assistant,
         _ => ConversationMode::Chat,
     };
-    gateway
+    let conversation_id = gateway
         .inner()
         .create_new_conversation(conv_mode)
-        .map_err(|error| error.payload())
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Conversations);
+    Ok(conversation_id)
 }
 
 #[tauri::command]
 async fn close_session(
     sessions: State<'_, SessionTracker>,
+    state_emit: State<'_, StateEmitter>,
     session_id: String,
 ) -> TauriResult<String> {
-    sessions
+    let session_id = sessions
         .inner()
         .close(&session_id)
-        .map_err(|error| error.payload())
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Conversations);
+    Ok(session_id)
 }
 
 // ── Info ──
@@ -147,12 +156,15 @@ async fn history(
 #[tauri::command]
 async fn clear_conversation(
     gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
     conversation_id: Option<String>,
 ) -> TauriResult<String> {
-    gateway
+    let conversation_id = gateway
         .inner()
         .clear_conversation(conversation_id)
-        .map_err(|error| error.payload())
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Conversations);
+    Ok(conversation_id)
 }
 
 #[tauri::command]
@@ -197,22 +209,26 @@ async fn get_topic(
 #[tauri::command]
 async fn create_topic(
     topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
+    state_emit: State<'_, StateEmitter>,
     name: String,
     description: String,
 ) -> TauriResult<Topic> {
-    with_topic_store(&topic_store, |store| {
+    let topic = with_topic_store(&topic_store, |store| {
         store.create(&name, &description, TopicStatus::Todo, vec![], None)
-    })
+    })?;
+    state_emit.inner()(StateChange::Topics);
+    Ok(topic)
 }
 
 #[tauri::command]
 async fn update_topic(
     topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
+    state_emit: State<'_, StateEmitter>,
     id: String,
     name: Option<String>,
     description: Option<String>,
 ) -> TauriResult<Topic> {
-    with_topic_store(&topic_store, |store| {
+    let topic = with_topic_store(&topic_store, |store| {
         store.update(
             &id,
             TopicUpdate {
@@ -221,65 +237,85 @@ async fn update_topic(
                 extra: None,
             },
         )
-    })
+    })?;
+    state_emit.inner()(StateChange::Topics);
+    Ok(topic)
 }
 
 #[tauri::command]
 async fn delete_topic(
     topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
+    state_emit: State<'_, StateEmitter>,
     id: String,
 ) -> TauriResult<bool> {
-    with_topic_store(&topic_store, |store| store.delete(&id))
+    let deleted = with_topic_store(&topic_store, |store| store.delete(&id))?;
+    state_emit.inner()(StateChange::Topics);
+    Ok(deleted)
 }
 
 #[tauri::command]
 async fn add_topic_scope_item(
     topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
+    state_emit: State<'_, StateEmitter>,
     topic_id: String,
     goal: String,
     done_contract: String,
 ) -> TauriResult<Topic> {
-    with_topic_store(&topic_store, |store| {
+    let topic = with_topic_store(&topic_store, |store| {
         store.add_scope_item(&topic_id, &goal, &done_contract)
-    })
+    })?;
+    state_emit.inner()(StateChange::Topics);
+    Ok(topic)
 }
 
 #[tauri::command]
 async fn delete_topic_scope_item(
     topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
+    state_emit: State<'_, StateEmitter>,
     topic_id: String,
     item_id: String,
 ) -> TauriResult<Topic> {
-    with_topic_store(&topic_store, |store| {
+    let topic = with_topic_store(&topic_store, |store| {
         store.delete_scope_item(&topic_id, &item_id)
-    })
+    })?;
+    state_emit.inner()(StateChange::Topics);
+    Ok(topic)
 }
 
 #[tauri::command]
 async fn complete_topic_scope_item(
     topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
+    state_emit: State<'_, StateEmitter>,
     topic_id: String,
     item_id: String,
 ) -> TauriResult<Topic> {
-    with_topic_store(&topic_store, |store| {
+    let topic = with_topic_store(&topic_store, |store| {
         store.complete_scope_item(&topic_id, &item_id)
-    })
+    })?;
+    state_emit.inner()(StateChange::Topics);
+    Ok(topic)
 }
 
 #[tauri::command]
 async fn pause_topic(
     topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
+    state_emit: State<'_, StateEmitter>,
     id: String,
 ) -> TauriResult<Topic> {
-    with_topic_store(&topic_store, |store| store.pause(&id))
+    let topic = with_topic_store(&topic_store, |store| store.pause(&id))?;
+    state_emit.inner()(StateChange::Topics);
+    Ok(topic)
 }
 
 #[tauri::command]
 async fn resume_topic(
     topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
+    state_emit: State<'_, StateEmitter>,
     id: String,
 ) -> TauriResult<Topic> {
-    with_topic_store(&topic_store, |store| store.resume(&id))
+    let topic = with_topic_store(&topic_store, |store| store.resume(&id))?;
+    state_emit.inner()(StateChange::Topics);
+    Ok(topic)
 }
 
 // ── Poller ──
@@ -290,27 +326,42 @@ async fn poll_status(poller: State<'_, Arc<StdMutex<Poller>>>) -> TauriResult<Po
 }
 
 #[tauri::command]
-async fn poll_pause(poller: State<'_, Arc<StdMutex<Poller>>>) -> TauriResult<()> {
-    with_poller(&poller, |p| {
+async fn poll_pause(
+    poller: State<'_, Arc<StdMutex<Poller>>>,
+    state_emit: State<'_, StateEmitter>,
+) -> TauriResult<()> {
+    let status = with_poller(&poller, |p| {
         p.pause();
-        Ok(())
-    })
+        Ok(p.status())
+    })?;
+    state_emit.inner()(StateChange::Poller { status });
+    Ok(())
 }
 
 #[tauri::command]
-async fn poll_resume(poller: State<'_, Arc<StdMutex<Poller>>>) -> TauriResult<()> {
-    with_poller(&poller, |p| {
+async fn poll_resume(
+    poller: State<'_, Arc<StdMutex<Poller>>>,
+    state_emit: State<'_, StateEmitter>,
+) -> TauriResult<()> {
+    let status = with_poller(&poller, |p| {
         p.resume();
-        Ok(())
-    })
+        Ok(p.status())
+    })?;
+    state_emit.inner()(StateChange::Poller { status });
+    Ok(())
 }
 
 #[tauri::command]
-async fn poll_trigger(poller: State<'_, Arc<StdMutex<Poller>>>) -> TauriResult<()> {
-    with_poller(&poller, |p| {
+async fn poll_trigger(
+    poller: State<'_, Arc<StdMutex<Poller>>>,
+    state_emit: State<'_, StateEmitter>,
+) -> TauriResult<()> {
+    let status = with_poller(&poller, |p| {
         p.trigger();
-        Ok(())
-    })
+        Ok(p.status())
+    })?;
+    state_emit.inner()(StateChange::Poller { status });
+    Ok(())
 }
 
 // ── Neuron ──
@@ -490,9 +541,18 @@ pub fn run() {
                 "agent-app logging initialized"
             );
 
+            // 统一状态事件发射器：command 层写操作与后台推进完成后广播，
+            // 前端 dataStore 监听 STATE_CHANGED_EVENT 并按 kind 重新拉取。
+            let state_emit_handle = handle.clone();
+            let state_emit: StateEmitter = Arc::new(move |change: StateChange| {
+                let _ = state_emit_handle.emit(STATE_CHANGED_EVENT, change);
+            });
+
             let store = ConversationStore::new(&storage_root)
                 .map_err(|error| error.to_string())?;
-            let gateway = Gateway::new(store).map_err(|error| error.to_string())?;
+            let gateway =
+                Gateway::with_state_emitter(store, Some(state_emit.clone()))
+                    .map_err(|error| error.to_string())?;
 
             // Domain states (no outer Mutex across network).
             let neuron_manager = gateway.neuron_manager();
@@ -511,6 +571,7 @@ pub fn run() {
             app.manage(providers);
             app.manage(conversation_store);
             app.manage(gateway);
+            app.manage(state_emit);
 
             // Bootstrap without holding any Gateway lock across model calls.
             tauri::async_runtime::spawn(async move {

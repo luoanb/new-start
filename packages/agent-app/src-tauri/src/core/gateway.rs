@@ -27,6 +27,8 @@ use super::{
     CompactionConfig,
 };
 
+use super::events::{StateChange, StateEmitter};
+
 #[derive(Debug, Clone)]
 pub struct Gateway {
     engine: Engine,
@@ -49,6 +51,15 @@ impl Gateway {
     }
 
     pub fn new(store: ConversationStore) -> AppResult<Self> {
+        Self::with_state_emitter(store, None)
+    }
+
+    /// 与 `new` 等价，但允许注入状态事件发射器，
+    /// 用于 Tauri 运行时向前端广播状态变更。
+    pub fn with_state_emitter(
+        store: ConversationStore,
+        state_emit: Option<StateEmitter>,
+    ) -> AppResult<Self> {
         let providers = ProviderRegistry::new(store.root().to_path_buf());
         let current_conversation_id = match store.list_conversations()?.first() {
             Some(conversation) => conversation.id.clone(),
@@ -132,6 +143,7 @@ impl Gateway {
             providers.clone(),
             step_rx,
             poller_settings.base_interval_ms,
+            state_emit,
         );
 
         Ok(Self {
@@ -543,6 +555,7 @@ fn spawn_poller_runtime(
     providers: ProviderRegistry,
     mut step_rx: mpsc::UnboundedReceiver<AssistantStepRequest>,
     base_interval_ms: u64,
+    state_emit: Option<StateEmitter>,
 ) {
     tracing::info!(
         phase = "poller_runtime",
@@ -556,6 +569,11 @@ fn spawn_poller_runtime(
                 _ = interval.tick() => {
                     if let Ok(mut guard) = poller.lock() {
                         guard.tick();
+                        if let Some(emit) = state_emit.as_ref() {
+                            emit(StateChange::Poller {
+                                status: guard.status(),
+                            });
+                        }
                     }
                 }
                 Some(request) = step_rx.recv() => {
@@ -565,6 +583,11 @@ fn spawn_poller_runtime(
                         _ => continue,
                     };
                     assistant.process_step_request(request, &model).await;
+                    // 后台推进会写入会话/课题，通知前端重新拉取。
+                    if let Some(emit) = state_emit.as_ref() {
+                        emit(StateChange::Conversations);
+                        emit(StateChange::Topics);
+                    }
                 }
             }
         }

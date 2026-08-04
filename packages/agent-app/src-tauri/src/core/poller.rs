@@ -81,6 +81,7 @@ pub trait PollHandler: Send {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum PollerRunState {
     Running,
     Paused,

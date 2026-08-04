@@ -1,17 +1,5 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
-  import type {
-    ProviderInfo,
-    ModelInfo,
-    SkillInfo,
-    Conversation,
-    Message,
-    ChatResponse,
-    RuntimeStatus,
-    Topic,
-    PollerStatus,
-  } from "$lib/types";
   import StatusBar from "$lib/components/StatusBar.svelte";
   import SessionList from "$lib/components/SessionList.svelte";
   import ChatArea from "$lib/components/ChatArea.svelte";
@@ -30,24 +18,23 @@
   import { t } from "$lib/i18n";
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
   import { hotkeyService } from "$lib/hotkey/hotkeyService";
+  import { dataStore } from "$lib/stores/dataStore.svelte";
 
-  // ── Bootstrap state (loaded once) ──
-  let providers: ProviderInfo[] = $state([]);
-  let models: ModelInfo[] = $state([]);
-  let skills: SkillInfo[] = $state([]);
-  let conversations: Conversation[] = $state([]);
-  let runtimeStatus: RuntimeStatus | null = $state(null);
-  let topics: Topic[] = $state([]);
-  let pollerStatus: PollerStatus | null = $state(null);
-  let ready = $state(false);
+  // ── 统一数据（dataStore 驱动：bootstrap + 事件订阅刷新）──
+  let providers = $derived(dataStore.state.providers);
+  let models = $derived(dataStore.state.models);
+  let skills = $derived(dataStore.state.skills);
+  let conversations = $derived(dataStore.state.conversations);
+  let runtimeStatus = $derived(dataStore.state.runtimeStatus);
+  let ready = $derived(dataStore.state.ready);
 
-  // ── Active selection (persisted to localStorage) ──
-  let activeConversationId: string = $state("");
+  // ── Active selection（会话选择由 dataStore 管理；provider/model 持久化到 localStorage）──
+  let activeConversationId = $derived(dataStore.state.activeConversationId ?? "");
   let activeProviderId: string = $state(localStorage.getItem("agent-app:providerId") ?? "");
   let activeModelId: string = $state(localStorage.getItem("agent-app:modelId") ?? "");
 
-  // ── Messages & loading ──
-  let messages: Message[] = $state([]);
+  // ── Messages & loading（消息由 dataStore 管理，事件驱动自动刷新）──
+  let messages = $derived(dataStore.state.messages);
   let loading = $state(false);
 
   // ── UI state ──
@@ -88,44 +75,11 @@
   let activeMode = $derived(activeConversation?.mode ?? "chat");
   let hasModel = $derived(!!activeProviderId && !!activeModelId);
 
-  // ── Bootstrap ──
+  // ── Bootstrap：统一拉取 + 订阅后端状态事件 ──
   onMount(async () => {
-    try {
-      const [providersRes, modelsRes, skillsRes, convsRes, statusRes, topicsRes, pollerRes] =
-        await Promise.all([
-          invoke<ProviderInfo[]>("list_providers"),
-          invoke<ModelInfo[]>("list_models"),
-          invoke<SkillInfo[]>("list_skills"),
-          invoke<Conversation[]>("list_conversations"),
-          invoke<RuntimeStatus>("status"),
-          invoke<Topic[]>("list_topics"),
-          invoke<PollerStatus>("poll_status"),
-        ]);
-
-      providers = providersRes;
-      models = modelsRes;
-      skills = skillsRes;
-      conversations = convsRes;
-      runtimeStatus = statusRes;
-      topics = topicsRes;
-      pollerStatus = pollerRes;
-
-      if (convsRes.length > 0) {
-        activeConversationId = convsRes[0].id;
-      }
-
-      ready = true;
-      setupHotkeys();
-    } catch (e) {
-      error = `Failed to load: ${formatInvokeError(e)}`;
-    }
-  });
-
-  $effect(() => {
-    if (!activeConversationId) return;
-    invoke<Message[]>("history", { conversationId: activeConversationId })
-      .then((msgs) => { messages = msgs; })
-      .catch((e) => { error = `Failed to load history: ${formatInvokeError(e)}`; });
+    await dataStore.bootstrap();
+    await dataStore.subscribe();
+    setupHotkeys();
   });
 
   async function handleSend(text: string) {
@@ -137,16 +91,10 @@
       error = "Select a provider and model before sending.";
       return;
     }
-    const userMsg: Message = { role: "user", content: text, timestamp: Date.now() };
-    messages = [...messages, userMsg];
     loading = true;
     error = "";
     try {
-      const res = await invoke<ChatResponse>("send_chat_message", {
-        message: text, providerId: activeProviderId,
-        modelId: activeModelId, conversationId: activeConversationId,
-      });
-      messages = [...messages, { role: "assistant", content: res.response, timestamp: Date.now() }];
+      await dataStore.sendMessage(text, activeProviderId, activeModelId);
     } catch (e) {
       error = `Send failed: ${formatInvokeError(e)}`;
     } finally {
@@ -157,9 +105,7 @@
   async function handleCreateSession(mode: string) {
     showCreateModal = false;
     try {
-      const id = await invoke<string>("create_conversation", { mode });
-      conversations = await invoke<Conversation[]>("list_conversations");
-      activeConversationId = id;
+      await dataStore.createConversation(mode);
     } catch (e) {
       error = `Failed to create session: ${formatInvokeError(e)}`;
     }
@@ -167,19 +113,15 @@
 
   async function handleCloseSession(sessionId: string) {
     try {
-      await invoke<string>("close_session", { sessionId });
-      conversations = conversations.filter((c) => c.id !== sessionId);
-      if (activeConversationId === sessionId) {
-        activeConversationId = conversations[0]?.id ?? "";
-        if (!activeConversationId) messages = [];
-      }
+      // dataStore 内部处理 active 回退与列表/消息刷新。
+      await dataStore.closeSession(sessionId);
     } catch (e) {
       error = `Failed to close session: ${formatInvokeError(e)}`;
     }
   }
 
   function handleSelectConversation(id: string) {
-    activeConversationId = id;
+    void dataStore.selectConversation(id);
     drawerSidebar = false;
   }
 
@@ -315,7 +257,6 @@
   <div class="main-area">
     <aside class="sidebar-area desktop-only" style={sidebarStyle}>
       <SessionList
-        {conversations}
         activeId={activeConversationId}
         collapsed={false}
         onSelect={handleSelectConversation}
@@ -384,7 +325,7 @@
             {/each}
           </div>
           {#if layoutStore.state.panel.activeView === "poller"}
-            <PollerPanel bind:pollerStatus />
+            <PollerPanel />
           {:else if layoutStore.state.panel.activeView === "logs"}
             <LogPanel />
           {:else}
@@ -403,12 +344,15 @@
 
     <!-- Desktop info panel -->
     <aside class="info-area desktop-only" style={infoStyle}>
-      <SidePanel {providers} {models} {skills} {topics} />
+      <SidePanel {providers} {models} {skills} />
     </aside>
   </div>
 
   <div class="error-area">
-    <ErrorBanner message={error} onDismiss={() => (error = "")} />
+    <ErrorBanner
+      message={error || dataStore.state.error}
+      onDismiss={() => { error = ""; dataStore.state.error = ""; }}
+    />
   </div>
 </div>
 
@@ -422,7 +366,6 @@
       <button class="drawer-close" onclick={closeDrawers}>×</button>
     </div>
     <SessionList
-      {conversations}
       activeId={activeConversationId}
       collapsed={false}
       onSelect={handleSelectConversation}
@@ -441,7 +384,7 @@
       <h2>{t("drawer.info")}</h2>
       <button class="drawer-close" onclick={closeDrawers}>×</button>
     </div>
-    <SidePanel {providers} {models} {skills} {topics} />
+    <SidePanel {providers} {models} {skills} />
   </aside>
 {/if}
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ProviderInfo, ModelInfo, SkillInfo, Topic } from "$lib/types";
+  import type { ProviderInfo, ModelInfo, SkillInfo } from "$lib/types";
   import { t, tMap } from "$lib/i18n";
   import TopicPanel from "./TopicPanel.svelte";
 
@@ -7,18 +7,11 @@
     providers,
     models,
     skills,
-    topics = [],
   }: {
     providers: ProviderInfo[];
     models: ModelInfo[];
     skills: SkillInfo[];
-    topics?: Topic[];
   } = $props();
-
-  let localTopics = $state<Topic[]>(topics);
-
-  // Sync local state when parent updates props after async load
-  $effect(() => { localTopics = topics; });
 
   let activeTab = $state("providers");
 
@@ -119,7 +112,7 @@
         </div>
       {/if}
     {:else if activeTab === "topics"}
-      <TopicPanel bind:topics={localTopics} />
+      <TopicPanel />
     {/if}
   </div>
 </div>

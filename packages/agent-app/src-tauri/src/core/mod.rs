@@ -6,6 +6,7 @@ pub mod compactor;
 pub mod conversation_store;
 pub mod engine;
 pub mod error;
+pub mod events;
 pub mod gateway;
 pub mod insert_catalog;
 pub mod model_call_input;
@@ -24,6 +25,7 @@ pub use topic_store::TopicStore;
 
 pub use assistant_mode::AssistantMode;
 pub use error::{AppError, AppResult};
+pub use events::{StateChange, StateEmitter, STATE_CHANGED_EVENT};
 pub use gateway::Gateway;
 pub use insert_catalog::InsertCatalog;
 pub use model_call_input::{ModelAppendTemplate, ModelCallInput};
