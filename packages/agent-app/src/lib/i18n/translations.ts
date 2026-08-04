@@ -65,6 +65,13 @@ export type Translations = {
   toolCall: {
     arguments: string;
   };
+  toolResult: {
+    executed: string;
+    timedOut: string;
+    empty: string;
+    stdout: string;
+    stderr: string;
+  };
   drawer: {
     sessions: string;
     info: string;
@@ -176,6 +183,9 @@ export type Translations = {
     createConfirm: string;
     creating: string;
     createDownstreamFromHere: string;
+    createToolIdsLabel: string;
+    createToolIdsPlaceholder: string;
+    noToolsAvailable: string;
   };
 };
 
@@ -251,6 +261,13 @@ export const en: Translations = {
   },
   toolCall: {
     arguments: "Arguments",
+  },
+  toolResult: {
+    executed: "Command executed",
+    timedOut: "timed out",
+    empty: "No output",
+    stdout: "stdout",
+    stderr: "stderr",
   },
   drawer: {
     sessions: "Sessions",
@@ -363,6 +380,9 @@ export const en: Translations = {
     createConfirm: "Create",
     creating: "Creating...",
     createDownstreamFromHere: "Create downstream neuron",
+    createToolIdsLabel: "Tools",
+    createToolIdsPlaceholder: "Select tools this neuron can use (leave empty for none)",
+    noToolsAvailable: "No tools available",
   },
 };
 
@@ -438,6 +458,13 @@ export const zh: Translations = {
   },
   toolCall: {
     arguments: "参数",
+  },
+  toolResult: {
+    executed: "命令执行",
+    timedOut: "已超时",
+    empty: "无输出",
+    stdout: "标准输出",
+    stderr: "标准错误",
   },
   drawer: {
     sessions: "会话列表",
@@ -550,5 +577,8 @@ export const zh: Translations = {
     createConfirm: "创建",
     creating: "创建中...",
     createDownstreamFromHere: "创建下游神经元",
+    createToolIdsLabel: "工具",
+    createToolIdsPlaceholder: "选择该神经元可用的工具（留空则无工具）",
+    noToolsAvailable: "当前没有可用工具",
   },
 };

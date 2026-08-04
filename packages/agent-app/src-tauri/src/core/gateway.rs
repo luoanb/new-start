@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 
 use super::{
     assistant_mode::{AssistantMode, AssistantStepRequest},
+    cmd_exec::ExecuteCommandTool,
     conversation_store::{now_ms, ConversationStore},
     engine::Engine,
     error::{AppError, AppResult},
@@ -73,15 +74,18 @@ impl Gateway {
             .init_table()?;
 
         let session_tracker = SessionTracker::new();
+
+        // Production tools are registered only when they have self-describing inserts.
+        // `execute_command` is the first on-shelf tool (see inserts/execute_command.md).
+        let mut tool_registry = ToolRegistry::new();
+        tool_registry.register(ExecuteCommandTool::new());
+
         let neuron_manager = Arc::new(NeuronManager::new(
             Arc::clone(&neuron_store),
             Arc::new(DefaultNeuronModelCaller::new(providers.clone())),
             NeuronConfigReader::new(store.root().to_path_buf()),
+            tool_registry.clone(),
         ));
-
-        // External tools intentionally unregistered until self-describing inserts exist.
-        // `ToolRegistry::register` still requires `inserts/<name>.md`.
-        let tool_registry = ToolRegistry::new();
         let engine = Engine::with_tools(
             store.clone(),
             providers.clone(),
@@ -590,12 +594,12 @@ mod tests {
     }
 
     #[test]
-    fn list_skills_returns_empty_without_registered_tools() {
-        let gateway = test_gateway("list_skills_returns_empty_without_registered_tools");
+    fn list_skills_includes_execute_command_tool() {
+        let gateway = test_gateway("list_skills_includes_execute_command_tool");
         let skills = gateway.list_skills();
         assert!(
-            skills.is_empty(),
-            "expected empty tool registry, got: {:?}",
+            skills.iter().any(|s| s.name == "execute_command"),
+            "expected execute_command in tool registry, got: {:?}",
             skills
         );
     }

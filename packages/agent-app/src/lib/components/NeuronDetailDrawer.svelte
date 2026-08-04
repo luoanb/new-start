@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import type { Connection, Neuron } from "$lib/types";
   import { t } from "$lib/i18n";
@@ -18,12 +19,25 @@
   let edgeDelta = 1;
   let desc = "";
   let content = "";
+  let toolIds: string[] = [];
+  let availableTools: { name: string; description: string }[] = [];
 
   // 打开抽屉时重置编辑态
   $: if (neuron && !editing) {
     desc = neuron.desc;
     content = neuron.content;
+    toolIds = neuron.tool_ids ? [...neuron.tool_ids] : [];
   }
+
+  onMount(() => {
+    invoke("list_skills")
+      .then((skills) => {
+        availableTools = skills as { name: string; description: string }[];
+      })
+      .catch(() => {
+        availableTools = [];
+      });
+  });
 
   async function handleSave() {
     if (!neuron) return;
@@ -33,9 +47,11 @@
         id: neuron.id,
         desc,
         content,
+        tool_ids: toolIds,
       });
-      neuron = { ...neuron, desc, content };
+      neuron = { ...neuron, desc, content, tool_ids: toolIds };
       editing = false;
+      onChanged();
     } catch (e) {
       console.error(String(e));
     } finally {
@@ -47,7 +63,14 @@
     if (!neuron) return;
     desc = neuron.desc;
     content = neuron.content;
+    toolIds = neuron.tool_ids ? [...neuron.tool_ids] : [];
     editing = false;
+  }
+
+  function toggleTool(name: string) {
+    toolIds = toolIds.includes(name)
+      ? toolIds.filter((x) => x !== name)
+      : [...toolIds, name];
   }
 
   async function adjustNeuron(delta: number) {
@@ -146,12 +169,34 @@
         {/if}
       </div>
 
-      {#if neuron.tool_ids && neuron.tool_ids.length}
-        <div class="field">
-          <label>{t("neuronPanel.toolIds")}</label>
-          <span class="value mono">{neuron.tool_ids.join(", ")}</span>
-        </div>
-      {/if}
+      <div class="field">
+        <label>{t("neuronPanel.toolIds")}</label>
+        {#if editing}
+          {#if availableTools.length === 0}
+            <span class="value muted">{t("neuronPanel.noToolsAvailable")}</span>
+          {:else}
+            <div class="tool-checks">
+              {#each availableTools as tool (tool.name)}
+                <label class="tool-check">
+                  <input
+                    type="checkbox"
+                    checked={toolIds.includes(tool.name)}
+                    on:change={() => toggleTool(tool.name)}
+                  />
+                  <span class="tool-name">{tool.name}</span>
+                  <span class="tool-desc">{tool.description}</span>
+                </label>
+              {/each}
+            </div>
+          {/if}
+        {:else}
+          {#if neuron.tool_ids && neuron.tool_ids.length}
+            <span class="value mono">{neuron.tool_ids.join(", ")}</span>
+          {:else}
+            <span class="value muted">—</span>
+          {/if}
+        {/if}
+      </div>
 
       <div class="field">
         <label>{t("neuronPanel.createdAt")}</label>
@@ -308,6 +353,41 @@
   }
   .value.muted {
     color: var(--color-text-muted);
+  }
+  .tool-checks {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 160px;
+    overflow-y: auto;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 8px;
+    background: var(--color-bg);
+  }
+  .tool-check {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+  .tool-check input {
+    margin-top: 2px;
+    accent-color: var(--color-primary);
+  }
+  .tool-name {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--color-text);
+    white-space: nowrap;
+  }
+  .tool-desc {
+    color: var(--color-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   textarea {

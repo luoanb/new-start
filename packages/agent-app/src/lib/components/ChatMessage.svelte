@@ -2,6 +2,7 @@
   import type { Message } from "$lib/types";
   import MarkdownRenderer from "./MarkdownRenderer.svelte";
   import ToolCallBlock from "./ToolCallBlock.svelte";
+  import ToolResultBlock from "./ToolResultBlock.svelte";
   import { t } from "$lib/i18n";
 
   let { message }: { message: Message } = $props();
@@ -9,6 +10,7 @@
   const isUser = $derived(message.role === "user");
   const isAssistant = $derived(message.role === "assistant");
   const isSystem = $derived(message.role === "system");
+  const isToolResult = $derived(message.msg_type === "tool_result");
   const hasToolCalls = $derived(
     message.tool_calls && message.tool_calls.length > 0
   );
@@ -43,7 +45,9 @@
       {/if}
     </div>
 
-    {#if isSystem}
+    {#if isToolResult}
+      <ToolResultBlock {message} />
+    {:else if isSystem}
       <p class="content">{message.content}</p>
     {:else}
       <div class="content markdown-content">

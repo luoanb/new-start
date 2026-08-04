@@ -130,6 +130,7 @@ export type CreateNeuronPlainInput = {
   desc: string;
   content?: string;
   link_to?: string | null;
+  tool_ids?: string[];
 };
 
 export type PollerRunState = "running" | "paused";

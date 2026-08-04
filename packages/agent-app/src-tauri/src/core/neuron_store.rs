@@ -284,9 +284,16 @@ impl NeuronStore {
             set_parts.push("content = ?".to_string());
             param_values.push(Box::new(c.clone()));
         }
+        if let Some(ref t) = update.tool_ids {
+            let encoded = serde_json::to_string(t).map_err(|e| {
+                AppError::InvalidInput(format!("Failed to encode tool_ids: {}", e))
+            })?;
+            set_parts.push("tool_ids = ?".to_string());
+            param_values.push(Box::new(encoded));
+        }
         if set_parts.is_empty() {
             return Err(AppError::InvalidInput(
-                "update_neuron requires desc or content".into(),
+                "update_neuron requires at least one field".into(),
             ));
         }
 

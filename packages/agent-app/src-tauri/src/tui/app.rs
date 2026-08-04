@@ -1316,10 +1316,12 @@ impl TuiApp {
                         "desc" => NeuronUpdate {
                             desc: Some(value),
                             content: None,
+                            ..Default::default()
                         },
                         "content" => NeuronUpdate {
                             desc: None,
                             content: Some(value),
+                            ..Default::default()
                         },
                         _ => {
                             self.error_banner = Some(TuiErrorView::from(AppError::InvalidInput(

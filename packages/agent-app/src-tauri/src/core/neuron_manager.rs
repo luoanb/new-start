@@ -44,6 +44,7 @@ pub struct NeuronManager {
     model_caller: Arc<dyn NeuronModelCaller>,
     config: NeuronConfigReader,
     creator_id: Mutex<Option<String>>,
+    tool_registry: ToolRegistry,
 }
 
 impl std::fmt::Debug for NeuronManager {
@@ -57,13 +58,32 @@ impl NeuronManager {
         store: Arc<Mutex<NeuronStore>>,
         model_caller: Arc<dyn NeuronModelCaller>,
         config: NeuronConfigReader,
+        tool_registry: ToolRegistry,
     ) -> Self {
         Self {
             store,
             model_caller,
             config,
             creator_id: Mutex::new(None),
+            tool_registry,
         }
+    }
+
+    /// Build an "available tools" block for creator prompts so `tool_ids` can only
+    /// be picked from tools that actually exist in the registry (no invented names).
+    fn available_tools_block(&self) -> String {
+        let defs = self.tool_registry.list_definitions();
+        if defs.is_empty() {
+            return "No tools are registered; `tool_ids` must be [].".to_string();
+        }
+        let mut lines = vec![
+            "Available tools for `tool_ids` (pick only from this list; do not invent names):"
+                .to_string(),
+        ];
+        for d in defs {
+            lines.push(format!("- {}: {}", d.name, d.description));
+        }
+        lines.join("\n")
     }
 
     /// Previously registered AI tools; kept as no-op until tools are reintroduced with inserts.
@@ -554,6 +574,7 @@ impl NeuronManager {
         }
 
         let creator = self.ensure_creator()?;
+        let tools_note = self.available_tools_block();
         let user_prompt = format!(
             "Write a system prompt neuron with system_type={system_type}.\n\
              Requirements:\n\
@@ -561,7 +582,8 @@ impl NeuronManager {
              - Prefer 200–800 Chinese characters (or equivalent); no slogans or placeholders.\n\
              - One responsibility aligned with system_type={system_type}.\n\
              - Do not assign importance scores; system forces initial weight to 0.\n\
-             - `tool_ids`: only truly needed tools; else []. Do not invent tool names.\n\
+             - `tool_ids`: only truly needed tools; else [].\n\
+             - {tools_note}\n\
              - Return ONLY JSON with desc, content, and tool_ids (weight optional/ignored)."
         );
         tracing::info!(
@@ -831,6 +853,7 @@ impl NeuronManager {
             NeuronUpdate {
                 desc: None,
                 content: Some(version.content.clone()),
+                ..Default::default()
             },
         )?;
         store.insert_neuron_version(
@@ -896,6 +919,7 @@ impl NeuronManager {
             NeuronUpdate {
                 desc: Some(desc),
                 content: Some(content.to_string()),
+                ..Default::default()
             },
         )?;
         store.set_variant_state(&variant.neuron.id, Some("observing"))?;
@@ -1159,6 +1183,7 @@ impl NeuronManager {
             Some(id) => format!(" These neurons will be direct downstream of {id}."),
             None => String::new(),
         };
+        let tools_note = self.available_tools_block();
         Ok(match input {
             CreateNeuronInput::Purpose(purpose) => format!(
                 "Create {count_word} single-responsibility neuron(s) for the purpose below.{link_note}\n\
@@ -1167,7 +1192,8 @@ impl NeuronManager {
                  - `content` must be an executable prompt/knowledge block (role, when to use / not use, steps, output format, hard constraints).\n\
                  - Prefer 200–800 Chinese characters (or equivalent) in `content`; no slogans or placeholders.\n\
                  - Do not assign importance scores; system forces initial weight to 0.\n\
-                 - `tool_ids`: only truly needed tools; else []. Do not invent tool names.\n\
+                 - `tool_ids`: only truly needed tools; else [].\n\
+                 - {tools_note}\n\
                  - {list_contract}\n\
                  Purpose: {purpose}"
             ),
@@ -1179,7 +1205,8 @@ impl NeuronManager {
                  - `content` must be an executable prompt/knowledge block (role, when to use / not use, steps, output format, hard constraints).\n\
                  - Prefer 200–800 Chinese characters (or equivalent) in `content`; no slogans or placeholders.\n\
                  - Do not assign importance scores; system forces initial weight to 0.\n\
-                 - `tool_ids`: only truly needed tools; else []. Do not invent tool names.\n\
+                 - `tool_ids`: only truly needed tools; else [].\n\
+                 - {tools_note}\n\
                  - {list_contract}\n\
                  Context: {}",
                 serde_json::to_string(messages).unwrap_or_default()
@@ -1499,6 +1526,15 @@ impl Tool for UpdateNeuronTool {
                 .get("content")
                 .and_then(Value::as_str)
                 .map(str::to_string),
+            tool_ids: args
+                .get("tool_ids")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                }),
         };
         let neuron = self.manager.update_content_for_ai(id, update)?;
         serde_json::to_string(&neuron).map_err(|e| AppError::StorageError(e.to_string()))
@@ -1740,6 +1776,7 @@ mod tests {
                 calls: AtomicUsize::new(0),
             }),
             NeuronConfigReader::new(root.clone()),
+            ToolRegistry::new(),
         ));
         (manager, root)
     }
@@ -1971,6 +2008,7 @@ mod tests {
             NeuronUpdate {
                 desc: Some("changed".into()),
                 content: None,
+                ..Default::default()
             },
         );
         assert!(result.is_err());
@@ -2303,6 +2341,7 @@ mod tests {
                     NeuronUpdate {
                         desc: None,
                         content: Some("current-v2".into()),
+                        ..Default::default()
                     },
                 )
                 .unwrap();
@@ -2382,6 +2421,7 @@ mod tests {
                 NeuronUpdate {
                     desc: None,
                     content: Some("edited".into()),
+                    ..Default::default()
                 },
             )
             .unwrap();

@@ -140,7 +140,7 @@
 
       subgraph = buildSubgraph();
     } catch (e) {
-      errorMsg = `Failed to load neurons: ${errorMessage(e)}`;
+      console.error(`Failed to load neurons: ${errorMessage(e)}`);
     } finally {
       loading = false;
     }
@@ -198,6 +198,19 @@
   let createSource = $state<string>("");
   let creating = $state(false);
   let createError = $state<string | null>(null);
+  let createToolIds = $state<string[]>([]);
+  let availableTools = $state<{ name: string; description: string }[]>([]);
+
+  async function loadAvailableTools() {
+    try {
+      availableTools = (await invoke("list_skills")) as {
+        name: string;
+        description: string;
+      }[];
+    } catch {
+      availableTools = [];
+    }
+  }
 
   // 顶栏：直接进入孤立模式
   function openCreateOrphan() {
@@ -205,6 +218,7 @@
     createSource = "";
     createDesc = "";
     createContent = "";
+    createToolIds = [];
     createError = null;
     showCreate = true;
   }
@@ -215,8 +229,15 @@
     createSource = sourceId;
     createDesc = "";
     createContent = "";
+    createToolIds = [];
     createError = null;
     showCreate = true;
+  }
+
+  function toggleCreateTool(name: string) {
+    createToolIds = createToolIds.includes(name)
+      ? createToolIds.filter((x) => x !== name)
+      : [...createToolIds, name];
   }
 
   async function submitCreate() {
@@ -236,11 +257,13 @@
         desc,
         content: createContent,
         link_to: createMode === "downstream" ? createSource : null,
+        tool_ids: createToolIds,
       })) as Neuron;
       showCreate = false;
       createDesc = "";
       createContent = "";
       createSource = "";
+      createToolIds = [];
       createMode = "orphan";
       await load();
       selectNeuron(created.id);
@@ -257,11 +280,13 @@
     createDesc = "";
     createContent = "";
     createSource = "";
+    createToolIds = [];
     createMode = "orphan";
   }
 
   onMount(() => {
     load();
+    loadAvailableTools();
   });
 </script>
 
@@ -381,6 +406,27 @@
             placeholder={t("neuronPanel.createContentPlaceholder")}
             bind:value={createContent}
           ></textarea>
+        </div>
+
+        <div class="modal-row">
+          <label class="modal-label">{t("neuronPanel.createToolIdsLabel")}</label>
+          {#if availableTools.length === 0}
+            <span class="modal-hint">{t("neuronPanel.noToolsAvailable")}</span>
+          {:else}
+            <div class="tool-checks">
+              {#each availableTools as tool (tool.name)}
+                <label class="tool-check">
+                  <input
+                    type="checkbox"
+                    checked={createToolIds.includes(tool.name)}
+                    on:change={() => toggleCreateTool(tool.name)}
+                  />
+                  <span class="tool-name">{tool.name}</span>
+                  <span class="tool-desc">{tool.description}</span>
+                </label>
+              {/each}
+            </div>
+          {/if}
         </div>
 
         {#if createError}
@@ -583,6 +629,44 @@
   .modal-input:focus {
     outline: none;
     border-color: var(--color-primary);
+  }
+  .modal-hint {
+    font-size: 12px;
+    color: var(--color-text-muted);
+  }
+  .tool-checks {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 140px;
+    overflow-y: auto;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    padding: 8px;
+    background: var(--color-bg);
+  }
+  .tool-check {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    cursor: pointer;
+    font-size: 12.5px;
+    line-height: 1.4;
+  }
+  .tool-check input {
+    margin-top: 2px;
+    accent-color: var(--color-primary);
+  }
+  .tool-name {
+    font-family: var(--font-mono, monospace);
+    color: var(--color-text);
+    white-space: nowrap;
+  }
+  .tool-desc {
+    color: var(--color-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .modal-error {
     color: var(--color-error);

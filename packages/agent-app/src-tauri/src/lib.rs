@@ -334,9 +334,17 @@ async fn update_neuron(
     id: String,
     desc: Option<String>,
     content: Option<String>,
+    tool_ids: Option<Vec<String>>,
 ) -> TauriResult<Neuron> {
     mgr.inner()
-        .update_content_for_admin(&id, NeuronUpdate { desc, content })
+        .update_content_for_admin(
+            &id,
+            NeuronUpdate {
+                desc,
+                content,
+                tool_ids,
+            },
+        )
         .map_err(|error| error.payload())
 }
 
@@ -367,13 +375,14 @@ async fn create_neuron_plain(
     desc: String,
     content: Option<String>,
     link_to: Option<String>,
+    tool_ids: Vec<String>,
 ) -> TauriResult<Neuron> {
     let create = NeuronCreate {
         desc,
         content: content.unwrap_or_default(),
         weight: 0.0,
         system_type: None,
-        tool_ids: vec![],
+        tool_ids,
         lineage_parent_id: None,
         variant_state: None,
     };

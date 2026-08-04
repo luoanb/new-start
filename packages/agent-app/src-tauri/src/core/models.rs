@@ -341,6 +341,7 @@ pub struct NeuronSubgraph {
 pub struct NeuronUpdate {
     pub desc: Option<String>,
     pub content: Option<String>,
+    pub tool_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
