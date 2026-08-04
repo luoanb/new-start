@@ -22,18 +22,20 @@ import type {
   RuntimeStatus,
   Topic,
   PollerStatus,
+  RunningSession,
 } from "$lib/types";
 import { formatInvokeError } from "$lib/utils/formatInvokeError";
 
 /** 与后端 core/events.rs STATE_CHANGED_EVENT 保持一致 */
 export const STATE_CHANGED_EVENT = "app://state-changed";
 
-export type StateEventKind = "topics" | "conversations" | "poller";
+export type StateEventKind = "topics" | "conversations" | "poller" | "sessions";
 
 export type StateChangePayload =
   | { kind: "topics" }
   | { kind: "conversations" }
-  | { kind: "poller"; status: PollerStatus };
+  | { kind: "poller"; status: PollerStatus }
+  | { kind: "sessions" };
 
 const state = $state({
   ready: false,
@@ -47,6 +49,7 @@ const state = $state({
   runtimeStatus: null as RuntimeStatus | null,
   topics: [] as Topic[],
   poller: null as PollerStatus | null,
+  runningSessions: [] as RunningSession[],
 });
 
 let unlisten: UnlistenFn | null = null;
@@ -77,6 +80,10 @@ async function refreshPoller(): Promise<void> {
   state.poller = await invoke<PollerStatus>("poll_status");
 }
 
+async function refreshRunningSessions(): Promise<void> {
+  state.runningSessions = await invoke<RunningSession[]>("list_running_sessions");
+}
+
 // ── 事件订阅 ──
 
 async function handleStateChanged(payload: StateChangePayload): Promise<void> {
@@ -87,6 +94,8 @@ async function handleStateChanged(payload: StateChangePayload): Promise<void> {
       await refreshConversations();
     } else if (payload.kind === "poller") {
       state.poller = payload.status;
+    } else if (payload.kind === "sessions") {
+      await refreshRunningSessions();
     }
   } catch (e) {
     state.error = `State refresh failed: ${formatInvokeError(e)}`;
@@ -110,16 +119,25 @@ function unsubscribe(): void {
 
 async function bootstrap(): Promise<void> {
   try {
-    const [providersRes, modelsRes, skillsRes, convsRes, statusRes, topicsRes, pollerRes] =
-      await Promise.all([
-        invoke<ProviderInfo[]>("list_providers"),
-        invoke<ModelInfo[]>("list_models"),
-        invoke<SkillInfo[]>("list_skills"),
-        invoke<Conversation[]>("list_conversations"),
-        invoke<RuntimeStatus>("status"),
-        invoke<Topic[]>("list_topics"),
-        invoke<PollerStatus>("poll_status"),
-      ]);
+    const [
+      providersRes,
+      modelsRes,
+      skillsRes,
+      convsRes,
+      statusRes,
+      topicsRes,
+      pollerRes,
+      runningSessionsRes,
+    ] = await Promise.all([
+      invoke<ProviderInfo[]>("list_providers"),
+      invoke<ModelInfo[]>("list_models"),
+      invoke<SkillInfo[]>("list_skills"),
+      invoke<Conversation[]>("list_conversations"),
+      invoke<RuntimeStatus>("status"),
+      invoke<Topic[]>("list_topics"),
+      invoke<PollerStatus>("poll_status"),
+      invoke<RunningSession[]>("list_running_sessions"),
+    ]);
 
     state.providers = providersRes;
     state.models = modelsRes;
@@ -128,6 +146,7 @@ async function bootstrap(): Promise<void> {
     state.runtimeStatus = statusRes;
     state.topics = topicsRes;
     state.poller = pollerRes;
+    state.runningSessions = runningSessionsRes;
     state.error = "";
 
     // 默认选中第一个会话（若存在），并加载其消息。
@@ -272,6 +291,7 @@ export const dataStore = {
   refreshTopics,
   refreshConversations,
   refreshPoller,
+  refreshRunningSessions,
   // actions
   selectConversation,
   createConversation,

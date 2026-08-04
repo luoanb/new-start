@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use serde::Serialize;
 
 use super::{
     error::{AppError, AppResult},
@@ -9,7 +10,7 @@ use super::{
 };
 
 /// Information about a currently running session.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RunningSession {
     pub session_id: String,
     pub started_at: u128,
@@ -28,6 +29,7 @@ struct SessionCtx {
 #[derive(Clone)]
 pub struct SessionTracker {
     inner: Arc<Mutex<HashMap<String, SessionCtx>>>,
+    on_change: Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
 }
 
 impl std::fmt::Debug for SessionTracker {
@@ -40,6 +42,23 @@ impl SessionTracker {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
+            on_change: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Set a callback invoked whenever the set of running sessions changes
+    /// (register / unregister / update_step / close).
+    pub fn set_on_change(&self, callback: Arc<dyn Fn() + Send + Sync>) {
+        if let Ok(mut slot) = self.on_change.lock() {
+            *slot = Some(callback);
+        }
+    }
+
+    fn notify(&self) {
+        if let Ok(slot) = self.on_change.lock() {
+            if let Some(cb) = slot.as_ref() {
+                cb();
+            }
         }
     }
 
@@ -52,40 +71,54 @@ impl SessionTracker {
         session_id: &str,
         abort: Option<Box<dyn FnOnce() + Send>>,
     ) -> AppResult<()> {
-        let mut map = self
-            .inner
-            .lock()
-            .map_err(|e| AppError::StorageError(format!("Lock error: {}", e)))?;
-        map.insert(
-            session_id.to_string(),
-            SessionCtx {
-                info: RunningSession {
-                    session_id: session_id.to_string(),
-                    started_at: now_ms(),
-                    current_step: None,
+        {
+            let mut map = self
+                .inner
+                .lock()
+                .map_err(|e| AppError::StorageError(format!("Lock error: {}", e)))?;
+            map.insert(
+                session_id.to_string(),
+                SessionCtx {
+                    info: RunningSession {
+                        session_id: session_id.to_string(),
+                        started_at: now_ms(),
+                        current_step: None,
+                    },
+                    abort,
                 },
-                abort,
-            },
-        );
+            );
+        }
+        self.notify();
         Ok(())
     }
 
     /// Remove a session from the tracker (normal completion).
     /// Does NOT invoke the abort callback.
     pub fn unregister(&self, session_id: &str) {
-        if let Ok(mut map) = self.inner.lock() {
-            let _ = map.remove(session_id);
+        {
+            if let Ok(mut map) = self.inner.lock() {
+                let _ = map.remove(session_id);
+            }
         }
+        self.notify();
     }
 
     /// Update the current execution step for an agent session.
     pub fn update_step(&self, session_id: &str, step: &str) -> AppResult<()> {
-        let mut map = self
-            .inner
-            .lock()
-            .map_err(|e| AppError::StorageError(format!("Lock error: {}", e)))?;
-        if let Some(ctx) = map.get_mut(session_id) {
-            ctx.info.current_step = Some(step.to_string());
+        let changed = {
+            let mut map = self
+                .inner
+                .lock()
+                .map_err(|e| AppError::StorageError(format!("Lock error: {}", e)))?;
+            if let Some(ctx) = map.get_mut(session_id) {
+                ctx.info.current_step = Some(step.to_string());
+                true
+            } else {
+                false
+            }
+        };
+        if changed {
+            self.notify();
             Ok(())
         } else {
             Err(AppError::ConversationNotFound(format!(
@@ -96,17 +129,19 @@ impl SessionTracker {
 
     /// Force-close a running session: invokes the abort callback and removes it.
     pub fn close(&self, session_id: &str) -> AppResult<String> {
-        let mut map = self
-            .inner
-            .lock()
-            .map_err(|e| AppError::StorageError(format!("Lock error: {}", e)))?;
-        if let Some(ctx) = map.remove(session_id) {
-            let abort = ctx.abort;
+        let abort = {
+            let mut map = self
+                .inner
+                .lock()
+                .map_err(|e| AppError::StorageError(format!("Lock error: {}", e)))?;
+            map.remove(session_id).map(|ctx| ctx.abort)
+        };
+        if let Some(abort) = abort {
             // Release lock before calling the callback
-            drop(map);
             if let Some(f) = abort {
                 f();
             }
+            self.notify();
             Ok(format!("Closed session: {session_id}"))
         } else {
             Err(AppError::ConversationNotFound(format!(

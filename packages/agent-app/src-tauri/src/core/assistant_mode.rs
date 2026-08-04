@@ -97,6 +97,7 @@ pub struct AssistantMode {
     neuron_store: Arc<Mutex<NeuronStore>>,
     tool_registry: ToolRegistry,
     step_tx: UnboundedSender<AssistantStepRequest>,
+    session_tracker: super::session_tracker::SessionTracker,
 }
 
 impl fmt::Debug for AssistantMode {
@@ -114,6 +115,7 @@ impl AssistantMode {
         neuron_store: Arc<Mutex<NeuronStore>>,
         tool_registry: ToolRegistry,
         step_tx: UnboundedSender<AssistantStepRequest>,
+        session_tracker: super::session_tracker::SessionTracker,
     ) -> Self {
         Self {
             store,
@@ -123,6 +125,7 @@ impl AssistantMode {
             neuron_store,
             tool_registry,
             step_tx,
+            session_tracker,
         }
     }
 
@@ -376,9 +379,18 @@ impl AssistantMode {
                     if matches!(topic.status, TopicStatus::Paused | TopicStatus::Cancelled) {
                         continue;
                     }
+                    if let Err(error) = self.session_tracker.register(&session_id, None) {
+                        eprintln!(
+                            "assistant poll register failed for {}: {error}",
+                            topic.id
+                        );
+                        continue;
+                    }
+                    let _ = self.session_tracker.update_step(&session_id, "polling");
                     if let Err(error) = self.step_poller(&session_id, model).await {
                         eprintln!("assistant poll step failed for {}: {error}", topic.id);
                     }
+                    self.session_tracker.unregister(&session_id);
                 }
             }
         }
@@ -392,11 +404,13 @@ impl AssistantMode {
         let conversation = self.store.require_conversation(session_id)?;
         let topic = self.topics()?.find_by_session_id(session_id)?;
         let state = topic.as_ref().map(read_assistant_state).unwrap_or_default();
-        let messages = conversation
-            .messages
-            .iter()
-            .filter_map(message_to_model)
-            .collect();
+        let messages = ModelCallInput::sanitize_tool_pairs(
+            &conversation
+                .messages
+                .iter()
+                .filter_map(message_to_model)
+                .collect::<Vec<_>>(),
+        );
         Ok(AssistantRoundContext {
             session_id: session_id.to_string(),
             topic_id: topic.map(|t| t.id),
@@ -1309,17 +1323,38 @@ pub fn extract_json_object(text: &str) -> AppResult<serde_json::Value> {
 }
 
 fn message_to_model(message: &Message) -> Option<ModelMessage> {
-    let role = match message.role {
-        MessageRole::User => ModelMessageRole::User,
-        MessageRole::Assistant => ModelMessageRole::Assistant,
-        MessageRole::System => ModelMessageRole::System,
-        MessageRole::Compaction => return None,
+    // Compaction 摘要按 System 角色携带（与 engine 对齐），避免长会话压缩后丢失上下文。
+    if message.role == MessageRole::Compaction {
+        return Some(ModelMessage {
+            role: ModelMessageRole::System,
+            content: format!("[Previous conversation summary]: {}", message.content),
+            tool_calls: None,
+            tool_call_id: None,
+        });
+    }
+    let (role, tool_calls, tool_call_id) = match message.role {
+        MessageRole::User => (ModelMessageRole::User, None, None),
+        // 工具结果消息（带 tool_call_id）必须按 tool 角色发送，否则 OpenAI 兼容
+        // 接口（如 DeepSeek）会以「tool_calls 后缺少 tool 消息」拒绝请求。
+        MessageRole::Assistant => {
+            if message.tool_call_id.is_some() {
+                (ModelMessageRole::Tool, None, message.tool_call_id.clone())
+            } else {
+                (
+                    ModelMessageRole::Assistant,
+                    message.tool_calls.clone(),
+                    None,
+                )
+            }
+        }
+        MessageRole::System => (ModelMessageRole::System, None, None),
+        MessageRole::Compaction => unreachable!("handled above"),
     };
     Some(ModelMessage {
         role,
         content: message.content.clone(),
-        tool_calls: message.tool_calls.clone(),
-        tool_call_id: message.tool_call_id.clone(),
+        tool_calls,
+        tool_call_id,
     })
 }
 

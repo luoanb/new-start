@@ -8,7 +8,7 @@ use crate::core::{
     neuron_manager::NeuronManager,
     poller::Poller,
     providers::ProviderRegistry,
-    session_tracker::SessionTracker,
+    session_tracker::{RunningSession, SessionTracker},
     topic_store::TopicStore,
     ChatOptions, ChatResponse, Connection, Conversation, ConversationMode, Gateway, Message,
     ModelCallRequest, ModelCallResponse, ModelInfo, Neuron, NeuronCreate, NeuronSubgraph,
@@ -95,8 +95,18 @@ async fn close_session(
         .inner()
         .close(&session_id)
         .map_err(|error| error.payload())?;
-    state_emit.inner()(StateChange::Conversations);
+    state_emit.inner()(StateChange::Sessions);
     Ok(session_id)
+}
+
+#[tauri::command]
+async fn list_running_sessions(
+    sessions: State<'_, SessionTracker>,
+) -> TauriResult<Vec<RunningSession>> {
+    sessions
+        .inner()
+        .list()
+        .map_err(|error| error.payload())
 }
 
 // ── Info ──
@@ -602,6 +612,7 @@ pub fn run() {
             send_chat_message,
             create_conversation,
             close_session,
+            list_running_sessions,
             list_skills,
             list_providers,
             list_models,

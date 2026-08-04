@@ -19,6 +19,9 @@
   } = $props();
 
   let conversations = $derived(dataStore.state.conversations);
+  let runningSessionIds = $derived(
+    new Set(dataStore.state.runningSessions.map((s) => s.session_id)),
+  );
 
   const modeLabel: Record<string, string> = {
     chat: "Chat",
@@ -77,7 +80,12 @@
           >
             <div class="session-indicator" class:active={conv.id === activeId}></div>
             <div class="session-info">
-              <span class="session-id" title={conv.id}>{shortId(conv.id)}</span>
+              <span class="session-id" title={conv.id}>
+                {shortId(conv.id)}
+                {#if runningSessionIds.has(conv.id)}
+                  <span class="running-badge" title="Running">●</span>
+                {/if}
+              </span>
               <span class="session-meta">
                 <span class="mode-badge {conv.mode}">{modeLabel[conv.mode] ?? conv.mode}</span>
                 <span class="session-count">{conv.messages.length} {t("sessionList.msgs")}</span>
@@ -133,7 +141,9 @@
   .session-indicator { flex-shrink: 0; width: 3px; align-self: stretch; border-radius: 2px; background: transparent; }
   .session-indicator.active { background: var(--color-primary); }
   .session-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-  .session-id { font-size: var(--fs-sm); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session-id { display: flex; align-items: center; gap: var(--space-1); font-size: var(--fs-sm); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .running-badge { flex-shrink: 0; font-size: 9px; color: var(--color-success); animation: running-pulse 1.6s var(--ease-out) infinite; }
+  @keyframes running-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
   .session-meta { display: flex; align-items: center; gap: var(--space-2); font-size: var(--fs-xs); color: var(--color-text-muted); }
   .mode-badge { font-size: 10px; font-weight: 600; text-transform: uppercase; padding: 1px 5px; border-radius: var(--radius-sm); letter-spacing: 0.03em; }
   .mode-badge.chat { background: color-mix(in srgb, var(--color-primary) 15%, transparent); color: var(--color-primary); }

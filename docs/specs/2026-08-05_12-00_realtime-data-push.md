@@ -25,7 +25,7 @@
 - 前端类型对齐（`StateEventKind` 等）
 
 **Out**:
-- 运行中会话列表（`SessionTracker` 仍无 Tauri 命令暴露，`GetRunningSessionsTool` 为 dead code）——本 spec 不新增 `list_sessions`，会话指"对话列表 conversations"
+- ~~运行中会话列表（`SessionTracker` 仍无 Tauri 命令暴露，`GetRunningSessionsTool` 为 dead code）——本 spec 不新增 `list_sessions`，会话指"对话列表 conversations"~~ → 已由 `2026-08-05_18-00_gui-running-sessions.md` 承接，本 spec 范围不变（会话指"对话列表 conversations"）
 - 事件节流/批处理（tick 高频时不做合并，按实际频度 emit）
 - Neuron 面板的自动刷新（`neuron-manager-api` 另起 spec，不在此范围）
 

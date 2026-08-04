@@ -85,6 +85,12 @@ impl Gateway {
             .init_table()?;
 
         let session_tracker = SessionTracker::new();
+        if let Some(emit) = state_emit.as_ref() {
+            let emit = Arc::clone(emit);
+            session_tracker.set_on_change(Arc::new(move || {
+                emit(StateChange::Sessions);
+            }));
+        }
 
         // Production tools are registered only when they have self-describing inserts.
         // `execute_command` is the first on-shelf tool (see inserts/execute_command.md).
@@ -113,6 +119,7 @@ impl Gateway {
             Arc::clone(&neuron_store),
             tool_registry.clone(),
             step_tx,
+            session_tracker.clone(),
         ));
 
         let poller_settings = PollerConfigReader::new(store.root().to_path_buf()).load()?;
@@ -562,6 +569,10 @@ fn spawn_poller_runtime(
         base_interval_ms,
         "poller runtime loop starting via tauri async runtime"
     );
+    // 串行化 assistant step 处理：同一时刻只允许一个 PollAll 在跑，
+    // 避免阻塞 tick 循环（select 分支内的 await 会拖住 interval），
+    // 也避免并发推进同一批课题。
+    let step_guard = Arc::new(tokio::sync::Mutex::new(()));
     tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(base_interval_ms));
         loop {
@@ -582,12 +593,22 @@ fn spawn_poller_runtime(
                         Ok(Some(model)) => model,
                         _ => continue,
                     };
-                    assistant.process_step_request(request, &model).await;
-                    // 后台推进会写入会话/课题，通知前端重新拉取。
-                    if let Some(emit) = state_emit.as_ref() {
-                        emit(StateChange::Conversations);
-                        emit(StateChange::Topics);
-                    }
+                    let assistant = assistant.clone();
+                    let emit = state_emit.clone();
+                    let step_guard = step_guard.clone();
+                    // 放到独立任务执行，tick 循环立即返回，绝不被模型调用拖住。
+                    tauri::async_runtime::spawn(async move {
+                        let Ok(_permit) = step_guard.try_lock() else {
+                            tracing::info!(phase = "poller_runtime", "step request skipped: another step is in flight");
+                            return;
+                        };
+                        assistant.process_step_request(request, &model).await;
+                        // 后台推进会写入会话/课题，通知前端重新拉取。
+                        if let Some(emit) = emit.as_ref() {
+                            emit(StateChange::Conversations);
+                            emit(StateChange::Topics);
+                        }
+                    });
                 }
             }
         }

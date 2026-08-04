@@ -23,6 +23,9 @@ pub enum StateChange {
     Conversations,
     /// 轮询状态变化，直接携带最新 PollerStatus。
     Poller { status: PollerStatus },
+    /// 运行中会话集合变化（register/unregister/update_step/close），
+    /// 前端应重新拉取 running sessions。
+    Sessions,
 }
 
 /// 状态事件发射器：由 `lib.rs` setup 构造（捕获 AppHandle），

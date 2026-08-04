@@ -6,6 +6,8 @@
 //!
 //! This type does not look up inserts or assemble a full `ModelCallRequest`.
 
+use std::collections::HashSet;
+
 use super::{
     error::{AppError, AppResult},
     models::{ModelMessage, ModelMessageRole},
@@ -122,6 +124,47 @@ impl ModelCallInput {
         )
     }
 
+    /// Normalize tool-call/tool-result pairing before sending to the model.
+    ///
+    /// OpenAI-compatible providers (DeepSeek etc.) reject a message list where an
+    /// assistant message declares `tool_calls` but no later `tool` message answers
+    /// each `tool_call_id` ("insufficient tool messages following tool_calls").
+    /// Such orphan pairs can appear in legacy/imported history. This pass
+    /// self-heals the list:
+    ///
+    /// - Declared calls answered by a `role=tool` message are kept untouched.
+    /// - An *unanswered* assistant tool_calls message keeps its text but drops the
+    ///   `tool_calls` field (degrades to a plain assistant message); if it has no
+    ///   text at all the message is dropped entirely.
+    pub fn sanitize_tool_pairs(history: &[ModelMessage]) -> Vec<ModelMessage> {
+        let answered: HashSet<&str> = history
+            .iter()
+            .filter(|m| m.role == ModelMessageRole::Tool)
+            .filter_map(|m| m.tool_call_id.as_deref())
+            .collect();
+        let mut out = Vec::with_capacity(history.len());
+        for message in history {
+            let orphan = message.role == ModelMessageRole::Assistant
+                && message
+                    .tool_calls
+                    .as_ref()
+                    .map(|calls| calls.iter().any(|c| !answered.contains(c.id.as_str())))
+                    .unwrap_or(false);
+            if orphan {
+                if message.content.trim().is_empty() {
+                    continue; // 纯 tool_calls、无文本 → 整条丢弃
+                }
+                out.push(ModelMessage {
+                    tool_calls: None,
+                    ..message.clone()
+                });
+            } else {
+                out.push(message.clone());
+            }
+        }
+        out
+    }
+
     fn message(role: ModelMessageRole, content: &str) -> ModelMessage {
         ModelMessage {
             role,
@@ -182,12 +225,39 @@ fn render_manual_template(content: &str, user_input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::models::ToolCall;
 
     fn msg(role: ModelMessageRole, content: &str) -> ModelMessage {
         ModelMessage {
             role,
             content: content.to_string(),
             tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    fn tool_msg(content: &str, tool_call_id: &str) -> ModelMessage {
+        ModelMessage {
+            role: ModelMessageRole::Tool,
+            content: content.to_string(),
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.to_string()),
+        }
+    }
+
+    fn tool_call_msg(content: &str, ids: &[&str]) -> ModelMessage {
+        ModelMessage {
+            role: ModelMessageRole::Assistant,
+            content: content.to_string(),
+            tool_calls: Some(
+                ids.iter()
+                    .map(|id| ToolCall {
+                        id: id.to_string(),
+                        name: "test_tool".to_string(),
+                        arguments: serde_json::json!({}),
+                    })
+                    .collect(),
+            ),
             tool_call_id: None,
         }
     }
@@ -285,6 +355,47 @@ mod tests {
         let err = ModelCallInput::insert_at(&history, 2, msg(ModelMessageRole::User, "x"))
             .unwrap_err();
         assert!(matches!(err, AppError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn sanitize_keeps_paired_tool_messages() {
+        let history = vec![
+            msg(ModelMessageRole::User, "u1"),
+            tool_call_msg("thinking", &["call_1"]),
+            tool_msg("result ok", "call_1"),
+            msg(ModelMessageRole::Assistant, "done"),
+        ];
+        let out = ModelCallInput::sanitize_tool_pairs(&history);
+        assert_eq!(out, history);
+    }
+
+    #[test]
+    fn sanitize_downgrades_orphan_with_text() {
+        let history = vec![tool_call_msg("I will check", &["call_orphan"])];
+        let out = ModelCallInput::sanitize_tool_pairs(&history);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].role, ModelMessageRole::Assistant);
+        assert!(out[0].tool_calls.is_none());
+        assert_eq!(out[0].content, "I will check");
+    }
+
+    #[test]
+    fn sanitize_drops_orphan_without_text() {
+        let history = vec![tool_call_msg("", &["call_orphan"])];
+        let out = ModelCallInput::sanitize_tool_pairs(&history);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn sanitize_downgrades_partially_answered_calls() {
+        let history = vec![
+            tool_call_msg("two calls", &["call_1", "call_2"]),
+            tool_msg("only one answered", "call_1"),
+        ];
+        let out = ModelCallInput::sanitize_tool_pairs(&history);
+        assert_eq!(out.len(), 2);
+        assert!(out[0].tool_calls.is_none());
+        assert_eq!(out[1], tool_msg("only one answered", "call_1"));
     }
 
     #[test]

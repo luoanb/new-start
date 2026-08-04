@@ -324,7 +324,7 @@ fn build_context(
         .flatten()
         .collect();
 
-    conversation
+    let messages = conversation
         .messages
         .iter()
         .filter(|m| {
@@ -344,7 +344,9 @@ fn build_context(
             }
         })
         .map(message_to_model_message)
-        .collect()
+        .collect::<Vec<_>>();
+    // 兜底：清理历史里可能存在的孤立 tool_calls（无对应 tool 响应），避免 400。
+    ModelCallInput::sanitize_tool_pairs(&messages)
 }
 
 /// Convert a stored Message to a ModelMessage for the LLM API call.

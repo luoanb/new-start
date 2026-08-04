@@ -152,3 +152,11 @@ export type LogEntry = {
   message: string;
   fields?: Record<string, string>;
 };
+
+// ── Running Sessions ──
+
+export type RunningSession = {
+  session_id: string;
+  started_at: number;
+  current_step: string | null;
+};
