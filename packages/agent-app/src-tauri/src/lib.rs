@@ -374,6 +374,25 @@ async fn poll_trigger(
     Ok(())
 }
 
+/// 设置轮询并发推进数量（clamp 到 1..=8），持久化并运行时生效。
+#[tauri::command]
+async fn poll_set_parallelism(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    n: u64,
+) -> TauriResult<u64> {
+    let clamped = gateway
+        .inner()
+        .set_poll_parallelism(n)
+        .map_err(|error| error.payload())?;
+    let status = gateway
+        .inner()
+        .poll_status()
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Poller { status });
+    Ok(clamped)
+}
+
 // ── Neuron ──
 
 #[tauri::command]
@@ -637,6 +656,7 @@ pub fn run() {
             poll_pause,
             poll_resume,
             poll_trigger,
+            poll_set_parallelism,
             // Neuron
             list_neurons,
             get_neuron,

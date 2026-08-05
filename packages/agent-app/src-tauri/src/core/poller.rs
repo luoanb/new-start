@@ -1,12 +1,33 @@
-use std::{fmt, fs, path::PathBuf};
+use std::{
+    fmt,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 use serde::{Deserialize, Serialize};
 
-use super::error::{AppError, AppResult};
+use super::{
+    config::ConfigStore,
+    error::AppResult,
+};
 
 /// Defaults when `config.json` omits `poller` fields.
 pub const DEFAULT_POLLER_BASE_INTERVAL_MS: u64 = 1000;
 pub const DEFAULT_ASSISTANT_POLL_TICKS: u64 = 30;
+pub const DEFAULT_ASSISTANT_POLL_PARALLELISM: u64 = 2;
+/// 单次 PollAll 内同时推进的课题数上限，避免并发过高打爆模型 API。
+pub const MAX_ASSISTANT_POLL_PARALLELISM: u64 = 8;
+
+/// 轮询并发推进数量的共享运行时值：Gateway 建好后再分发给
+/// Poller（状态展示）与 AssistantMode（实际执行），两边读写同一原子。
+pub type SharedPollParallelism = Arc<AtomicUsize>;
+
+pub fn new_shared_poll_parallelism(initial: usize) -> SharedPollParallelism {
+    Arc::new(AtomicUsize::new(initial.max(1)))
+}
 
 /// Startup settings loaded from `.agent-app/config.json` → `poller`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +36,8 @@ pub struct PollerSettings {
     pub enabled: bool,
     pub base_interval_ms: u64,
     pub assistant_interval_ticks: u64,
+    /// 单次 PollAll 内同时推进的课题数上限。
+    pub assistant_poll_parallelism: u64,
 }
 
 impl Default for PollerSettings {
@@ -23,44 +46,27 @@ impl Default for PollerSettings {
             enabled: false,
             base_interval_ms: DEFAULT_POLLER_BASE_INTERVAL_MS,
             assistant_interval_ticks: DEFAULT_ASSISTANT_POLL_TICKS,
+            assistant_poll_parallelism: DEFAULT_ASSISTANT_POLL_PARALLELISM,
         }
     }
 }
 
-#[derive(Debug, Deserialize, Default)]
-struct PollerConfigFile {
-    poller: Option<PollerConfigSection>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct PollerConfigSection {
-    enabled: Option<bool>,
-    base_interval_ms: Option<u64>,
-    assistant_interval_ticks: Option<u64>,
-}
-
-/// Reads poller settings from `{storage_root}/config.json`.
+/// Reads / writes poller settings from `{storage_root}/config.json`
+/// via the shared `ConfigStore` (read-modify-write, lossless).
 pub struct PollerConfigReader {
-    storage_root: PathBuf,
+    store: ConfigStore,
 }
 
 impl PollerConfigReader {
     pub fn new(storage_root: PathBuf) -> Self {
-        Self { storage_root }
+        Self {
+            store: ConfigStore::new(storage_root),
+        }
     }
 
     pub fn load(&self) -> AppResult<PollerSettings> {
-        let path = self.storage_root.join("config.json");
-        if !path.exists() {
-            return Ok(PollerSettings::default());
-        }
-        let content = fs::read_to_string(&path).map_err(|e| {
-            AppError::StorageError(format!("Failed to read {}: {e}", path.display()))
-        })?;
-        let file: PollerConfigFile = serde_json::from_str(&content).map_err(|e| {
-            AppError::StorageError(format!("Invalid config.json poller section: {e}"))
-        })?;
-        let section = file.poller.unwrap_or_default();
+        let config = self.store.read()?;
+        let section = config.poller.unwrap_or_default();
         Ok(PollerSettings {
             enabled: section.enabled.unwrap_or(false),
             base_interval_ms: section
@@ -71,6 +77,19 @@ impl PollerConfigReader {
                 .assistant_interval_ticks
                 .unwrap_or(DEFAULT_ASSISTANT_POLL_TICKS)
                 .max(1),
+            assistant_poll_parallelism: section
+                .assistant_poll_parallelism
+                .unwrap_or(DEFAULT_ASSISTANT_POLL_PARALLELISM)
+                .clamp(1, MAX_ASSISTANT_POLL_PARALLELISM),
+        })
+    }
+
+    /// 持久化并发数量（clamp 到 `[1, MAX_ASSISTANT_POLL_PARALLELISM]`）。
+    pub fn set_parallelism(&self, n: u64) -> AppResult<()> {
+        let clamped = n.clamp(1, MAX_ASSISTANT_POLL_PARALLELISM);
+        self.store.update(|config| {
+            let section = config.poller.get_or_insert_with(Default::default);
+            section.assistant_poll_parallelism = Some(clamped);
         })
     }
 }
@@ -94,6 +113,8 @@ pub struct PollerStatus {
     pub base_interval_ms: u64,
     pub task_count: usize,
     pub pending_trigger: bool,
+    /// 单次 PollAll 内同时推进的课题数上限（运行时值）。
+    pub assistant_poll_parallelism: u64,
 }
 
 struct PollTask {
@@ -110,6 +131,8 @@ pub struct Poller {
     state: PollerRunState,
     pending_trigger: bool,
     tasks: Vec<PollTask>,
+    /// 与 AssistantMode 共享的并发推进数量（运行时可变）。
+    poll_parallelism: SharedPollParallelism,
 }
 
 impl fmt::Debug for Poller {
@@ -125,7 +148,7 @@ impl fmt::Debug for Poller {
 }
 
 impl Poller {
-    pub fn new(base_interval_ms: u64) -> Self {
+    pub fn new(base_interval_ms: u64, poll_parallelism: SharedPollParallelism) -> Self {
         Self {
             base_interval_ms: base_interval_ms.max(1),
             tick_count: 0,
@@ -133,7 +156,15 @@ impl Poller {
             state: PollerRunState::Paused,
             pending_trigger: false,
             tasks: Vec::new(),
+            poll_parallelism,
         }
+    }
+
+    /// 更新并发推进数量（clamp 到 ≥1），返回实际生效值。
+    pub fn set_parallelism(&self, n: usize) -> usize {
+        let n = n.max(1);
+        self.poll_parallelism.store(n, Ordering::Relaxed);
+        n
     }
 
     pub fn register(
@@ -212,6 +243,7 @@ impl Poller {
             base_interval_ms: self.base_interval_ms,
             task_count: self.tasks.len(),
             pending_trigger: self.pending_trigger,
+            assistant_poll_parallelism: self.poll_parallelism.load(Ordering::Relaxed) as u64,
         }
     }
 }
@@ -219,7 +251,11 @@ impl Poller {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Mutex;
+
+    fn test_poller(interval_ms: u64) -> Poller {
+        Poller::new(interval_ms, new_shared_poll_parallelism(2))
+    }
 
     struct CountingHandler {
         counter: Arc<Mutex<u64>>,
@@ -234,7 +270,7 @@ mod tests {
     #[test]
     fn fires_on_interval_and_respects_pause() {
         let counter = Arc::new(Mutex::new(0u64));
-        let mut poller = Poller::new(1000);
+        let mut poller = test_poller(1000);
         poller.resume();
         poller
             .register(
@@ -293,7 +329,7 @@ mod tests {
     #[test]
     fn default_new_is_paused_until_resume() {
         let counter = Arc::new(Mutex::new(0u64));
-        let mut poller = Poller::new(1000);
+        let mut poller = test_poller(1000);
         poller
             .register(
                 "assistant",
@@ -312,7 +348,7 @@ mod tests {
     #[test]
     fn trigger_fires_all_on_next_tick() {
         let counter = Arc::new(Mutex::new(0u64));
-        let mut poller = Poller::new(1000);
+        let mut poller = test_poller(1000);
         poller
             .register(
                 "assistant",

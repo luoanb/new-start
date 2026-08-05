@@ -141,6 +141,7 @@ export type PollerStatus = {
   base_interval_ms: number;
   task_count: number;
   pending_trigger: boolean;
+  assistant_poll_parallelism: number;
 };
 
 export type LogLevel = "error" | "warn" | "info" | "debug" | "trace";

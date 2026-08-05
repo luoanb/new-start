@@ -7,6 +7,33 @@
 
   let operating = $state(false);
   let errorMsg = $state("");
+  let parallelism = $state(0);
+
+  $effect(() => {
+    if (pollerStatus && parallelism === 0) {
+      parallelism = pollerStatus.assistant_poll_parallelism;
+    }
+  });
+
+  const parallelismDirty = $derived(
+    parallelism !== pollerStatus?.assistant_poll_parallelism,
+  );
+
+  async function handleSaveParallelism() {
+    if (!Number.isInteger(parallelism) || parallelism < 1 || parallelism > 8) {
+      errorMsg = "Parallelism must be an integer between 1 and 8";
+      return;
+    }
+    operating = true;
+    errorMsg = "";
+    try {
+      await dataStore.setPollParallelism(parallelism);
+    } catch (e) {
+      errorMsg = `Save failed: ${errorMessage(e)}`;
+    } finally {
+      operating = false;
+    }
+  }
 
   async function handlePause() {
     operating = true;
@@ -96,6 +123,33 @@
       {/if}
     </div>
 
+    <!-- Parallelism controls -->
+    <div class="parallelism-card">
+      <div class="parallelism-header">
+        <span class="parallelism-title">{t("pollerPanel.parallelism")}</span>
+        <span class="parallelism-count" class:dirty={parallelismDirty}>×{parallelism}</span>
+      </div>
+      <input
+        type="range"
+        min="1"
+        max="8"
+        step="1"
+        bind:value={parallelism}
+        disabled={operating}
+        aria-label={t("pollerPanel.parallelism")}
+      />
+      <div class="parallelism-footer">
+        <span class="parallelism-hint">{t("pollerPanel.parallelismHint")}</span>
+        <button
+          class="btn btn-primary"
+          onclick={handleSaveParallelism}
+          disabled={!parallelismDirty || operating}
+        >
+          {t("pollerPanel.save")}
+        </button>
+      </div>
+    </div>
+
     <!-- Controls -->
     <div class="controls">
       {#if pollerStatus.state === "running"}
@@ -127,6 +181,14 @@
   .state-badge.running { background: var(--color-success, #22c55e); }
   .state-badge.paused { background: var(--color-warning, #f59e0b); }
   .controls { display: flex; gap: var(--space-1); }
+  .parallelism-card { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2); background: var(--color-bg); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-md); }
+  .parallelism-header { display: flex; justify-content: space-between; align-items: center; font-size: var(--fs-sm); }
+  .parallelism-title { color: var(--color-text); font-weight: 600; }
+  .parallelism-count { font-family: monospace; font-weight: 600; color: var(--color-text); }
+  .parallelism-count.dirty { color: var(--color-primary); }
+  .parallelism-card input[type="range"] { width: 100%; margin: 0; accent-color: var(--color-primary); }
+  .parallelism-footer { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); }
+  .parallelism-hint { font-size: var(--fs-xs); color: var(--color-text-muted); line-height: 1.4; }
 
   .btn { font-size: var(--fs-sm); padding: var(--space-1) var(--space-3); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-sm); background: transparent; color: var(--color-text); cursor: pointer; }
   .btn-primary { background: var(--color-primary); color: var(--color-on-primary); border-color: var(--color-primary); }

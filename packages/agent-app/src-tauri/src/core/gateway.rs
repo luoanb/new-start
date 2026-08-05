@@ -19,7 +19,9 @@ use super::{
     neuron_manager::NeuronManager,
     neuron_model::DefaultNeuronModelCaller,
     neuron_store::NeuronStore,
-    poller::{Poller, PollerConfigReader, PollerStatus},
+    poller::{
+        new_shared_poll_parallelism, Poller, PollerConfigReader, PollerStatus,
+    },
     providers::ProviderRegistry,
     session_tracker::SessionTracker,
     tool_registry::ToolRegistry,
@@ -111,6 +113,21 @@ impl Gateway {
         );
 
         let (step_tx, step_rx) = mpsc::unbounded_channel::<AssistantStepRequest>();
+
+        let poller_settings = PollerConfigReader::new(store.root().to_path_buf()).load()?;
+        tracing::info!(
+            phase = "poller_config",
+            enabled = poller_settings.enabled,
+            base_interval_ms = poller_settings.base_interval_ms,
+            assistant_interval_ticks = poller_settings.assistant_interval_ticks,
+            assistant_poll_parallelism = poller_settings.assistant_poll_parallelism,
+            "loaded poller settings from config"
+        );
+        // 并发数在 Poller（状态展示）与 AssistantMode（实际执行）之间共享同一原子值，
+        // 前端调整后运行时立即生效并持久化到 config.json。
+        let poll_parallelism =
+            new_shared_poll_parallelism(poller_settings.assistant_poll_parallelism as usize);
+
         let assistant = Arc::new(AssistantMode::new(
             store.clone(),
             providers.clone(),
@@ -120,18 +137,13 @@ impl Gateway {
             tool_registry.clone(),
             step_tx,
             session_tracker.clone(),
+            Arc::clone(&poll_parallelism),
         ));
 
-        let poller_settings = PollerConfigReader::new(store.root().to_path_buf()).load()?;
-        tracing::info!(
-            phase = "poller_config",
-            enabled = poller_settings.enabled,
-            base_interval_ms = poller_settings.base_interval_ms,
-            assistant_interval_ticks = poller_settings.assistant_interval_ticks,
-            "loaded poller settings from config"
-        );
-
-        let poller = Arc::new(Mutex::new(Poller::new(poller_settings.base_interval_ms)));
+        let poller = Arc::new(Mutex::new(Poller::new(
+            poller_settings.base_interval_ms,
+            poll_parallelism,
+        )));
         {
             let mut guard = poller
                 .lock()
@@ -381,6 +393,19 @@ impl Gateway {
             .map_err(|e| AppError::StorageError(format!("Poller lock error: {e}")))?
             .trigger();
         Ok(())
+    }
+
+    /// 设置轮询并发推进数量：持久化到 config.json（统一 ConfigStore 接口），
+    /// 并更新共享运行时值（Poller 与 AssistantMode 同时生效）。
+    pub fn set_poll_parallelism(&self, n: u64) -> AppResult<u64> {
+        let clamped = n.clamp(1, super::poller::MAX_ASSISTANT_POLL_PARALLELISM);
+        PollerConfigReader::new(self.store.root().to_path_buf()).set_parallelism(clamped)?;
+        let guard = self
+            .poller
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Poller lock error: {e}")))?;
+        guard.set_parallelism(clamped as usize);
+        Ok(clamped)
     }
 
     /// Manually trigger compaction for the current conversation.

@@ -283,6 +283,11 @@ async function triggerPoller(): Promise<void> {
   await refreshPoller();
 }
 
+async function setPollParallelism(n: number): Promise<void> {
+  await invoke<number>("poll_set_parallelism", { n });
+  await refreshPoller();
+}
+
 export const dataStore = {
   state,
   bootstrap,
@@ -308,4 +313,5 @@ export const dataStore = {
   pausePoller,
   resumePoller,
   triggerPoller,
+  setPollParallelism,
 };

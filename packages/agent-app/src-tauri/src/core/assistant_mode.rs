@@ -1,5 +1,8 @@
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, Mutex,
+};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -19,7 +22,7 @@ use super::{
     },
     neuron_manager::NeuronManager,
     neuron_store::NeuronStore,
-    poller::{PollHandler, Poller},
+    poller::{PollHandler, Poller, SharedPollParallelism},
     providers::ProviderRegistry,
     tool_registry::ToolRegistry,
     topic_store::TopicStore,
@@ -100,6 +103,8 @@ pub struct AssistantMode {
     tool_registry: ToolRegistry,
     step_tx: UnboundedSender<AssistantStepRequest>,
     session_tracker: super::session_tracker::SessionTracker,
+    /// 与 Poller 共享的轮询并发推进数量（运行时可变，前端可调）。
+    poll_parallelism: SharedPollParallelism,
 }
 
 impl fmt::Debug for AssistantMode {
@@ -118,6 +123,7 @@ impl AssistantMode {
         tool_registry: ToolRegistry,
         step_tx: UnboundedSender<AssistantStepRequest>,
         session_tracker: super::session_tracker::SessionTracker,
+        poll_parallelism: SharedPollParallelism,
     ) -> Self {
         Self {
             store,
@@ -128,7 +134,15 @@ impl AssistantMode {
             tool_registry,
             step_tx,
             session_tracker,
+            poll_parallelism,
         }
+    }
+
+    /// 更新轮询并发推进数量（运行时生效），返回实际生效值。
+    pub fn set_poll_parallelism(&self, n: usize) -> usize {
+        let n = n.max(1);
+        self.poll_parallelism.store(n, Ordering::Relaxed);
+        n
     }
 
     pub fn enqueue_poll_all(&self) {
@@ -359,7 +373,7 @@ impl AssistantMode {
     }
 
     pub async fn process_step_request(
-        &self,
+        self: Arc<Self>,
         request: AssistantStepRequest,
         model: &ChatModelSelection,
     ) {
@@ -374,6 +388,13 @@ impl AssistantMode {
                     }
                 };
                 tracing::info!(phase = "assistant_poll_handler", topic_count = topics.len(), "PollAll topic list resolved");
+
+                // 跨课题受限并发推进：每个课题绑定唯一会话、互不干扰，
+                // 同一时刻最多“当前配置的并发数”个课题在跑；全局 step_guard 仍保证
+                // 同一时刻只有一个 PollAll 在推进（超时周期被丢弃而非并发）。
+                let parallelism = self.poll_parallelism.load(Ordering::Relaxed).max(1);
+                let semaphore = Arc::new(tokio::sync::Semaphore::new(parallelism));
+                let mut tasks = tokio::task::JoinSet::new();
                 for topic in topics {
                     let Some(session_id) = topic.session_id else {
                         continue;
@@ -381,19 +402,24 @@ impl AssistantMode {
                     if matches!(topic.status, TopicStatus::Paused | TopicStatus::Cancelled) {
                         continue;
                     }
-                    if let Err(error) = self.session_tracker.register(&session_id, None) {
-                        eprintln!(
-                            "assistant poll register failed for {}: {error}",
-                            topic.id
-                        );
-                        continue;
-                    }
-                    let _ = self.session_tracker.update_step(&session_id, "polling");
-                    if let Err(error) = self.step_poller(&session_id, model).await {
-                        eprintln!("assistant poll step failed for {}: {error}", topic.id);
-                    }
-                    self.session_tracker.unregister(&session_id);
+                    let topic_id = topic.id;
+                    let model = model.clone();
+                    let assistant = Arc::clone(&self);
+                    let semaphore = Arc::clone(&semaphore);
+                    tasks.spawn(async move {
+                        let _permit = semaphore.acquire().await.expect("semaphore not closed");
+                        if let Err(error) = assistant.session_tracker.register(&session_id, None) {
+                            eprintln!("assistant poll register failed for {topic_id}: {error}");
+                            return;
+                        }
+                        let _ = assistant.session_tracker.update_step(&session_id, "polling");
+                        if let Err(error) = assistant.step_poller(&session_id, &model).await {
+                            eprintln!("assistant poll step failed for {topic_id}: {error}");
+                        }
+                        assistant.session_tracker.unregister(&session_id);
+                    });
                 }
+                while tasks.join_next().await.is_some() {}
             }
         }
     }

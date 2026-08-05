@@ -113,6 +113,9 @@ export type Translations = {
     tickCount: string;
     taskCount: string;
     interval: string;
+    parallelism: string;
+    parallelismHint: string;
+    save: string;
     pause: string;
     resume: string;
     trigger: string;
@@ -313,6 +316,9 @@ export const en: Translations = {
     tickCount: "Ticks",
     taskCount: "Tasks",
     interval: "Interval",
+    parallelism: "Parallelism",
+    parallelismHint: "Topics advanced per poll round (1–8); saved & applied immediately.",
+    save: "Save",
     pause: "Pause",
     resume: "Resume",
     trigger: "Trigger",
@@ -513,6 +519,9 @@ export const zh: Translations = {
     tickCount: "Tick 数",
     taskCount: "任务数",
     interval: "间隔",
+    parallelism: "并发推进",
+    parallelismHint: "单次轮询同时推进的课题数（1–8），保存后立即生效。",
+    save: "保存",
     pause: "暂停",
     resume: "恢复",
     trigger: "触发",

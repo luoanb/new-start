@@ -1,6 +1,7 @@
 pub mod app_log;
 pub mod assistant_mode;
 pub mod cmd_exec;
+pub mod config;
 pub mod log_redact;
 pub mod compactor;
 pub mod conversation_store;
