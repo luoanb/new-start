@@ -231,15 +231,10 @@
       appName={runtimeStatus?.app_name ?? "Agent App"}
       sessionId={activeConversationId}
       mode={activeMode}
-      {providers}
-      {models}
-      selectedProviderId={activeProviderId}
-      selectedModelId={activeModelId}
       neuronActive={isNeuronSplit}
       sidebarVisible={layoutStore.state.sidebar.visible}
       infoVisible={layoutStore.state.info.visible}
       panelVisible={layoutStore.state.panel.visible}
-      onChange={handleModelChange}
       onToggleSidebar={() => {
         if (window.innerWidth <= 800) drawerSidebar = !drawerSidebar;
         else layoutStore.toggleSidebar();
@@ -286,7 +281,16 @@
         <div class="chat-content">
           {#if isNeuronSplit}
             <div class="main-split" style="--split-ratio: {splitRatio}">
-              <ChatArea {messages} {loading} onSend={handleSend} />
+              <ChatArea
+                {messages}
+                {loading}
+                onSend={handleSend}
+                {providers}
+                {models}
+                selectedProviderId={activeProviderId}
+                selectedModelId={activeModelId}
+                onModelChange={handleModelChange}
+              />
               <Splitter
                 orientation="vertical"
                 onResize={handleSplitResize}
@@ -297,7 +301,16 @@
           {:else if layoutStore.state.activity.active === "neurons"}
             <NeuronManager />
           {:else}
-            <ChatArea {messages} {loading} onSend={handleSend} />
+            <ChatArea
+              {messages}
+              {loading}
+              onSend={handleSend}
+              {providers}
+              {models}
+              selectedProviderId={activeProviderId}
+              selectedModelId={activeModelId}
+              onModelChange={handleModelChange}
+            />
           {/if}
         </div>
       </main>

@@ -1,7 +1,25 @@
 <script lang="ts">
+  import ModelPicker from "./ModelPicker.svelte";
+  import type { ProviderInfo, ModelInfo } from "$lib/types";
   import { t } from "$lib/i18n";
 
-  let { onSend, loading = false }: { onSend: (text: string) => void; loading?: boolean } = $props();
+  let {
+    onSend,
+    loading = false,
+    providers = [],
+    models = [],
+    selectedProviderId = "",
+    selectedModelId = "",
+    onModelChange,
+  }: {
+    onSend: (text: string) => void;
+    loading?: boolean;
+    providers?: ProviderInfo[];
+    models?: ModelInfo[];
+    selectedProviderId?: string;
+    selectedModelId?: string;
+    onModelChange?: (providerId: string, modelId: string) => void;
+  } = $props();
 
   let text = $state("");
   let composing = $state(false);
@@ -67,6 +85,15 @@
       rows="1"
     ></textarea>
     <div class="input-footer">
+      <div class="footer-left">
+        <ModelPicker
+          {providers}
+          {models}
+          {selectedProviderId}
+          {selectedModelId}
+          onChange={onModelChange}
+        />
+      </div>
       <button
         class="send-btn"
         onclick={submit}
@@ -107,7 +134,8 @@
   textarea { width: 100%; min-height: 24px; max-height: 160px; border: none; background: transparent; resize: none; outline: none; padding: var(--space-1) var(--space-2); font-size: var(--fs-base); font-family: inherit; line-height: 1.5; color: var(--color-text); }
   textarea::placeholder { color: var(--color-text-muted); }
   textarea:disabled { opacity: 0.5; }
-  .input-footer { display: flex; justify-content: flex-end; padding: var(--space-1) var(--space-2); }
+  .input-footer { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-2); }
+  .footer-left { display: flex; align-items: center; min-width: 0; }
   .send-btn { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border: none; border-radius: var(--radius-full); background: var(--color-primary); color: var(--color-on-primary); cursor: pointer; transition: background var(--duration-fast) var(--ease-out), opacity var(--duration-fast) var(--ease-out); }
   .send-btn:not(:disabled):hover { background: var(--color-primary-dim); }
   .send-btn:disabled { background: var(--color-border); color: var(--color-text-muted); cursor: not-allowed; }

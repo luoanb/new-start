@@ -1,7 +1,7 @@
 <script lang="ts">
   import ChatMessage from "./ChatMessage.svelte";
   import ChatInput from "./ChatInput.svelte";
-  import type { Message } from "$lib/types";
+  import type { Message, ProviderInfo, ModelInfo } from "$lib/types";
   import { t } from "$lib/i18n";
   import { dataStore } from "$lib/stores/dataStore.svelte";
   import { errorMessage } from "$lib/errorMessage";
@@ -10,10 +10,20 @@
     messages,
     loading,
     onSend,
+    providers = [],
+    models = [],
+    selectedProviderId = "",
+    selectedModelId = "",
+    onModelChange,
   }: {
     messages: Message[];
     loading: boolean;
     onSend: (text: string) => void;
+    providers?: ProviderInfo[];
+    models?: ModelInfo[];
+    selectedProviderId?: string;
+    selectedModelId?: string;
+    onModelChange?: (providerId: string, modelId: string) => void;
   } = $props();
 
   let containerEl: HTMLDivElement | undefined = $state();
@@ -76,7 +86,15 @@
     {/if}
   </div>
 
-  <ChatInput {onSend} {loading} />
+  <ChatInput
+    {onSend}
+    {loading}
+    {providers}
+    {models}
+    {selectedProviderId}
+    {selectedModelId}
+    {onModelChange}
+  />
 </div>
 
 <style>
