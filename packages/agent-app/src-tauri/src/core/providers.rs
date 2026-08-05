@@ -248,7 +248,14 @@ impl ProviderRegistry {
         }
 
         for message in &request.messages {
-            if message.content.trim().is_empty() {
+            // OpenAI 兼容规范：assistant 的 tool_calls 消息可以没有正文（content 为空是合法形态）。
+            // 仅对无 tool_calls 的消息强制非空，避免合法工具调用历史被本地校验误拒。
+            let is_tool_call = message.role == ModelMessageRole::Assistant
+                && message
+                    .tool_calls
+                    .as_ref()
+                    .is_some_and(|calls| !calls.is_empty());
+            if !is_tool_call && message.content.trim().is_empty() {
                 return Err(AppError::InvalidInput(
                     "Model message content cannot be empty".into(),
                 ));

@@ -60,6 +60,8 @@ pub enum RoundTrigger {
 pub struct AssistantRoundContext {
     pub session_id: String,
     pub topic_id: Option<String>,
+    /// 轮询 / 手动推进时注入的课题简报（目标、进度、待办清单），避免模型盲目推进。
+    pub topic_brief: Option<String>,
     pub trigger: RoundTrigger,
     pub user_input: Option<String>,
     pub system_prompt: Option<String>,
@@ -413,7 +415,8 @@ impl AssistantMode {
         );
         Ok(AssistantRoundContext {
             session_id: session_id.to_string(),
-            topic_id: topic.map(|t| t.id),
+            topic_id: topic.as_ref().map(|t| t.id.clone()),
+            topic_brief: topic.as_ref().map(build_topic_brief),
             trigger,
             user_input: None,
             system_prompt: None,
@@ -455,7 +458,10 @@ impl AssistantMode {
             self.store.add_message(&ctx.session_id, user_message)?;
             user_input
         } else if matches!(ctx.trigger, RoundTrigger::ManualStep | RoundTrigger::Poller) {
-            "Continue advancing the bound topic using available tools if needed.".to_string()
+            // 轮询 / 手动推进：注入课题简报，让模型明确目标、进度与待办，避免盲目推进。
+            ctx.topic_brief.clone().unwrap_or_else(|| {
+                "Continue advancing the bound topic using available tools if needed.".to_string()
+            })
         } else {
             String::new()
         };
@@ -1356,6 +1362,33 @@ fn message_to_model(message: &Message) -> Option<ModelMessage> {
         tool_calls,
         tool_call_id,
     })
+}
+
+/// 为轮询 / 手动推进回合构建课题简报：目标、进度与 scope_in 待办清单（含验收标准）。
+fn build_topic_brief(topic: &Topic) -> String {
+    let mut out = String::from("【课题简报】\n");
+    out.push_str(&format!("课题：{}\n", topic.name.trim()));
+    if !topic.description.trim().is_empty() {
+        out.push_str(&format!("目标：{}\n", topic.description.trim()));
+    }
+    out.push_str(&format!("进度：{}%\n", topic.progress));
+    out.push_str("待办清单：\n");
+    if topic.scope_in.is_empty() {
+        out.push_str("- （无待办项）\n");
+    } else {
+        for item in &topic.scope_in {
+            let mark = if item.status == "completed" { "[x]" } else { "[ ]" };
+            out.push_str(&format!(
+                "- {mark} {}\n    验收：{}\n",
+                item.goal.trim(),
+                item.done_contract.trim()
+            ));
+        }
+    }
+    out.push_str(
+        "本轮任务：基于上述课题，选择一件尚未完成的事项推进；必要时调用可用工具执行，并在回复中说明本轮进展。若所有事项均已完成，输出完成总结。",
+    );
+    out
 }
 
 #[cfg(test)]
