@@ -2,8 +2,10 @@
   import { Handle, Position } from "@xyflow/svelte";
 
   let {
+    id,
     data,
   }: {
+    id: string;
     data: {
       label: string;
       weight: number;
@@ -20,6 +22,7 @@
   <Handle id="l" type="source" position={Position.Left} />
   <div class="node-label">{data.label}</div>
   <div class="node-meta">
+    <span class="node-id" title={id}>{id}</span>
     <span>w={data.weight.toFixed(1)}</span>
   </div>
 </div>
@@ -53,6 +56,14 @@
     align-items: center;
     color: var(--color-text-muted, #999);
     font-size: 10px;
+  }
+  .node-id {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--font-mono, monospace);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   /* floating edge: hide visible handles but keep them functional */
   .neuron-flow-node :global(.svelte-flow__handle) {

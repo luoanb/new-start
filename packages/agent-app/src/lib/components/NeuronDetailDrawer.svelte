@@ -3,6 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import type { Connection, Neuron } from "$lib/types";
   import { t } from "$lib/i18n";
+  import { formatInvokeError } from "$lib/utils/formatInvokeError";
 
   export let neuron: Neuron | null = null;
   export let connections: Connection[] = [];
@@ -22,11 +23,37 @@
   let toolIds: string[] = [];
   let availableTools: { name: string; description: string }[] = [];
 
-  // 打开抽屉时重置编辑态
-  $: if (neuron && !editing) {
+  let lastNeuronId: string | null = null;
+  let copied = false;
+  let copyTimer: ReturnType<typeof setTimeout> | undefined;
+  let saveError: string | null = null;
+
+  async function copyId() {
+    if (!neuron) return;
+    try {
+      await navigator.clipboard.writeText(neuron.id);
+      copied = true;
+      clearTimeout(copyTimer);
+      copyTimer = setTimeout(() => (copied = false), 1500);
+    } catch {
+      // 忽略复制失败
+    }
+  }
+
+  // 打开抽屉 / 切换神经元时：重置编辑态并加载该神经元的最新数据
+  $: if (neuron && neuron.id !== lastNeuronId) {
+    lastNeuronId = neuron.id;
+    editing = false;
+    saveError = null;
     desc = neuron.desc;
     content = neuron.content;
     toolIds = neuron.tool_ids ? [...neuron.tool_ids] : [];
+  }
+
+  // 关闭抽屉时清空记忆，下次打开任意神经元都会重新初始化
+  $: if (!neuron) {
+    lastNeuronId = null;
+    editing = false;
   }
 
   onMount(() => {
@@ -42,18 +69,20 @@
   async function handleSave() {
     if (!neuron) return;
     saving = true;
+    saveError = null;
     try {
       await invoke("update_neuron", {
         id: neuron.id,
         desc,
         content,
-        tool_ids: toolIds,
+        toolIds,
       });
       neuron = { ...neuron, desc, content, tool_ids: toolIds };
       editing = false;
       onChanged();
     } catch (e) {
-      console.error(String(e));
+      console.error(e);
+      saveError = formatInvokeError(e);
     } finally {
       saving = false;
     }
@@ -67,10 +96,28 @@
     editing = false;
   }
 
-  function toggleTool(name: string) {
-    toolIds = toolIds.includes(name)
+  // 勾选 / 取消工具即时保存（与权重步进器一致），不依赖「保存」按钮。
+  // 乐观更新：不阻塞勾选交互；失败时回滚并展示错误。
+  async function toggleTool(name: string) {
+    if (!neuron) return;
+    const next = toolIds.includes(name)
       ? toolIds.filter((x) => x !== name)
       : [...toolIds, name];
+    toolIds = next;
+    saveError = null;
+    try {
+      const updated = (await invoke("update_neuron", {
+        id: neuron.id,
+        toolIds: next,
+      })) as Neuron;
+      neuron = updated;
+      onChanged();
+    } catch (e) {
+      console.error(e);
+      // 保存失败回滚为已保存的工具列表，并在抽屉内展示错误
+      saveError = formatInvokeError(e);
+      toolIds = neuron.tool_ids ? [...neuron.tool_ids] : [];
+    }
   }
 
   async function adjustNeuron(delta: number) {
@@ -128,6 +175,15 @@
       <div class="field">
         <label>{t("neuronPanel.systemType")}</label>
         <span class="value mono">{neuron.system_type || "—"}</span>
+      </div>
+      <div class="field">
+        <label>{t("neuronPanel.id")}</label>
+        <div class="id-row">
+          <span class="value mono id-text" title={neuron.id}>{neuron.id}</span>
+          <button class="copy-btn" on:click={copyId} title={t("neuronPanel.copy")}>
+            {copied ? t("neuronPanel.copied") : t("neuronPanel.copy")}
+          </button>
+        </div>
       </div>
       <div class="field">
         <label>{t("neuronPanel.weight")}</label>
@@ -241,6 +297,10 @@
       </div>
     </div>
 
+    {#if saveError}
+      <div class="drawer-error">{saveError}</div>
+    {/if}
+
     <div class="drawer-foot">
       <button class="btn primary" on:click={() => onRequestCreateDownstream(neuron!.id)}>
         {t("neuronPanel.createDownstreamFromHere")}
@@ -353,6 +413,35 @@
   }
   .value.muted {
     color: var(--color-text-muted);
+  }
+  .id-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .id-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .copy-btn {
+    flex-shrink: 0;
+    border: 1px solid var(--color-border);
+    background: var(--color-bg);
+    color: var(--color-text-muted);
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    transition:
+      color 0.15s ease,
+      border-color 0.15s ease;
+  }
+  .copy-btn:hover {
+    color: var(--color-primary);
+    border-color: var(--color-primary);
   }
   .tool-checks {
     display: flex;
@@ -523,6 +612,17 @@
     gap: 8px;
     padding: 10px 14px;
     border-top: 1px solid var(--color-border);
+  }
+  .drawer-error {
+    margin: 0 14px;
+    padding: 8px 10px;
+    border: 1px solid var(--color-error, #e5484d);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--color-error, #e5484d) 10%, transparent);
+    color: var(--color-error, #e5484d);
+    font-size: 11.5px;
+    line-height: 1.4;
+    word-break: break-all;
   }
   .btn {
     flex: 1;

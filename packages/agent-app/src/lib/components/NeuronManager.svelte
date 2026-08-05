@@ -7,6 +7,7 @@
   import NeuronDetailDrawer from "./NeuronDetailDrawer.svelte";
   import Select from "./Select.svelte";
   import { errorMessage } from "$lib/errorMessage";
+  import { formatInvokeError } from "$lib/utils/formatInvokeError";
   import NeuronList from "./NeuronList.svelte";
   import NeuronDetail from "./NeuronDetail.svelte";
   import NeuronNetwork from "./NeuronNetwork.svelte";
@@ -151,11 +152,14 @@
     openDrawer(id);
   }
 
-  // 抽屉权重调整后：刷新该神经元的连接与全局连接快照（用于图与侧栏徽标）
+  // 抽屉保存 / 权重调整后：从后端拉取该神经元最新数据并同步到列表与图（避免用过期快照覆盖已保存值）
   async function refreshDrawerAndGraph() {
     if (!drawerNeuron) return;
     const id = drawerNeuron.id;
     try {
+      const n = (await invoke("get_neuron", { id })) as Neuron;
+      drawerNeuron = n;
+      neurons = neurons.map((x) => (x.id === id ? n : x));
       const cs = (await invoke("get_connections", { id })) as Connection[];
       drawerConns = cs;
       // 更新全局连接快照中该节点相关的边
@@ -163,10 +167,6 @@
         ...allConnections.filter((c) => c.source !== id && c.target !== id),
         ...cs,
       ];
-      const n = neurons.find((x) => x.id === id);
-      if (n) {
-        drawerNeuron = { ...n };
-      }
       subgraph = buildSubgraph();
     } catch {
       // 忽略刷新失败，抽屉已显示最新返回值
@@ -256,8 +256,8 @@
       const created = (await invoke("create_neuron_plain", {
         desc,
         content: createContent,
-        link_to: createMode === "downstream" ? createSource : null,
-        tool_ids: createToolIds,
+        linkTo: createMode === "downstream" ? createSource : null,
+        toolIds: createToolIds,
       })) as Neuron;
       showCreate = false;
       createDesc = "";
@@ -268,7 +268,7 @@
       await load();
       selectNeuron(created.id);
     } catch (e) {
-      createError = String(e);
+      createError = formatInvokeError(e);
     } finally {
       creating = false;
     }

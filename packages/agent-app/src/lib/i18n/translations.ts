@@ -186,6 +186,9 @@ export type Translations = {
     createToolIdsLabel: string;
     createToolIdsPlaceholder: string;
     noToolsAvailable: string;
+    id: string;
+    copy: string;
+    copied: string;
   };
 };
 
@@ -383,6 +386,9 @@ export const en: Translations = {
     createToolIdsLabel: "Tools",
     createToolIdsPlaceholder: "Select tools this neuron can use (leave empty for none)",
     noToolsAvailable: "No tools available",
+    id: "ID",
+    copy: "Copy",
+    copied: "Copied",
   },
 };
 
@@ -580,5 +586,8 @@ export const zh: Translations = {
     createToolIdsLabel: "工具",
     createToolIdsPlaceholder: "选择该神经元可用的工具（留空则无工具）",
     noToolsAvailable: "当前没有可用工具",
+    id: "ID",
+    copy: "复制",
+    copied: "已复制",
   },
 };
