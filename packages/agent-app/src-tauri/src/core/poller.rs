@@ -243,6 +243,7 @@ impl Poller {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::sync::Mutex;
 
     fn test_poller(interval_ms: u64) -> Poller {

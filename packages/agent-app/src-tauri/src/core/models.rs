@@ -284,6 +284,15 @@ pub struct Neuron {
     pub tool_ids: Vec<String>,
     pub created_at: u128,
     pub updated_at: u128,
+    /// 命中/打分/编辑累积的活跃计数（回收排序用）。
+    #[serde(default)]
+    pub use_count: i64,
+    /// 最近一次被使用的时间戳（命中/打分/编辑）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<u128>,
+    /// 逻辑删除时间戳；非空表示已被回收，业务全流程不可见。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_at: Option<u128>,
 }
 
 #[derive(Debug, Clone, Default)]

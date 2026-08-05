@@ -99,10 +99,12 @@ impl Gateway {
         let mut tool_registry = ToolRegistry::new();
         tool_registry.register(ExecuteCommandTool::new());
 
+        let neuron_config = NeuronConfigReader::new(store.root().to_path_buf());
+        let neuron_recycle_interval_ms = neuron_config.recycle_interval_ms()?;
         let neuron_manager = Arc::new(NeuronManager::new(
             Arc::clone(&neuron_store),
             Arc::new(DefaultNeuronModelCaller::new(providers.clone())),
-            NeuronConfigReader::new(store.root().to_path_buf()),
+            neuron_config,
             tool_registry.clone(),
         ));
         let engine = Engine::with_tools(
@@ -162,6 +164,13 @@ impl Gateway {
             providers.clone(),
             step_rx,
             poller_settings.base_interval_ms,
+            state_emit.clone(),
+        );
+
+        // 神经元容量回收：超限时后台定时逻辑删除最低价值节点，并通知前端刷新。
+        spawn_neuron_recycle_runtime(
+            Arc::clone(&neuron_manager),
+            neuron_recycle_interval_ms,
             state_emit,
         );
 
@@ -634,6 +643,47 @@ fn spawn_poller_runtime(
                             emit(StateChange::Topics);
                         }
                     });
+                }
+            }
+        }
+    });
+}
+
+/// 定时回收低价值神经元：周期由 config `neuron.recycle_interval_ms` 控制，
+/// 超容量时按低价值排序逻辑删除，并通知前端刷新神经元面板。
+fn spawn_neuron_recycle_runtime(
+    neurons: Arc<NeuronManager>,
+    interval_ms: u64,
+    state_emit: Option<StateEmitter>,
+) {
+    tracing::info!(
+        phase = "neuron_recycle_runtime",
+        interval_ms,
+        "neuron recycle runtime loop starting via tauri async runtime"
+    );
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(interval_ms));
+        loop {
+            interval.tick().await;
+            match neurons.recycle_if_over_capacity() {
+                Ok(recycled) if recycled > 0 => {
+                    tracing::info!(
+                        phase = "neuron_recycle_runtime",
+                        recycled,
+                        "recycled low-value neurons over capacity"
+                    );
+                    if let Some(emit) = state_emit.as_ref() {
+                        emit(StateChange::Neurons);
+                    }
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        phase = "neuron_recycle_runtime",
+                        error_code = error.code(),
+                        error = %error,
+                        "neuron recycle check failed"
+                    );
                 }
             }
         }

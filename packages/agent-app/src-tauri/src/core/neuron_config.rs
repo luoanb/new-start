@@ -2,7 +2,12 @@ use std::{fs, path::PathBuf};
 
 use serde::Deserialize;
 
-use super::error::AppResult;
+use super::{config::NeuronSection, error::AppResult};
+
+/// 活跃神经元数量默认上限。
+pub const DEFAULT_NEURON_CAPACITY: usize = 300;
+/// 回收定时任务默认周期（1h）。
+pub const DEFAULT_NEURON_RECYCLE_INTERVAL_MS: u64 = 3_600_000;
 
 /// Fallback seed when config.json has no create_neuron_prompt.
 pub const DEFAULT_CREATE_NEURON_PROMPT: &str = r#"You are the Neuron Creator for an agent app.
@@ -39,6 +44,8 @@ pub struct NeuronConfigReader {
 #[derive(Debug, Deserialize, Default)]
 struct AppConfigSlice {
     neurons: Option<NeuronConfig>,
+    /// 顶层 `neuron` 键：容量/回收配置。
+    neuron: Option<NeuronSection>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -72,5 +79,31 @@ impl NeuronConfigReader {
             }
         }
         Ok(DEFAULT_CREATE_NEURON_PROMPT.to_string())
+    }
+
+    /// 活跃神经元容量上限；config.json 顶层 `neuron.capacity` 覆盖，默认 300。
+    pub fn capacity(&self) -> AppResult<usize> {
+        Ok(self
+            .read_neuron_section()?
+            .capacity
+            .unwrap_or(DEFAULT_NEURON_CAPACITY))
+    }
+
+    /// 回收定时任务周期（毫秒）；config.json 顶层 `neuron.recycle_interval_ms` 覆盖，默认 1h。
+    pub fn recycle_interval_ms(&self) -> AppResult<u64> {
+        Ok(self
+            .read_neuron_section()?
+            .recycle_interval_ms
+            .unwrap_or(DEFAULT_NEURON_RECYCLE_INTERVAL_MS))
+    }
+
+    fn read_neuron_section(&self) -> AppResult<NeuronSection> {
+        let path = self.storage_root.join("config.json");
+        if path.exists() {
+            let content = fs::read_to_string(path)?;
+            let config: AppConfigSlice = serde_json::from_str(&content)?;
+            return Ok(config.neuron.unwrap_or_default());
+        }
+        Ok(NeuronSection::default())
     }
 }

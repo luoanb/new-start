@@ -14,6 +14,8 @@ use super::error::{AppError, AppResult};
 pub struct AppConfigFile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub poller: Option<PollerSection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub neuron: Option<NeuronSection>,
     /// 尚未建模的顶层字段原样保留，写回时不丢数据。
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -29,6 +31,17 @@ pub struct PollerSection {
     pub assistant_interval_ticks: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assistant_poll_parallelism: Option<u64>,
+}
+
+/// 神经元容量与低价值回收配置（顶层 `neuron` 键）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NeuronSection {
+    /// 活跃神经元数量上限；超过时后台定时回收最低价值节点。默认 300。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capacity: Option<usize>,
+    /// 回收定时任务周期（毫秒）。默认 3_600_000（1h）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recycle_interval_ms: Option<u64>,
 }
 
 pub struct ConfigStore {

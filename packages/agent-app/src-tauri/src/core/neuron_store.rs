@@ -123,6 +123,15 @@ impl NeuronStore {
                 AppError::StorageError(format!("Failed to add manual_edited: {}", e))
             })?;
         }
+        if !has_column(&conn, "neurons", "deleted_at")? {
+            conn.execute(
+                "ALTER TABLE neurons ADD COLUMN deleted_at INTEGER",
+                [],
+            )
+            .map_err(|e| {
+                AppError::StorageError(format!("Failed to add deleted_at: {}", e))
+            })?;
+        }
         conn.execute(
             "CREATE TABLE IF NOT EXISTS neuron_versions (
                 id              TEXT PRIMARY KEY,
@@ -197,6 +206,9 @@ impl NeuronStore {
             tool_ids: create.tool_ids,
             created_at: now,
             updated_at: now,
+            use_count: 0,
+            last_used_at: None,
+            deleted_at: None,
         })
     }
 
@@ -207,8 +219,9 @@ impl NeuronStore {
             .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, desc, content, weight, system_type, tool_ids, created_at, updated_at
-                 FROM neurons WHERE id = ?1",
+                "SELECT id, desc, content, weight, system_type, tool_ids, created_at, updated_at,
+                        use_count, last_used_at, deleted_at
+                 FROM neurons WHERE id = ?1 AND deleted_at IS NULL",
             )
             .map_err(|e| AppError::StorageError(format!("Failed to prepare: {}", e)))?;
         let mut rows = stmt
@@ -228,8 +241,9 @@ impl NeuronStore {
             .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, desc, content, weight, system_type, tool_ids, created_at, updated_at
-                 FROM neurons ORDER BY created_at DESC",
+                "SELECT id, desc, content, weight, system_type, tool_ids, created_at, updated_at,
+                        use_count, last_used_at, deleted_at
+                 FROM neurons WHERE deleted_at IS NULL ORDER BY created_at DESC",
             )
             .map_err(|e| AppError::StorageError(format!("Failed to prepare: {}", e)))?;
         let rows = stmt
@@ -250,8 +264,9 @@ impl NeuronStore {
             .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, desc, content, weight, system_type, tool_ids, created_at, updated_at
-                 FROM neurons WHERE system_type = ?1",
+                "SELECT id, desc, content, weight, system_type, tool_ids, created_at, updated_at,
+                        use_count, last_used_at, deleted_at
+                 FROM neurons WHERE system_type = ?1 AND deleted_at IS NULL",
             )
             .map_err(|e| AppError::StorageError(format!("Failed to prepare: {}", e)))?;
         let mut rows = stmt
@@ -297,11 +312,18 @@ impl NeuronStore {
             ));
         }
 
+        // 编辑即使用：合并活跃信号（use_count+1, last_used_at）。
+        set_parts.push("use_count = use_count + 1".to_string());
         let now = now_ms();
+        set_parts.push("last_used_at = ?".to_string());
+        param_values.push(Box::new(now as i64));
         set_parts.push("updated_at = ?".to_string());
         param_values.push(Box::new(now as i64));
 
-        let sql = format!("UPDATE neurons SET {} WHERE id = ?", set_parts.join(", "));
+        let sql = format!(
+            "UPDATE neurons SET {} WHERE id = ? AND deleted_at IS NULL",
+            set_parts.join(", ")
+        );
         param_values.push(Box::new(id.to_string()));
 
         conn.execute(&sql, rusqlite::params_from_iter(param_values.iter()))
@@ -321,9 +343,12 @@ impl NeuronStore {
             .conn
             .lock()
             .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        // 打分即使用：合并活跃信号（use_count+1, last_used_at）。
         let affected = conn
             .execute(
-                "UPDATE neurons SET weight = weight + ?1, updated_at = ?2 WHERE id = ?3",
+                "UPDATE neurons SET weight = weight + ?1, use_count = use_count + 1,
+                        last_used_at = ?2, updated_at = ?2
+                 WHERE id = ?3 AND deleted_at IS NULL",
                 params![delta, now as i64, id],
             )
             .map_err(|e| AppError::StorageError(format!("Failed to adjust weight: {}", e)))?;
@@ -346,7 +371,8 @@ impl NeuronStore {
             .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         let affected = conn
             .execute(
-                "UPDATE neurons SET system_type = ?1, updated_at = ?2 WHERE id = ?3",
+                "UPDATE neurons SET system_type = ?1, updated_at = ?2
+                 WHERE id = ?3 AND deleted_at IS NULL",
                 params![system_type, now as i64, id],
             )
             .map_err(|e| AppError::StorageError(format!("Failed to set system_type: {}", e)))?;
@@ -368,7 +394,8 @@ impl NeuronStore {
             .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         let affected = conn
             .execute(
-                "UPDATE neurons SET tool_ids = ?1, updated_at = ?2 WHERE id = ?3",
+                "UPDATE neurons SET tool_ids = ?1, updated_at = ?2
+                 WHERE id = ?3 AND deleted_at IS NULL",
                 params![encoded, now as i64, id],
             )
             .map_err(|e| AppError::StorageError(format!("Failed to set tool_ids: {}", e)))?;
@@ -454,6 +481,9 @@ impl NeuronStore {
             tool_ids: create.tool_ids,
             created_at: now,
             updated_at: now,
+            use_count: 0,
+            last_used_at: None,
+            deleted_at: None,
         };
         let connection = NeuronConnection {
             source: source_id.to_string(),
@@ -472,6 +502,19 @@ impl NeuronStore {
             .conn
             .lock()
             .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        // 拒绝 deleted 端点：两端都必须是活跃神经元。
+        let active_endpoints: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM neurons WHERE id IN (?1, ?2) AND deleted_at IS NULL",
+                params![source, target],
+                |row| row.get(0),
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to check endpoints: {}", e)))?;
+        if active_endpoints != 2 {
+            return Err(AppError::NeuronNotFound(format!(
+                "link endpoint missing or deleted: {source} -> {target}"
+            )));
+        }
         conn.execute(
             "INSERT OR REPLACE INTO connections (source, target, weight) VALUES (?1, ?2, ?3)",
             params![source, target, weight],
@@ -555,7 +598,11 @@ impl NeuronStore {
             .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         let mut stmt = conn
             .prepare(
-                "SELECT source, target, weight FROM connections WHERE source = ?1 OR target = ?1",
+                "SELECT c.source, c.target, c.weight
+                 FROM connections c
+                 JOIN neurons src ON src.id = c.source AND src.deleted_at IS NULL
+                 JOIN neurons tgt ON tgt.id = c.target AND tgt.deleted_at IS NULL
+                 WHERE c.source = ?1 OR c.target = ?1",
             )
             .map_err(|e| AppError::StorageError(format!("Failed to prepare: {}", e)))?;
         let rows = stmt
@@ -587,10 +634,11 @@ impl NeuronStore {
         let mut stmt = conn
             .prepare(
                 "SELECT n.id, n.desc, n.content, n.weight, n.system_type, n.tool_ids,
-                        n.created_at, n.updated_at
+                        n.created_at, n.updated_at, n.use_count, n.last_used_at, n.deleted_at
                  FROM connections c
                  JOIN neurons n ON n.id = c.target
                  WHERE c.source = ?1
+                   AND n.deleted_at IS NULL
                    AND (n.variant_state IS NULL OR n.variant_state != 'observing')
                  ORDER BY n.weight DESC, RANDOM()",
             )
@@ -631,10 +679,11 @@ impl NeuronStore {
                 "SELECT n.id, n.desc, n.content, n.weight, n.system_type, n.tool_ids,
                         n.created_at, n.updated_at, n.lineage_parent_id,
                         n.use_count, n.accumulated_delta, n.last_used_at,
-                        n.variant_state, n.manual_edited
+                        n.variant_state, n.manual_edited, n.deleted_at
                  FROM connections c
                  JOIN neurons n ON n.id = c.target
                  WHERE c.source = ?1
+                   AND n.deleted_at IS NULL
                  ORDER BY n.weight DESC, RANDOM()",
             )
             .map_err(|e| AppError::StorageError(format!("Failed to prepare: {}", e)))?;
@@ -664,7 +713,7 @@ impl NeuronStore {
             .execute(
                 "UPDATE neurons
                  SET use_count = use_count + 1, last_used_at = ?1, updated_at = ?1
-                 WHERE id = ?2",
+                 WHERE id = ?2 AND deleted_at IS NULL",
                 params![now as i64, variant_id],
             )
             .map_err(|e| AppError::StorageError(format!("Failed to bump usage: {}", e)))?;
@@ -691,7 +740,7 @@ impl NeuronStore {
             .execute(
                 "UPDATE neurons
                  SET accumulated_delta = accumulated_delta + ?1, updated_at = ?2
-                 WHERE id = ?3",
+                 WHERE id = ?3 AND deleted_at IS NULL",
                 params![delta, now as i64, variant_id],
             )
             .map_err(|e| AppError::StorageError(format!("Failed to accumulate delta: {}", e)))?;
@@ -715,7 +764,7 @@ impl NeuronStore {
             .execute(
                 "UPDATE neurons
                  SET variant_state = ?1, updated_at = ?2
-                 WHERE id = ?3",
+                 WHERE id = ?3 AND deleted_at IS NULL",
                 params![state, now as i64, variant_id],
             )
             .map_err(|e| AppError::StorageError(format!("Failed to set variant state: {}", e)))?;
@@ -739,7 +788,7 @@ impl NeuronStore {
             .execute(
                 "UPDATE neurons
                  SET manual_edited = ?1, updated_at = ?2
-                 WHERE id = ?3",
+                 WHERE id = ?3 AND deleted_at IS NULL",
                 params![if edited { 1 } else { 0 }, now as i64, neuron_id],
             )
             .map_err(|e| AppError::StorageError(format!("Failed to set manual_edited: {}", e)))?;
@@ -837,10 +886,10 @@ impl NeuronStore {
             .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         conn.query_row(
             "SELECT n.id, n.desc, n.content, n.weight, n.system_type, n.tool_ids,
-                    n.created_at, n.updated_at
+                    n.created_at, n.updated_at, n.use_count, n.last_used_at, n.deleted_at
              FROM connections c
              JOIN neurons n ON n.id = c.source
-             WHERE c.target = ?1
+             WHERE c.target = ?1 AND n.deleted_at IS NULL
              ORDER BY n.weight DESC, RANDOM()
              LIMIT 1",
             params![target_id],
@@ -861,8 +910,9 @@ impl NeuronStore {
             .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, desc, content, weight, system_type, tool_ids, created_at, updated_at
-                 FROM neurons
+                "SELECT id, desc, content, weight, system_type, tool_ids, created_at, updated_at,
+                        use_count, last_used_at, deleted_at
+                 FROM neurons WHERE deleted_at IS NULL
                  ORDER BY weight DESC, RANDOM()",
             )
             .map_err(|e| AppError::StorageError(format!("Failed to prepare: {}", e)))?;
@@ -936,6 +986,101 @@ impl NeuronStore {
             connections,
         })
     }
+
+    // ── Capacity & low-value recycling (logical delete) ────────
+
+    /// 活跃（未逻辑删除）神经元数量。
+    pub fn count_active(&self) -> AppResult<usize> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM neurons WHERE deleted_at IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to count neurons: {}", e)))?;
+        Ok(count as usize)
+    }
+
+    /// 选出 `n` 个最低价值节点 id（系统提示词豁免）。
+    /// 低价值排序：weight ASC, use_count ASC, last_used_at ASC (NULL 优先), created_at DESC。
+    pub fn select_low_value(&self, n: usize) -> AppResult<Vec<String>> {
+        if n == 0 {
+            return Ok(Vec::new());
+        }
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id FROM neurons
+                 WHERE deleted_at IS NULL AND system_type IS NULL
+                 ORDER BY weight ASC, use_count ASC,
+                          last_used_at IS NULL DESC, last_used_at ASC,
+                          created_at DESC
+                 LIMIT ?1",
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to prepare: {}", e)))?;
+        let rows = stmt
+            .query_map(params![n as i64], |row| row.get::<_, String>(0))
+            .map_err(|e| AppError::StorageError(format!("Failed to query: {}", e)))?;
+        let mut ids = Vec::new();
+        for row in rows {
+            ids.push(
+                row.map_err(|e| AppError::StorageError(format!("Failed to read: {}", e)))?,
+            );
+        }
+        Ok(ids)
+    }
+
+    /// 逻辑删除指定节点：打 `deleted_at` 标记，数据与版本历史保留。
+    /// 返回实际被标记的行数（已删除的节点跳过）。
+    pub fn mark_deleted(&self, ids: &[String]) -> AppResult<usize> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let now = now_ms();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let placeholders = vec!["?"; ids.len()].join(", ");
+        let sql = format!(
+            "UPDATE neurons SET deleted_at = ?1, updated_at = ?1
+             WHERE id IN ({placeholders}) AND deleted_at IS NULL"
+        );
+        let deleted_at = now as i64;
+        let mut params: Vec<&dyn rusqlite::types::ToSql> = vec![&deleted_at];
+        params.extend(ids.iter().map(|id| id as &dyn rusqlite::types::ToSql));
+        conn.execute(&sql, rusqlite::params_from_iter(params.iter().copied()))
+            .map_err(|e| AppError::StorageError(format!("Failed to mark deleted: {}", e)))
+    }
+
+    /// 记录一次使用（select_one 命中、手动标记），`use_count+1, last_used_at=now`。
+    pub fn mark_used(&self, id: &str) -> AppResult<Neuron> {
+        let now = now_ms();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let affected = conn
+            .execute(
+                "UPDATE neurons SET use_count = use_count + 1, last_used_at = ?1, updated_at = ?1
+                 WHERE id = ?2 AND deleted_at IS NULL",
+                params![now as i64, id],
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to mark used: {}", e)))?;
+        drop(conn);
+        if affected == 0 {
+            return Err(AppError::NeuronNotFound(id.to_string()));
+        }
+        self.get_neuron(id)?
+            .ok_or_else(|| AppError::NeuronNotFound(id.to_string()))
+    }
 }
 
 fn row_to_neuron(row: &rusqlite::Row) -> rusqlite::Result<Neuron> {
@@ -952,6 +1097,9 @@ fn row_to_neuron(row: &rusqlite::Row) -> rusqlite::Result<Neuron> {
         tool_ids,
         created_at: row.get::<_, i64>(6)? as u128,
         updated_at: row.get::<_, i64>(7)? as u128,
+        use_count: row.get(8)?,
+        last_used_at: row.get::<_, Option<i64>>(9)?.map(|v| v as u128),
+        deleted_at: row.get::<_, Option<i64>>(10)?.map(|v| v as u128),
     })
 }
 
@@ -970,6 +1118,9 @@ fn row_to_neuron_variant(row: &rusqlite::Row) -> rusqlite::Result<NeuronVariant>
             tool_ids,
             created_at: row.get::<_, i64>(6)? as u128,
             updated_at: row.get::<_, i64>(7)? as u128,
+            use_count: row.get(9)?,
+            last_used_at: row.get::<_, Option<i64>>(11)?.map(|v| v as u128),
+            deleted_at: row.get::<_, Option<i64>>(14)?.map(|v| v as u128),
         },
         lineage_parent_id: row.get(8)?,
         use_count: row.get(9)?,
@@ -1247,5 +1398,88 @@ mod tests {
         );
         assert!(failed.is_err());
         assert_eq!(store.list_neurons().unwrap().len(), count_before);
+    }
+
+    // ── Capacity & low-value recycling ─────────────────────
+
+    #[test]
+    fn test_recycle_low_value_ordering() {
+        let s = test_store();
+        // a: weight 0, use 0（最低价值）；b: use 1；c: weight 2。
+        let a = create(&s, "a", "", 0.0);
+        let b = create(&s, "b", "", 0.0);
+        let c = create(&s, "c", "", 0.0);
+        s.mark_used(&b.id).unwrap();
+        s.adjust_weight(&c.id, 2.0).unwrap();
+
+        let victims = s.select_low_value(2).unwrap();
+        assert_eq!(victims, vec![a.id.clone(), b.id.clone()]);
+
+        let one = s.select_low_value(1).unwrap();
+        assert_eq!(one, vec![a.id]);
+    }
+
+    #[test]
+    fn test_recycle_exempts_system_neurons() {
+        let s = test_store();
+        let plain = create(&s, "plain", "", 0.0);
+        let sys = s
+            .create_neuron(NeuronCreate {
+                desc: "sys".into(),
+                content: "prompt".into(),
+                system_type: Some("selector".into()),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let victims = s.select_low_value(10).unwrap();
+        assert!(victims.contains(&plain.id));
+        assert!(!victims.contains(&sys.id));
+    }
+
+    #[test]
+    fn test_recycle_deleted_nodes_excluded_everywhere() {
+        let s = test_store();
+        let a = create(&s, "a", "", 0.0);
+        let b = create(&s, "b", "", 0.0);
+        let c = create(&s, "c", "", 0.0);
+        s.link(&a.id, &b.id, 0.0).unwrap();
+
+        assert_eq!(s.mark_deleted(&[c.id.clone()]).unwrap(), 1);
+        assert_eq!(s.count_active().unwrap(), 2);
+        assert!(s.get_neuron(&c.id).unwrap().is_none());
+        assert_eq!(s.list_neurons().unwrap().len(), 2);
+        assert!(!s
+            .list_global_candidates(10, &std::collections::HashSet::new())
+            .unwrap()
+            .iter()
+            .any(|n| n.id == c.id));
+        // 重复删除幂等。
+        assert_eq!(s.mark_deleted(&[c.id]).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_recycle_deleted_blocks_writes_and_links() {
+        let s = test_store();
+        let a = create(&s, "a", "", 0.0);
+        let b = create(&s, "b", "", 0.0);
+        let s1 = create(&s, "s1", "", 0.0);
+        s.mark_deleted(&[a.id.clone()]).unwrap();
+
+        assert!(s.adjust_weight(&a.id, 1.0).is_err());
+        assert!(s
+            .update_neuron(
+                &a.id,
+                NeuronUpdate {
+                    desc: Some("x".into()),
+                    ..Default::default()
+                },
+            )
+            .is_err());
+        assert!(s.mark_used(&a.id).is_err());
+        // 连到已删除端点被拒绝。
+        assert!(s.link(&a.id, &b.id, 0.0).is_err());
+        assert!(s.link(&b.id, &a.id, 0.0).is_err());
+        assert!(s.link(&b.id, &s1.id, 0.0).is_ok());
     }
 }

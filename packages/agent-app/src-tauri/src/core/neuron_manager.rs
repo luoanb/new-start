@@ -462,6 +462,8 @@ impl NeuronManager {
         }
         match self.try_llm_select(candidates, history).await {
             Ok(neuron) => {
+                // 活跃信号：select_one 命中即记录使用（忽略失败，不阻塞选择流程）。
+                let _ = self.store()?.mark_used(&neuron.id);
                 tracing::info!(
                     phase = "select_one",
                     method = "llm",
@@ -477,7 +479,9 @@ impl NeuronManager {
                     error = %error,
                     "llm select failed; falling back to weight"
                 );
-                pick_by_weight(candidates)
+                let picked = pick_by_weight(candidates)?;
+                let _ = self.store()?.mark_used(&picked.id);
+                Ok(picked)
             }
         }
     }
@@ -509,8 +513,8 @@ impl NeuronManager {
                     min_new: 0,
                 })
                 .await?;
-            // Attribute usage back to the chosen variant.
-            self.record_variant_usage(&variant.id)?;
+            // select_one 命中已记录 use_count/last_used_at（活跃信号），
+            // 无需在此重复计数。
             (variant.content.clone(), Some(variant.id.clone()))
         };
         let user_prompt = self.create_neuron_user_prompt(&input, count, link_to)?;
@@ -1252,6 +1256,32 @@ impl NeuronManager {
 
     fn store(&self) -> AppResult<std::sync::MutexGuard<'_, NeuronStore>> {
         self.store.lock().map_err(lock_error)
+    }
+
+    /// 活跃数据超容量时，按低价值排序回收最低价值节点（逻辑删除），返回回收数量。
+    /// 系统提示词（system_type IS NOT NULL）豁免；幂等，未超容量时返回 0。
+    pub fn recycle_if_over_capacity(&self) -> AppResult<usize> {
+        let capacity = self.config.capacity()?;
+        let store = self.store()?;
+        let active = store.count_active()?;
+        let over = active.saturating_sub(capacity);
+        if over == 0 {
+            return Ok(0);
+        }
+        let victims = store.select_low_value(over)?;
+        if victims.is_empty() {
+            return Ok(0);
+        }
+        let recycled = store.mark_deleted(&victims)?;
+        tracing::info!(
+            phase = "recycle_if_over_capacity",
+            capacity,
+            active_before = active,
+            victims = victims.len(),
+            recycled,
+            "recycled low-value neurons over capacity"
+        );
+        Ok(recycled)
     }
 }
 
@@ -2436,6 +2466,89 @@ mod tests {
         };
         assert!(edited.manual_edited);
         assert_eq!(edited.neuron.content, "edited");
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    // ── Capacity & low-value recycling ─────────────────────────
+
+    fn write_config_with_capacity(root: &std::path::Path, capacity: usize) {
+        fs::write(
+            root.join("config.json"),
+            format!(
+                r#"{{"neurons":{{"bootstrap":{{"create_neuron_prompt":"create a neuron"}}}},"neuron":{{"capacity":{capacity}}}}}"#
+            ),
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn recycle_if_over_capacity_recycles_lowest_value_and_exempts_system() {
+        let (manager, root) = test_manager();
+        write_config_with_capacity(&root, 3);
+
+        for index in 0..5 {
+            insert_plain(&manager, &format!("n{index}"), "plain");
+        }
+        manager
+            .store()
+            .unwrap()
+            .create_neuron(NeuronCreate {
+                desc: "sys".into(),
+                content: "prompt".into(),
+                system_type: Some("sys_type".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(manager.list().unwrap().len(), 6);
+
+        let recycled = manager.recycle_if_over_capacity().unwrap();
+        assert_eq!(recycled, 3);
+        // 2 个普通 + 1 个系统保留，恰好等于容量 3。
+        assert_eq!(manager.list().unwrap().len(), 3);
+        assert!(manager
+            .get_neuron_by_system_type("sys_type")
+            .unwrap()
+            .is_some());
+
+        // 幂等：未超容量返回 0。
+        assert_eq!(manager.recycle_if_over_capacity().unwrap(), 0);
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn recycle_spares_used_neurons() {
+        let (manager, root) = test_manager();
+        write_config_with_capacity(&root, 2);
+
+        let used = insert_plain(&manager, "used", "used");
+        insert_plain(&manager, "low-a", "a");
+        insert_plain(&manager, "low-b", "b");
+        manager.store().unwrap().mark_used(&used.id).unwrap();
+
+        let recycled = manager.recycle_if_over_capacity().unwrap();
+        assert_eq!(recycled, 1);
+        let remaining: Vec<String> = manager
+            .list()
+            .unwrap()
+            .into_iter()
+            .map(|n| n.id)
+            .collect();
+        assert!(remaining.contains(&used.id), "used neuron must survive");
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn select_one_marks_usage_as_active_signal() {
+        let (manager, root) = test_manager();
+        let n = insert_plain(&manager, "target", "target");
+        let selected = manager.select_one_from(&[n.clone()]).await.unwrap();
+        assert_eq!(selected.id, n.id);
+        let stored = manager.get(&n.id).unwrap().unwrap();
+        assert_eq!(stored.use_count, 1);
+        assert!(stored.last_used_at.is_some());
         drop(manager);
         fs::remove_dir_all(root).unwrap();
     }
