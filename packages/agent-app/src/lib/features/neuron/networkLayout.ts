@@ -146,12 +146,51 @@ export function layoutFlowNodes(subgraph: NeuronSubgraph): LayoutNode[] {
  * Force-directed layout (deterministic). Models the neuron graph as a directed
  * graph, NOT a tree: nodes are freely placed via repulsion + spring forces over
  * fixed iterations. The seeded PRNG keeps coordinates stable across re-renders.
+ *
+ * Anti-crowding measures:
+ * - Springs only act on a sparse skeleton (each node's top-k heaviest edges),
+ *   so a near-complete graph no longer collapses into a blob.
+ * - Repulsion uses node bounding boxes (effective distance), and a collide
+ *   pass pushes overlapping nodes apart.
  */
+
+/** Node bounding-box estimation, aligned with NeuronFlowNode sizing. */
+export function estimateNodeSize(label: string): { w: number; h: number } {
+  const labelLen = (label || "").length;
+  // NeuronFlowNode: min-width 140, max-width 200 + label char width ~8px + padding 12
+  const w = Math.min(200, Math.max(140, labelLen * 8)) + 12;
+  return { w, h: 56 };
+}
+
+/**
+ * Sparse skeleton for spring forces: keep each node's top-k heaviest incident
+ * edges (union). Low-weight edges still render but exert no pull, preventing
+ * a near-complete graph from collapsing toward its center.
+ */
+export function selectSpringEdges(
+  connections: Connection[],
+  k = 3,
+): Connection[] {
+  const byNode = new Map<string, Connection[]>();
+  for (const c of connections) {
+    for (const id of [c.source, c.target]) {
+      if (!byNode.has(id)) byNode.set(id, []);
+      byNode.get(id)!.push(c);
+    }
+  }
+  const chosen = new Set<Connection>();
+  for (const list of byNode.values()) {
+    const top = [...list].sort((a, b) => b.weight - a.weight).slice(0, k);
+    for (const c of top) chosen.add(c);
+  }
+  return [...chosen];
+}
+
 export function layoutForceNodes(
   subgraph: NeuronSubgraph,
   options?: { iterations?: number; seed?: number },
 ): LayoutNode[] {
-  const iterations = options?.iterations ?? 300;
+  const iterations = options?.iterations ?? 400;
   const seed = options?.seed ?? 1337;
 
   const ids = subgraph.neurons.map((n) => n.id);
@@ -168,28 +207,41 @@ export function layoutForceNodes(
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 
+  // Node sizes (bbox) for effective-distance repulsion + collide pass
+  const sizes = new Map<string, { w: number; h: number }>();
+  for (const neuron of subgraph.neurons) {
+    const label = neuron.desc || neuron.id.slice(0, 8);
+    sizes.set(neuron.id, estimateNodeSize(label));
+  }
+  const radiusOf = (id: string) => {
+    const { w, h } = sizes.get(id)!;
+    return Math.hypot(w, h) / 4;
+  };
+
   const pos = new Map<string, { x: number; y: number }>();
   ids.forEach((id, i) => {
     const angle = (i / n) * Math.PI * 2;
-    const radius = 260 + (rand() - 0.5) * 120;
+    const radius = 360 + (rand() - 0.5) * 160;
     pos.set(id, {
       x: Math.cos(angle) * radius + (rand() - 0.5) * 40,
       y: Math.sin(angle) * radius + (rand() - 0.5) * 40,
     });
   });
 
-  // adjacency for spring forces
+  // spring adjacency: sparse skeleton only (anti-collapse)
   const adj = new Map<string, Set<string>>();
   ids.forEach((id) => adj.set(id, new Set()));
-  for (const c of subgraph.connections) {
+  for (const c of selectSpringEdges(subgraph.connections)) {
     if (adj.has(c.source) && adj.has(c.target)) {
       adj.get(c.source)!.add(c.target);
       adj.get(c.target)!.add(c.source);
     }
   }
 
+  // ideal distance: k lower-bounded by node width so springs don't pull into overlap
+  const avgW = [...sizes.values()].reduce((acc, s) => acc + s.w, 0) / n;
   const area = Math.max(90000, n * 1600);
-  const k = Math.sqrt(area / n); // ideal distance
+  const k = Math.max(Math.sqrt(area / n), avgW * 0.9);
   const repulse = 6000;
   const spring = 0.05;
   const damping = 0.85;
@@ -198,17 +250,20 @@ export function layoutForceNodes(
   for (let it = 0; it < iterations; it++) {
     ids.forEach((id) => disp.set(id, { x: 0, y: 0 }));
 
-    // repulsion (all pairs)
+    // repulsion (all pairs, effective distance = center dist - node radii)
     for (let i = 0; i < n; i++) {
       const a = ids[i];
       const pa = pos.get(a)!;
+      const ra = radiusOf(a);
       for (let j = i + 1; j < n; j++) {
         const b = ids[j];
         const pb = pos.get(b)!;
-        let dx = pa.x - pb.x;
-        let dy = pa.y - pb.y;
-        let dist = Math.hypot(dx, dy) || 0.01;
-        const f = repulse / (dist * dist);
+        const rb = radiusOf(b);
+        const dx = pa.x - pb.x;
+        const dy = pa.y - pb.y;
+        const dist = Math.hypot(dx, dy) || 0.01;
+        const eff = Math.max(dist - (ra + rb), 1);
+        const f = repulse / (eff * eff);
         const ux = (dx / dist) * f;
         const uy = (dy / dist) * f;
         const da = disp.get(a)!;
@@ -220,7 +275,7 @@ export function layoutForceNodes(
       }
     }
 
-    // attraction (edges)
+    // attraction (skeleton edges only)
     for (const [a, neighbors] of adj) {
       const pa = pos.get(a)!;
       const da = disp.get(a)!;
@@ -238,7 +293,7 @@ export function layoutForceNodes(
     }
 
     // apply with length limit + damping
-    const limit = 80 * damping ** (it / 30);
+    const limit = Math.max(24, 120 * damping ** (it / 30));
     ids.forEach((id) => {
       const d = disp.get(id)!;
       const len = Math.hypot(d.x, d.y) || 0.01;
@@ -247,6 +302,33 @@ export function layoutForceNodes(
       p.x += d.x * scale;
       p.y += d.y * scale;
     });
+
+    // collide pass: push overlapping bboxes apart along the least-overlap axis
+    for (let i = 0; i < n; i++) {
+      const a = ids[i];
+      const sa = sizes.get(a)!;
+      const pa = pos.get(a)!;
+      for (let j = i + 1; j < n; j++) {
+        const b = ids[j];
+        const sb = sizes.get(b)!;
+        const pb = pos.get(b)!;
+        const dx = pb.x - pa.x;
+        const dy = pb.y - pa.y;
+        const overlapX = (sa.w + sb.w) / 2 - Math.abs(dx);
+        const overlapY = (sa.h + sb.h) / 2 - Math.abs(dy);
+        if (overlapX > 0 && overlapY > 0) {
+          if (overlapX < overlapY) {
+            const sign = dx === 0 ? 1 : Math.sign(dx);
+            pa.x -= sign * (overlapX / 2);
+            pb.x += sign * (overlapX / 2);
+          } else {
+            const sign = dy === 0 ? 1 : Math.sign(dy);
+            pa.y -= sign * (overlapY / 2);
+            pb.y += sign * (overlapY / 2);
+          }
+        }
+      }
+    }
   }
 
   return subgraph.neurons.map((neuron) => ({

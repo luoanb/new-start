@@ -162,7 +162,7 @@ Three-column layout with flexible center:
 
 ### Input area
 
-Minimal: textarea + send button. Textarea expands from 1 to 5 lines, then scrolls. Send button disabled when empty or loading.
+Rounded card container: `max-width 720px`, `radius-lg`, `1px border`, surface background, centered with breathing padding. `focus-within` lifts the border to primary plus a soft 3px ring. Inside: borderless, transparent textarea that auto-grows from 1 to 5 lines then scrolls. Bottom-right circular send button (`radius-full`, 30px) with send icon; disabled (muted, border-colored) when empty or loading; loading state shows three pulsing dots.
 
 ### Model selector
 

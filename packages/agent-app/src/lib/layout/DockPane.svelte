@@ -85,5 +85,9 @@
     flex: 1;
     min-height: 0;
     overflow: auto;
+    /* flex 容器：子面板（如 LogPanel）可拉伸填满并在内部滚动，
+       避免 height:100% 不可靠导致的 外层滚动条 + 内层滚动条 双滚动条。 */
+    display: flex;
+    flex-direction: column;
   }
 </style>

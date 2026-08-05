@@ -9,8 +9,19 @@
   let historyIndex = $state(-1);
   let textareaEl: HTMLTextAreaElement | undefined = $state();
 
+  const MAX_HEIGHT = 160; // 约 5 行，之后滚动
+
   function handleCompositionStart() { composing = true; }
   function handleCompositionEnd() { composing = false; }
+
+  function autoResize() {
+    const el = textareaEl;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, MAX_HEIGHT) + "px";
+  }
+
+  function handleInput() { autoResize(); }
 
   function handleKeydown(e: KeyboardEvent) {
     if (composing || e.isComposing || e.key === "Process" || e.key === "Dead") return;
@@ -19,10 +30,12 @@
       e.preventDefault();
       historyIndex = historyIndex === -1 ? history.length - 1 : Math.max(0, historyIndex - 1);
       text = history[historyIndex];
+      requestAnimationFrame(autoResize);
     } else if (e.key === "ArrowDown" && historyIndex !== -1) {
       e.preventDefault();
       if (historyIndex < history.length - 1) { historyIndex++; text = history[historyIndex]; }
       else { historyIndex = -1; text = ""; }
+      requestAnimationFrame(autoResize);
     }
   }
 
@@ -33,32 +46,74 @@
     historyIndex = -1;
     onSend(trimmed);
     text = "";
-    setTimeout(() => textareaEl?.focus(), 0);
+    requestAnimationFrame(() => {
+      autoResize();
+      textareaEl?.focus();
+    });
   }
 </script>
 
 <div class="input-area">
-  <textarea
-    bind:this={textareaEl}
-    bind:value={text}
-    onkeydown={handleKeydown}
-    oncompositionstart={handleCompositionStart}
-    oncompositionend={handleCompositionEnd}
-    placeholder={t("chatArea.chatInputPlaceholder")}
-    disabled={loading}
-    rows="1"
-  ></textarea>
-  <button onclick={submit} disabled={loading || !text.trim()}>
-    {loading ? t("common.sending") : t("common.send")}
-  </button>
+  <div class="input-box">
+    <textarea
+      bind:this={textareaEl}
+      bind:value={text}
+      oninput={handleInput}
+      onkeydown={handleKeydown}
+      oncompositionstart={handleCompositionStart}
+      oncompositionend={handleCompositionEnd}
+      placeholder={t("chatArea.chatInputPlaceholder")}
+      disabled={loading}
+      rows="1"
+    ></textarea>
+    <div class="input-footer">
+      <button
+        class="send-btn"
+        onclick={submit}
+        disabled={loading || !text.trim()}
+        title={t("common.send")}
+        aria-label={t("common.send")}
+      >
+        {#if loading}
+          <span class="dots">
+            <span class="dot"></span>
+            <span class="dot"></span>
+            <span class="dot"></span>
+          </span>
+        {:else}
+          <svg
+            viewBox="0 0 24 24"
+            width="14"
+            height="14"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="m22 2-7 20-4-9-9-4Z" />
+            <path d="M22 2 11 13" />
+          </svg>
+        {/if}
+      </button>
+    </div>
+  </div>
 </div>
 
 <style>
-  .input-area { display: flex; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-top: var(--border-width) solid var(--color-border); background: var(--color-surface); }
-  textarea { flex: 1; resize: none; border: var(--border-width) solid var(--color-border); border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3); font-size: var(--fs-base); font-family: inherit; line-height: 1.4; background: var(--color-bg); color: var(--color-text); outline: none; max-height: 120px; transition: border-color var(--duration-fast) var(--ease-out); }
-  textarea:focus { border-color: var(--color-primary); }
+  .input-area { display: flex; justify-content: center; padding: var(--space-2) var(--space-4) var(--space-4); background: var(--color-bg); }
+  .input-box { display: flex; flex-direction: column; width: 100%; max-width: 720px; padding: var(--space-2); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-surface); transition: border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out); }
+  .input-box:focus-within { border-color: var(--color-primary); box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-primary) 14%, transparent); }
+  textarea { width: 100%; min-height: 24px; max-height: 160px; border: none; background: transparent; resize: none; outline: none; padding: var(--space-1) var(--space-2); font-size: var(--fs-base); font-family: inherit; line-height: 1.5; color: var(--color-text); }
+  textarea::placeholder { color: var(--color-text-muted); }
   textarea:disabled { opacity: 0.5; }
-  button { align-self: flex-end; padding: var(--space-2) var(--space-5); border-radius: var(--radius-sm); border: none; background: var(--color-primary); color: var(--color-on-primary); font-size: var(--fs-base); font-weight: 500; cursor: pointer; transition: opacity var(--duration-fast) var(--ease-out); white-space: nowrap; }
-  button:disabled { opacity: 0.4; cursor: not-allowed; }
-  button:not(:disabled):hover { opacity: 0.9; }
+  .input-footer { display: flex; justify-content: flex-end; padding: var(--space-1) var(--space-2); }
+  .send-btn { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border: none; border-radius: var(--radius-full); background: var(--color-primary); color: var(--color-on-primary); cursor: pointer; transition: background var(--duration-fast) var(--ease-out), opacity var(--duration-fast) var(--ease-out); }
+  .send-btn:not(:disabled):hover { background: var(--color-primary-dim); }
+  .send-btn:disabled { background: var(--color-border); color: var(--color-text-muted); cursor: not-allowed; }
+  .dots { display: inline-flex; gap: 3px; }
+  .dot { width: 4px; height: 4px; border-radius: var(--radius-full); background: currentColor; animation: dot-pulse 1s var(--ease-out) infinite; }
+  .dot:nth-child(2) { animation-delay: 0.15s; }
+  .dot:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes dot-pulse { 0%, 100% { opacity: 0.4; transform: scale(1); } 50% { opacity: 1; transform: scale(1.25); } }
 </style>

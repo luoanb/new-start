@@ -41,8 +41,13 @@
   function openRating() {
     if (ratingBtnEl) {
       const rect = ratingBtnEl.getBoundingClientRect();
-      // 底部空间不足时向上弹出，避免面板被输入框/区域边缘遮住。
-      panelUp = rect.bottom + 48 > window.innerHeight;
+      // 以最近的滚动容器（.messages）为基准：它带 overflow 裁剪，面板超出其
+      // 可视底部会被裁掉。按钮下方剩余空间不足一个面板高度时向上弹出。
+      const container = ratingBtnEl.closest(".messages") as HTMLElement | null;
+      const availableBelow = container
+        ? container.getBoundingClientRect().bottom - rect.bottom
+        : window.innerHeight - rect.bottom;
+      panelUp = availableBelow < 48;
     }
     ratingOpen = true;
   }

@@ -87,6 +87,8 @@
     {nodeTypes}
     {edgeTypes}
     fitView
+    fitViewOptions={{ padding: 0.3 }}
+    minZoom={0.1}
     nodesConnectable={false}
     elementsSelectable={true}
     deleteKey={null}

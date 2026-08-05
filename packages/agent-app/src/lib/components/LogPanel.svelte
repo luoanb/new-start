@@ -168,7 +168,7 @@
   .log-panel {
     display: flex;
     flex-direction: column;
-    height: 100%;
+    flex: 1;
     min-height: 0;
     gap: var(--space-2);
     padding: var(--space-2);
