@@ -3,6 +3,7 @@ pub mod tui;
 
 use crate::core::{
     app_log::{self, LogEntry},
+    assistant_mode::AssistantMode,
     conversation_store::ConversationStore,
     error::AppErrorPayload,
     neuron_manager::NeuronManager,
@@ -494,6 +495,33 @@ async fn adjust_edge_weight(
         .map_err(|error| error.payload())
 }
 
+/// 人工评价：对当前会话绑定 topic 的干预窗口应用评分 delta，
+/// 与模型打分 hook 共享 `apply_score_feedback`，仅分数来源不同（用户点击）。
+#[tauri::command]
+async fn score_feedback(
+    assistant: State<'_, Arc<AssistantMode>>,
+    state_emit: State<'_, StateEmitter>,
+    conversation_id: String,
+    score: i64,
+) -> TauriResult<()> {
+    assistant
+        .inner()
+        .score_feedback(&conversation_id, score)
+        .await
+        .map_err(|error| {
+            tracing::warn!(
+                phase = "score_feedback_command",
+                conversation_id,
+                score,
+                error = %error,
+                "manual rating failed"
+            );
+            error.payload()
+        })?;
+    state_emit.inner()(StateChange::Neurons);
+    Ok(())
+}
+
 // ── Logs ──
 
 #[tauri::command]
@@ -666,6 +694,7 @@ pub fn run() {
             create_neuron_plain,
             adjust_neuron_weight,
             adjust_edge_weight,
+            score_feedback,
             // Logs
             logs_snapshot,
             logs_get_level,

@@ -196,14 +196,6 @@ impl Poller {
         self.tick_count = self.tick_count.saturating_add(1);
         let force_all = self.pending_trigger;
         self.pending_trigger = false;
-        tracing::info!(
-            phase = "poller_tick",
-            tick = self.tick_count,
-            state = ?self.state,
-            force_all,
-            task_count = self.tasks.len(),
-            "poller tick processed"
-        );
         if force_all {
             tracing::info!(phase = "poller_tick", tick = self.tick_count, "trigger consumed: force_all firing all handlers");
         }

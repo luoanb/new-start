@@ -26,6 +26,8 @@ pub enum StateChange {
     /// 运行中会话集合变化（register/unregister/update_step/close），
     /// 前端应重新拉取 running sessions。
     Sessions,
+    /// 神经元权重/连接变化（人工评价、人工调整），前端应刷新神经元面板。
+    Neurons,
 }
 
 /// 状态事件发射器：由 `lib.rs` setup 构造（捕获 AppHandle），

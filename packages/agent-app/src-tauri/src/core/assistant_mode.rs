@@ -794,6 +794,93 @@ impl AssistantMode {
             .default_model_selection()?
             .ok_or(AppError::ModelNotSelected)
     }
+
+    /// 读取 topic 的干预窗口；窗口为空返回空 Vec（由调用方决定跳过或报错）。
+    pub fn intervention_window(&self, topic_id: &str) -> AppResult<Vec<String>> {
+        let topic = self
+            .topics()?
+            .get(topic_id)?
+            .ok_or_else(|| AppError::ConversationNotFound(topic_id.to_string()))?;
+        Ok(read_assistant_state(&topic).intervention_neuron_ids)
+    }
+
+    /// 对窗口内每个介入神经元应用 delta：节点权重 + 关联边 + lineage 归因 + 变体演进。
+    /// 模型打分 hook 与人工评价共用；窗口为空时静默通过。
+    pub async fn apply_score_feedback(&self, topic_id: &str, delta: f64) -> AppResult<()> {
+        let neuron_ids = self.intervention_window(topic_id)?;
+        if neuron_ids.is_empty() {
+            return Ok(());
+        }
+        tracing::info!(
+            phase = "apply_score_feedback",
+            topic_id,
+            neuron_count = neuron_ids.len(),
+            delta,
+            "applying weight delta"
+        );
+        for neuron_id in &neuron_ids {
+            let _ = self.neuron_manager.adjust_weight(neuron_id, delta)?;
+            let connections = self.neurons()?.get_connections(neuron_id)?;
+            for edge in connections {
+                if edge.target == *neuron_id || edge.source == *neuron_id {
+                    let _ = self
+                        .neurons()?
+                        .adjust_connection_weight(&edge.source, &edge.target, delta);
+                }
+            }
+            // Lineage attribution: the score also flows back to the creator
+            // variant that generated this neuron, feeding the self-iteration pool.
+            if let Some(parent_id) = self.neurons()?.lineage_parent_id_of(neuron_id)? {
+                let _ = self
+                    .neuron_manager
+                    .accumulate_variant_delta(&parent_id, delta)?;
+            }
+        }
+        // Creator pool self-iteration after a scoring round. Never allowed to
+        // break the feedback flow: failures keep the pool unchanged.
+        if let Err(error) = self.neuron_manager.maybe_evolve_creator_variants().await {
+            tracing::warn!(
+                phase = "apply_score_feedback",
+                error = %error,
+                "maybe_evolve_creator_variants failed; keeping pool unchanged"
+            );
+        }
+        Ok(())
+    }
+
+    /// 人工评价入口：按会话解析绑定 topic，校验分数并应用评分 delta。
+    /// 与模型打分 hook 共享 `apply_score_feedback`，只是分数来源不同（用户点击 vs 模型 JSON）。
+    pub async fn score_feedback(&self, session_id: &str, score: i64) -> AppResult<()> {
+        if score == 0 || !(-5..=5).contains(&score) {
+            return Err(AppError::InvalidInput(format!(
+                "score must be in -5..=5 and non-zero, got {score}"
+            )));
+        }
+        let topic_id = self
+            .topics()?
+            .find_by_session_id(session_id)?
+            .ok_or_else(|| {
+                AppError::ConversationNotFound(format!(
+                    "no topic bound to session {session_id}"
+                ))
+            })?
+            .id;
+        let neuron_ids = self.intervention_window(&topic_id)?;
+        if neuron_ids.is_empty() {
+            return Err(AppError::InvalidInput(
+                "no intervention window to score".into(),
+            ));
+        }
+        tracing::info!(
+            phase = "manual_score_feedback",
+            session_id,
+            topic_id = %topic_id,
+            score,
+            neuron_count = neuron_ids.len(),
+            "manual rating applied"
+        );
+        self.apply_score_feedback(&topic_id, score as f64).await
+    }
 }
 
 struct AssistantPollHandler {
@@ -1151,46 +1238,10 @@ impl BeforeHook for ScoreFeedbackBeforeHook<'_> {
             )));
         }
         tracing::info!(phase = "score_feedback_hook", score, "applying weight delta");
-        let delta = score as f64;
-        for neuron_id in &state.intervention_neuron_ids {
-            let _ = self
-                .assistant
-                .neuron_manager
-                .adjust_weight(neuron_id, delta)?;
-            let connections = self.assistant.neurons()?.get_connections(neuron_id)?;
-            for edge in connections {
-                if edge.target == *neuron_id || edge.source == *neuron_id {
-                    let _ = self.assistant.neurons()?.adjust_connection_weight(
-                        &edge.source,
-                        &edge.target,
-                        delta,
-                    );
-                }
-            }
-            // Lineage attribution: the score also flows back to the creator
-            // variant that generated this neuron, feeding the self-iteration pool.
-            if let Some(parent_id) = self.assistant.neurons()?.lineage_parent_id_of(neuron_id)? {
-                let _ = self
-                    .assistant
-                    .neuron_manager
-                    .accumulate_variant_delta(&parent_id, delta)?;
-            }
-        }
-        // Creator pool self-iteration after a scoring round. Never allowed to
-        // break the feedback flow: failures keep the pool unchanged.
-        if let Err(error) = self
-            .assistant
-            .neuron_manager
-            .maybe_evolve_creator_variants()
+        // 与人工评价共用同一评分逻辑：节点权重 + 关联边 + lineage 归因 + 变体演进。
+        self.assistant
+            .apply_score_feedback(&topic_id, score as f64)
             .await
-        {
-            tracing::warn!(
-                phase = "score_feedback_hook",
-                error = %error,
-                "maybe_evolve_creator_variants failed; keeping pool unchanged"
-            );
-        }
-        Ok(())
     }
 }
 

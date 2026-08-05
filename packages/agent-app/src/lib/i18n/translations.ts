@@ -28,6 +28,9 @@ export type Translations = {
     you: string;
     assistant: string;
     system: string;
+    copy: string;
+    rate: string;
+    copied: string;
   };
   sidePanel: {
     providers: string;
@@ -225,6 +228,9 @@ export const en: Translations = {
     you: "You",
     assistant: "Assistant",
     system: "system",
+    copy: "Copy",
+    rate: "Rate",
+    copied: "Copied",
   },
   sidePanel: {
     providers: "Providers",
@@ -428,6 +434,9 @@ export const zh: Translations = {
     you: "你",
     assistant: "助手",
     system: "系统",
+    copy: "复制",
+    rate: "评价",
+    copied: "已复制",
   },
   sidePanel: {
     providers: "服务商",

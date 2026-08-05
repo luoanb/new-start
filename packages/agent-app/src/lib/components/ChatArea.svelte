@@ -3,6 +3,8 @@
   import ChatInput from "./ChatInput.svelte";
   import type { Message } from "$lib/types";
   import { t } from "$lib/i18n";
+  import { dataStore } from "$lib/stores/dataStore.svelte";
+  import { errorMessage } from "$lib/errorMessage";
 
   let {
     messages,
@@ -15,6 +17,7 @@
   } = $props();
 
   let containerEl: HTMLDivElement | undefined = $state();
+  let ratingError = $state("");
 
   $effect(() => {
     if (messages.length > 0 && containerEl) {
@@ -23,9 +26,34 @@
       });
     }
   });
+
+  // 仅当当前会话已绑定 topic（assistant 模式）时，assistant 回复才显示评价按钮。
+  const canRate = $derived(
+    dataStore.state.topics.some(
+      (topic) => topic.session_id === dataStore.state.activeConversationId
+    )
+  );
+
+  async function handleCopy(msg: Message): Promise<void> {
+    await navigator.clipboard.writeText(msg.content);
+  }
+
+  async function handleRate(score: number): Promise<void> {
+    const conversationId = dataStore.state.activeConversationId;
+    if (!conversationId) return;
+    try {
+      await dataStore.scoreFeedback(conversationId, score);
+    } catch (e) {
+      ratingError = `评价失败: ${errorMessage(e)}`;
+      setTimeout(() => (ratingError = ""), 3000);
+    }
+  }
 </script>
 
 <div class="chat-area">
+  {#if ratingError}
+    <div class="rating-error">{ratingError}</div>
+  {/if}
   <div class="messages" bind:this={containerEl}>
     {#if messages.length === 0}
       <div class="empty">
@@ -36,7 +64,7 @@
       </div>
     {:else}
       {#each messages as msg}
-        <ChatMessage message={msg} />
+        <ChatMessage message={msg} {canRate} onCopy={handleCopy} onRate={handleRate} />
       {/each}
     {/if}
 
@@ -53,6 +81,7 @@
 
 <style>
   .chat-area { display: flex; flex-direction: column; height: 100%; overflow: hidden; min-height: 0; background: var(--color-bg); }
+  .rating-error { margin: var(--space-1) var(--space-4); padding: var(--space-1) var(--space-2); font-size: var(--fs-xs); color: var(--color-error); background: var(--color-error-bg); border-radius: var(--radius-sm); }
   .messages { flex: 1; overflow-y: auto; min-height: 0; padding: var(--space-3) 0; scroll-behavior: smooth; }
   .empty { display: flex; align-items: center; justify-content: center; height: 100%; }
   .empty-content { text-align: center; max-width: 300px; }

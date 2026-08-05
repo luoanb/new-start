@@ -5,7 +5,17 @@
   import ToolResultBlock from "./ToolResultBlock.svelte";
   import { t } from "$lib/i18n";
 
-  let { message }: { message: Message } = $props();
+  let {
+    message,
+    onCopy,
+    onRate,
+    canRate,
+  }: {
+    message: Message;
+    onCopy?: (msg: Message) => void;
+    onRate?: (score: number) => void;
+    canRate?: boolean;
+  } = $props();
 
   const isUser = $derived(message.role === "user");
   const isAssistant = $derived(message.role === "assistant");
@@ -14,6 +24,39 @@
   const hasToolCalls = $derived(
     message.tool_calls && message.tool_calls.length > 0
   );
+
+  // 操作栏显隐：工具调用/工具回复/系统消息无操作栏，其余有。
+  const showActions = $derived(
+    !isSystem && !isToolResult && message.msg_type !== "tool_call"
+  );
+
+  // 打分区间与模型约束一致：-5..5 且非 0（去掉 0），一行 10 个。
+  const scoreList = [-5, -4, -3, -2, -1, 1, 2, 3, 4, 5];
+
+  let ratingOpen = $state(false);
+  let ratingBtnEl: HTMLButtonElement | undefined = $state();
+  let panelUp = $state(false);
+  let copied = $state(false);
+
+  function openRating() {
+    if (ratingBtnEl) {
+      const rect = ratingBtnEl.getBoundingClientRect();
+      // 底部空间不足时向上弹出，避免面板被输入框/区域边缘遮住。
+      panelUp = rect.bottom + 48 > window.innerHeight;
+    }
+    ratingOpen = true;
+  }
+
+  async function handleCopy() {
+    await onCopy?.(message);
+    copied = true;
+    setTimeout(() => (copied = false), 1500);
+  }
+
+  function handleRate(score: number) {
+    ratingOpen = false;
+    onRate?.(score);
+  }
 
   function formatTime(ts: number): string {
     const d = new Date(ts);
@@ -29,34 +72,120 @@
   class:assistant={isAssistant}
   class:system={isSystem}
 >
-  <div class="bubble">
-    <div class="role-bar">
-      <span class="role-label">
-        {#if isSystem}
-          {t("chatMessage.system")}
-        {:else if isAssistant}
-          {t("chatMessage.assistant")}
-        {:else}
-          {t("chatMessage.you")}
+  <div class="msg-col">
+    <div class="bubble">
+      <div class="role-bar">
+        <span class="role-label">
+          {#if isSystem}
+            {t("chatMessage.system")}
+          {:else if isAssistant}
+            {t("chatMessage.assistant")}
+          {:else}
+            {t("chatMessage.you")}
+          {/if}
+        </span>
+        {#if !isSystem}
+          <span class="timestamp">{formatTime(message.timestamp)}</span>
         {/if}
-      </span>
-      {#if !isSystem}
-        <span class="timestamp">{formatTime(message.timestamp)}</span>
+      </div>
+
+      {#if isToolResult}
+        <ToolResultBlock {message} />
+      {:else if isSystem}
+        <p class="content">{message.content}</p>
+      {:else}
+        <div class="content markdown-content">
+          <MarkdownRenderer content={message.content} />
+        </div>
+      {/if}
+
+      {#if hasToolCalls}
+        <ToolCallBlock toolCalls={message.tool_calls!} />
       {/if}
     </div>
 
-    {#if isToolResult}
-      <ToolResultBlock {message} />
-    {:else if isSystem}
-      <p class="content">{message.content}</p>
-    {:else}
-      <div class="content markdown-content">
-        <MarkdownRenderer content={message.content} />
+    {#if showActions}
+      <div class="actions">
+        <button
+          class="action-btn"
+          class:copied
+          onclick={handleCopy}
+          title={copied ? t("chatMessage.copied") : t("chatMessage.copy")}
+          aria-label={copied ? t("chatMessage.copied") : t("chatMessage.copy")}
+        >
+          {#if copied}
+            <svg
+              viewBox="0 0 24 24"
+              width="14"
+              height="14"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          {:else}
+            <svg
+              viewBox="0 0 24 24"
+              width="14"
+              height="14"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+              <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+            </svg>
+          {/if}
+        </button>
+        {#if isAssistant && canRate}
+          <div
+            class="rating"
+            role="group"
+            aria-label={t("chatMessage.rate")}
+            onmouseenter={openRating}
+            onmouseleave={() => (ratingOpen = false)}
+          >
+            <button
+              class="action-btn"
+              bind:this={ratingBtnEl}
+              title={t("chatMessage.rate")}
+              aria-label={t("chatMessage.rate")}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="14"
+                height="14"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <polygon
+                  points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"
+                />
+              </svg>
+            </button>
+            {#if ratingOpen}
+              <div class="rating-panel" class:up={panelUp}>
+                {#each scoreList as score}
+                  <button
+                    class="rating-btn"
+                    onclick={() => handleRate(score)}
+                  >
+                    {score}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/if}
       </div>
-    {/if}
-
-    {#if hasToolCalls}
-      <ToolCallBlock toolCalls={message.tool_calls!} />
     {/if}
   </div>
 </div>
@@ -66,6 +195,9 @@
   @keyframes msg-fadein { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
   .message.user { justify-content: flex-end; }
   .message.assistant, .message.system { justify-content: flex-start; }
+  .msg-col { display: flex; flex-direction: column; gap: var(--space-1); width: 100%; min-width: 0; }
+  .message.user .msg-col { align-items: flex-end; }
+  .message.assistant .msg-col, .message.system .msg-col { align-items: flex-start; }
   .bubble { max-width: 75%; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--color-surface); border: var(--border-width) solid var(--color-border); }
   .message.user .bubble { background: var(--color-primary); color: var(--color-on-primary); border-color: var(--color-primary); border-bottom-right-radius: var(--space-1); }
   .message.assistant .bubble { border-bottom-left-radius: var(--space-1); border: none; max-width: 100%; }
@@ -77,4 +209,16 @@
   .content.markdown-content :global(p) { margin: 0.3em 0; }
   .content.markdown-content :global(p:first-child) { margin-top: 0; }
   .content.markdown-content :global(p:last-child) { margin-bottom: 0; }
+
+  .actions { display: inline-flex; align-items: center; gap: var(--space-1); position: relative; opacity: 0; transition: opacity var(--duration-fast) var(--ease-out); }
+  .message:hover .actions { opacity: 1; }
+  .action-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px; padding: 0; border: var(--border-width) solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text-muted); cursor: pointer; }
+  .action-btn:hover { color: var(--color-text); border-color: var(--color-primary); }
+  .action-btn.copied { color: var(--color-primary); border-color: var(--color-primary); }
+  .rating { position: relative; display: inline-flex; }
+  .rating-panel { position: absolute; top: 100%; left: 0; display: grid; grid-template-columns: repeat(10, 26px); gap: 2px; padding: var(--space-1); background: var(--color-surface); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-sm); z-index: 100; }
+  .rating-panel.up { top: auto; bottom: 100%; }
+  .message.user .rating-panel { left: auto; right: 0; }
+  .rating-btn { font-size: var(--fs-xs); height: 22px; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--color-text-muted); cursor: pointer; }
+  .rating-btn:hover { background: var(--color-primary); color: var(--color-on-primary); }
 </style>

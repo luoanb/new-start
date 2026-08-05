@@ -8,6 +8,7 @@
   import Select from "./Select.svelte";
   import { errorMessage } from "$lib/errorMessage";
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
+  import { dataStore } from "$lib/stores/dataStore.svelte";
   import NeuronList from "./NeuronList.svelte";
   import NeuronDetail from "./NeuronDetail.svelte";
   import NeuronNetwork from "./NeuronNetwork.svelte";
@@ -287,6 +288,16 @@
   onMount(() => {
     load();
     loadAvailableTools();
+  });
+
+  // 人工评价/权重变化（StateChange::Neurons）后自动刷新列表与网络。
+  let lastNeuronsVersion = 0;
+  $effect(() => {
+    const version = dataStore.state.neuronsVersion;
+    if (version !== lastNeuronsVersion) {
+      lastNeuronsVersion = version;
+      void load();
+    }
   });
 </script>
 

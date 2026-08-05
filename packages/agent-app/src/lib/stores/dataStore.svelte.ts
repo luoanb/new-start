@@ -29,13 +29,14 @@ import { formatInvokeError } from "$lib/utils/formatInvokeError";
 /** 与后端 core/events.rs STATE_CHANGED_EVENT 保持一致 */
 export const STATE_CHANGED_EVENT = "app://state-changed";
 
-export type StateEventKind = "topics" | "conversations" | "poller" | "sessions";
+export type StateEventKind = "topics" | "conversations" | "poller" | "sessions" | "neurons";
 
 export type StateChangePayload =
   | { kind: "topics" }
   | { kind: "conversations" }
   | { kind: "poller"; status: PollerStatus }
-  | { kind: "sessions" };
+  | { kind: "sessions" }
+  | { kind: "neurons" };
 
 const state = $state({
   ready: false,
@@ -50,6 +51,7 @@ const state = $state({
   topics: [] as Topic[],
   poller: null as PollerStatus | null,
   runningSessions: [] as RunningSession[],
+  neuronsVersion: 0,
 });
 
 let unlisten: UnlistenFn | null = null;
@@ -96,6 +98,8 @@ async function handleStateChanged(payload: StateChangePayload): Promise<void> {
       state.poller = payload.status;
     } else if (payload.kind === "sessions") {
       await refreshRunningSessions();
+    } else if (payload.kind === "neurons") {
+      state.neuronsVersion++;
     }
   } catch (e) {
     state.error = `State refresh failed: ${formatInvokeError(e)}`;
@@ -216,6 +220,11 @@ async function clearConversation(): Promise<void> {
   await refreshConversations();
 }
 
+// 人工评价：对当前会话绑定 topic 的干预窗口应用评分 delta（后端 emit Neurons 触发刷新）。
+async function scoreFeedback(conversationId: string, score: number): Promise<void> {
+  await invoke("score_feedback", { conversationId, score });
+}
+
 // Topic actions
 async function createTopic(name: string, description: string): Promise<Topic> {
   const topic = await invoke<Topic>("create_topic", { name, description });
@@ -303,6 +312,7 @@ export const dataStore = {
   closeSession,
   sendMessage,
   clearConversation,
+  scoreFeedback,
   createTopic,
   pauseTopic,
   resumeTopic,
