@@ -6,6 +6,7 @@
   import NeuronNetworkGraph from "./NeuronNetworkGraph.svelte";
   import NeuronDetailDrawer from "./NeuronDetailDrawer.svelte";
   import Select from "./Select.svelte";
+  import MultiSelect from "./MultiSelect.svelte";
   import { errorMessage } from "$lib/errorMessage";
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
   import { dataStore } from "$lib/stores/dataStore.svelte";
@@ -29,6 +30,15 @@
   let search = $state("");
   let depth = $state(2);
 
+  // 核心节点选择：由用户在顶栏 Top60 多选下拉中勾选（默认权重最高节点）
+  let coreSelection = $state<string[]>([]);
+  const topNeurons = $derived(
+    [...neurons].sort((a, b) => b.weight - a.weight).slice(0, 60),
+  );
+  const coreOptions = $derived(
+    topNeurons.map((n) => ({ value: n.id, label: n.desc || n.id })),
+  );
+
   // 连线类型（力导向布局默认 floating：自动吸附卡片最近边缘点）
   type EdgeType = "bezier" | "smoothstep" | "step" | "straight" | "floating";
   let edgeType = $state<EdgeType>("floating");
@@ -44,33 +54,21 @@
   // 可见节点 id 集合（过滤后）
   let visibleIds = $derived(new Set(filteredNeurons.map((n) => n.id)));
 
-  // 构建全局图的 subgraph：在可见节点内取 top-N（按权重）+ 其邻居
-  const TOP_N = 60;
+  // 构建全局图的 subgraph：以用户勾选的核心节点为起点，按 depth 展开
   function buildSubgraph(): NeuronSubgraph {
-    const visible = filteredNeurons;
-    if (visible.length === 0) return { seed_id: "", neurons: [], connections: [] };
+    if (coreSelection.length === 0 || filteredNeurons.length === 0)
+      return { seed_id: "", neurons: [], connections: [] };
 
-    // 按权重排序取 top-N 作为核心节点
-    const sorted = [...visible].sort((a, b) => b.weight - a.weight);
-    const core = sorted.slice(0, TOP_N);
-    const coreIds = new Set(core.map((n) => n.id));
+    const coreIds = new Set(coreSelection);
 
-    // 收集核心节点与其邻居（邻居也必须在可见集合内）
-    const nodeIds = new Set<string>(coreIds);
-    for (const c of allConnections) {
-      if (coreIds.has(c.source) && visibleIds.has(c.target)) nodeIds.add(c.target);
-      if (coreIds.has(c.target) && visibleIds.has(c.source)) nodeIds.add(c.source);
-    }
+    // 从核心集合 BFS 展开 depth 跳（核心 + 跳内节点）
+    const finalIds = pruneByDepth(coreIds, depth);
 
-    // 深度剪枝：仅保留从核心出发 depth 跳内的连接
-    const chosen = pruneByDepth(coreIds, depth);
-    const finalIds = new Set<string>([...nodeIds, ...chosen]);
-
-    const subNeurons = visible.filter((n) => finalIds.has(n.id));
+    const subNeurons = filteredNeurons.filter((n) => finalIds.has(n.id));
     const subConns = allConnections.filter(
-      (c) => finalIds.has(c.source) && finalIds.has(c.target)
+      (c) => finalIds.has(c.source) && finalIds.has(c.target),
     );
-    return { seed_id: core[0]?.id ?? "", neurons: subNeurons, connections: subConns };
+    return { seed_id: coreSelection[0], neurons: subNeurons, connections: subConns };
   }
 
   // 从核心节点按 BFS 限制展开深度
@@ -101,12 +99,20 @@
 
   let allConnections = $state<Connection[]>([]);
 
-  // 过滤变化时重建图
+  // 过滤 / 核心 / 深度变化时重建图
   $effect(() => {
-    // 依赖：filteredNeurons / depth / visibleIds
+    // 依赖：filteredNeurons / depth / coreSelection / visibleIds
     filteredNeurons;
     depth;
+    coreSelection;
     subgraph = buildSubgraph();
+  });
+
+  // 默认核心：权重最高节点；全取消时自动回弹（不允许全空）
+  $effect(() => {
+    if (coreSelection.length === 0 && topNeurons.length > 0) {
+      coreSelection = [topNeurons[0].id];
+    }
   });
 
   async function load() {
@@ -308,6 +314,10 @@
       placeholder={t("neuronPanel.search")}
       bind:value={search}
     />
+    <div class="core-select">
+      <span class="depth-label">{t("neuronPanel.coreSelect")}</span>
+      <MultiSelect bind:value={coreSelection} options={coreOptions} />
+    </div>
     <button class="create-btn" on:click={openCreateOrphan}>
       ＋ {t("neuronPanel.create")}
     </button>
@@ -516,6 +526,11 @@
   }
 
   .depth {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .core-select {
     display: flex;
     align-items: center;
     gap: 6px;

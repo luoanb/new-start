@@ -6,6 +6,8 @@ export type Translations = {
     thinking: string;
     noModel: string;
     session: string;
+    selected: string;
+    selectAll: string;
   };
   statusBar: {
     appName: string;
@@ -155,6 +157,7 @@ export type Translations = {
     viewModeTree: string;
     edgeWeight: string;
     depthLabel: string;
+    coreSelect: string;
     edgeTypeLabel: string;
     edgeFloating: string;
     edgeBezier: string;
@@ -206,6 +209,8 @@ export const en: Translations = {
     thinking: "Thinking...",
     noModel: "No model selected",
     session: "Session",
+    selected: "Selected: {count}",
+    selectAll: "Select all",
   },
   statusBar: {
     appName: "Agent App",
@@ -361,6 +366,7 @@ export const en: Translations = {
     viewModeTree: "Tree",
     edgeWeight: "Edge",
     depthLabel: "Depth",
+    coreSelect: "Core",
     edgeTypeLabel: "Edge",
     edgeFloating: "Auto",
     edgeBezier: "Bezier",
@@ -412,6 +418,8 @@ export const zh: Translations = {
     thinking: "思考中...",
     noModel: "未选择模型",
     session: "会话",
+    selected: "已选 {count}",
+    selectAll: "全选",
   },
   statusBar: {
     appName: "智能体应用",
@@ -567,6 +575,7 @@ export const zh: Translations = {
     viewModeTree: "树",
     edgeWeight: "边权",
     depthLabel: "深度",
+    coreSelect: "核心",
     edgeTypeLabel: "连线",
     edgeFloating: "自动",
     edgeBezier: "曲线",

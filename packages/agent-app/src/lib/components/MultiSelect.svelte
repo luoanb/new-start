@@ -1,5 +1,7 @@
 <script lang="ts">
-  type Option = { value: string | number; label: string };
+  import { t } from "$lib/i18n";
+
+  type Option = { value: string; label: string };
 
   let {
     value = $bindable(),
@@ -10,24 +12,35 @@
     onchange,
     class: className = "",
   }: {
-    value?: string | number;
+    value?: string[];
     options: Option[];
     placeholder?: string;
     align?: "left" | "right";
     disabled?: boolean;
-    onchange?: (value: string | number) => void;
+    onchange?: (values: string[]) => void;
     class?: string;
   } = $props();
 
   let open = $state(false);
   let highlight = $state(0);
   let triggerEl = $state<HTMLButtonElement | null>(null);
-  let floatingEl = $state<HTMLDivElement | null>(null);
-  // 浮层定位（相对视口，position: fixed）
   let pos = $state<{ top: number; left: number; width: number } | null>(null);
 
-  const selectedLabel = $derived(
-    options.find((o) => o.value === value)?.label ?? placeholder,
+  // $bindable prop 可能为 undefined，统一走非空视图
+  const selected = $derived(value ?? []);
+
+  const firstLabel = $derived(
+    options.find((o) => o.value === selected[0])?.label ?? "",
+  );
+  const summary = $derived(
+    selected.length === 0
+      ? placeholder
+      : `${t("common.selected", { count: selected.length })}${
+          firstLabel ? " · " + firstLabel : ""
+        }`,
+  );
+  const allChecked = $derived(
+    options.length > 0 && selected.length === options.length,
   );
 
   // 把浮层 + backdrop portal 到 body，避免被 overflow:hidden / transform 祖先裁切
@@ -48,8 +61,8 @@
     const maxW = Math.min(300, vw - 16);
     let left = align === "right" ? r.right - r.width : r.left;
     left = Math.max(8, Math.min(left, vw - maxW - 8));
-    // 估算展开高度（option 约 30px + 边距），底部空间不足时向上展开
-    const estH = Math.min(240, options.length * 30 + 8);
+    // 估算展开高度（option 约 30px + 全选行 + 边距），底部空间不足时向上展开
+    const estH = Math.min(260, options.length * 30 + 40);
     let top = r.bottom + 4;
     if (top + estH > vh - 8) top = Math.max(8, r.top - estH - 4);
     pos = { top, left, width: r.width };
@@ -57,8 +70,10 @@
 
   function openMenu() {
     open = true;
-    const idx = options.findIndex((o) => o.value === value);
-    highlight = idx >= 0 ? idx : 0;
+    highlight = Math.max(
+      0,
+      options.findIndex((o) => o.value === selected[0]),
+    );
     place();
   }
 
@@ -73,14 +88,30 @@
     pos = null;
   }
 
-  function choose(v: string | number) {
-    value = v;
-    close();
-    onchange?.(v);
+  function commit(next: string[]) {
+    value = next;
+    onchange?.(next);
+  }
+
+  function toggleOption(v: string) {
+    commit(
+      selected.includes(v)
+        ? selected.filter((x) => x !== v)
+        : [...selected, v],
+    );
+  }
+
+  function toggleAll() {
+    commit(allChecked ? [] : options.map((o) => o.value));
   }
 
   function onTriggerKey(e: KeyboardEvent) {
-    if (e.key === "Enter" || e.key === " " || e.key === "ArrowDown" || e.key === "ArrowUp") {
+    if (
+      e.key === "Enter" ||
+      e.key === " " ||
+      e.key === "ArrowDown" ||
+      e.key === "ArrowUp"
+    ) {
       e.preventDefault();
       openMenu();
     }
@@ -102,10 +133,10 @@
     } else if (e.key === "End") {
       e.preventDefault();
       highlight = options.length - 1;
-    } else if (e.key === "Enter") {
+    } else if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       const opt = options[highlight];
-      if (opt) choose(opt.value);
+      if (opt) toggleOption(opt.value);
     }
   }
 
@@ -121,14 +152,14 @@
     bind:this={triggerEl}
     type="button"
     class="trigger"
-    class:placeholder={selectedLabel === placeholder}
+    class:placeholder={selected.length === 0}
     {disabled}
     onclick={toggle}
     onkeydown={onTriggerKey}
     aria-haspopup="listbox"
     aria-expanded={open}
   >
-    <span class="value">{selectedLabel}</span>
+    <span class="value">{summary}</span>
     <svg
       class="caret"
       class:flip={open}
@@ -158,26 +189,35 @@
 
   <div
     {@attach portal}
-    bind:this={floatingEl}
     class="dropdown {align}"
-    class:open
     role="listbox"
     tabindex="-1"
     style="top: {pos?.top ?? 0}px; left: {pos?.left ?? 0}px; min-width: {pos?.width ?? 0}px;"
     onkeydown={onMenuKey}
   >
+    <button
+      type="button"
+      class="option toggle-all"
+      class:checked={allChecked}
+      onmouseenter={() => (highlight = -1)}
+      onclick={toggleAll}
+    >
+      <span class="check">{allChecked ? "✓" : ""}</span>
+      <span class="opt-label">{t("common.selectAll")}</span>
+    </button>
     {#each options as opt, i (opt.value)}
       <button
         type="button"
         class="option"
-        class:active={opt.value === value}
+        class:checked={selected.includes(opt.value)}
         class:highlight={i === highlight}
         role="option"
-        aria-selected={opt.value === value}
+        aria-selected={selected.includes(opt.value)}
         onmouseenter={() => (highlight = i)}
-        onclick={() => choose(opt.value)}
+        onclick={() => toggleOption(opt.value)}
       >
-        {opt.label}
+        <span class="check">{selected.includes(opt.value) ? "✓" : ""}</span>
+        <span class="opt-label">{opt.label}</span>
       </button>
     {/each}
   </div>
@@ -195,7 +235,8 @@
     justify-content: space-between;
     gap: var(--space-2);
     width: 100%;
-    min-width: 96px;
+    min-width: 140px;
+    max-width: 220px;
     padding: var(--space-1) var(--space-2);
     border: var(--border-width) solid var(--color-border);
     border-radius: var(--radius-sm);
@@ -241,14 +282,13 @@
     position: fixed;
     inset: 0;
     z-index: 900;
-    /* 透明遮罩，仅用于捕获外部点击 */
   }
 
   .dropdown {
     position: fixed;
     z-index: 901;
     max-width: min(300px, calc(100vw - 16px));
-    max-height: 240px;
+    max-height: 260px;
     overflow-y: auto;
     outline: none;
     background: var(--color-elevated);
@@ -257,35 +297,60 @@
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.16);
   }
 
-  /* left / right 对齐均由 inline style 的 left + min-width 控制，无需额外规则 */
-
   .option {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
     width: 100%;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
     padding: var(--space-2) var(--space-3);
     border: none;
     background: transparent;
     color: var(--color-text);
     font-size: var(--fs-sm);
     text-align: left;
-    white-space: nowrap;
     cursor: pointer;
     transition: background var(--duration-fast) var(--ease-out);
   }
 
-  .option:hover {
-    background: var(--color-hover);
-  }
-
+  .option:hover,
   .option.highlight {
     background: var(--color-hover);
   }
 
-  .option.active {
+  .option.checked .opt-label {
     font-weight: 600;
     color: var(--color-primary);
+  }
+
+  .check {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    line-height: 1;
+    color: transparent;
+  }
+
+  .option.checked .check {
+    border-color: var(--color-primary);
+    background: var(--color-primary);
+    color: var(--color-on-primary, #fff);
+  }
+
+  .opt-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .toggle-all {
+    border-bottom: 1px solid var(--color-border);
   }
 </style>
