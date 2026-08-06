@@ -45,6 +45,61 @@ export type SkillInfo = {
   description: string;
 };
 
+// ── Tools（运行阶段三通道：native / config / mcp）──
+
+export type ToolSource = "native" | "config" | "mcp";
+
+export type ToolInfo = {
+  name: string;
+  description: string;
+  source: ToolSource;
+  parameters: Record<string, unknown>;
+};
+
+export type McpServerStatusKind = "connected" | "failed" | "disabled";
+
+export type McpServerStatus = {
+  name: string;
+  transport: string;
+  status: McpServerStatusKind;
+  tool_count: number;
+  error: string | null;
+};
+
+// ── 工具配置（弹窗编辑 / 写回 JSON，字段与后端 serde 保持一致）──
+
+export type McpServerConfig = {
+  name: string;
+  transport: "stdio" | "http";
+  command?: string | null;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string | null;
+  headers?: Record<string, string>;
+  disabled?: boolean;
+};
+
+export type HttpToolConfig = {
+  name: string;
+  desc: string;
+  method?: string;
+  url: string;
+  timeout_ms?: number | null;
+};
+
+export type CommandToolConfig = {
+  name: string;
+  desc: string;
+  template: string;
+  timeout_ms?: number | null;
+};
+
+export type ToolConfigView = {
+  mcp_servers: McpServerConfig[];
+  http_tools: HttpToolConfig[];
+  command_tools: CommandToolConfig[];
+};
+
 export type ProviderInfo = {
   id: string;
   display_name: string;

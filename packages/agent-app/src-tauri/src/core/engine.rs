@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::{Arc, RwLock};
 
 use super::{
     compactor::Compactor,
@@ -21,7 +22,9 @@ pub struct Engine {
     store: ConversationStore,
     providers: ProviderRegistry,
     compactor: Compactor,
-    tool_registry: Option<ToolRegistry>,
+    /// 共享工具注册表（与 Gateway 同一 `Arc<RwLock>`）：读锁 clone 后立即释放，
+    /// 不跨 await；运行期重装配写锁一次性替换。
+    tool_registry: Option<Arc<RwLock<ToolRegistry>>>,
 }
 
 impl Engine {
@@ -42,7 +45,7 @@ impl Engine {
         store: ConversationStore,
         providers: ProviderRegistry,
         config: CompactionConfig,
-        tool_registry: ToolRegistry,
+        tool_registry: Arc<RwLock<ToolRegistry>>,
     ) -> Self {
         Self {
             store,
@@ -182,10 +185,12 @@ impl Engine {
         options: &ChatOptions,
         conversation_id: &str,
     ) -> AppResult<ChatResponse> {
-        let tool_defs = self
-            .tool_registry
-            .as_ref()
-            .map(|reg| reg.list_definitions());
+        let tool_defs = self.tool_registry.as_ref().map(|reg| {
+            // 读锁仅用于 clone definitions，释放后再进入模型调用 await。
+            reg.read()
+                .map(|g| g.list_definitions())
+                .unwrap_or_default()
+        });
 
         let mut iterations = 0u32;
 
@@ -241,8 +246,12 @@ impl Engine {
                 // Execute each tool call
                 let tcs = model_response.tool_calls.unwrap_or_default();
                 for tc in &tcs {
-                    let result = match &self.tool_registry {
-                        Some(reg) => reg.execute(&tc.name, tc.arguments.clone()).await,
+                    // 读锁内仅 clone 工具引用（释放锁后再 await execute，锁不跨 await）。
+                    let tool = self.tool_registry.as_ref().and_then(|reg| {
+                        reg.read().ok().and_then(|g| g.get_tool(&tc.name))
+                    });
+                    let result = match tool {
+                        Some(tool) => tool.execute(tc.arguments.clone()).await,
                         None => Err(AppError::SkillNotFound(tc.name.clone())),
                     };
                     let result_str = result.unwrap_or_else(|e| format!("Error: {}", e));

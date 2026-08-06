@@ -1,7 +1,7 @@
 use std::fmt;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc, Mutex,
+    atomic::Ordering,
+    Arc, Mutex, RwLock,
 };
 
 use async_trait::async_trait;
@@ -100,7 +100,8 @@ pub struct AssistantMode {
     neuron_manager: Arc<NeuronManager>,
     topic_store: Arc<Mutex<TopicStore>>,
     neuron_store: Arc<Mutex<NeuronStore>>,
-    tool_registry: ToolRegistry,
+    /// 共享工具注册表（与 Gateway 同一 `Arc<RwLock>`）：读锁 clone 后立即释放，不跨 await。
+    tool_registry: Arc<RwLock<ToolRegistry>>,
     step_tx: UnboundedSender<AssistantStepRequest>,
     session_tracker: super::session_tracker::SessionTracker,
     /// 与 Poller 共享的轮询并发推进数量（运行时可变，前端可调）。
@@ -120,7 +121,7 @@ impl AssistantMode {
         neuron_manager: Arc<NeuronManager>,
         topic_store: Arc<Mutex<TopicStore>>,
         neuron_store: Arc<Mutex<NeuronStore>>,
-        tool_registry: ToolRegistry,
+        tool_registry: Arc<RwLock<ToolRegistry>>,
         step_tx: UnboundedSender<AssistantStepRequest>,
         session_tracker: super::session_tracker::SessionTracker,
         poll_parallelism: SharedPollParallelism,
@@ -462,7 +463,11 @@ impl AssistantMode {
             ctx.authorized_tool_ids.clear();
             return;
         };
-        ctx.authorized_tool_ids = filter_authorized_tool_ids(&self.tool_registry, &neuron.tool_ids);
+        let guard = self
+            .tool_registry
+            .read()
+            .expect("tool registry lock should not be poisoned");
+        ctx.authorized_tool_ids = filter_authorized_tool_ids(&guard, &neuron.tool_ids);
     }
 
     async fn run_core(
@@ -503,7 +508,12 @@ impl AssistantMode {
         let tools = if ctx.authorized_tool_ids.is_empty() {
             None
         } else {
-            Some(self.tool_registry.definitions_for(&ctx.authorized_tool_ids))
+            Some(
+                self.tool_registry
+                    .read()
+                    .map(|reg| reg.definitions_for(&ctx.authorized_tool_ids))
+                    .unwrap_or_default(),
+            )
         };
 
         tracing::info!(
@@ -563,10 +573,16 @@ impl AssistantMode {
                     tool = %first.name,
                     "tool execute start"
                 );
-                let result = self
+                // 读锁内仅 clone 工具引用（释放锁后再 await execute，锁不跨 await）。
+                let tool = self
                     .tool_registry
-                    .execute(&first.name, first.arguments.clone())
-                    .await?;
+                    .read()
+                    .ok()
+                    .and_then(|reg| reg.get_tool(&first.name));
+                let result = match tool {
+                    Some(tool) => tool.execute(first.arguments.clone()).await?,
+                    None => return Err(AppError::SkillNotFound(first.name.clone())),
+                };
                 tracing::info!(
                     phase = "assistant_run_core",
                     tool = %first.name,

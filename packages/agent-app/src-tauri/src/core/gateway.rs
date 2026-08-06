@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use tauri;
@@ -8,12 +8,14 @@ use super::{
     assistant_mode::{AssistantMode, AssistantStepRequest},
     cmd_exec::ExecuteCommandTool,
     conversation_store::{now_ms, ConversationStore},
+    dynamic_tool::{CommandTool, HttpTool},
     engine::Engine,
     error::{AppError, AppResult},
+    mcp::{McpServerClient, McpServerStatus, McpServerStatusKind},
     models::{
         ChatModelSelection, ChatOptions, ChatResponse, Conversation, ConversationMode, Message,
         MessageRole, ModelCallRequest, ModelCallResponse, ModelInfo, ProviderInfo, RuntimeStatus,
-        SkillInfo,
+        SkillInfo, ToolInfo, ToolSource,
     },
     neuron_config::NeuronConfigReader,
     neuron_manager::NeuronManager,
@@ -24,6 +26,9 @@ use super::{
     },
     providers::ProviderRegistry,
     session_tracker::SessionTracker,
+    tool_config::{
+        validate_tool_config, DynamicToolsFile, McpServersFile, ToolConfigReader, ToolConfigView,
+    },
     tool_registry::ToolRegistry,
     topic_store::TopicStore,
     CompactionConfig,
@@ -36,7 +41,9 @@ pub struct Gateway {
     engine: Engine,
     store: ConversationStore,
     providers: ProviderRegistry,
-    tool_registry: Option<ToolRegistry>,
+    /// 共享工具注册表：启动期装配 + 运行期手动重装配（保存即生效）共用。
+    /// 读锁只在 clone 结果/工具引用期间持有，不跨 await；重装配用写锁一次性替换。
+    tool_registry: Arc<RwLock<ToolRegistry>>,
     topic_store: Option<Arc<Mutex<TopicStore>>>,
     neuron_store: Option<Arc<Mutex<NeuronStore>>>,
     neuron_manager: Arc<NeuronManager>,
@@ -45,6 +52,8 @@ pub struct Gateway {
     session_tracker: SessionTracker,
     /// Shared so Gateway can be used via `&self` / Tauri State without holding an outer lock across await.
     current_conversation_id: Arc<Mutex<String>>,
+    /// MCP server 状态（装配期与运行期重装配均可更新，供前端 DockPane 展示）。
+    mcp_server_statuses: Arc<RwLock<Vec<McpServerStatus>>>,
 }
 
 impl Gateway {
@@ -94,10 +103,10 @@ impl Gateway {
             }));
         }
 
-        // Production tools are registered only when they have self-describing inserts.
-        // `execute_command` is the first on-shelf tool (see inserts/execute_command.md).
-        let mut tool_registry = ToolRegistry::new();
-        tool_registry.register(ExecuteCommandTool::new());
+        // 全量装配工具集（native + config + mcp）。启动期与运行期重装配共用同一
+        // `build_registry`；`execute_command` 是首个上架 native 工具（见 inserts/execute_command.md）。
+        let (tool_registry, mcp_server_statuses) = build_registry(&store.root())?;
+        let tool_registry = Arc::new(RwLock::new(tool_registry));
 
         let neuron_config = NeuronConfigReader::new(store.root().to_path_buf());
         let neuron_recycle_interval_ms = neuron_config.recycle_interval_ms()?;
@@ -105,13 +114,13 @@ impl Gateway {
             Arc::clone(&neuron_store),
             Arc::new(DefaultNeuronModelCaller::new(providers.clone())),
             neuron_config,
-            tool_registry.clone(),
+            Arc::clone(&tool_registry),
         ));
         let engine = Engine::with_tools(
             store.clone(),
             providers.clone(),
             CompactionConfig::default(),
-            tool_registry.clone(),
+            Arc::clone(&tool_registry),
         );
 
         let (step_tx, step_rx) = mpsc::unbounded_channel::<AssistantStepRequest>();
@@ -136,7 +145,7 @@ impl Gateway {
             Arc::clone(&neuron_manager),
             Arc::clone(&topic_store),
             Arc::clone(&neuron_store),
-            tool_registry.clone(),
+            Arc::clone(&tool_registry),
             step_tx,
             session_tracker.clone(),
             Arc::clone(&poll_parallelism),
@@ -178,7 +187,7 @@ impl Gateway {
             engine,
             store,
             providers,
-            tool_registry: Some(tool_registry),
+            tool_registry,
             topic_store: Some(topic_store),
             neuron_store: Some(neuron_store),
             neuron_manager,
@@ -186,6 +195,7 @@ impl Gateway {
             poller,
             session_tracker,
             current_conversation_id: Arc::new(Mutex::new(current_conversation_id)),
+            mcp_server_statuses: Arc::new(RwLock::new(mcp_server_statuses)),
         })
     }
 
@@ -253,7 +263,7 @@ impl Gateway {
 
     pub fn list_skills(&self) -> Vec<SkillInfo> {
         self.tool_registry
-            .as_ref()
+            .read()
             .map(|reg| {
                 reg.list_definitions()
                     .into_iter()
@@ -264,6 +274,84 @@ impl Gateway {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// 工具治理视图：全量工具（native / config / mcp）供前端 DockPane 展示。
+    pub fn list_tool_info(&self) -> Vec<ToolInfo> {
+        self.tool_registry
+            .read()
+            .map(|reg| {
+                reg.list_definitions()
+                    .into_iter()
+                    .map(|d| ToolInfo {
+                        name: d.name,
+                        description: d.description,
+                        source: d.source,
+                        parameters: d.parameters,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// MCP server 连接状态（装配期与重装配后均可读取）。
+    pub fn mcp_server_statuses(&self) -> Vec<McpServerStatus> {
+        self.mcp_server_statuses
+            .read()
+            .map(|s| s.clone())
+            .unwrap_or_default()
+    }
+
+    /// 读取当前工具配置（供前端弹窗编辑）。
+    pub fn get_tool_config(&self) -> AppResult<ToolConfigView> {
+        let reader = ToolConfigReader::new(self.store.root().to_path_buf());
+        let mcp = reader.mcp_servers()?;
+        let dynamic = reader.dynamic_tools()?;
+        Ok(ToolConfigView {
+            mcp_servers: mcp.mcp_servers,
+            http_tools: dynamic.http,
+            command_tools: dynamic.command,
+        })
+    }
+
+    /// 保存工具配置：校验 → 原子写回 JSON → 全量重建 registry → 替换运行期引用。
+    /// 保存即生效，无需重启。非法配置在写文件前被拒绝。
+    pub async fn save_tool_config(&self, view: ToolConfigView) -> AppResult<ToolConfigView> {
+        validate_tool_config(&view)?;
+        let reader = ToolConfigReader::new(self.store.root().to_path_buf());
+        reader.save_mcp_servers(&McpServersFile {
+            mcp_servers: view.mcp_servers.clone(),
+        })?;
+        reader.save_dynamic_tools(&DynamicToolsFile {
+            http: view.http_tools.clone(),
+            command: view.command_tools.clone(),
+        })?;
+
+        let (new_registry, new_statuses) = build_registry(&self.store.root())?;
+        {
+            let mut reg = self
+                .tool_registry
+                .write()
+                .map_err(|e| AppError::RuntimeError(format!("tool registry lock: {e}")))?;
+            *reg = new_registry;
+        }
+        {
+            let mut status = self
+                .mcp_server_statuses
+                .write()
+                .map_err(|e| AppError::RuntimeError(format!("mcp status lock: {e}")))?;
+            *status = new_statuses;
+        }
+
+        tracing::info!(
+            phase = "tool_config",
+            mcp_servers = view.mcp_servers.len(),
+            http_tools = view.http_tools.len(),
+            command_tools = view.command_tools.len(),
+            "tool config saved and registry reassembled"
+        );
+
+        self.get_tool_config()
     }
 
     pub fn list_providers(&self) -> Vec<ProviderInfo> {
@@ -469,7 +557,7 @@ impl Gateway {
             current_conversation_id: self.get_current_conversation_id()?,
             skill_count: self
                 .tool_registry
-                .as_ref()
+                .read()
                 .map(|r| r.list_definitions().len())
                 .unwrap_or(0),
             conversation_count: self.store.list_conversations()?.len(),
@@ -690,9 +778,106 @@ fn spawn_neuron_recycle_runtime(
     });
 }
 
+/// 全量装配工具集（native + config + mcp）。
+///
+/// 启动期（`Gateway::with_state_emitter`）与运行期手动重装配（`save_tool_config`）共用，
+/// 保证两处装配结果一致。纯 A 语义：MCP 连接在装配期一次性完成（失败 warn + skip，
+/// 不阻塞）；返回的 registry 与状态由调用方放入共享 `Arc<RwLock<_>>`。
+fn build_registry(
+    storage_root: &std::path::Path,
+) -> AppResult<(ToolRegistry, Vec<McpServerStatus>)> {
+    let mut registry = ToolRegistry::new();
+    // `execute_command` 是首个上架 native 工具（见 inserts/execute_command.md）。
+    registry.register(ExecuteCommandTool::new());
+
+    // 配置驱动通道：dynamic_tools.json（HttpTool / CommandTool）。声明即 schema，
+    // 豁免 insert 门禁；命令模板复用 cmd_exec 安全护栏。
+    let tool_config = ToolConfigReader::new(storage_root.to_path_buf());
+    let dynamic = tool_config.dynamic_tools()?;
+    for cfg in dynamic.http {
+        registry.register_source(HttpTool::from_config(&cfg), ToolSource::Config);
+    }
+    for cfg in dynamic.command {
+        registry.register_source(CommandTool::from_config(&cfg), ToolSource::Config);
+    }
+
+    // MCP 通道：mcp_servers.json。单个 server 失败仅记录状态（Failed）并 warn + skip。
+    let mcp_server_statuses = assemble_mcp_servers(&mut registry, &tool_config)?;
+    Ok((registry, mcp_server_statuses))
+}
+
+/// 装配期连接所有启用的 MCP server 并注册其工具到 registry。
+///
+/// 纯 A 语义：一次性连接 + `tools/list` 发现，随后连接保活至进程退出。
+/// 单个 server 失败仅记录状态（Failed）并 warn + skip，不阻塞应用启动；
+/// `disabled` 的 server 直接记为 Disabled。配置本身解析失败则向上传播（用户声明错误）。
+fn assemble_mcp_servers(
+    registry: &mut ToolRegistry,
+    config_reader: &ToolConfigReader,
+) -> AppResult<Vec<McpServerStatus>> {
+    let servers = config_reader.mcp_servers()?;
+    let mut statuses = Vec::with_capacity(servers.mcp_servers.len());
+    for cfg in servers.mcp_servers {
+        if cfg.disabled {
+            statuses.push(McpServerStatus {
+                name: cfg.name.clone(),
+                transport: cfg.transport.clone(),
+                status: McpServerStatusKind::Disabled,
+                tool_count: 0,
+                error: None,
+            });
+            continue;
+        }
+        let name = cfg.name.clone();
+        let transport = cfg.transport.clone();
+        match tauri::async_runtime::block_on(McpServerClient::connect(cfg)) {
+            Ok(client) => match tauri::async_runtime::block_on(client.discover_tools()) {
+                Ok(tools) => {
+                    let tool_count = tools.len();
+                    if tool_count == 0 {
+                        tracing::warn!(server = %name, "mcp server advertised no tools");
+                    }
+                    for tool in tools {
+                        registry.register_source(tool, ToolSource::Mcp);
+                    }
+                    statuses.push(McpServerStatus {
+                        name,
+                        transport,
+                        status: McpServerStatusKind::Connected,
+                        tool_count,
+                        error: None,
+                    });
+                }
+                Err(error) => {
+                    tracing::warn!(server = %name, error = %error, "mcp server tools/list failed; skipped");
+                    statuses.push(McpServerStatus {
+                        name,
+                        transport,
+                        status: McpServerStatusKind::Failed,
+                        tool_count: 0,
+                        error: Some(error.to_string()),
+                    });
+                }
+            },
+            Err(error) => {
+                tracing::warn!(server = %name, error = %error, "mcp server connect failed; skipped");
+                statuses.push(McpServerStatus {
+                    name,
+                    transport,
+                    status: McpServerStatusKind::Failed,
+                    tool_count: 0,
+                    error: Some(error.to_string()),
+                });
+            }
+        }
+    }
+    Ok(statuses)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::tool_config::{HttpToolConfig, McpServerConfig};
     use std::{fs, path::PathBuf};
 
     #[test]
@@ -776,6 +961,68 @@ mod tests {
 
         assert_eq!(error.code(), "model_not_found");
         assert!(history.is_empty());
+    }
+
+    #[tokio::test]
+    async fn save_tool_config_reassembles_registry() {
+        let gateway = test_gateway("save_tool_config_reassembles_registry");
+        let mut view = gateway.get_tool_config().expect("empty config");
+        view.http_tools.push(HttpToolConfig {
+            name: "lookup_wiki".into(),
+            desc: "查内部 wiki".into(),
+            method: "GET".into(),
+            url: "https://api.example.com/wiki?q={query}".into(),
+            timeout_ms: None,
+        });
+
+        let saved = gateway
+            .save_tool_config(view)
+            .await
+            .expect("save should succeed");
+        assert_eq!(saved.http_tools.len(), 1);
+        assert_eq!(saved.http_tools[0].name, "lookup_wiki");
+
+        // 保存即生效：registry 已重建并包含新工具，无需重启。
+        let tools = gateway.list_tool_info();
+        let tool = tools
+            .iter()
+            .find(|t| t.name == "lookup_wiki")
+            .expect("lookup_wiki should be registered after reassembly");
+        assert_eq!(tool.source, ToolSource::Config);
+    }
+
+    #[tokio::test]
+    async fn save_tool_config_rejects_invalid_and_keeps_previous() {
+        let gateway = test_gateway("save_tool_config_rejects_invalid_and_keeps_previous");
+        let mut view = gateway.get_tool_config().expect("empty config");
+        view.mcp_servers.push(McpServerConfig {
+            name: "broken".into(),
+            transport: "sse".into(), // 非法 transport
+            command: None,
+            args: vec![],
+            env: Default::default(),
+            url: None,
+            headers: Default::default(),
+            disabled: false,
+        });
+
+        let err = gateway
+            .save_tool_config(view)
+            .await
+            .expect_err("invalid transport should be rejected");
+        assert!(err.to_string().contains("未知 transport"));
+        // 拒绝保存：registry 与状态保持原状。
+        assert!(gateway.mcp_server_statuses().is_empty());
+        assert!(!gateway.list_tool_info().iter().any(|t| t.name == "broken"));
+    }
+
+    #[test]
+    fn get_tool_config_returns_default_empty_view() {
+        let gateway = test_gateway("get_tool_config_returns_default_empty_view");
+        let view = gateway.get_tool_config().expect("empty default view");
+        assert!(view.mcp_servers.is_empty());
+        assert!(view.http_tools.is_empty());
+        assert!(view.command_tools.is_empty());
     }
 
     fn test_gateway(name: &str) -> Gateway {

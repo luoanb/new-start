@@ -14,7 +14,9 @@ use crate::core::{
     ChatOptions, ChatResponse, Connection, Conversation, ConversationMode, Gateway, Message,
     ModelCallRequest, ModelCallResponse, ModelInfo, Neuron, NeuronCreate, NeuronSubgraph,
     NeuronUpdate, StateChange, StateEmitter, STATE_CHANGED_EVENT,
-    PollerStatus, ProviderInfo, RuntimeStatus, SkillInfo, Topic, TopicStatus, TopicUpdate,
+    PollerStatus, ProviderInfo, RuntimeStatus, SkillInfo, ToolInfo, Topic, TopicStatus, TopicUpdate,
+    McpServerStatus,
+    tool_config::ToolConfigView,
 };
 use std::{
     path::PathBuf,
@@ -115,6 +117,38 @@ async fn list_running_sessions(
 #[tauri::command]
 async fn list_skills(gateway: State<'_, Gateway>) -> TauriResult<Vec<SkillInfo>> {
     Ok(gateway.inner().list_skills())
+}
+
+/// 工具治理视图：全量工具（native / config / mcp）。
+#[tauri::command]
+async fn list_tools(gateway: State<'_, Gateway>) -> TauriResult<Vec<ToolInfo>> {
+    Ok(gateway.inner().list_tool_info())
+}
+
+/// MCP server 连接状态（装配期与运行期重装配后均可读取）。
+#[tauri::command]
+async fn list_mcp_servers(gateway: State<'_, Gateway>) -> TauriResult<Vec<McpServerStatus>> {
+    Ok(gateway.inner().mcp_server_statuses())
+}
+
+/// 读取当前工具配置（供前端弹窗编辑）。
+#[tauri::command]
+async fn get_tool_config(gateway: State<'_, Gateway>) -> TauriResult<ToolConfigView> {
+    gateway.inner().get_tool_config().map_err(|e| e.payload())
+}
+
+/// 保存工具配置：校验 → 原子写回 JSON → 全量重装配（保存即生效，无需重启）。
+/// 校验失败时拒绝保存，前端展示可读错误。
+#[tauri::command]
+async fn save_tool_config(
+    gateway: State<'_, Gateway>,
+    view: ToolConfigView,
+) -> TauriResult<ToolConfigView> {
+    gateway
+        .inner()
+        .save_tool_config(view)
+        .await
+        .map_err(|e| e.payload())
 }
 
 #[tauri::command]
@@ -661,6 +695,10 @@ pub fn run() {
             close_session,
             list_running_sessions,
             list_skills,
+            list_tools,
+            list_mcp_servers,
+            get_tool_config,
+            save_tool_config,
             list_providers,
             list_models,
             call_model,

@@ -194,10 +194,32 @@ pub struct ToolCall {
     pub arguments: serde_json::Value,
 }
 
+/// 工具来源：native（项目自有代码工具）、config（配置驱动 DynamicTool）、mcp（外部 MCP server）。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolSource {
+    #[default]
+    Native,
+    Config,
+    Mcp,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolDefinition {
     pub name: String,
     pub description: String,
+    pub parameters: serde_json::Value,
+    /// 治理字段，不进模型请求 wire；缺省为 native（向后兼容）。
+    #[serde(skip_serializing, default)]
+    pub source: ToolSource,
+}
+
+/// 工具治理视图（供前端 DockPane 只读展示工具列表）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolInfo {
+    pub name: String,
+    pub description: String,
+    pub source: ToolSource,
     pub parameters: serde_json::Value,
 }
 

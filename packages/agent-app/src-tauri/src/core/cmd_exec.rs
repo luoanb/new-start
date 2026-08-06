@@ -11,7 +11,7 @@ use super::{
 };
 
 /// v1 保守安全策略：命中以下前缀（trim 后）的命令直接拒绝。
-const DANGEROUS_PREFIXES: &[&str] = &[
+pub(crate) const DANGEROUS_PREFIXES: &[&str] = &[
     "rm -rf /",
     "rm -rf /*",
     "mkfs",
@@ -25,9 +25,10 @@ const DANGEROUS_PREFIXES: &[&str] = &[
 ];
 
 /// 需要词边界的前缀（避免误伤 shutdowner / sudoku 等普通词）。
-const DANGEROUS_WORD_PREFIXES: &[&str] = &["sudo", "shutdown", "reboot", "poweroff", "halt", "cryptsetup"];
+pub(crate) const DANGEROUS_WORD_PREFIXES: &[&str] =
+    &["sudo", "shutdown", "reboot", "poweroff", "halt", "cryptsetup"];
 
-fn is_denied(command: &str) -> bool {
+pub(crate) fn is_denied(command: &str) -> bool {
     let trimmed = command.trim();
     DANGEROUS_PREFIXES.iter().any(|p| trimmed.starts_with(p))
         || DANGEROUS_WORD_PREFIXES.iter().any(|w| {
@@ -39,12 +40,12 @@ fn is_denied(command: &str) -> bool {
         })
 }
 
-const DEFAULT_TIMEOUT_MS: u64 = 30_000;
-const MIN_TIMEOUT_MS: u64 = 1_000;
-const MAX_TIMEOUT_MS: u64 = 120_000;
-const MAX_CONCURRENT: usize = 4;
-const MAX_OUTPUT_CHARS: usize = 64 * 1024;
-const TIMEOUT_EXIT_CODE: i32 = 124;
+pub(crate) const DEFAULT_TIMEOUT_MS: u64 = 30_000;
+pub(crate) const MIN_TIMEOUT_MS: u64 = 1_000;
+pub(crate) const MAX_TIMEOUT_MS: u64 = 120_000;
+pub(crate) const MAX_CONCURRENT: usize = 4;
+pub(crate) const MAX_OUTPUT_CHARS: usize = 64 * 1024;
+pub(crate) const TIMEOUT_EXIT_CODE: i32 = 124;
 
 /// 执行系统 shell 命令的 Agent 工具。
 pub struct ExecuteCommandTool {
@@ -65,7 +66,7 @@ impl Default for ExecuteCommandTool {
     }
 }
 
-fn truncate_output(bytes: &[u8], max_chars: usize) -> String {
+pub(crate) fn truncate_output(bytes: &[u8], max_chars: usize) -> String {
     let text = String::from_utf8_lossy(bytes);
     if text.chars().count() <= max_chars {
         return text.into_owned();
@@ -74,7 +75,7 @@ fn truncate_output(bytes: &[u8], max_chars: usize) -> String {
     format!("{truncated}\n[truncated: output exceeds {max_chars} chars]")
 }
 
-async fn read_pipe<R: AsyncReadExt + Unpin>(reader: Option<R>) -> AppResult<Vec<u8>> {
+pub(crate) async fn read_pipe<R: AsyncReadExt + Unpin>(reader: Option<R>) -> AppResult<Vec<u8>> {
     match reader {
         Some(mut r) => {
             let mut buf = Vec::new();
@@ -142,78 +143,93 @@ impl Tool for ExecuteCommandTool {
         let timeout_ms = args
             .get("timeout_ms")
             .and_then(|v| v.as_u64())
-            .unwrap_or(DEFAULT_TIMEOUT_MS)
-            .clamp(MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
-        let timeout = Duration::from_millis(timeout_ms);
+            .unwrap_or(DEFAULT_TIMEOUT_MS);
 
         let _permit = self.semaphore.acquire().await.map_err(|e| {
             AppError::RuntimeError(format!("execute_command: semaphore acquire failed: {e}"))
         })?;
 
-        let started = std::time::Instant::now();
-
-        let mut cmd = build_command(&command);
-        cmd.stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-        if let Some(dir) = &cwd {
-            cmd.current_dir(dir);
-        }
-
-        let mut child = cmd.spawn().map_err(|e| {
-            AppError::RuntimeError(format!("execute_command: failed to spawn: {e}"))
-        })?;
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-
-        let status = match tokio::time::timeout(timeout, child.wait()).await {
-            Ok(status) => status.map_err(|e| {
-                AppError::RuntimeError(format!("execute_command: wait failed: {e}"))
-            })?,
-            Err(_elapsed) => {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
-                tracing::warn!(
-                    tool = "execute_command",
-                    command_len = command.len(),
-                    timeout_ms,
-                    "shell command timed out and was killed"
-                );
-                return Ok(json!({
-                    "exit_code": TIMEOUT_EXIT_CODE,
-                    "stdout": "",
-                    "stderr": "",
-                    "timed_out": true
-                })
-                .to_string());
-            }
-        };
-
-        let stdout_bytes = read_pipe::<tokio::process::ChildStdout>(stdout).await?;
-        let stderr_bytes = read_pipe::<tokio::process::ChildStderr>(stderr).await?;
-
-        let exit_code = status.code().unwrap_or(-1);
-        let stdout = truncate_output(&stdout_bytes, MAX_OUTPUT_CHARS);
-        let stderr = truncate_output(&stderr_bytes, MAX_OUTPUT_CHARS);
-
-        tracing::info!(
-            tool = "execute_command",
-            command_len = command.len(),
-            cwd = cwd.as_deref().unwrap_or("."),
-            exit_code,
-            duration_ms = started.elapsed().as_millis() as u64,
-            stdout_bytes = stdout_bytes.len(),
-            stderr_bytes = stderr_bytes.len(),
-            "shell command executed"
-        );
-
-        Ok(json!({
-            "exit_code": exit_code,
-            "stdout": stdout,
-            "stderr": stderr,
-            "timed_out": false
-        })
-        .to_string())
+        run_guarded_shell("execute_command", &command, cwd.as_deref(), Some(timeout_ms)).await
     }
+}
+
+/// 共享的有护栏 shell 执行器：denylist 已在调用方校验，此处负责超时夹紧、
+/// spawn/timeout/kill、输出截断与日志脱敏。并发由调用方持有的 Semaphore 控制。
+/// 返回 JSON 字符串 { exit_code, stdout, stderr, timed_out }。
+pub(crate) async fn run_guarded_shell(
+    tool_name: &str,
+    command: &str,
+    cwd: Option<&str>,
+    timeout_ms: Option<u64>,
+) -> AppResult<String> {
+    let timeout = Duration::from_millis(
+        timeout_ms
+            .unwrap_or(DEFAULT_TIMEOUT_MS)
+            .clamp(MIN_TIMEOUT_MS, MAX_TIMEOUT_MS),
+    );
+
+    let started = std::time::Instant::now();
+
+    let mut cmd = build_command(command);
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+
+    let mut child = cmd.spawn().map_err(|e| {
+        AppError::RuntimeError(format!("{tool_name}: failed to spawn: {e}"))
+    })?;
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    let status = match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(status) => status
+            .map_err(|e| AppError::RuntimeError(format!("{tool_name}: wait failed: {e}")))?,
+        Err(_elapsed) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            tracing::warn!(
+                tool = tool_name,
+                command_len = command.len(),
+                timeout_ms = timeout.as_millis() as u64,
+                "shell command timed out and was killed"
+            );
+            return Ok(json!({
+                "exit_code": TIMEOUT_EXIT_CODE,
+                "stdout": "",
+                "stderr": "",
+                "timed_out": true
+            })
+            .to_string());
+        }
+    };
+
+    let stdout_bytes = read_pipe::<tokio::process::ChildStdout>(stdout).await?;
+    let stderr_bytes = read_pipe::<tokio::process::ChildStderr>(stderr).await?;
+
+    let exit_code = status.code().unwrap_or(-1);
+    let stdout = truncate_output(&stdout_bytes, MAX_OUTPUT_CHARS);
+    let stderr = truncate_output(&stderr_bytes, MAX_OUTPUT_CHARS);
+
+    tracing::info!(
+        tool = tool_name,
+        command_len = command.len(),
+        cwd = cwd.unwrap_or("."),
+        exit_code,
+        duration_ms = started.elapsed().as_millis() as u64,
+        stdout_bytes = stdout_bytes.len(),
+        stderr_bytes = stderr_bytes.len(),
+        "shell command executed"
+    );
+
+    Ok(json!({
+        "exit_code": exit_code,
+        "stdout": stdout,
+        "stderr": stderr,
+        "timed_out": false
+    })
+    .to_string())
 }
 
 #[cfg(windows)]

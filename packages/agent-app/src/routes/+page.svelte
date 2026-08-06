@@ -8,6 +8,7 @@
   import ErrorBanner from "$lib/components/ErrorBanner.svelte";
   import NeuronManager from "$lib/components/NeuronManager.svelte";
   import PollerPanel from "$lib/components/PollerPanel.svelte";
+  import ToolPanel from "$lib/components/ToolPanel.svelte";
   import LogPanel from "$lib/components/LogPanel.svelte";
   import ActivityBar from "$lib/layout/ActivityBar.svelte";
   import Splitter from "$lib/layout/Splitter.svelte";
@@ -339,6 +340,8 @@
           </div>
           {#if layoutStore.state.panel.activeView === "poller"}
             <PollerPanel />
+          {:else if layoutStore.state.panel.activeView === "tools"}
+            <ToolPanel />
           {:else if layoutStore.state.panel.activeView === "logs"}
             <LogPanel />
           {:else}

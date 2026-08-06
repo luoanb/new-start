@@ -17,6 +17,7 @@ export const activityItems: ViewMeta[] = [
 
 export const panelViews: ViewMeta[] = [
   { id: "poller", label: "Poller" },
+  { id: "tools", label: "Tools" },
   { id: "logs", label: "Logs" },
 ];
 

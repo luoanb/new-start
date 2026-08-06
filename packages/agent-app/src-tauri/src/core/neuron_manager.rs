@@ -1,6 +1,6 @@
 use std::{
     collections::HashSet,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use async_trait::async_trait;
@@ -44,7 +44,8 @@ pub struct NeuronManager {
     model_caller: Arc<dyn NeuronModelCaller>,
     config: NeuronConfigReader,
     creator_id: Mutex<Option<String>>,
-    tool_registry: ToolRegistry,
+    /// 共享工具注册表（与 Gateway 同一 `Arc<RwLock>`）：读锁 clone 后立即释放，不跨 await。
+    tool_registry: Arc<RwLock<ToolRegistry>>,
 }
 
 impl std::fmt::Debug for NeuronManager {
@@ -58,7 +59,7 @@ impl NeuronManager {
         store: Arc<Mutex<NeuronStore>>,
         model_caller: Arc<dyn NeuronModelCaller>,
         config: NeuronConfigReader,
-        tool_registry: ToolRegistry,
+        tool_registry: Arc<RwLock<ToolRegistry>>,
     ) -> Self {
         Self {
             store,
@@ -72,7 +73,11 @@ impl NeuronManager {
     /// Build an "available tools" block for creator prompts so `tool_ids` can only
     /// be picked from tools that actually exist in the registry (no invented names).
     fn available_tools_block(&self) -> String {
-        let defs = self.tool_registry.list_definitions();
+        let defs = self
+            .tool_registry
+            .read()
+            .map(|reg| reg.list_definitions())
+            .unwrap_or_default();
         if defs.is_empty() {
             return "No tools are registered; `tool_ids` must be [].".to_string();
         }
@@ -1806,7 +1811,7 @@ mod tests {
                 calls: AtomicUsize::new(0),
             }),
             NeuronConfigReader::new(root.clone()),
-            ToolRegistry::new(),
+            Arc::new(RwLock::new(ToolRegistry::new())),
         ));
         (manager, root)
     }
