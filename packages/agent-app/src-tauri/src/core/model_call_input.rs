@@ -124,6 +124,36 @@ impl ModelCallInput {
         )
     }
 
+    /// 主对话专用装配：首轮角色定格 System；非首轮 System 不再被替换。
+    ///
+    /// - 空 `history`：System = `role_system ∥ body`（同 `assemble`）。
+    /// - 非空 `history`：不替换已有 System；仅当历史中无 System 时头部兜底插入 `role_system`；
+    ///   `body` 非空则 append 为末尾 User。
+    ///
+    /// 目标：前缀稳定（provider 侧 prompt cache 按前缀命中）+ 动态角色放末尾
+    /// （模型对最后一条消息注意力最高），避免首轮角色设定被后续轮次覆盖。
+    pub fn assemble_stable(
+        history: &[ModelMessage],
+        role_system: &str,
+        content: &str,
+        user_input: &str,
+        template: ModelAppendTemplate,
+    ) -> Vec<ModelMessage> {
+        let body = Self::with_user_input_for_append(content, user_input, template);
+        if history.is_empty() {
+            let system = join_nonempty(role_system, &body);
+            return Self::replace_system(&[], &system);
+        }
+        let mut out = history.to_vec();
+        if !out.iter().any(|m| m.role == ModelMessageRole::System) {
+            out.insert(0, Self::message(ModelMessageRole::System, role_system));
+        }
+        if !body.is_empty() {
+            out.push(Self::message(ModelMessageRole::User, &body));
+        }
+        out
+    }
+
     /// Normalize tool-call/tool-result pairing before sending to the model.
     ///
     /// OpenAI-compatible providers (DeepSeek etc.) reject a message list where an
@@ -480,5 +510,67 @@ mod tests {
         assert_eq!(out[2].role, ModelMessageRole::User);
         assert!(out[2].content.contains("## 操作说明书（工具与输出契约）\n\nmanual"));
         assert!(out[2].content.contains("## 待处理输入\n\npayload"));
+    }
+
+    #[test]
+    fn assemble_stable_folds_body_into_system_on_empty_history() {
+        let out = ModelCallInput::assemble_stable(
+            &[],
+            "role",
+            "c",
+            "u",
+            ModelAppendTemplate::Neuron,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].role, ModelMessageRole::System);
+        assert!(out[0].content.starts_with("role\n\n【神经元】"));
+        assert!(out[0].content.contains("## 角色与能力\n\nc"));
+        assert!(out[0].content.contains("## 本轮输入\n\nu"));
+    }
+
+    #[test]
+    fn assemble_stable_keeps_existing_system_untouched() {
+        let history = vec![
+            msg(ModelMessageRole::System, "fixed-role"),
+            msg(ModelMessageRole::User, "u1"),
+            msg(ModelMessageRole::Assistant, "a1"),
+        ];
+        let out = ModelCallInput::assemble_stable(
+            &history,
+            "new-role",
+            "c",
+            "u2",
+            ModelAppendTemplate::Neuron,
+        );
+        assert_eq!(out.len(), 4);
+        // 首条 System 定格，不被新 role_system 覆盖
+        assert_eq!(out[0], msg(ModelMessageRole::System, "fixed-role"));
+        assert_eq!(out[1], msg(ModelMessageRole::User, "u1"));
+        assert_eq!(out[2], msg(ModelMessageRole::Assistant, "a1"));
+        assert_eq!(out[3].role, ModelMessageRole::User);
+        assert!(out[3].content.contains("## 角色与能力\n\nc"));
+        assert!(out[3].content.contains("## 本轮输入\n\nu2"));
+    }
+
+    #[test]
+    fn assemble_stable_inserts_system_when_missing() {
+        let history = vec![
+            msg(ModelMessageRole::User, "u1"),
+            msg(ModelMessageRole::Assistant, "a1"),
+        ];
+        let out = ModelCallInput::assemble_stable(
+            &history,
+            "role",
+            "c",
+            "u2",
+            ModelAppendTemplate::Neuron,
+        );
+        assert_eq!(out.len(), 4);
+        // 历史无 System（legacy 导入）：头部兜底插入 role_system
+        assert_eq!(out[0], msg(ModelMessageRole::System, "role"));
+        assert_eq!(out[1], msg(ModelMessageRole::User, "u1"));
+        assert_eq!(out[2], msg(ModelMessageRole::Assistant, "a1"));
+        assert_eq!(out[3].role, ModelMessageRole::User);
+        assert!(out[3].content.contains("## 角色与能力\n\nc"));
     }
 }

@@ -492,10 +492,17 @@ impl AssistantMode {
             String::new()
         };
 
-        let messages = ModelCallInput::assemble(
+        // 主对话装配：首轮角色定格 System；非首轮 System 不再被替换。
+        // 神经元相对上轮变化才在末尾追加 content（首轮 None 不拼，角色已在 System 定格），
+        // 避免 token 重复累积，同时保持 System 前缀稳定以利 provider 侧 prompt cache 命中。
+        let content = match (&ctx.last_selected_neuron_id, &ctx.selected_neuron) {
+            (Some(prev), Some(neuron)) if prev != &neuron.id => neuron.content.clone(),
+            _ => String::new(),
+        };
+        let messages = ModelCallInput::assemble_stable(
             &ctx.messages,
             &role_system,
-            "",
+            &content,
             &user_input,
             ModelAppendTemplate::Neuron,
         );
