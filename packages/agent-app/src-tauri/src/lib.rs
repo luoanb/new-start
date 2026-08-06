@@ -151,6 +151,17 @@ async fn save_tool_config(
         .map_err(|e| e.payload())
 }
 
+/// 重新装配：读取磁盘配置并全量重建工具集（不写文件）。
+/// 供前端「刷新」按钮使用，配置非法时返回可读错误。
+#[tauri::command]
+async fn reassemble_tools(gateway: State<'_, Gateway>) -> TauriResult<()> {
+    gateway
+        .inner()
+        .reassemble_tools()
+        .await
+        .map_err(|e| e.payload())
+}
+
 #[tauri::command]
 async fn list_providers(providers: State<'_, ProviderRegistry>) -> TauriResult<Vec<ProviderInfo>> {
     Ok(providers.inner().list_providers())
@@ -699,6 +710,7 @@ pub fn run() {
             list_mcp_servers,
             get_tool_config,
             save_tool_config,
+            reassemble_tools,
             list_providers,
             list_models,
             call_model,

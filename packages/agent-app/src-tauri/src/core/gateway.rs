@@ -328,6 +328,35 @@ impl Gateway {
         })?;
 
         let (new_registry, new_statuses) = build_registry(&self.store.root())?;
+        self.replace_tools(new_registry, new_statuses)?;
+
+        tracing::info!(
+            phase = "tool_config",
+            mcp_servers = view.mcp_servers.len(),
+            http_tools = view.http_tools.len(),
+            command_tools = view.command_tools.len(),
+            "tool config saved and registry reassembled"
+        );
+
+        self.get_tool_config()
+    }
+
+    /// 重新装配：读取磁盘上的 `mcp_servers.json` / `dynamic_tools.json` 并全量重建
+    /// 工具集（不写文件）。供前端「刷新」按钮使用——配置文件在外部被修改后，
+    /// 无需打开弹窗即可让变更生效。配置非法时返回可读错误，registry 保持原状。
+    pub async fn reassemble_tools(&self) -> AppResult<()> {
+        let (new_registry, new_statuses) = build_registry(&self.store.root())?;
+        self.replace_tools(new_registry, new_statuses)?;
+        tracing::info!(phase = "tool_config", "tool registry reassembled from disk");
+        Ok(())
+    }
+
+    /// 原子替换共享 registry 与 MCP 状态（在飞工具调用持有旧 Arc 引用，不受影响）。
+    fn replace_tools(
+        &self,
+        new_registry: ToolRegistry,
+        new_statuses: Vec<McpServerStatus>,
+    ) -> AppResult<()> {
         {
             let mut reg = self
                 .tool_registry
@@ -342,16 +371,7 @@ impl Gateway {
                 .map_err(|e| AppError::RuntimeError(format!("mcp status lock: {e}")))?;
             *status = new_statuses;
         }
-
-        tracing::info!(
-            phase = "tool_config",
-            mcp_servers = view.mcp_servers.len(),
-            http_tools = view.http_tools.len(),
-            command_tools = view.command_tools.len(),
-            "tool config saved and registry reassembled"
-        );
-
-        self.get_tool_config()
+        Ok(())
     }
 
     pub fn list_providers(&self) -> Vec<ProviderInfo> {
@@ -1023,6 +1043,42 @@ mod tests {
         assert!(view.mcp_servers.is_empty());
         assert!(view.http_tools.is_empty());
         assert!(view.command_tools.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reassemble_tools_loads_disk_config() {
+        let root = test_root("reassemble_tools_loads_disk_config");
+        if root.exists() {
+            fs::remove_dir_all(&root).expect("old test storage should be removable");
+        }
+        let store = ConversationStore::new(root.clone()).expect("test store should initialize");
+        let gateway = Gateway::new(store).expect("test gateway should initialize");
+        assert!(!gateway.list_tool_info().iter().any(|t| t.name == "lookup_wiki"));
+
+        // 模拟外部修改配置：直接写 dynamic_tools.json。
+        ToolConfigReader::new(&root)
+            .save_dynamic_tools(&DynamicToolsFile {
+                http: vec![HttpToolConfig {
+                    name: "lookup_wiki".into(),
+                    desc: "查内部 wiki".into(),
+                    method: "GET".into(),
+                    url: "https://api.example.com/wiki?q={query}".into(),
+                    timeout_ms: None,
+                }],
+                command: vec![],
+            })
+            .expect("write config");
+
+        gateway
+            .reassemble_tools()
+            .await
+            .expect("reassemble should succeed");
+        let tools = gateway.list_tool_info();
+        assert!(
+            tools.iter().any(|t| t.name == "lookup_wiki"),
+            "expected lookup_wiki after reassemble: {:?}",
+            tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>()
+        );
     }
 
     fn test_gateway(name: &str) -> Gateway {

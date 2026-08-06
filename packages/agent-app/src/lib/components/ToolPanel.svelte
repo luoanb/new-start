@@ -13,6 +13,7 @@
   let tools = $state<ToolInfo[]>([]);
   let mcpServers = $state<McpServerStatus[]>([]);
   let loading = $state(true);
+  let refreshing = $state(false);
   let errorMsg = $state("");
 
   // 配置编辑器状态（列表只读展示不变，编辑收敛在弹窗）
@@ -30,8 +31,8 @@
     await refresh();
   });
 
-  async function refresh() {
-    loading = true;
+  async function refresh(silent = false) {
+    if (!silent) loading = true;
     errorMsg = "";
     try {
       const [toolList, serverList] = await Promise.all([
@@ -44,6 +45,21 @@
       errorMsg = `Load failed: ${e}`;
     } finally {
       loading = false;
+    }
+  }
+
+  /// 手动刷新：重新读取磁盘配置并全量重装配（不打开弹窗、不写文件）。
+  async function handleRefresh() {
+    if (refreshing) return;
+    refreshing = true;
+    errorMsg = "";
+    try {
+      await invoke("reassemble_tools");
+      await refresh(true);
+    } catch (e) {
+      errorMsg = `重新装配失败: ${e}`;
+    } finally {
+      refreshing = false;
     }
   }
 
@@ -146,7 +162,10 @@
 
   <div class="panel-toolbar">
     <span class="panel-title">工具</span>
-    <button class="link-btn" type="button" onclick={openEditor}>编辑配置</button>
+    <div class="toolbar-actions">
+      <button class="link-btn icon" class:spinning={refreshing} type="button" onclick={handleRefresh} disabled={loading || refreshing} aria-label="刷新">⟳</button>
+      <button class="link-btn" type="button" onclick={openEditor}>编辑配置</button>
+    </div>
   </div>
 
   {#if loading}
@@ -413,6 +432,22 @@
     font-size: var(--fs-base);
     font-weight: 600;
     color: var(--color-text);
+  }
+  .toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+  .link-btn.icon {
+    font-size: var(--fs-base);
+    line-height: 1;
+    padding: 2px 6px;
+  }
+  .link-btn.icon.spinning {
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
   }
 
   .link-btn {

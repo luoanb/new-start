@@ -1,0 +1,14 @@
+{
+  "mcp_servers": [
+    {
+      "name": "open-websearch",
+      "transport": "stdio",
+      "command": "pnpm",
+      "args": ["dlx", "open-websearch@latest"],
+      "env": {
+        "MODE": "stdio"
+      },
+      "disabled": false
+    }
+  ]
+}
