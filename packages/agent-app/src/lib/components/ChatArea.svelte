@@ -1,30 +1,23 @@
 <script lang="ts">
   import ChatMessage from "./ChatMessage.svelte";
   import ChatInput from "./ChatInput.svelte";
-  import type { Message, ProviderInfo, ModelInfo } from "$lib/types";
+  import type { Message } from "$lib/types";
   import { t } from "$lib/i18n";
-  import { dataStore } from "$lib/stores/dataStore.svelte";
   import { errorMessage } from "$lib/errorMessage";
+  import { useViewContext } from "$lib/layout/viewContext";
 
-  let {
-    messages,
-    loading,
-    onSend,
-    providers = [],
-    models = [],
-    selectedProviderId = "",
-    selectedModelId = "",
-    onModelChange,
-  }: {
-    messages: Message[];
-    loading: boolean;
-    onSend: (text: string) => void;
-    providers?: ProviderInfo[];
-    models?: ModelInfo[];
-    selectedProviderId?: string;
-    selectedModelId?: string;
-    onModelChange?: (providerId: string, modelId: string) => void;
-  } = $props();
+  // 视图数据/命令统一来自 ViewContext（容器与内容解耦，无 props）。
+  const ctx = useViewContext();
+  let messages = $derived(ctx.stores.data.state.messages);
+  let loading = $derived(ctx.ui.loading);
+  let providers = $derived(ctx.stores.data.state.providers);
+  let models = $derived(ctx.stores.data.state.models);
+  let selectedProviderId = $derived(ctx.ui.activeProviderId);
+  let selectedModelId = $derived(ctx.ui.activeModelId);
+
+  const onSend = (text: string) => void ctx.commands.sendMessage(text);
+  const onModelChange = (providerId: string, modelId: string) =>
+    ctx.commands.changeModel(providerId, modelId);
 
   let containerEl: HTMLDivElement | undefined = $state();
   let ratingError = $state("");
@@ -39,8 +32,8 @@
 
   // 仅当当前会话已绑定 topic（assistant 模式）时，assistant 回复才显示评价按钮。
   const canRate = $derived(
-    dataStore.state.topics.some(
-      (topic) => topic.session_id === dataStore.state.activeConversationId
+    ctx.stores.data.state.topics.some(
+      (topic) => topic.session_id === ctx.stores.data.state.activeConversationId
     )
   );
 
@@ -49,10 +42,10 @@
   }
 
   async function handleRate(score: number): Promise<void> {
-    const conversationId = dataStore.state.activeConversationId;
+    const conversationId = ctx.stores.data.state.activeConversationId;
     if (!conversationId) return;
     try {
-      await dataStore.scoreFeedback(conversationId, score);
+      await ctx.stores.data.scoreFeedback(conversationId, score);
     } catch (e) {
       ratingError = `评价失败: ${errorMessage(e)}`;
       setTimeout(() => (ratingError = ""), 3000);

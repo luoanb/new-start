@@ -15,7 +15,7 @@ export class LocalStorageLayoutStorage implements LayoutStorage {
       const raw = localStorage.getItem(this.key);
       if (!raw) return null;
       const parsed = JSON.parse(raw) as Partial<LayoutState>;
-      return mergeWithDefault(parsed);
+      return normalize(parsed);
     } catch {
       return null;
     }
@@ -30,16 +30,47 @@ export class LocalStorageLayoutStorage implements LayoutStorage {
   }
 }
 
-// 浅合并：缺字段补默认值，未知字段丢弃。version 不匹配时直接回退默认。
-function mergeWithDefault(parsed: Partial<LayoutState>): LayoutState {
-  if (parsed.version !== DEFAULT_LAYOUT.version) return { ...DEFAULT_LAYOUT };
+// 未知字段丢弃；version 匹配时逐段浅合并，缺字段补默认值。
+// 旧版本（v2）迁移：保留面板宽度/高度/激活视图，视图归属回退默认。
+function normalize(parsed: Partial<LayoutState>): LayoutState {
+  if (parsed.version === DEFAULT_LAYOUT.version) {
+    return {
+      version: DEFAULT_LAYOUT.version,
+      sidebar: { ...DEFAULT_LAYOUT.sidebar, ...parsed.sidebar },
+      info: { ...DEFAULT_LAYOUT.info, ...parsed.info },
+      panel: { ...DEFAULT_LAYOUT.panel, ...parsed.panel },
+      containers: {
+        sidebar: { ...DEFAULT_LAYOUT.containers.sidebar, ...parsed.containers?.sidebar },
+        info: { ...DEFAULT_LAYOUT.containers.info, ...parsed.containers?.info },
+        panel: { ...DEFAULT_LAYOUT.containers.panel, ...parsed.containers?.panel },
+      },
+      hiddenViews: parsed.hiddenViews ?? [],
+      main: { ...DEFAULT_LAYOUT.main, ...parsed.main },
+      activity: { ...DEFAULT_LAYOUT.activity, ...parsed.activity },
+    };
+  }
 
-  return {
-    version: DEFAULT_LAYOUT.version,
-    sidebar: { ...DEFAULT_LAYOUT.sidebar, ...parsed.sidebar },
-    info: { ...DEFAULT_LAYOUT.info, ...parsed.info },
-    panel: { ...DEFAULT_LAYOUT.panel, ...parsed.panel },
-    main: { ...DEFAULT_LAYOUT.main, ...parsed.main },
-    activity: { ...DEFAULT_LAYOUT.activity, ...parsed.activity },
-  };
+  if (parsed.version === 2) {
+    const old = parsed as Partial<LayoutState> & {
+      panel?: { visible?: boolean; height?: number; activeView?: string };
+    };
+    return {
+      version: DEFAULT_LAYOUT.version,
+      sidebar: { ...DEFAULT_LAYOUT.sidebar, ...old.sidebar },
+      info: { ...DEFAULT_LAYOUT.info, ...old.info },
+      panel: { ...DEFAULT_LAYOUT.panel, ...old.panel },
+      containers: {
+        ...DEFAULT_LAYOUT.containers,
+        panel: {
+          ...DEFAULT_LAYOUT.containers.panel,
+          activeView: old.panel?.activeView ?? DEFAULT_LAYOUT.containers.panel.activeView,
+        },
+      },
+      hiddenViews: [],
+      main: { ...DEFAULT_LAYOUT.main, ...old.main },
+      activity: { ...DEFAULT_LAYOUT.activity, ...old.activity },
+    };
+  }
+
+  return { ...DEFAULT_LAYOUT };
 }

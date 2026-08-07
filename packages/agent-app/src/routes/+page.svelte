@@ -2,41 +2,36 @@
   import { onMount } from "svelte";
   import StatusBar from "$lib/components/StatusBar.svelte";
   import SessionList from "$lib/components/SessionList.svelte";
-  import ChatArea from "$lib/components/ChatArea.svelte";
   import SidePanel from "$lib/components/SidePanel.svelte";
   import SessionCreateModal from "$lib/components/SessionCreateModal.svelte";
   import ErrorBanner from "$lib/components/ErrorBanner.svelte";
-  import NeuronManager from "$lib/components/NeuronManager.svelte";
-  import PollerPanel from "$lib/components/PollerPanel.svelte";
-  import ToolPanel from "$lib/components/ToolPanel.svelte";
-  import LogPanel from "$lib/components/LogPanel.svelte";
   import ActivityBar from "$lib/layout/ActivityBar.svelte";
   import Splitter from "$lib/layout/Splitter.svelte";
-  import DockPane from "$lib/layout/DockPane.svelte";
   import EditorTabs from "$lib/layout/EditorTabs.svelte";
+  import ViewHost from "$lib/layout/ViewHost.svelte";
+  import ViewContainer from "$lib/layout/ViewContainer.svelte";
   import { layoutStore } from "$lib/layout/LayoutStore.svelte";
-  import { activityItems, panelViews, mainTabs } from "$lib/layout/views";
+  import { activityItems, mainViews, mainTabs } from "$lib/layout/views";
+  import { setViewContext, type ViewContext } from "$lib/layout/viewContext";
   import { t } from "$lib/i18n";
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
   import { hotkeyService } from "$lib/hotkey/hotkeyService";
   import { dataStore } from "$lib/stores/dataStore.svelte";
 
   // ── 统一数据（dataStore 驱动：bootstrap + 事件订阅刷新）──
-  let providers = $derived(dataStore.state.providers);
-  let models = $derived(dataStore.state.models);
-  let skills = $derived(dataStore.state.skills);
   let conversations = $derived(dataStore.state.conversations);
   let runtimeStatus = $derived(dataStore.state.runtimeStatus);
   let ready = $derived(dataStore.state.ready);
 
   // ── Active selection（会话选择由 dataStore 管理；provider/model 持久化到 localStorage）──
   let activeConversationId = $derived(dataStore.state.activeConversationId ?? "");
-  let activeProviderId: string = $state(localStorage.getItem("agent-app:providerId") ?? "");
-  let activeModelId: string = $state(localStorage.getItem("agent-app:modelId") ?? "");
 
-  // ── Messages & loading（消息由 dataStore 管理，事件驱动自动刷新）──
-  let messages = $derived(dataStore.state.messages);
-  let loading = $state(false);
+  // ── ViewContext：视图共享的会话级 UI 状态（$state 保证响应式传播）──
+  let ui = $state({
+    activeProviderId: localStorage.getItem("agent-app:providerId") ?? "",
+    activeModelId: localStorage.getItem("agent-app:modelId") ?? "",
+    loading: false,
+  });
 
   // ── UI state ──
   let error = $state("");
@@ -74,7 +69,7 @@
     conversations.find((c) => c.id === activeConversationId)
   );
   let activeMode = $derived(activeConversation?.mode ?? "chat");
-  let hasModel = $derived(!!activeProviderId && !!activeModelId);
+  let hasModel = $derived(!!ui.activeProviderId && !!ui.activeModelId);
 
   // ── Bootstrap：统一拉取 + 订阅后端状态事件 ──
   onMount(async () => {
@@ -92,14 +87,14 @@
       error = "Select a provider and model before sending.";
       return;
     }
-    loading = true;
+    ui.loading = true;
     error = "";
     try {
-      await dataStore.sendMessage(text, activeProviderId, activeModelId);
+      await dataStore.sendMessage(text, ui.activeProviderId, ui.activeModelId);
     } catch (e) {
       error = `Send failed: ${formatInvokeError(e)}`;
     } finally {
-      loading = false;
+      ui.loading = false;
     }
   }
 
@@ -127,11 +122,35 @@
   }
 
   function handleModelChange(providerId: string, modelId: string) {
-    activeProviderId = providerId;
-    activeModelId = modelId;
+    ui.activeProviderId = providerId;
+    ui.activeModelId = modelId;
     localStorage.setItem("agent-app:providerId", providerId);
     localStorage.setItem("agent-app:modelId", modelId);
   }
+
+  // ── ViewContext：容器与内容解耦的边界（容器只消费注册表，视图组件自取 context）──
+  const chatView = mainViews.find((v) => v.id === "chat")!;
+  const neuronsView = mainViews.find((v) => v.id === "neurons")!;
+
+  const viewCtx: ViewContext = {
+    stores: { data: dataStore, layout: layoutStore },
+    ui,
+    commands: {
+      sendMessage: handleSend,
+      selectConversation: handleSelectConversation,
+      createSession: handleCreateSession,
+      closeSession: handleCloseSession,
+      changeModel: handleModelChange,
+      openCreateModal: () => {
+        showCreateModal = true;
+        drawerSidebar = false;
+        drawerInfo = false;
+      },
+      showError: (msg) => (error = msg),
+      dismissError: () => (error = ""),
+    },
+  };
+  setViewContext(viewCtx);
 
   // ── Activity Bar / 布局操作 ──
 
@@ -252,14 +271,7 @@
   <!-- Desktop sidebar -->
   <div class="main-area">
     <aside class="sidebar-area desktop-only" style={sidebarStyle}>
-      <SessionList
-        activeId={activeConversationId}
-        collapsed={false}
-        onSelect={handleSelectConversation}
-        onCreate={() => (showCreateModal = true)}
-        onClose={handleCloseSession}
-        onToggle={() => layoutStore.toggleSidebar()}
-      />
+      <ViewContainer containerId="sidebar" />
     </aside>
 
     <Splitter
@@ -282,36 +294,18 @@
         <div class="chat-content">
           {#if isNeuronSplit}
             <div class="main-split" style="--split-ratio: {splitRatio}">
-              <ChatArea
-                {messages}
-                {loading}
-                onSend={handleSend}
-                {providers}
-                {models}
-                selectedProviderId={activeProviderId}
-                selectedModelId={activeModelId}
-                onModelChange={handleModelChange}
-              />
+              <ViewHost registration={chatView} />
               <Splitter
                 orientation="vertical"
                 onResize={handleSplitResize}
                 onResizeEnd={() => layoutStore.persistNow()}
               />
-              <NeuronManager />
+              <ViewHost registration={neuronsView} />
             </div>
           {:else if layoutStore.state.activity.active === "neurons"}
-            <NeuronManager />
+            <ViewHost registration={neuronsView} />
           {:else}
-            <ChatArea
-              {messages}
-              {loading}
-              onSend={handleSend}
-              {providers}
-              {models}
-              selectedProviderId={activeProviderId}
-              selectedModelId={activeModelId}
-              onModelChange={handleModelChange}
-            />
+            <ViewHost registration={chatView} />
           {/if}
         </div>
       </main>
@@ -323,31 +317,7 @@
           onResize={(delta) => layoutStore.setPanelHeight(layoutStore.state.panel.height - delta, false)}
           onResizeEnd={() => layoutStore.persistNow()}
         />
-        <DockPane
-          title={panelViews.find((v) => v.id === layoutStore.state.panel.activeView)?.label ?? "Panel"}
-          onToggle={() => layoutStore.togglePanel()}
-        >
-          <div class="panel-tabs">
-            {#each panelViews as pv}
-              <button
-                class="panel-tab"
-                class:active={layoutStore.state.panel.activeView === pv.id}
-                onclick={() => layoutStore.setPanelView(pv.id)}
-              >
-                {pv.label}
-              </button>
-            {/each}
-          </div>
-          {#if layoutStore.state.panel.activeView === "poller"}
-            <PollerPanel />
-          {:else if layoutStore.state.panel.activeView === "tools"}
-            <ToolPanel />
-          {:else if layoutStore.state.panel.activeView === "logs"}
-            <LogPanel />
-          {:else}
-            <p class="panel-empty">Logs placeholder</p>
-          {/if}
-        </DockPane>
+        <ViewContainer containerId="panel" />
       </section>
     </div>
 
@@ -360,7 +330,7 @@
 
     <!-- Desktop info panel -->
     <aside class="info-area desktop-only" style={infoStyle}>
-      <SidePanel {providers} {models} {skills} />
+      <ViewContainer containerId="info" />
     </aside>
   </div>
 
@@ -381,14 +351,7 @@
       <h2>{t("drawer.sessions")}</h2>
       <button class="drawer-close" onclick={closeDrawers}>×</button>
     </div>
-    <SessionList
-      activeId={activeConversationId}
-      collapsed={false}
-      onSelect={handleSelectConversation}
-      onCreate={() => { showCreateModal = true; drawerSidebar = false; }}
-      onClose={handleCloseSession}
-      onToggle={() => {}}
-    />
+    <SessionList />
   </aside>
 {/if}
 
@@ -400,7 +363,7 @@
       <h2>{t("drawer.info")}</h2>
       <button class="drawer-close" onclick={closeDrawers}>×</button>
     </div>
-    <SidePanel {providers} {models} {skills} />
+    <SidePanel />
   </aside>
 {/if}
 
@@ -525,21 +488,6 @@
       minmax(0, calc((1 - var(--split-ratio)) * (100% - 4px)));
   }
   .main-split > :global(*) { min-width: 0; min-height: 0; }
-
-  .panel-tabs { display: flex; flex-shrink: 0; border-bottom: var(--border-width) solid var(--color-border); padding: 0 var(--space-2); }
-  .panel-tab {
-    padding: var(--space-1) var(--space-3);
-    border: none;
-    background: transparent;
-    cursor: pointer;
-    font-size: var(--fs-sm);
-    font-weight: 500;
-    color: var(--color-text-muted);
-    border-bottom: 2px solid transparent;
-  }
-  .panel-tab.active { color: var(--color-primary); border-bottom-color: var(--color-primary); }
-  .panel-tab:hover { color: var(--color-text); }
-  .panel-empty { padding: var(--space-4); color: var(--color-text-muted); font-size: var(--fs-sm); }
 
   .loading-overlay {
     position: fixed; inset: 0;

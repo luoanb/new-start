@@ -1,17 +1,14 @@
 <script lang="ts">
-  import type { ProviderInfo, ModelInfo, SkillInfo } from "$lib/types";
+  import type { ModelInfo } from "$lib/types";
   import { t, tMap } from "$lib/i18n";
   import TopicPanel from "./TopicPanel.svelte";
+  import { useViewContext } from "$lib/layout/viewContext";
 
-  let {
-    providers,
-    models,
-    skills,
-  }: {
-    providers: ProviderInfo[];
-    models: ModelInfo[];
-    skills: SkillInfo[];
-  } = $props();
+  // 数据来自 ViewContext（容器与内容解耦，无 props）。
+  const ctx = useViewContext();
+  let providers = $derived(ctx.stores.data.state.providers);
+  let models = $derived(ctx.stores.data.state.models);
+  let skills = $derived(ctx.stores.data.state.skills);
 
   let activeTab = $state("providers");
 

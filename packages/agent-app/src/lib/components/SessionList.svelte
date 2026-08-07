@@ -1,27 +1,21 @@
 <script lang="ts">
   import { t } from "$lib/i18n";
-  import { dataStore } from "$lib/stores/dataStore.svelte";
+  import { useViewContext } from "$lib/layout/viewContext";
 
-  let {
-    activeId,
-    collapsed,
-    onSelect,
-    onCreate,
-    onClose,
-    onToggle,
-  }: {
-    activeId: string;
-    collapsed: boolean;
-    onSelect: (id: string) => void;
-    onCreate: () => void;
-    onClose: (id: string) => void;
-    onToggle: () => void;
-  } = $props();
+  // 数据/命令统一来自 ViewContext；collapsed 是纯视觉 prop（窄侧栏形态）。
+  const ctx = useViewContext();
+  let { collapsed = false }: { collapsed?: boolean } = $props();
 
-  let conversations = $derived(dataStore.state.conversations);
+  let activeId = $derived(ctx.stores.data.state.activeConversationId ?? "");
+  let conversations = $derived(ctx.stores.data.state.conversations);
   let runningSessionIds = $derived(
-    new Set(dataStore.state.runningSessions.map((s) => s.session_id)),
+    new Set(ctx.stores.data.state.runningSessions.map((s) => s.session_id)),
   );
+
+  const onSelect = (id: string) => ctx.commands.selectConversation(id);
+  const onCreate = () => ctx.commands.openCreateModal();
+  const onClose = (id: string) => void ctx.commands.closeSession(id);
+  const onToggle = () => ctx.stores.layout.toggleSidebar();
 
   const modeLabel: Record<string, string> = {
     chat: "Chat",
