@@ -18,7 +18,7 @@ export type ViewContainerState = {
 };
 
 export type LayoutState = {
-  version: 4;
+  version: 7;
   sidebar: { visible: boolean; width: number };
   info: { visible: boolean; width: number };
   panel: { visible: boolean; height: number };
@@ -31,16 +31,16 @@ export type LayoutState = {
 };
 
 export const DEFAULT_LAYOUT: LayoutState = {
-  version: 4,
+  version: 7,
   sidebar: { visible: true, width: 260 },
   info: { visible: true, width: 280 },
   // v2/v3: 底部面板默认展开（对齐 VS Code 底部栏习惯）
   panel: { visible: true, height: 200 },
   containers: {
-    sidebar: { views: ["sessions"], activeView: "sessions" },
-    // v4: 原 Info 组合面板拆分为 providers/models/topics 三个独立视图
-    info: { views: ["providers", "models", "topics"], activeView: "providers" },
-    panel: { views: ["poller", "tools", "logs"], activeView: "poller" },
+    // v5/v6: topics 曾默认在 panel/topics 位置演变；v7: topics 与 tools 默认归位左侧 sidebar
+    sidebar: { views: ["sessions", "topics", "tools"], activeView: "sessions" },
+    info: { views: ["providers", "models"], activeView: "providers" },
+    panel: { views: ["poller", "logs"], activeView: "poller" },
   },
   hiddenViews: [],
   main: { splits: [] },
