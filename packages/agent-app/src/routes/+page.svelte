@@ -30,10 +30,12 @@
   let activeConversationId = $derived(dataStore.state.activeConversationId ?? "");
 
   // ── ViewContext：视图共享的会话级 UI 状态（$state 保证响应式传播）──
+  // 运行状态由 dataStore.runningSessions 权威驱动（后端多会话并行）；
+  // sendingIds 仅做本会话发送请求的瞬时防连点，互不阻塞其他会话。
   let ui = $state({
     activeProviderId: localStorage.getItem("agent-app:providerId") ?? "",
     activeModelId: localStorage.getItem("agent-app:modelId") ?? "",
-    loading: false,
+    sendingIds: new Set<string>(),
   });
 
   // ── UI state ──
@@ -111,14 +113,18 @@
       error = "Select a provider and model before sending.";
       return;
     }
-    ui.loading = true;
+    // 仅拦截当前会话自身的并发发送；其他会话并行不受影响
+    if (ui.sendingIds.has(activeConversationId)) return;
     error = "";
+    ui.sendingIds = new Set(ui.sendingIds).add(activeConversationId);
     try {
       await dataStore.sendMessage(text, ui.activeProviderId, ui.activeModelId);
     } catch (e) {
       error = `Send failed: ${formatInvokeError(e)}`;
     } finally {
-      ui.loading = false;
+      const next = new Set(ui.sendingIds);
+      next.delete(activeConversationId);
+      ui.sendingIds = next;
     }
   }
 

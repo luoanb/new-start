@@ -23,11 +23,13 @@ export type ViewCommands = {
   dismissError: () => void;
 };
 
-/** 会话级 UI 状态（组合根持有，$state 保证响应式传播）。 */
+/** 会话级 UI 状态（组合根持有，$state 保证响应式传播）。
+ * 运行状态以 dataStore.runningSessions 为权威来源（后端多会话并行）；
+ * sendingIds 仅为前端发送请求的瞬时集合，用于防止同一会话连点。 */
 export type ViewUiState = {
   activeProviderId: string;
   activeModelId: string;
-  loading: boolean;
+  sendingIds: Set<string>;
 };
 
 export type ViewContext = {

@@ -9,11 +9,20 @@
   // 视图数据/命令统一来自 ViewContext（容器与内容解耦，无 props）。
   const ctx = useViewContext();
   let messages = $derived(ctx.stores.data.state.messages);
-  let loading = $derived(ctx.ui.loading);
   let providers = $derived(ctx.stores.data.state.providers);
   let models = $derived(ctx.stores.data.state.models);
   let selectedProviderId = $derived(ctx.ui.activeProviderId);
   let selectedModelId = $derived(ctx.ui.activeModelId);
+
+  // 会话级运行状态：以后端 runningSessions 为权威来源（多会话并行互不影响），
+  // sendingIds 兜底覆盖发送请求尚未被后端事件刷新的瞬时窗口。
+  let activeConversationId = $derived(ctx.stores.data.state.activeConversationId ?? "");
+  let runningSession = $derived(
+    ctx.stores.data.state.runningSessions.find((s) => s.session_id === activeConversationId)
+  );
+  let isRunning = $derived(
+    !!runningSession || ctx.ui.sendingIds.has(activeConversationId)
+  );
 
   const onSend = (text: string) => void ctx.commands.sendMessage(text);
   const onModelChange = (providerId: string, modelId: string) =>
@@ -71,17 +80,20 @@
       {/each}
     {/if}
 
-    {#if loading}
+    {#if isRunning}
       <div class="loading-indicator">
         <span class="dot-pulse"></span>
         <span>{t("common.thinking")}</span>
+        {#if runningSession?.current_step}
+          <span class="running-step">{runningSession.current_step}</span>
+        {/if}
       </div>
     {/if}
   </div>
 
   <ChatInput
     {onSend}
-    {loading}
+    loading={isRunning}
     {providers}
     {models}
     {selectedProviderId}
@@ -99,6 +111,7 @@
   .empty-content h3 { margin: 0 0 var(--space-2); font-size: var(--fs-lg); font-weight: 600; color: var(--color-text); }
   .empty-content p { margin: 0; font-size: var(--fs-sm); color: var(--color-text-muted); }
   .loading-indicator { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-5); font-size: var(--fs-sm); color: var(--color-text-muted); }
+  .running-step { font-family: var(--font-mono, monospace); font-size: var(--fs-xs); color: var(--color-primary); opacity: 0.85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .dot-pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--color-primary); animation: pulse 1.2s ease-in-out infinite; }
   @keyframes pulse { 0%, 100% { opacity: 0.3; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.2); } }
 </style>
