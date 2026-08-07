@@ -2,7 +2,9 @@
   import { onMount } from "svelte";
   import StatusBar from "$lib/components/StatusBar.svelte";
   import SessionList from "$lib/components/SessionList.svelte";
-  import SidePanel from "$lib/components/SidePanel.svelte";
+  import ProvidersPanel from "$lib/components/ProvidersPanel.svelte";
+  import ModelsPanel from "$lib/components/ModelsPanel.svelte";
+  import TopicPanel from "$lib/components/TopicPanel.svelte";
   import SessionCreateModal from "$lib/components/SessionCreateModal.svelte";
   import ErrorBanner from "$lib/components/ErrorBanner.svelte";
   import ActivityBar from "$lib/layout/ActivityBar.svelte";
@@ -38,6 +40,13 @@
   let showCreateModal = $state(false);
   let drawerSidebar = $state(false);
   let drawerInfo = $state(false);
+  // 移动端 drawer-info：原 Info 组合面板拆分为三个独立视图，drawer 内以本地 tab 切换承载
+  let drawerInfoTab = $state("providers");
+  let infoDrawerTabs = $derived([
+    { id: "providers", label: t("sidePanel.providers") },
+    { id: "models", label: t("sidePanel.models") },
+    { id: "topics", label: t("topicPanel.topics") },
+  ]);
 
   // ── Layout (store-driven) ──
   let mainRef = $state<HTMLElement | null>(null);
@@ -363,7 +372,26 @@
       <h2>{t("drawer.info")}</h2>
       <button class="drawer-close" onclick={closeDrawers}>×</button>
     </div>
-    <SidePanel />
+    <div class="drawer-tabs">
+      {#each infoDrawerTabs as tab}
+        <button
+          class="drawer-tab"
+          class:active={drawerInfoTab === tab.id}
+          onclick={() => (drawerInfoTab = tab.id)}
+        >
+          {tab.label}
+        </button>
+      {/each}
+    </div>
+    <div class="drawer-body">
+      {#if drawerInfoTab === "providers"}
+        <ProvidersPanel />
+      {:else if drawerInfoTab === "models"}
+        <ModelsPanel />
+      {:else}
+        <TopicPanel />
+      {/if}
+    </div>
   </aside>
 {/if}
 
@@ -548,9 +576,32 @@
     border-right: none;
   }
 
-  .drawer :global(.side-panel) {
-    height: 100%;
+  .drawer-tabs {
+    display: flex;
+    border-bottom: var(--border-width) solid var(--color-border);
+    flex-shrink: 0;
   }
+  .drawer-tab {
+    flex: 1;
+    padding: var(--space-2);
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: var(--fs-sm);
+    font-weight: 500;
+    color: var(--color-text-muted);
+    border-bottom: 2px solid transparent;
+  }
+  .drawer-tab.active { color: var(--color-primary); border-bottom-color: var(--color-primary); }
+
+  .drawer-body {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .drawer-body :global(> *) { flex: 1; min-height: 0; }
 
   /* ── Responsive: <800px hide desktop panels, show drawers ── */
   @media (max-width: 800px) {

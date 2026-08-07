@@ -37,10 +37,8 @@ export type Translations = {
   sidePanel: {
     providers: string;
     models: string;
-    skills: string;
     noProviders: string;
     noModels: string;
-    noSkills: string;
     id: string;
     auth: string;
     api: string;
@@ -240,10 +238,8 @@ export const en: Translations = {
   sidePanel: {
     providers: "Providers",
     models: "Models",
-    skills: "Skills",
     noProviders: "No providers configured.",
     noModels: "No models available.",
-    noSkills: "No skills available.",
     id: "ID",
     auth: "Auth",
     api: "API",
@@ -449,10 +445,8 @@ export const zh: Translations = {
   sidePanel: {
     providers: "服务商",
     models: "模型",
-    skills: "技能",
     noProviders: "未配置服务商。",
     noModels: "无可用模型。",
-    noSkills: "无可用技能。",
     id: "ID",
     auth: "认证",
     api: "API",

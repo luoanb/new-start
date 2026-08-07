@@ -8,7 +8,9 @@
 import type { Component } from "svelte";
 import type { ViewContainerId } from "./layoutTypes";
 import SessionList from "$lib/components/SessionList.svelte";
-import SidePanel from "$lib/components/SidePanel.svelte";
+import ProvidersPanel from "$lib/components/ProvidersPanel.svelte";
+import ModelsPanel from "$lib/components/ModelsPanel.svelte";
+import TopicPanel from "$lib/components/TopicPanel.svelte";
 import PollerPanel from "$lib/components/PollerPanel.svelte";
 import ToolPanel from "$lib/components/ToolPanel.svelte";
 import LogPanel from "$lib/components/LogPanel.svelte";
@@ -35,7 +37,10 @@ export type ViewRegistration = {
 /** 视图容器注册表（sidebar / info / panel 共享）。 */
 export const viewRegistry: Record<string, ViewRegistration> = {
   sessions: { id: "sessions", title: "Sessions", component: SessionList, movableTo: "*" },
-  info: { id: "info", title: "Info", component: SidePanel, movableTo: "*" },
+  // 原 Info 组合面板拆分为三个独立视图（技能并入 Tools，不再单独展示）
+  providers: { id: "providers", title: "Providers", component: ProvidersPanel, movableTo: "*" },
+  models: { id: "models", title: "Models", component: ModelsPanel, movableTo: "*" },
+  topics: { id: "topics", title: "Topics", component: TopicPanel, movableTo: "*" },
   poller: { id: "poller", title: "Poller", component: PollerPanel, movableTo: "*" },
   tools: { id: "tools", title: "Tools", component: ToolPanel, movableTo: "*" },
   logs: { id: "logs", title: "Logs", component: LogPanel, movableTo: "*" },
