@@ -1,6 +1,7 @@
 use agent_app_lib::core::{
-    app_log, AppError, AppResult, Conversation, Gateway, Message, MessageRole, ModelAppendTemplate,
-    ModelCallInput, ModelCallRequest, ModelInfo, ProviderInfo, RuntimeStatus, SkillInfo,
+    app_log, AppError, AppResult, Conversation, Gateway, Message, MessageRole,
+    ModelAppendTemplate, ModelCallInput, ModelCallRequest, ModelInfo, ProviderInfo, RuntimeStatus,
+    SkillInfo,
 };
 use std::{env, process};
 
@@ -27,7 +28,7 @@ async fn run() -> AppResult<()> {
         eprintln!("warning: failed to init logging: {error}");
     }
 
-    let mut gateway = Gateway::default()?;
+    let gateway = Gateway::default()?;
     if let Err(error) = gateway.bootstrap_neurons().await {
         eprintln!(
             "warning: neuron bootstrap incomplete [{}]: {}",
@@ -255,9 +256,10 @@ fn print_history(messages: Vec<Message>) {
             MessageRole::User => "user",
             MessageRole::Assistant => "assistant",
             MessageRole::System => "system",
+            MessageRole::Tool => "tool",
             MessageRole::Compaction => "compaction",
         };
-        println!("[{}] {}: {}", message.timestamp, role, message.content);
+        println!("[{}] {}: {}", message.timestamp, role, message.text());
     }
 }
 

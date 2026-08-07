@@ -197,7 +197,11 @@ async function sendMessage(
   if (!state.activeConversationId) {
     throw new Error("No active session. Create a new session first.");
   }
-  const userMsg: Message = { role: "user", content: text, timestamp: Date.now() };
+  const userMsg: Message = {
+    role: "user",
+    body: { kind: "text", content: text },
+    timestamp: Date.now(),
+  };
   state.messages = [...state.messages, userMsg];
   const res = await invoke<ChatResponse>("send_chat_message", {
     message: text,
@@ -208,7 +212,11 @@ async function sendMessage(
   // 乐观追加 assistant 回复；后端 emit 会再触发一次权威刷新（幂等）。
   state.messages = [
     ...state.messages,
-    { role: "assistant", content: res.response, timestamp: Date.now() },
+    {
+      role: "assistant",
+      body: { kind: "text", content: res.response },
+      timestamp: Date.now(),
+    },
   ];
   return res;
 }

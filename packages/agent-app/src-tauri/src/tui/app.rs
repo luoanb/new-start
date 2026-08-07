@@ -119,12 +119,13 @@ impl TuiApp {
                 MessageRole::User => TuiMessageRole::User,
                 MessageRole::Assistant => TuiMessageRole::Assistant,
                 MessageRole::System => TuiMessageRole::Status,
+                MessageRole::Tool => TuiMessageRole::Status,
                 MessageRole::Compaction => TuiMessageRole::Status,
             };
             messages.push(TuiMessage {
                 id: format!("{}-{i}", active_session_id),
                 role,
-                content: msg.content.clone(),
+                content: msg.text().to_string(),
                 timestamp: Some(msg.timestamp),
                 collapsed: false,
             });
@@ -461,9 +462,10 @@ impl TuiApp {
                                     MessageRole::User => "user",
                                     MessageRole::Assistant => "assistant",
                                     MessageRole::System => "system",
+                                    MessageRole::Tool => "tool",
                                     MessageRole::Compaction => "compaction",
                                 };
-                                format!("  [{role}] {}", msg.content)
+                                format!("  [{role}] {}", msg.text())
                             })
                             .collect();
                         self.messages.push(TuiMessage::status(format!(
@@ -1463,12 +1465,13 @@ impl TuiApp {
                 MessageRole::User => TuiMessageRole::User,
                 MessageRole::Assistant => TuiMessageRole::Assistant,
                 MessageRole::System => TuiMessageRole::Status,
+                MessageRole::Tool => TuiMessageRole::Status,
                 MessageRole::Compaction => TuiMessageRole::Status,
             };
             self.messages.push(TuiMessage {
                 id: format!("{}-{i}", self.active_session_id),
                 role,
-                content: msg.content.clone(),
+                content: msg.text().to_string(),
                 timestamp: Some(msg.timestamp),
                 collapsed: false,
             });
@@ -1534,12 +1537,13 @@ impl TuiApp {
                 MessageRole::User => TuiMessageRole::User,
                 MessageRole::Assistant => TuiMessageRole::Assistant,
                 MessageRole::System => TuiMessageRole::Status,
+                MessageRole::Tool => TuiMessageRole::Status,
                 MessageRole::Compaction => TuiMessageRole::Status,
             };
             self.messages.push(TuiMessage {
                 id: format!("{}-{i}", self.active_session_id),
                 role,
-                content: msg.content.clone(),
+                content: msg.text().to_string(),
                 timestamp: Some(msg.timestamp),
                 collapsed: false,
             });

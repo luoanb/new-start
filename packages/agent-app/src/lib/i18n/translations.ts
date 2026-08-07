@@ -30,6 +30,8 @@ export type Translations = {
     you: string;
     assistant: string;
     system: string;
+    tool: string;
+    compaction: string;
     copy: string;
     rate: string;
     copied: string;
@@ -231,6 +233,8 @@ export const en: Translations = {
     you: "You",
     assistant: "Assistant",
     system: "system",
+    tool: "tool",
+    compaction: "summary",
     copy: "Copy",
     rate: "Rate",
     copied: "Copied",
@@ -438,6 +442,8 @@ export const zh: Translations = {
     you: "你",
     assistant: "助手",
     system: "系统",
+    tool: "工具",
+    compaction: "摘要",
     copy: "复制",
     rate: "评价",
     copied: "已复制",

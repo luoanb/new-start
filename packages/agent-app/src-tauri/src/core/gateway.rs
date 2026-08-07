@@ -14,8 +14,8 @@ use super::{
     mcp::{McpServerClient, McpServerStatus, McpServerStatusKind},
     models::{
         ChatModelSelection, ChatOptions, ChatResponse, Conversation, ConversationMode, Message,
-        MessageRole, ModelCallRequest, ModelCallResponse, ModelInfo, ProviderInfo, RuntimeStatus,
-        SkillInfo, ToolInfo, ToolSource,
+        MessageBody, MessageRole, ModelCallRequest, ModelCallResponse, ModelInfo, ProviderInfo,
+        RuntimeStatus, SkillInfo, ToolInfo, ToolSource,
     },
     neuron_config::NeuronConfigReader,
     neuron_manager::NeuronManager,
@@ -212,17 +212,15 @@ impl Gateway {
         let conversation_id = self.resolve_conversation_id(conversation_id)?;
         let user_message = Message {
             role: MessageRole::User,
-            content: input.to_string(),
+            body: MessageBody::Text {
+                content: input.to_string(),
+            },
             timestamp: now_ms(),
-            msg_type: None,
-            summary_of: None,
-            tool_calls: None,
-            tool_call_id: None,
         };
 
         self.store.add_message(&conversation_id, user_message)?;
         let assistant_message = self.runtime_respond(input)?;
-        let response = assistant_message.content.clone();
+        let response = assistant_message.text().to_string();
         self.store
             .add_message(&conversation_id, assistant_message)?;
         self.set_current_conversation_id(conversation_id.clone())?;
@@ -252,12 +250,8 @@ impl Gateway {
 
         Ok(Message {
             role: MessageRole::Assistant,
-            content: response,
+            body: MessageBody::Text { content: response },
             timestamp: now_ms(),
-            msg_type: None,
-            summary_of: None,
-            tool_calls: None,
-            tool_call_id: None,
         })
     }
 

@@ -16,9 +16,9 @@ use super::{
     log_redact::{preview_default, preview_json_for_log},
     model_call_input::{ModelAppendTemplate, ModelCallInput},
     models::{
-        AssistantCandidateScope, ChatModelSelection, ChatResponse, Message, MessageRole,
-        ModelCallRequest, ModelMessage, ModelMessageRole, Neuron, ScopeInItem, Topic, TopicStatus,
-        TopicUpdate,
+        AssistantCandidateScope, ChatModelSelection, ChatResponse, Message, MessageBody,
+        MessageRole, ModelCallRequest, ModelMessage, ModelMessageRole, Neuron, ScopeInItem, Topic,
+        TopicStatus, TopicUpdate,
     },
     neuron_manager::NeuronManager,
     neuron_store::NeuronStore,
@@ -479,12 +479,10 @@ impl AssistantMode {
         let user_input = if let Some(user_input) = ctx.user_input.clone() {
             let user_message = Message {
                 role: MessageRole::User,
-                content: user_input.clone(),
+                body: MessageBody::Text {
+                    content: user_input.clone(),
+                },
                 timestamp: now_ms(),
-                msg_type: None,
-                summary_of: None,
-                tool_calls: None,
-                tool_call_id: None,
             };
             self.store.add_message(&ctx.session_id, user_message)?;
             user_input
@@ -590,25 +588,23 @@ impl AssistantMode {
                     "tool execute ok"
                 );
                 tool_result = Some(result.clone());
-                let assistant_tool_calls = Some(vec![first.clone()]);
                 let tool_msg = Message {
                     role: MessageRole::Assistant,
-                    content: output.clone(),
+                    body: MessageBody::ToolCall {
+                        content: output.clone(),
+                        tool_calls: vec![first.clone()],
+                    },
                     timestamp: now_ms(),
-                    msg_type: Some("tool_call".into()),
-                    summary_of: None,
-                    tool_calls: assistant_tool_calls,
-                    tool_call_id: None,
                 };
                 self.store.add_message(&ctx.session_id, tool_msg)?;
                 let result_msg = Message {
-                    role: MessageRole::Assistant,
-                    content: result.clone(),
+                    role: MessageRole::Tool,
+                    body: MessageBody::ToolResult {
+                        tool_call_id: first.id.clone(),
+                        tool_name: first.name.clone(),
+                        content: result.clone(),
+                    },
                     timestamp: now_ms(),
-                    msg_type: Some("tool_result".into()),
-                    summary_of: None,
-                    tool_calls: None,
-                    tool_call_id: Some(first.id.clone()),
                 };
                 self.store.add_message(&ctx.session_id, result_msg)?;
                 output = if output.trim().is_empty() {
@@ -620,12 +616,10 @@ impl AssistantMode {
         } else {
             let assistant_msg = Message {
                 role: MessageRole::Assistant,
-                content: output.clone(),
+                body: MessageBody::Text {
+                    content: output.clone(),
+                },
                 timestamp: now_ms(),
-                msg_type: None,
-                summary_of: None,
-                tool_calls: None,
-                tool_call_id: None,
             };
             self.store.add_message(&ctx.session_id, assistant_msg)?;
         }
@@ -1422,39 +1416,44 @@ pub fn extract_json_object(text: &str) -> AppResult<serde_json::Value> {
 }
 
 fn message_to_model(message: &Message) -> Option<ModelMessage> {
-    // Compaction 摘要按 System 角色携带（与 engine 对齐），避免长会话压缩后丢失上下文。
-    if message.role == MessageRole::Compaction {
-        return Some(ModelMessage {
+    match &message.body {
+        // Compaction 摘要按 System 角色携带（与 engine 对齐），避免长会话压缩后丢失上下文。
+        MessageBody::Compaction { content, .. } => Some(ModelMessage {
             role: ModelMessageRole::System,
-            content: format!("[Previous conversation summary]: {}", message.content),
+            content: format!("[Previous conversation summary]: {content}"),
             tool_calls: None,
             tool_call_id: None,
-        });
-    }
-    let (role, tool_calls, tool_call_id) = match message.role {
-        MessageRole::User => (ModelMessageRole::User, None, None),
-        // 工具结果消息（带 tool_call_id）必须按 tool 角色发送，否则 OpenAI 兼容
-        // 接口（如 DeepSeek）会以「tool_calls 后缺少 tool 消息」拒绝请求。
-        MessageRole::Assistant => {
-            if message.tool_call_id.is_some() {
-                (ModelMessageRole::Tool, None, message.tool_call_id.clone())
-            } else {
-                (
-                    ModelMessageRole::Assistant,
-                    message.tool_calls.clone(),
-                    None,
-                )
-            }
+        }),
+        // 工具结果必须按 tool 角色发送，否则 OpenAI 兼容接口（如 DeepSeek）会以
+        // 「tool_calls 后缺少 tool 消息」拒绝请求。
+        MessageBody::ToolResult { tool_call_id, content, .. } => Some(ModelMessage {
+            role: ModelMessageRole::Tool,
+            content: content.clone(),
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.clone()),
+        }),
+        MessageBody::ToolCall { content, tool_calls } => Some(ModelMessage {
+            role: ModelMessageRole::Assistant,
+            content: content.clone(),
+            tool_calls: Some(tool_calls.clone()),
+            tool_call_id: None,
+        }),
+        MessageBody::Text { content } => {
+            let role = match message.role {
+                MessageRole::User => ModelMessageRole::User,
+                // Tool 角色不会携带 Text 正文（Tool 只对应 ToolResult），兜底按 Assistant 发送。
+                MessageRole::Assistant | MessageRole::Tool => ModelMessageRole::Assistant,
+                MessageRole::System => ModelMessageRole::System,
+                MessageRole::Compaction => unreachable!("handled above"),
+            };
+            Some(ModelMessage {
+                role,
+                content: content.clone(),
+                tool_calls: None,
+                tool_call_id: None,
+            })
         }
-        MessageRole::System => (ModelMessageRole::System, None, None),
-        MessageRole::Compaction => unreachable!("handled above"),
-    };
-    Some(ModelMessage {
-        role,
-        content: message.content.clone(),
-        tool_calls,
-        tool_call_id,
-    })
+    }
 }
 
 /// 为轮询 / 手动推进回合构建课题简报：目标、进度与 scope_in 待办清单（含验收标准）。

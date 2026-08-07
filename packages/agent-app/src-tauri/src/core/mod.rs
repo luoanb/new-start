@@ -37,7 +37,7 @@ pub use model_call_input::{ModelAppendTemplate, ModelCallInput};
 pub use models::{
     AssistantCandidateScope, BootstrapReport, CandidateQuery, ChatModelSelection, ChatOptions,
     ChatResponse, CompactionConfig, Connection, Conversation, ConversationMode, CreateNeuronInput,
-    EnsureSystemOpts, GeneratedNeuronDraft, Message, MessageRole, ModelCallRequest,
+    EnsureSystemOpts, GeneratedNeuronDraft, Message, MessageBody, MessageRole, ModelCallRequest,
     ModelCallResponse, ModelCapabilities, ModelInfo, ModelMessage, ModelMessageRole,
     NeighborhoodPoolPolicy, Neuron, NeuronCreate, NeuronSubgraph, NeuronUpdate, ProviderInfo,
     ProviderKind, RuntimeStatus, ScopeInItem, SkillInfo, SystemPromptStatus, ToolCall,

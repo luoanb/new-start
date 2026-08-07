@@ -20,14 +20,19 @@
   const isUser = $derived(message.role === "user");
   const isAssistant = $derived(message.role === "assistant");
   const isSystem = $derived(message.role === "system");
-  const isToolResult = $derived(message.msg_type === "tool_result");
+  const isCompaction = $derived(message.role === "compaction");
+  const isTool = $derived(message.role === "tool");
+  const isToolResult = $derived(message.body.kind === "tool_result");
   const hasToolCalls = $derived(
-    message.tool_calls && message.tool_calls.length > 0
+    message.body.kind === "tool_call" && message.body.tool_calls.length > 0
+  );
+  const toolCalls = $derived(
+    message.body.kind === "tool_call" ? message.body.tool_calls : []
   );
 
   // 操作栏显隐：工具调用/工具回复/系统消息无操作栏，其余有。
   const showActions = $derived(
-    !isSystem && !isToolResult && message.msg_type !== "tool_call"
+    !isSystem && !isCompaction && !isToolResult && message.body.kind !== "tool_call"
   );
 
   // 打分区间与模型约束一致：-5..5 且非 0（去掉 0），一行 10 个。
@@ -83,6 +88,10 @@
         <span class="role-label">
           {#if isSystem}
             {t("chatMessage.system")}
+          {:else if isCompaction}
+            {t("chatMessage.compaction")}
+          {:else if isTool}
+            {t("chatMessage.tool")}
           {:else if isAssistant}
             {t("chatMessage.assistant")}
           {:else}
@@ -96,16 +105,23 @@
 
       {#if isToolResult}
         <ToolResultBlock {message} />
+      {:else if hasToolCalls}
+        {#if message.body.content}
+          <div class="content markdown-content">
+            <MarkdownRenderer content={message.body.content} />
+          </div>
+        {/if}
+        <ToolCallBlock {toolCalls} />
       {:else if isSystem}
-        <p class="content">{message.content}</p>
+        <p class="content">{message.body.content}</p>
+      {:else if isCompaction}
+        <div class="content compaction-content">
+          <MarkdownRenderer content={message.body.content} />
+        </div>
       {:else}
         <div class="content markdown-content">
-          <MarkdownRenderer content={message.content} />
+          <MarkdownRenderer content={message.body.content} />
         </div>
-      {/if}
-
-      {#if hasToolCalls}
-        <ToolCallBlock toolCalls={message.tool_calls!} />
       {/if}
     </div>
 
@@ -199,14 +215,14 @@
   .message { display: flex; padding: var(--space-1) var(--space-4); animation: msg-fadein var(--duration-normal) var(--ease-out); }
   @keyframes msg-fadein { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
   .message.user { justify-content: flex-end; }
-  .message.assistant, .message.system { justify-content: flex-start; }
+  .message.assistant, .message.system, .message.tool { justify-content: flex-start; }
   .msg-col { display: flex; flex-direction: column; gap: var(--space-1); width: 100%; min-width: 0; }
   .message.user .msg-col { align-items: flex-end; }
-  .message.assistant .msg-col, .message.system .msg-col { align-items: flex-start; }
+  .message.assistant .msg-col, .message.system .msg-col, .message.tool .msg-col { align-items: flex-start; }
   .bubble { max-width: 75%; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--color-surface); border: var(--border-width) solid var(--color-border); }
   .message.user .bubble { background: var(--color-primary); color: var(--color-on-primary); border-color: var(--color-primary); border-bottom-right-radius: var(--space-1); }
   .message.assistant .bubble { border-bottom-left-radius: var(--space-1); border: none; max-width: 100%; }
-  .message.system .bubble { background: transparent; border: none; text-align: center; max-width: 100%; padding: var(--space-1) var(--space-3); }
+  .message.system .bubble, .message.compaction .bubble { background: transparent; border: none; text-align: center; max-width: 100%; padding: var(--space-1) var(--space-3); }
   .role-bar { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-1); }
   .role-label { font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.6; }
   .timestamp { font-size: var(--fs-xs); opacity: 0.4; }

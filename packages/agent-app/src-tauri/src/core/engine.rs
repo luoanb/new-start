@@ -8,7 +8,7 @@ use super::{
     model_call_input::{ModelAppendTemplate, ModelCallInput},
     models::{
         ChatModelSelection, ChatOptions, ChatResponse, CompactionConfig, ConversationMode, Message,
-        MessageRole, ModelCallRequest, ModelMessage, ModelMessageRole,
+        MessageBody, MessageRole, ModelCallRequest, ModelMessage, ModelMessageRole,
     },
     providers::ProviderRegistry,
     tool_registry::ToolRegistry,
@@ -110,12 +110,10 @@ impl Engine {
         let user_ts = now_ms();
         let user_message = Message {
             role: MessageRole::User,
-            content: input.to_string(),
+            body: MessageBody::Text {
+                content: input.to_string(),
+            },
             timestamp: user_ts,
-            msg_type: None,
-            summary_of: None,
-            tool_calls: None,
-            tool_call_id: None,
         };
         self.store.add_message(&conversation_id, user_message)?;
 
@@ -163,12 +161,10 @@ impl Engine {
 
         let assistant_msg = Message {
             role: MessageRole::Assistant,
-            content: model_response.output.clone(),
+            body: MessageBody::Text {
+                content: model_response.output.clone(),
+            },
             timestamp: now_ms(),
-            msg_type: None,
-            summary_of: None,
-            tool_calls: None,
-            tool_call_id: None,
         };
         self.store.add_message(conversation_id, assistant_msg)?;
 
@@ -223,12 +219,11 @@ impl Engine {
                 // Save assistant message with tool_calls
                 let assistant_msg = Message {
                     role: MessageRole::Assistant,
-                    content: model_response.output.clone(),
+                    body: MessageBody::ToolCall {
+                        content: model_response.output.clone(),
+                        tool_calls: model_response.tool_calls.clone().unwrap_or_default(),
+                    },
                     timestamp: now_ms(),
-                    msg_type: None,
-                    summary_of: None,
-                    tool_calls: model_response.tool_calls.clone(),
-                    tool_call_id: None,
                 };
                 self.store.add_message(conversation_id, assistant_msg)?;
 
@@ -267,13 +262,13 @@ impl Engine {
                     );
 
                     let tool_result_msg = Message {
-                        role: MessageRole::Assistant,
-                        content: format!("[Tool {} result]: {}", tc.name, result_str),
+                        role: MessageRole::Tool,
+                        body: MessageBody::ToolResult {
+                            tool_call_id: tc.id.clone(),
+                            tool_name: tc.name.clone(),
+                            content: result_str,
+                        },
                         timestamp: now_ms(),
-                        msg_type: Some("tool_result".to_string()),
-                        summary_of: None,
-                        tool_calls: None,
-                        tool_call_id: Some(tc.id.clone()),
                     };
                     self.store.add_message(conversation_id, tool_result_msg)?;
                 }
@@ -282,12 +277,10 @@ impl Engine {
                 // Normal text response
                 let assistant_msg = Message {
                     role: MessageRole::Assistant,
-                    content: model_response.output.clone(),
+                    body: MessageBody::Text {
+                        content: model_response.output.clone(),
+                    },
                     timestamp: now_ms(),
-                    msg_type: None,
-                    summary_of: None,
-                    tool_calls: None,
-                    tool_call_id: None,
                 };
                 self.store.add_message(conversation_id, assistant_msg)?;
 
@@ -329,7 +322,7 @@ fn build_context(
         .messages
         .iter()
         .filter(|m| m.role == MessageRole::Compaction)
-        .filter_map(|m| m.summary_of.clone())
+        .filter_map(|m| m.summary_of().map(|s| s.to_vec()))
         .flatten()
         .collect();
 
@@ -347,7 +340,7 @@ fn build_context(
             }
             // Chat mode: skip tool-related messages
             if *mode == ConversationMode::Chat {
-                m.tool_calls.is_none() && m.tool_call_id.is_none()
+                !m.is_tool()
             } else {
                 true
             }
@@ -360,45 +353,46 @@ fn build_context(
 
 /// Convert a stored Message to a ModelMessage for the LLM API call.
 ///
-/// - Compaction messages → System role with summary prefix.
-/// - Assistant messages with `tool_call_id` (tool results persisted as assistant) → Tool role.
-/// - Other Assistant messages → Assistant role (preserving tool_calls if any).
+/// - Compaction body → System role with summary prefix.
+/// - ToolResult body → Tool role with `tool_call_id`.
+/// - ToolCall body → Assistant role preserving tool_calls.
+/// - Text body → mapped by the stored author role.
 fn message_to_model_message(message: &Message) -> ModelMessage {
-    match message.role {
-        MessageRole::System => ModelMessage {
+    match &message.body {
+        MessageBody::Compaction { content, .. } => ModelMessage {
             role: ModelMessageRole::System,
-            content: message.content.clone(),
+            content: format!("[Previous conversation summary]: {content}"),
             tool_calls: None,
             tool_call_id: None,
         },
-        MessageRole::User => ModelMessage {
-            role: ModelMessageRole::User,
-            content: message.content.clone(),
+        MessageBody::ToolResult {
+            tool_call_id, content, ..
+        } => ModelMessage {
+            role: ModelMessageRole::Tool,
+            content: content.clone(),
             tool_calls: None,
+            tool_call_id: Some(tool_call_id.clone()),
+        },
+        MessageBody::ToolCall { content, tool_calls } => ModelMessage {
+            role: ModelMessageRole::Assistant,
+            content: content.clone(),
+            tool_calls: Some(tool_calls.clone()),
             tool_call_id: None,
         },
-        MessageRole::Assistant => {
-            if message.tool_call_id.is_some() {
-                ModelMessage {
-                    role: ModelMessageRole::Tool,
-                    content: message.content.clone(),
-                    tool_calls: None,
-                    tool_call_id: message.tool_call_id.clone(),
-                }
-            } else {
-                ModelMessage {
-                    role: ModelMessageRole::Assistant,
-                    content: message.content.clone(),
-                    tool_calls: message.tool_calls.clone(),
-                    tool_call_id: None,
-                }
+        MessageBody::Text { content } => {
+            let role = match message.role {
+                MessageRole::System => ModelMessageRole::System,
+                MessageRole::User => ModelMessageRole::User,
+                // Tool 角色不会携带 Text 正文（Tool 只对应 ToolResult），兜底按 Assistant 发送。
+                MessageRole::Assistant | MessageRole::Tool => ModelMessageRole::Assistant,
+                MessageRole::Compaction => unreachable!("handled above"),
+            };
+            ModelMessage {
+                role,
+                content: content.clone(),
+                tool_calls: None,
+                tool_call_id: None,
             }
         }
-        MessageRole::Compaction => ModelMessage {
-            role: ModelMessageRole::System,
-            content: format!("[Previous conversation summary]: {}", message.content),
-            tool_calls: None,
-            tool_call_id: None,
-        },
     }
 }

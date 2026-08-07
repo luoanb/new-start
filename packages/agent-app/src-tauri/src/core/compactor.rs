@@ -2,7 +2,7 @@ use super::{
     error::{AppError, AppResult},
     model_call_input::{ModelAppendTemplate, ModelCallInput},
     models::{
-        CompactionConfig, Conversation, ConversationMode, Message, MessageRole, ModelCallRequest,
+        CompactionConfig, Conversation, Message, MessageBody, MessageRole, ModelCallRequest,
     },
     providers::ProviderRegistry,
 };
@@ -22,9 +22,10 @@ fn compaction_prompt(messages: &[Message]) -> String {
                 MessageRole::User => "user",
                 MessageRole::Assistant => "assistant",
                 MessageRole::System => "system",
+                MessageRole::Tool => "tool",
                 MessageRole::Compaction => "compaction",
             };
-            format!("[{role}]: {}", m.content)
+            format!("[{role}]: {}", m.text())
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -60,9 +61,10 @@ impl Compactor {
                     MessageRole::System => 6,
                     MessageRole::User => 4,
                     MessageRole::Assistant => 8,
+                    MessageRole::Tool => 8,
                     MessageRole::Compaction => 10,
                 };
-                role_len + estimate_tokens(&m.content)
+                role_len + estimate_tokens(m.text())
             })
             .sum()
     }
@@ -133,17 +135,14 @@ impl Compactor {
         // Create a Compaction message with timestamps of summarized messages
         let compaction_msg = Message {
             role: MessageRole::Compaction,
-            content: summary,
-            timestamp: crate::core::conversation_store::now_ms(),
-            msg_type: Some("compaction".to_string()),
-            summary_of: Some(
-                old_messages
+            body: MessageBody::Compaction {
+                summary_of: old_messages
                     .iter()
                     .map(|m| m.timestamp.to_string())
                     .collect(),
-            ),
-            tool_calls: None,
-            tool_call_id: None,
+                content: summary,
+            },
+            timestamp: crate::core::conversation_store::now_ms(),
         };
 
         // Insert the compaction summary at position 0 (original messages kept intact)
@@ -176,17 +175,14 @@ impl Compactor {
         // Create a Compaction message with timestamps of summarized messages
         let compaction_msg = Message {
             role: MessageRole::Compaction,
-            content: summary,
-            timestamp: crate::core::conversation_store::now_ms(),
-            msg_type: Some("compaction".to_string()),
-            summary_of: Some(
-                old_messages
+            body: MessageBody::Compaction {
+                summary_of: old_messages
                     .iter()
                     .map(|m| m.timestamp.to_string())
                     .collect(),
-            ),
-            tool_calls: None,
-            tool_call_id: None,
+                content: summary,
+            },
+            timestamp: crate::core::conversation_store::now_ms(),
         };
 
         // Insert the compaction summary at position 0 (original messages kept intact)
@@ -233,16 +229,15 @@ impl Compactor {
 mod tests {
     use super::*;
     use crate::core::conversation_store::now_ms;
+    use crate::core::models::ConversationMode;
 
     fn make_message(role: MessageRole, content: &str) -> Message {
         Message {
             role,
-            content: content.to_string(),
+            body: MessageBody::Text {
+                content: content.to_string(),
+            },
             timestamp: now_ms(),
-            msg_type: None,
-            summary_of: None,
-            tool_calls: None,
-            tool_call_id: None,
         }
     }
 

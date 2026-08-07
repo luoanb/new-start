@@ -22,14 +22,18 @@ export type ToolCall = {
   arguments: Record<string, unknown>;
 };
 
+export type MessageRole = "user" | "assistant" | "system" | "tool" | "compaction";
+
+export type MessageBody =
+  | { kind: "text"; content: string }
+  | { kind: "tool_call"; content: string; tool_calls: ToolCall[] }
+  | { kind: "tool_result"; tool_call_id: string; tool_name: string; content: string }
+  | { kind: "compaction"; summary_of: string[]; content: string };
+
 export type Message = {
-  role: "user" | "assistant" | "system";
-  content: string;
+  role: MessageRole;
+  body: MessageBody;
   timestamp: number;
-  msg_type?: string;
-  summary_of?: string[];
-  tool_calls?: ToolCall[];
-  tool_call_id?: string;
 };
 
 export type RuntimeStatus = {

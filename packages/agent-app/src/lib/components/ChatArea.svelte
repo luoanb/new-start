@@ -47,7 +47,7 @@
   );
 
   async function handleCopy(msg: Message): Promise<void> {
-    await navigator.clipboard.writeText(msg.content);
+    await navigator.clipboard.writeText(msg.body.content);
   }
 
   async function handleRate(score: number): Promise<void> {

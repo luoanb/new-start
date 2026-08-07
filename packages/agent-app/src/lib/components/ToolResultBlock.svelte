@@ -17,26 +17,27 @@
     expanded = !expanded;
   }
 
-  // engine 格式: "[Tool execute_command result]: {...}"
-  // assistant 格式: 纯 JSON
+  // 本组件只渲染 tool_result 消息（由 ChatMessage 按 body.kind 分发）。
+  let toolName = $derived(
+    message.body.kind === "tool_result" ? message.body.tool_name : ""
+  );
+  let content = $derived(
+    message.body.kind === "tool_result" ? message.body.content : ""
+  );
+
   let parsed = $derived.by(() => {
-    const match = message.content.match(/^\[Tool (.+?) result\]:\s*/);
-    const jsonStr = match
-      ? message.content.slice(match[0].length)
-      : message.content;
-    const name = match ? match[1] : null;
     try {
-      const v = JSON.parse(jsonStr);
+      const v = JSON.parse(content);
       if (v && typeof v === "object") {
-        return { name, result: v as CmdResult };
+        return { result: v as CmdResult };
       }
     } catch {
-      // fall through to plain text
+      // 非 JSON：按纯文本展示
     }
-    return { name, result: null };
+    return { result: null };
   });
 
-  let toolName = $derived(parsed.name ?? t("toolResult.executed"));
+  let label = $derived(toolName || t("toolResult.executed"));
   let result = $derived(parsed.result);
   let isCmdShape = $derived(
     result !== null &&
@@ -45,19 +46,21 @@
   let isSuccess = $derived(result?.exit_code === 0);
 </script>
 
-{#if isCmdShape}
-  <div class="toolresult-block" class:expanded>
-    <button class="summary" onclick={toggle}>
-      <span class="toggle-icon">{expanded ? "▾" : "▸"}</span>
-      <span class="label">🖥 {toolName}</span>
+<div class="toolresult-block" class:expanded class:cmd-shape={isCmdShape}>
+  <button class="summary" onclick={toggle}>
+    <span class="toggle-icon">{expanded ? "▾" : "▸"}</span>
+    <span class="label">🖥 {label}</span>
+    {#if isCmdShape}
       {#if result!.timed_out}
         <span class="badge timeout">{t("toolResult.timedOut")}</span>
       {/if}
       <span class="exit" class:error={!isSuccess}>{result!.exit_code}</span>
-    </button>
+    {/if}
+  </button>
 
-    {#if expanded}
-      <div class="detail">
+  {#if expanded}
+    <div class="detail">
+      {#if isCmdShape}
         {#if result!.stdout}
           <div class="section">
             <span class="section-label">{t("toolResult.stdout")}</span>
@@ -73,12 +76,12 @@
         {#if !result!.stdout && !result!.stderr}
           <p class="empty">{t("toolResult.empty")}</p>
         {/if}
-      </div>
-    {/if}
-  </div>
-{:else}
-  <pre class="output fallback">{message.content}</pre>
-{/if}
+      {:else}
+        <pre class="output fallback">{content}</pre>
+      {/if}
+    </div>
+  {/if}
+</div>
 
 <style>
   .toolresult-block {

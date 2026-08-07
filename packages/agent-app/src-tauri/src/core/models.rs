@@ -8,22 +8,70 @@ pub enum MessageRole {
     User,
     Assistant,
     System,
+    Tool,
     Compaction,
+}
+
+/// 消息内容体：作者（role）与内容类型（body）正交。
+/// `kind` 为判别字段，前端按 `body.kind` 分支渲染。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MessageBody {
+    /// 普通文本（user / assistant / system 正文）。
+    Text { content: String },
+    /// 工具调用（模型发起）：content 可为模型的说明文字。
+    ToolCall { content: String, tool_calls: Vec<ToolCall> },
+    /// 工具返回：携带关联的调用 id 与工具名。
+    ToolResult {
+        tool_call_id: String,
+        tool_name: String,
+        content: String,
+    },
+    /// 压缩摘要：summary_of 为被摘要消息的时间戳集合。
+    Compaction { summary_of: Vec<String>, content: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Message {
     pub role: MessageRole,
-    pub content: String,
+    pub body: MessageBody,
     pub timestamp: u128,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub msg_type: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary_of: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_calls: Option<Vec<ToolCall>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
+}
+
+impl Message {
+    /// 返回消息正文文本（各 body 变体共有的 content），用于展示 / 统计。
+    pub fn text(&self) -> &str {
+        match &self.body {
+            MessageBody::Text { content }
+            | MessageBody::ToolCall { content, .. }
+            | MessageBody::ToolResult { content, .. }
+            | MessageBody::Compaction { content, .. } => content,
+        }
+    }
+
+    /// 是否为工具相关消息（调用或返回）。
+    pub fn is_tool(&self) -> bool {
+        matches!(
+            self.body,
+            MessageBody::ToolCall { .. } | MessageBody::ToolResult { .. }
+        )
+    }
+
+    /// Compaction 摘要覆盖的消息时间戳集合。
+    pub fn summary_of(&self) -> Option<&[String]> {
+        match &self.body {
+            MessageBody::Compaction { summary_of, .. } => Some(summary_of),
+            _ => None,
+        }
+    }
+
+    /// 工具调用消息的 tool_calls 数组。
+    pub fn tool_calls(&self) -> Option<&[ToolCall]> {
+        match &self.body {
+            MessageBody::ToolCall { tool_calls, .. } => Some(tool_calls),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
