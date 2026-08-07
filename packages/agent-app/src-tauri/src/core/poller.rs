@@ -16,7 +16,8 @@ use super::{
 
 /// Defaults when `config.json` omits `poller` fields.
 pub const DEFAULT_POLLER_BASE_INTERVAL_MS: u64 = 1000;
-pub const DEFAULT_ASSISTANT_POLL_TICKS: u64 = 30;
+/// 默认每 5 个基础 tick 推进一轮课题（1s × 5 = 5 秒），可被 config.json 覆盖。
+pub const DEFAULT_ASSISTANT_POLL_TICKS: u64 = 5;
 pub const DEFAULT_ASSISTANT_POLL_PARALLELISM: u64 = 2;
 /// 单次 PollAll 内同时推进的课题数上限，避免并发过高打爆模型 API。
 pub const MAX_ASSISTANT_POLL_PARALLELISM: u64 = 8;

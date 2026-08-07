@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import StatusBar from "$lib/components/StatusBar.svelte";
   import SessionList from "$lib/components/SessionList.svelte";
   import ProvidersPanel from "$lib/components/ProvidersPanel.svelte";
@@ -85,7 +86,21 @@
     await dataStore.bootstrap();
     await dataStore.subscribe();
     setupHotkeys();
+    void setWindowIcon();
   });
+
+  /** 运行时设置窗口图标（Linux 桌面导航栏/任务栏显示）。
+   * 打包安装后由 .desktop 图标接管；dev 模式与未打包场景依赖此调用生效。 */
+  async function setWindowIcon() {
+    try {
+      const res = await fetch("/favicon.png");
+      if (!res.ok) return;
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      await getCurrentWindow().setIcon(bytes);
+    } catch {
+      // 非 Tauri 环境或失败时静默，不影响应用启动
+    }
+  }
 
   async function handleSend(text: string) {
     if (!activeConversationId) {

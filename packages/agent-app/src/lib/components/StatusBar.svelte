@@ -94,6 +94,12 @@
     <button class="drawer-btn mobile-only" onclick={onToggleSidebar} title={t("drawer.sessions")}>
       ☰
     </button>
+    <!-- 品牌标识：Spark Node（星点方徽），颜色跟随主题 CSS 变量 -->
+    <svg class="app-logo" viewBox="0 0 48 48" aria-hidden="true">
+      <rect x="2" y="2" width="44" height="44" rx="14" fill="var(--color-primary)" />
+      <path d="M24 13 C25.2 19.4 28.6 22.8 35 24 C28.6 25.2 25.2 28.6 24 35 C22.8 28.6 19.4 25.2 13 24 C19.4 22.8 22.8 19.4 24 13 Z" fill="var(--color-on-primary)" />
+      <circle cx="34" cy="34" r="3.2" fill="var(--color-on-primary)" fill-opacity="0.85" />
+    </svg>
     <span class="app-name">{appName}</span>
   </div>
 
@@ -226,6 +232,13 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
+  }
+
+  .app-logo {
+    display: block;
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
   }
 
   .bar-center { flex: 1; justify-content: center; }
