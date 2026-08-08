@@ -22,6 +22,9 @@ owner: user
 - 4. 2026-08-08 18:40: 增量——用户要求方 icon + tooltip：新增 `Tooltip.svelte`（CSS hover/focus-within，z-index 1100）；工具栏「重新加载（旋转 SVG）」「编辑配置（铅笔 SVG）」与弹窗「添加（+）」「删除（垃圾桶 SVG）」「关闭（×）」全部统一为方形 `icon-btn` + tooltip；「保存」「取消」保留文字主按钮；清理残留 `.link-btn` / `.field select` 样式；`pnpm check` 0 errors、`pnpm build` 通过。
 - 5. 2026-08-08 18:45: 增量——弹窗内 `+` / `×` 由文本字符改为 SVG（16px），与垃圾桶图标统一；`pnpm check` 0 errors、`pnpm build` 通过。
 - 6. 2026-08-08 18:50: 修复——Tooltip 纯 CSS `:hover` 在点击触发重渲染（按钮 disabled/spinning）后残留不消失；改为 JS 事件驱动（mouseenter/leave、focusin/out + 点击即隐藏），并按 Svelte 5 惯例迁移 `<slot>` → `children: Snippet`（`{@render}`，调用点写法不变）；`pnpm check` 0 errors（47 warnings）、`pnpm build` 通过。
+- 7. 2026-08-08 18:55: 修复——工具面板内容多时无法滚动（`container-body` flex column + overflow:hidden 裁切，`.tools-panel` 高度被内容撑开）；`.tools-panel` 补 `flex: 1` + `min-height: 0`，在容器内约束高度并自身滚动；`pnpm check` 0 errors、`pnpm build` 通过。
+- 8. 2026-08-08 19:00: 修复——工具配置弹窗内容多时无法滚动且滚动穿透到背景：`.modal-body` 补 `flex: 1` + `min-height: 0`（内容在弹窗内滚动）+ `overscroll-behavior: contain`（滚动链不穿透背景）；`.modal-footer` 加 `flex-shrink: 0`；`.modal-overlay` 加 `onwheel` 防护（modal 外滚动 `preventDefault`）；`pnpm check` 0 errors、`pnpm build` 通过。
+- 9. 2026-08-08 19:05: 修复（根因）——`.editor-group` 为 `overflow: hidden` 的 flex 子项，`min-height: auto` 自动最小尺寸失效（=0），空间不足时被 flex-shrink 压缩、内容被自身裁切，导致 modal-body 无溢出、不出滚动条、滚轮穿透背景；`.editor-group` 补 `flex-shrink: 0` 后内容完整溢出、modal-body 正常滚动；`pnpm check` 0 errors、`pnpm build` 通过。
 
 ## Next Action / 下一步唯一动作
 

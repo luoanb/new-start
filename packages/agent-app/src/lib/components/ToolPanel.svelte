@@ -168,6 +168,13 @@
   function newCommandTool(): CommandToolConfig {
     return { name: "", desc: "", template: "", timeout_ms: null };
   }
+
+  // 弹窗滚动防护：滚动链只发生在 modal-body 内部，不会穿透滚到背景页面。
+  function preventOverlayScroll(e: WheelEvent) {
+    const target = e.target;
+    if (target instanceof Element && target.closest(".modal")) return;
+    e.preventDefault();
+  }
 </script>
 
 <div class="tools-panel">
@@ -268,7 +275,7 @@
 </div>
 
 {#if editorOpen}
-  <div class="modal-overlay" role="presentation">
+  <div class="modal-overlay" role="presentation" onwheel={preventOverlayScroll}>
     <div
       class="modal"
       role="dialog"
@@ -513,6 +520,8 @@
   .tools-panel {
     display: flex;
     flex-direction: column;
+    flex: 1;
+    min-height: 0;
     gap: var(--space-6);
     padding: var(--space-3) var(--space-4);
     overflow: auto;
@@ -784,8 +793,11 @@
   .modal-body {
     display: flex;
     flex-direction: column;
+    flex: 1;
+    min-height: 0;
     gap: var(--space-6);
     overflow: auto;
+    overscroll-behavior: contain;
     padding: 2px;
   }
 
@@ -793,6 +805,10 @@
   .editor-group {
     display: flex;
     flex-direction: column;
+    /* overflow:hidden 使 min-height:auto 失效（自动最小尺寸=0），
+       不加 flex-shrink:0 会在空间不足时被压缩并裁切内容，
+       导致 modal-body 无溢出、不出滚动条、滚轮穿透背景。 */
+    flex-shrink: 0;
     border: var(--border-width) solid var(--color-border);
     border-radius: var(--radius-md);
     background: var(--color-surface);
@@ -893,6 +909,7 @@
   .modal-footer {
     display: flex;
     align-items: center;
+    flex-shrink: 0;
     gap: var(--space-2);
     padding-top: var(--space-3);
     border-top: var(--border-width) solid var(--color-border);
