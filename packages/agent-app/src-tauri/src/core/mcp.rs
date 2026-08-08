@@ -32,6 +32,8 @@ use super::tool_registry::Tool;
 
 /// 单 server 装配期连接超时。
 const CONNECT_TIMEOUT_MS: u64 = 15_000;
+/// 单 server 装配期 tools/list 发现超时（与 CONNECT 对齐）。
+const LIST_TIMEOUT_MS: u64 = 15_000;
 /// 单次 tools/call 超时。
 const CALL_TIMEOUT_MS: u64 = 120_000;
 /// tools/call 文本结果截断上限。
@@ -41,6 +43,8 @@ const MAX_RESULT_CHARS: usize = 64 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum McpServerStatusKind {
+    /// 装配进行中（连接/发现未完成）。
+    Connecting,
     Connected,
     Failed,
     Disabled,
@@ -119,10 +123,11 @@ impl McpServerClient {
     }
 
     /// `tools/list` → 本 server 暴露的工具定义列表（含 `tools/call` 转发）。
+    ///
+    /// 与 `connect` 一致地加超时：server 握手成功但不响应 `tools/list` 时，
+    /// 返回可读错误（装配方 warn + skip + Failed），避免刷新/启动被永久挂起。
     pub async fn discover_tools(self: &Arc<Self>) -> AppResult<Vec<McpTool>> {
-        let tools = self.peer.list_all_tools().await.map_err(|e| {
-            AppError::RuntimeError(format!("mcp[{}]: tools/list 失败: {e}", self.name))
-        })?;
+        let tools = list_all_tools_with_timeout(&self.peer, &self.name, LIST_TIMEOUT_MS).await?;
         let mut out = Vec::with_capacity(tools.len());
         for t in tools {
             let description = t.description.as_deref().unwrap_or("").to_string();
@@ -288,6 +293,22 @@ where
     .map_err(|e| AppError::RuntimeError(format!("mcp[{}]: 连接失败: {e}", cfg.name)))
 }
 
+/// `tools/list` 统一加超时（内部可注入超时值，便于单测覆盖不响应路径）。
+async fn list_all_tools_with_timeout(
+    peer: &Peer<RoleClient>,
+    name: &str,
+    timeout_ms: u64,
+) -> AppResult<Vec<rmcp::model::Tool>> {
+    tokio::time::timeout(Duration::from_millis(timeout_ms), peer.list_all_tools())
+        .await
+        .map_err(|_elapsed| {
+            AppError::RuntimeError(format!(
+                "mcp[{name}]: tools/list 发现超时（{timeout_ms}ms）"
+            ))
+        })?
+        .map_err(|e| AppError::RuntimeError(format!("mcp[{name}]: tools/list 失败: {e}")))
+}
+
 /// 将 `tools/call` 结果渲染为字符串；结构化结果优先。
 fn render_result(tool_name: &str, res: &CallToolResult) -> AppResult<String> {
     if let Some(sc) = &res.structured_content {
@@ -418,6 +439,66 @@ mod tests {
             .await
             .expect("call tool");
         assert_eq!(out, "echo:hi");
+
+        drop(client);
+        server_handle.abort();
+    }
+
+    /// server 握手成功但 `tools/list` 永不响应（挂起）时，discover 应在超时后返回可读错误，
+    /// 而不是永久阻塞——这是「刷新/启动被 MCP 卡死」bug 的回归测试。
+    #[tokio::test]
+    async fn discover_times_out_when_server_does_not_respond() {
+        #[derive(Debug, Default)]
+        struct HangingMcpServer;
+
+        impl ServerHandler for HangingMcpServer {
+            fn get_info(&self) -> ServerInfo {
+                ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            }
+
+            async fn list_tools(
+                &self,
+                _request: Option<PaginatedRequestParams>,
+                _context: RequestContext<RoleServer>,
+            ) -> Result<ListToolsResult, McpError> {
+                // 挂起 60s：模拟 server 握手成功但不响应 tools/list。
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                Ok(ListToolsResult::with_all_items(vec![]))
+            }
+        }
+
+        let (server_transport, client_transport) = tokio::io::duplex(4096);
+        let server_handle = tokio::spawn(async move {
+            let running = HangingMcpServer
+                .serve(server_transport)
+                .await
+                .expect("server handshake");
+            let _ = running.waiting().await;
+        });
+
+        let running = AgentClientHandler
+            .serve(client_transport)
+            .await
+            .expect("client handshake");
+        let client = Arc::new(
+            McpServerClient::from_running("hanging".into(), "stdio".into(), running)
+                .await
+                .expect("construct client"),
+        );
+
+        let started = std::time::Instant::now();
+        let err = list_all_tools_with_timeout(&client.peer, "hanging", 100)
+            .await
+            .expect_err("tools/list should time out");
+        assert!(
+            started.elapsed().as_millis() < 5_000,
+            "timeout should fire fast, elapsed: {:?}",
+            started.elapsed()
+        );
+        assert!(
+            err.to_string().contains("发现超时"),
+            "unexpected error: {err}"
+        );
 
         drop(client);
         server_handle.abort();

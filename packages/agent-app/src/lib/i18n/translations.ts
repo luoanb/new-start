@@ -199,6 +199,51 @@ export type Translations = {
     copy: string;
     copied: string;
   };
+  toolPanel: {
+    title: string;
+    reload: string;
+    editConfig: string;
+    loading: string;
+    mcpSection: string;
+    toolsSection: string;
+    httpToolsSection: string;
+    commandToolsSection: string;
+    toolsCount: string;
+    noMcpServers: string;
+    noTools: string;
+    status: Record<string, string>;
+    modalTitle: string;
+    modalAria: string;
+    close: string;
+    loadingConfig: string;
+    add: string;
+    delete: string;
+    emptyMcp: string;
+    emptyHttp: string;
+    emptyCommand: string;
+    name: string;
+    transport: string;
+    method: string;
+    command: string;
+    args: string;
+    url: string;
+    timeoutMs: string;
+    desc: string;
+    template: string;
+    disabled: string;
+    transportHint: string;
+    httpUrlHint: string;
+    commandHint: string;
+    saveHint: string;
+    optional: string;
+    descPlaceholder: string;
+    cancel: string;
+    save: string;
+    saving: string;
+    loadFailed: string;
+    reassembleFailed: string;
+    loadListFailed: string;
+  };
 };
 
 export const en: Translations = {
@@ -408,6 +453,56 @@ export const en: Translations = {
     copy: "Copy",
     copied: "Copied",
   },
+  toolPanel: {
+    title: "Tools",
+    reload: "Reload",
+    editConfig: "Edit config",
+    loading: "Loading…",
+    mcpSection: "MCP Servers",
+    toolsSection: "Tools",
+    httpToolsSection: "HTTP Tools",
+    commandToolsSection: "Command Tools",
+    toolsCount: "{count} tools",
+    noMcpServers: "No MCP servers. Click \"Edit config\" in the top-right to add one.",
+    noTools: "No tools available",
+    status: {
+      connecting: "Connecting",
+      connected: "Connected",
+      failed: "Failed",
+      disabled: "Disabled",
+    },
+    modalTitle: "Tool configuration",
+    modalAria: "Edit tool configuration",
+    close: "Close",
+    loadingConfig: "Loading config…",
+    add: "Add",
+    delete: "Delete",
+    emptyMcp: "No MCP servers",
+    emptyHttp: "No HTTP tools",
+    emptyCommand: "No command tools",
+    name: "Name",
+    transport: "Transport",
+    method: "Method",
+    command: "Command",
+    args: "Args (comma separated)",
+    url: "URL",
+    timeoutMs: "Timeout (ms)",
+    desc: "Description",
+    template: "Template (command)",
+    disabled: "Disabled",
+    transportHint: "stdio requires command; http requires URL",
+    httpUrlHint: "Fixed endpoint; {query} filled by the model",
+    commandHint: "Command passes safety rails: denylist / timeout / concurrency",
+    saveHint: "Saved immediately: writes JSON and reassembles tools",
+    optional: "Optional",
+    descPlaceholder: "Tool description",
+    cancel: "Cancel",
+    save: "Save",
+    saving: "Saving…",
+    loadFailed: "Failed to load config",
+    reassembleFailed: "Reassemble failed: {error}",
+    loadListFailed: "Failed to load tools: {error}",
+  },
 };
 
 export const zh: Translations = {
@@ -616,5 +711,55 @@ export const zh: Translations = {
     id: "ID",
     copy: "复制",
     copied: "已复制",
+  },
+  toolPanel: {
+    title: "工具",
+    reload: "重新加载",
+    editConfig: "编辑配置",
+    loading: "加载中…",
+    mcpSection: "MCP Servers",
+    toolsSection: "工具",
+    httpToolsSection: "HTTP Tools",
+    commandToolsSection: "Command Tools",
+    toolsCount: "{count} 个工具",
+    noMcpServers: "暂无 MCP server，点右上角「编辑配置」添加",
+    noTools: "暂无可用工具",
+    status: {
+      connecting: "连接中",
+      connected: "已连接",
+      failed: "失败",
+      disabled: "已停用",
+    },
+    modalTitle: "工具配置",
+    modalAria: "编辑工具配置",
+    close: "关闭",
+    loadingConfig: "加载配置中…",
+    add: "添加",
+    delete: "删除",
+    emptyMcp: "暂无 MCP server",
+    emptyHttp: "暂无 HTTP tool",
+    emptyCommand: "暂无 command tool",
+    name: "名称",
+    transport: "传输方式",
+    method: "方法",
+    command: "命令",
+    args: "参数（逗号分隔）",
+    url: "地址",
+    timeoutMs: "超时（毫秒）",
+    desc: "描述",
+    template: "模板（命令模板）",
+    disabled: "停用",
+    transportHint: "stdio 需 command；http 需 url",
+    httpUrlHint: "端点固定，{query} 由模型填充",
+    commandHint: "命令经过安全护栏：denylist / 超时 / 并发",
+    saveHint: "保存即生效：写回 JSON 并触发全量重装配",
+    optional: "可选",
+    descPlaceholder: "工具描述",
+    cancel: "取消",
+    save: "保存",
+    saving: "保存中…",
+    loadFailed: "加载配置失败",
+    reassembleFailed: "重新装配失败：{error}",
+    loadListFailed: "加载工具失败：{error}",
   },
 };

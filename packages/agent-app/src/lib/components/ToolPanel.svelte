@@ -1,6 +1,12 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { STATE_CHANGED_EVENT } from "$lib/stores/dataStore.svelte";
+  import { t, tMap } from "$lib/i18n";
+  import Select from "./Select.svelte";
+  import Toggle from "./Toggle.svelte";
+  import Tooltip from "./Tooltip.svelte";
   import type {
     CommandToolConfig,
     HttpToolConfig,
@@ -9,12 +15,14 @@
     ToolConfigView,
     ToolInfo,
   } from "$lib/types";
+  import type { StateChangePayload } from "$lib/stores/dataStore.svelte";
 
   let tools = $state<ToolInfo[]>([]);
   let mcpServers = $state<McpServerStatus[]>([]);
   let loading = $state(true);
   let refreshing = $state(false);
   let errorMsg = $state("");
+  let unlisten: UnlistenFn | null = null;
 
   // 配置编辑器状态（列表只读展示不变，编辑收敛在弹窗）
   let editorOpen = $state(false);
@@ -29,6 +37,16 @@
 
   onMount(async () => {
     await refresh();
+    // 启动后台装配 / 刷新 / 保存配置都会广播 Tools 事件，面板自动跟随。
+    unlisten = await listen<StateChangePayload>(STATE_CHANGED_EVENT, (event) => {
+      if (event.payload.kind === "tools") {
+        void refresh(true);
+      }
+    });
+  });
+
+  onDestroy(() => {
+    unlisten?.();
   });
 
   async function refresh(silent = false) {
@@ -42,7 +60,7 @@
       tools = toolList;
       mcpServers = serverList;
     } catch (e) {
-      errorMsg = `Load failed: ${e}`;
+      errorMsg = t("toolPanel.loadListFailed", { error: `${e}` });
     } finally {
       loading = false;
     }
@@ -57,7 +75,7 @@
       await invoke("reassemble_tools");
       await refresh(true);
     } catch (e) {
-      errorMsg = `重新装配失败: ${e}`;
+      errorMsg = t("toolPanel.reassembleFailed", { error: `${e}` });
     } finally {
       refreshing = false;
     }
@@ -86,7 +104,7 @@
         command_tools: view.command_tools.map((c) => ({ ...c })),
       };
     } catch (e) {
-      editorError = `Load config failed: ${e}`;
+      editorError = t("toolPanel.loadFailed", { error: `${e}` });
     } finally {
       editorLoading = false;
     }
@@ -161,23 +179,37 @@
   {/if}
 
   <div class="panel-toolbar">
-    <span class="panel-title">工具</span>
+    <span class="panel-title">{t("toolPanel.title")}</span>
     <div class="toolbar-actions">
-      <button class="link-btn icon" class:spinning={refreshing} type="button" onclick={handleRefresh} disabled={loading || refreshing} aria-label="刷新">⟳</button>
-      <button class="link-btn" type="button" onclick={openEditor}>编辑配置</button>
+      <Tooltip label={t("toolPanel.reload")}>
+        <button class="icon-btn" class:spinning={refreshing} type="button" onclick={handleRefresh} disabled={loading || refreshing} aria-label={t("toolPanel.reload")}>
+          <svg class="icon" aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+            <path d="M21 3v6h-6" />
+          </svg>
+        </button>
+      </Tooltip>
+      <Tooltip label={t("toolPanel.editConfig")}>
+        <button class="icon-btn" type="button" onclick={openEditor} aria-label={t("toolPanel.editConfig")}>
+          <svg class="icon" aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M17 3a2.83 2.83 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+            <path d="m15 5 4 4" />
+          </svg>
+        </button>
+      </Tooltip>
     </div>
   </div>
 
   {#if loading}
-    <p class="empty">加载中…</p>
+    <p class="empty">{t("toolPanel.loading")}</p>
   {:else}
     <section class="section">
       <div class="section-header">
-        <span class="section-title">MCP Servers</span>
+        <span class="section-title">{t("toolPanel.mcpSection")}</span>
         <span class="section-count">{mcpServers.length}</span>
       </div>
       {#if mcpServers.length === 0}
-        <p class="empty">暂无 MCP server，点右上角「编辑配置」添加</p>
+        <p class="empty">{t("toolPanel.noMcpServers")}</p>
       {:else}
         <ul class="server-list">
           {#each mcpServers as server (server.name)}
@@ -186,17 +218,18 @@
                 <span class="server-name">{server.name}</span>
                 <span class="server-meta">
                   <span class="transport">{server.transport}</span>
-                  <span class="tool-count">{server.tool_count} tools</span>
+                  <span class="tool-count">{t("toolPanel.toolsCount", { count: server.tool_count })}</span>
                 </span>
               </div>
               <span
                 class="status"
+                class:connecting={server.status === "connecting"}
                 class:connected={server.status === "connected"}
                 class:failed={server.status === "failed"}
                 class:disabled={server.status === "disabled"}
               >
                 <span class="status-dot" aria-hidden="true"></span>
-                {server.status}
+                {tMap("toolPanel.status", server.status)}
               </span>
             </li>
             {#if server.error}
@@ -209,11 +242,11 @@
 
     <section class="section">
       <div class="section-header">
-        <span class="section-title">工具</span>
+        <span class="section-title">{t("toolPanel.toolsSection")}</span>
         <span class="section-count">{tools.length}</span>
       </div>
       {#if tools.length === 0}
-        <p class="empty">暂无可用工具</p>
+        <p class="empty">{t("toolPanel.noTools")}</p>
       {:else}
         <ul class="tool-list">
           {#each tools as tool (tool.name)}
@@ -240,12 +273,19 @@
       class="modal"
       role="dialog"
       aria-modal="true"
-      aria-label="工具配置编辑"
+      aria-label={t("toolPanel.modalAria")}
       tabindex="-1"
     >
       <div class="modal-header">
-        <span class="modal-title">工具配置</span>
-        <button class="icon-btn" type="button" onclick={closeEditor} disabled={saving} aria-label="关闭">×</button>
+        <span class="modal-title">{t("toolPanel.modalTitle")}</span>
+        <Tooltip label={t("toolPanel.close")}>
+          <button class="icon-btn" type="button" onclick={closeEditor} disabled={saving} aria-label={t("toolPanel.close")}>
+            <svg class="icon" aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </Tooltip>
       </div>
 
       {#if editorError}
@@ -256,44 +296,54 @@
       {/if}
 
       {#if editorLoading}
-        <p class="empty">加载配置中…</p>
+        <p class="empty">{t("toolPanel.loadingConfig")}</p>
       {:else}
         <div class="modal-body">
           <!-- MCP Servers -->
           <div class="editor-group">
             <div class="editor-group-header">
-              <span>MCP Servers</span>
-              <button class="link-btn" type="button" onclick={() => draft.mcp_servers.push(newMcpServer())}>+ 添加</button>
+              <span>{t("toolPanel.mcpSection")}</span>
+              <Tooltip label={t("toolPanel.add")}>
+                <button class="icon-btn" type="button" onclick={() => draft.mcp_servers.push(newMcpServer())} aria-label={t("toolPanel.add")}>
+                  <svg class="icon" aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                  </svg>
+                </button>
+              </Tooltip>
             </div>
             {#if draft.mcp_servers.length === 0}
-              <p class="empty">暂无 MCP server</p>
+              <p class="empty">{t("toolPanel.emptyMcp")}</p>
             {:else}
               {#each draft.mcp_servers as server, i (i)}
                 <div class="editor-item">
                   <div class="field-row">
                     <label class="field">
-                      <span class="field-label">name</span>
+                      <span class="field-label">{t("toolPanel.name")}</span>
                       <input type="text" bind:value={server.name} placeholder="filesystem" />
                     </label>
                     <label class="field">
-                      <span class="field-label">transport</span>
-                      <select bind:value={server.transport}>
-                        <option value="stdio">stdio</option>
-                        <option value="http">http</option>
-                      </select>
+                      <span class="field-label">{t("toolPanel.transport")}</span>
+                      <Select
+                        value={server.transport}
+                        options={[
+                          { value: "stdio", label: "stdio" },
+                          { value: "http", label: "http" },
+                        ]}
+                        onchange={(v) => (server.transport = v as "stdio" | "http")}
+                      />
                     </label>
-                    <label class="field field-toggle">
-                      <input type="checkbox" bind:checked={server.disabled} />
-                      <span>disabled</span>
-                    </label>
+                    <div class="field-toggle">
+                      <Toggle bind:checked={server.disabled} label={t("toolPanel.disabled")} />
+                    </div>
                   </div>
                   {#if server.transport === "stdio"}
                     <label class="field">
-                      <span class="field-label">command</span>
+                      <span class="field-label">{t("toolPanel.command")}</span>
                       <input type="text" bind:value={server.command} placeholder="npx" />
                     </label>
                     <label class="field">
-                      <span class="field-label">args（逗号分隔）</span>
+                      <span class="field-label">{t("toolPanel.args")}</span>
                       <input
                         type="text"
                         value={argsText(server.args)}
@@ -303,13 +353,22 @@
                     </label>
                   {:else}
                     <label class="field">
-                      <span class="field-label">url</span>
+                      <span class="field-label">{t("toolPanel.url")}</span>
                       <input type="text" bind:value={server.url} placeholder="http://127.0.0.1:8000/mcp" />
                     </label>
                   {/if}
                   <div class="editor-item-footer">
-                    <span class="editor-item-hint">stdio 需 command；http 需 url</span>
-                    <button class="link-btn danger" type="button" onclick={() => draft.mcp_servers.splice(i, 1)}>删除</button>
+                    <span class="editor-item-hint">{t("toolPanel.transportHint")}</span>
+                    <Tooltip label={t("toolPanel.delete")} position="top">
+                      <button class="icon-btn danger" type="button" onclick={() => draft.mcp_servers.splice(i, 1)} aria-label={t("toolPanel.delete")}>
+                        <svg class="icon" aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <polyline points="3 6 5 6 21 6" />
+                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                          <line x1="10" y1="11" x2="10" y2="17" />
+                          <line x1="14" y1="11" x2="14" y2="17" />
+                        </svg>
+                      </button>
+                    </Tooltip>
                   </div>
                 </div>
               {/each}
@@ -319,44 +378,64 @@
           <!-- HTTP Tools -->
           <div class="editor-group">
             <div class="editor-group-header">
-              <span>HTTP Tools</span>
-              <button class="link-btn" type="button" onclick={() => draft.http_tools.push(newHttpTool())}>+ 添加</button>
+              <span>{t("toolPanel.httpToolsSection")}</span>
+              <Tooltip label={t("toolPanel.add")}>
+                <button class="icon-btn" type="button" onclick={() => draft.http_tools.push(newHttpTool())} aria-label={t("toolPanel.add")}>
+                  <svg class="icon" aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                  </svg>
+                </button>
+              </Tooltip>
             </div>
             {#if draft.http_tools.length === 0}
-              <p class="empty">暂无 HTTP tool</p>
+              <p class="empty">{t("toolPanel.emptyHttp")}</p>
             {:else}
               {#each draft.http_tools as tool, i (i)}
                 <div class="editor-item">
                   <div class="field-row">
                     <label class="field">
-                      <span class="field-label">name</span>
+                      <span class="field-label">{t("toolPanel.name")}</span>
                       <input type="text" bind:value={tool.name} placeholder="lookup_wiki" />
                     </label>
                     <label class="field">
-                      <span class="field-label">method</span>
-                      <select bind:value={tool.method}>
-                        <option value="GET">GET</option>
-                        <option value="POST">POST</option>
-                        <option value="PUT">PUT</option>
-                        <option value="DELETE">DELETE</option>
-                      </select>
+                      <span class="field-label">{t("toolPanel.method")}</span>
+                      <Select
+                        value={tool.method ?? "GET"}
+                        options={[
+                          { value: "GET", label: "GET" },
+                          { value: "POST", label: "POST" },
+                          { value: "PUT", label: "PUT" },
+                          { value: "DELETE", label: "DELETE" },
+                        ]}
+                        onchange={(v) => (tool.method = String(v))}
+                      />
                     </label>
                     <label class="field field-narrow">
-                      <span class="field-label">timeout_ms</span>
-                      <input type="number" bind:value={tool.timeout_ms} placeholder="可选" />
+                      <span class="field-label">{t("toolPanel.timeoutMs")}</span>
+                      <input type="number" bind:value={tool.timeout_ms} placeholder={t("toolPanel.optional")} />
                     </label>
                   </div>
                   <label class="field">
-                    <span class="field-label">desc</span>
-                    <input type="text" bind:value={tool.desc} placeholder="工具描述" />
+                    <span class="field-label">{t("toolPanel.desc")}</span>
+                    <input type="text" bind:value={tool.desc} placeholder={t("toolPanel.descPlaceholder")} />
                   </label>
                   <label class="field">
-                    <span class="field-label">url</span>
+                    <span class="field-label">{t("toolPanel.url")}</span>
                     <input type="text" bind:value={tool.url} placeholder={"https://api.example.com/wiki?q={query}"} />
                   </label>
                   <div class="editor-item-footer">
-                    <span class="editor-item-hint">端点固定，{'{query}'} 由模型填充</span>
-                    <button class="link-btn danger" type="button" onclick={() => draft.http_tools.splice(i, 1)}>删除</button>
+                    <span class="editor-item-hint">{t("toolPanel.httpUrlHint")}</span>
+                    <Tooltip label={t("toolPanel.delete")} position="top">
+                      <button class="icon-btn danger" type="button" onclick={() => draft.http_tools.splice(i, 1)} aria-label={t("toolPanel.delete")}>
+                        <svg class="icon" aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <polyline points="3 6 5 6 21 6" />
+                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                          <line x1="10" y1="11" x2="10" y2="17" />
+                          <line x1="14" y1="11" x2="14" y2="17" />
+                        </svg>
+                      </button>
+                    </Tooltip>
                   </div>
                 </div>
               {/each}
@@ -366,35 +445,51 @@
           <!-- Command Tools -->
           <div class="editor-group">
             <div class="editor-group-header">
-              <span>Command Tools</span>
-              <button class="link-btn" type="button" onclick={() => draft.command_tools.push(newCommandTool())}>+ 添加</button>
+              <span>{t("toolPanel.commandToolsSection")}</span>
+              <Tooltip label={t("toolPanel.add")}>
+                <button class="icon-btn" type="button" onclick={() => draft.command_tools.push(newCommandTool())} aria-label={t("toolPanel.add")}>
+                  <svg class="icon" aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                  </svg>
+                </button>
+              </Tooltip>
             </div>
             {#if draft.command_tools.length === 0}
-              <p class="empty">暂无 command tool</p>
+              <p class="empty">{t("toolPanel.emptyCommand")}</p>
             {:else}
               {#each draft.command_tools as tool, i (i)}
                 <div class="editor-item">
                   <div class="field-row">
                     <label class="field">
-                      <span class="field-label">name</span>
+                      <span class="field-label">{t("toolPanel.name")}</span>
                       <input type="text" bind:value={tool.name} placeholder="git_status" />
                     </label>
                     <label class="field field-narrow">
-                      <span class="field-label">timeout_ms</span>
-                      <input type="number" bind:value={tool.timeout_ms} placeholder="可选" />
+                      <span class="field-label">{t("toolPanel.timeoutMs")}</span>
+                      <input type="number" bind:value={tool.timeout_ms} placeholder={t("toolPanel.optional")} />
                     </label>
                   </div>
                   <label class="field">
-                    <span class="field-label">desc</span>
-                    <input type="text" bind:value={tool.desc} placeholder="工具描述" />
+                    <span class="field-label">{t("toolPanel.desc")}</span>
+                    <input type="text" bind:value={tool.desc} placeholder={t("toolPanel.descPlaceholder")} />
                   </label>
                   <label class="field">
-                    <span class="field-label">template（命令模板）</span>
+                    <span class="field-label">{t("toolPanel.template")}</span>
                     <textarea bind:value={tool.template} rows="2" placeholder="git status --porcelain"></textarea>
                   </label>
                   <div class="editor-item-footer">
-                    <span class="editor-item-hint">命令经过安全护栏：denylist / 超时 / 并发</span>
-                    <button class="link-btn danger" type="button" onclick={() => draft.command_tools.splice(i, 1)}>删除</button>
+                    <span class="editor-item-hint">{t("toolPanel.commandHint")}</span>
+                    <Tooltip label={t("toolPanel.delete")} position="top">
+                      <button class="icon-btn danger" type="button" onclick={() => draft.command_tools.splice(i, 1)} aria-label={t("toolPanel.delete")}>
+                        <svg class="icon" aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <polyline points="3 6 5 6 21 6" />
+                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                          <line x1="10" y1="11" x2="10" y2="17" />
+                          <line x1="14" y1="11" x2="14" y2="17" />
+                        </svg>
+                      </button>
+                    </Tooltip>
                   </div>
                 </div>
               {/each}
@@ -403,10 +498,10 @@
         </div>
 
         <div class="modal-footer">
-          <span class="hint">保存即生效：写回 JSON 并触发全量重装配</span>
-          <button class="btn" type="button" onclick={closeEditor} disabled={saving}>取消</button>
+          <span class="hint">{t("toolPanel.saveHint")}</span>
+          <button class="btn" type="button" onclick={closeEditor} disabled={saving}>{t("toolPanel.cancel")}</button>
           <button class="btn primary" type="button" onclick={saveConfig} disabled={saving || editorLoading}>
-            {saving ? "保存中…" : "保存"}
+            {saving ? t("toolPanel.saving") : t("toolPanel.save")}
           </button>
         </div>
       {/if}
@@ -438,37 +533,39 @@
     align-items: center;
     gap: var(--space-1);
   }
-  .link-btn.icon {
-    font-size: var(--fs-base);
-    line-height: 1;
-    padding: 2px 6px;
+  .icon-btn {
+    width: 26px;
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: background var(--duration-fast) var(--ease-out),
+                color var(--duration-fast) var(--ease-out);
   }
-  .link-btn.icon.spinning {
+  .icon-btn:hover:not(:disabled) {
+    background: var(--color-hover);
+    color: var(--color-text);
+  }
+  .icon-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+  .icon-btn.danger {
+    color: var(--color-error);
+  }
+  .icon-btn .icon {
+    display: block;
+  }
+  .icon-btn.spinning .icon {
     animation: spin 0.8s linear infinite;
   }
   @keyframes spin {
     to { transform: rotate(360deg); }
-  }
-
-  .link-btn {
-    font-size: var(--fs-sm);
-    font-weight: 500;
-    color: var(--color-primary);
-    background: transparent;
-    border: none;
-    padding: 2px 4px;
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-  }
-  .link-btn:hover {
-    background: var(--color-hover);
-  }
-  .link-btn.danger {
-    color: var(--color-error);
-  }
-  .link-btn:disabled {
-    opacity: 0.4;
-    cursor: default;
   }
 
   .error-banner {
@@ -603,9 +700,18 @@
     background: var(--color-text-muted);
   }
   .status.connected .status-dot { background: var(--color-success); }
+  .status.connecting .status-dot {
+    background: var(--color-warning);
+    animation: status-pulse 1.2s ease-in-out infinite;
+  }
+  .status.connecting { color: var(--color-warning); }
   .status.failed .status-dot { background: var(--color-error); }
   .status.failed { color: var(--color-error); }
   .status.disabled { opacity: 0.6; }
+  @keyframes status-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
 
   .source {
     display: inline-flex;
@@ -674,20 +780,6 @@
     font-weight: 600;
     color: var(--color-text);
   }
-  .icon-btn {
-    border: none;
-    background: transparent;
-    font-size: var(--fs-lg);
-    line-height: 1;
-    color: var(--color-text-muted);
-    cursor: pointer;
-    border-radius: var(--radius-sm);
-    padding: 2px 6px;
-  }
-  .icon-btn:hover {
-    background: var(--color-hover);
-    color: var(--color-text);
-  }
 
   .modal-body {
     display: flex;
@@ -751,7 +843,6 @@
     color: var(--color-text-muted);
   }
   .field input,
-  .field select,
   .field textarea {
     font-size: var(--fs-sm);
     padding: 4px 8px;
@@ -773,22 +864,19 @@
     opacity: 0.7;
   }
   .field input:focus,
-  .field select:focus,
   .field textarea:focus {
     outline: none;
     border-color: var(--color-primary);
     box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-primary) 15%, transparent);
   }
   .field-toggle {
-    flex: 0 1 auto;
+    flex: 0 0 auto;
+    display: flex;
     flex-direction: row;
     align-items: center;
-    gap: var(--space-1);
+    white-space: nowrap;
     align-self: flex-end;
     padding-bottom: 4px;
-  }
-  .field-toggle input[type="checkbox"] {
-    accent-color: var(--color-primary);
   }
 
   .editor-item-footer {

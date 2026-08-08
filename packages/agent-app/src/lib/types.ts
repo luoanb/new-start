@@ -60,7 +60,7 @@ export type ToolInfo = {
   parameters: Record<string, unknown>;
 };
 
-export type McpServerStatusKind = "connected" | "failed" | "disabled";
+export type McpServerStatusKind = "connecting" | "connected" | "failed" | "disabled";
 
 export type McpServerStatus = {
   name: string;

@@ -54,6 +54,8 @@ pub struct Gateway {
     current_conversation_id: Arc<Mutex<String>>,
     /// MCP server 状态（装配期与运行期重装配均可更新，供前端 DockPane 展示）。
     mcp_server_statuses: Arc<RwLock<Vec<McpServerStatus>>>,
+    /// 装配互斥：串行化启动期后台装配与运行期手动重装配，保证「以最后一次为准」。
+    assemble_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Gateway {
@@ -103,10 +105,44 @@ impl Gateway {
             }));
         }
 
-        // 全量装配工具集（native + config + mcp）。启动期与运行期重装配共用同一
-        // `build_registry`；`execute_command` 是首个上架 native 工具（见 inserts/execute_command.md）。
-        let (tool_registry, mcp_server_statuses) = build_registry(&store.root())?;
-        let tool_registry = Arc::new(RwLock::new(tool_registry));
+        // 工具装配：本地通道（native + config）同步就绪、启动即可用；MCP 通道
+        // 改为后台异步装配（不阻塞应用启动，连接完成自动登记并广播 Tools）。
+        let local_registry = assemble_local_tools(&store.root())?;
+        let tool_registry = Arc::new(RwLock::new(local_registry));
+        let mcp_server_statuses: Arc<RwLock<Vec<McpServerStatus>>> =
+            Arc::new(RwLock::new(Vec::new()));
+        let assemble_lock: Arc<tokio::sync::Mutex<()>> = Arc::new(tokio::sync::Mutex::new(()));
+
+        // 启动期后台装配 MCP：应用先起来（本地工具可用），MCP server 逐个连接，
+        // 状态由 Connecting → Connected/Failed，前端经 StateChange::Tools 自动刷新。
+        if let Some(emit) = state_emit.as_ref() {
+            let emit = Arc::clone(emit);
+            let tool_registry = Arc::clone(&tool_registry);
+            let mcp_server_statuses = Arc::clone(&mcp_server_statuses);
+            let assemble_lock = Arc::clone(&assemble_lock);
+            let storage_root = store.root().to_path_buf();
+            tauri::async_runtime::spawn(async move {
+                let _guard = assemble_lock.lock().await;
+                let base_registry = match assemble_local_tools(&storage_root) {
+                    Ok(registry) => registry,
+                    Err(error) => {
+                        tracing::error!(phase = "tool_config", error = %error, "background mcp assembly: local tools failed");
+                        return;
+                    }
+                };
+                if let Err(error) = assemble_mcp_progressive(
+                    &storage_root,
+                    base_registry,
+                    &tool_registry,
+                    &mcp_server_statuses,
+                    Some(&emit),
+                )
+                .await
+                {
+                    tracing::error!(phase = "tool_config", error = %error, "background mcp assembly failed");
+                }
+            });
+        }
 
         let neuron_config = NeuronConfigReader::new(store.root().to_path_buf());
         let neuron_recycle_interval_ms = neuron_config.recycle_interval_ms()?;
@@ -195,7 +231,8 @@ impl Gateway {
             poller,
             session_tracker,
             current_conversation_id: Arc::new(Mutex::new(current_conversation_id)),
-            mcp_server_statuses: Arc::new(RwLock::new(mcp_server_statuses)),
+            mcp_server_statuses,
+            assemble_lock,
         })
     }
 
@@ -321,8 +358,7 @@ impl Gateway {
             command: view.command_tools.clone(),
         })?;
 
-        let (new_registry, new_statuses) = build_registry(&self.store.root())?;
-        self.replace_tools(new_registry, new_statuses)?;
+        self.assemble_and_replace().await?;
 
         tracing::info!(
             phase = "tool_config",
@@ -339,10 +375,28 @@ impl Gateway {
     /// 工具集（不写文件）。供前端「刷新」按钮使用——配置文件在外部被修改后，
     /// 无需打开弹窗即可让变更生效。配置非法时返回可读错误，registry 保持原状。
     pub async fn reassemble_tools(&self) -> AppResult<()> {
-        let (new_registry, new_statuses) = build_registry(&self.store.root())?;
-        self.replace_tools(new_registry, new_statuses)?;
+        self.assemble_and_replace().await?;
         tracing::info!(phase = "tool_config", "tool registry reassembled from disk");
         Ok(())
+    }
+
+    /// 全量重装配并原子替换共享状态。
+    ///
+    /// 真正的 async 装配（无 `block_on`）：本地通道（native + config）同步装配，
+    /// MCP 通道逐 server 连接 + `tools/list`（各自超时），失败 warn + skip。
+    /// 通过装配互斥与启动期后台装配串行化，保证「以最后一次为准」。
+    async fn assemble_and_replace(&self) -> AppResult<()> {
+        let _guard = self.assemble_lock.lock().await;
+        let base_registry = assemble_local_tools(&self.store.root())?;
+        let (new_registry, new_statuses) = assemble_mcp_progressive(
+            &self.store.root(),
+            base_registry,
+            &self.tool_registry,
+            &self.mcp_server_statuses,
+            None,
+        )
+        .await?;
+        self.replace_tools(new_registry, new_statuses)
     }
 
     /// 原子替换共享 registry 与 MCP 状态（在飞工具调用持有旧 Arc 引用，不受影响）。
@@ -351,21 +405,8 @@ impl Gateway {
         new_registry: ToolRegistry,
         new_statuses: Vec<McpServerStatus>,
     ) -> AppResult<()> {
-        {
-            let mut reg = self
-                .tool_registry
-                .write()
-                .map_err(|e| AppError::RuntimeError(format!("tool registry lock: {e}")))?;
-            *reg = new_registry;
-        }
-        {
-            let mut status = self
-                .mcp_server_statuses
-                .write()
-                .map_err(|e| AppError::RuntimeError(format!("mcp status lock: {e}")))?;
-            *status = new_statuses;
-        }
-        Ok(())
+        replace_tools_shared(&self.tool_registry, new_registry)?;
+        replace_statuses_shared(&self.mcp_server_statuses, new_statuses)
     }
 
     pub fn list_providers(&self) -> Vec<ProviderInfo> {
@@ -792,20 +833,14 @@ fn spawn_neuron_recycle_runtime(
     });
 }
 
-/// 全量装配工具集（native + config + mcp）。
+/// 本地通道装配（native + config，同步、无网络）：启动即可用。
 ///
-/// 启动期（`Gateway::with_state_emitter`）与运行期手动重装配（`save_tool_config`）共用，
-/// 保证两处装配结果一致。纯 A 语义：MCP 连接在装配期一次性完成（失败 warn + skip，
-/// 不阻塞）；返回的 registry 与状态由调用方放入共享 `Arc<RwLock<_>>`。
-fn build_registry(
-    storage_root: &std::path::Path,
-) -> AppResult<(ToolRegistry, Vec<McpServerStatus>)> {
+/// `execute_command` 是首个上架 native 工具（见 inserts/execute_command.md）。
+/// 配置驱动通道：dynamic_tools.json（HttpTool / CommandTool）。声明即 schema，
+/// 豁免 insert 门禁；命令模板复用 cmd_exec 安全护栏。
+fn assemble_local_tools(storage_root: &std::path::Path) -> AppResult<ToolRegistry> {
     let mut registry = ToolRegistry::new();
-    // `execute_command` 是首个上架 native 工具（见 inserts/execute_command.md）。
     registry.register(ExecuteCommandTool::new());
-
-    // 配置驱动通道：dynamic_tools.json（HttpTool / CommandTool）。声明即 schema，
-    // 豁免 insert 门禁；命令模板复用 cmd_exec 安全护栏。
     let tool_config = ToolConfigReader::new(storage_root.to_path_buf());
     let dynamic = tool_config.dynamic_tools()?;
     for cfg in dynamic.http {
@@ -814,38 +849,63 @@ fn build_registry(
     for cfg in dynamic.command {
         registry.register_source(CommandTool::from_config(&cfg), ToolSource::Config);
     }
-
-    // MCP 通道：mcp_servers.json。单个 server 失败仅记录状态（Failed）并 warn + skip。
-    let mcp_server_statuses = assemble_mcp_servers(&mut registry, &tool_config)?;
-    Ok((registry, mcp_server_statuses))
+    Ok(registry)
 }
 
-/// 装配期连接所有启用的 MCP server 并注册其工具到 registry。
+/// 逐 server 装配 MCP 工具并渐进替换共享 registry / statuses。
 ///
-/// 纯 A 语义：一次性连接 + `tools/list` 发现，随后连接保活至进程退出。
-/// 单个 server 失败仅记录状态（Failed）并 warn + skip，不阻塞应用启动；
-/// `disabled` 的 server 直接记为 Disabled。配置本身解析失败则向上传播（用户声明错误）。
-fn assemble_mcp_servers(
-    registry: &mut ToolRegistry,
-    config_reader: &ToolConfigReader,
-) -> AppResult<Vec<McpServerStatus>> {
-    let servers = config_reader.mcp_servers()?;
+/// 启动（后台 spawn）与运行期（`save_tool_config` / `reassemble_tools`）共用，
+/// 真正的 async 装配（无 `block_on`）：连接与 `tools/list` 各自有超时，
+/// 单个 server 失败仅记录 Failed 并 warn + skip，不阻塞整体。
+///
+/// 流程：
+/// - 以 `base_registry`（纯本地工具）为起点，先替换共享 registry，清掉旧 MCP 工具；
+/// - statuses 初始占位：启用 server 记 Connecting（前端「连接中」），disabled 记 Disabled；
+/// - 每 server 完成：并入其工具、更新状态，原子替换两个共享状态，若提供 emit 则广播 Tools；
+/// - 返回最终 registry + statuses。
+///
+/// 配置解析失败向上传播（用户声明错误），不替换任何共享状态。
+async fn assemble_mcp_progressive(
+    storage_root: &std::path::Path,
+    base_registry: ToolRegistry,
+    tool_registry: &Arc<RwLock<ToolRegistry>>,
+    mcp_server_statuses: &Arc<RwLock<Vec<McpServerStatus>>>,
+    emit: Option<&StateEmitter>,
+) -> AppResult<(ToolRegistry, Vec<McpServerStatus>)> {
+    let reader = ToolConfigReader::new(storage_root.to_path_buf());
+    let servers = reader.mcp_servers()?;
+
+    let mut registry = base_registry;
     let mut statuses = Vec::with_capacity(servers.mcp_servers.len());
-    for cfg in servers.mcp_servers {
+    for cfg in &servers.mcp_servers {
+        statuses.push(McpServerStatus {
+            name: cfg.name.clone(),
+            transport: cfg.transport.clone(),
+            status: if cfg.disabled {
+                McpServerStatusKind::Disabled
+            } else {
+                McpServerStatusKind::Connecting
+            },
+            tool_count: 0,
+            error: None,
+        });
+    }
+
+    // 初始占位：registry = 纯本地；启用 server 显示「连接中」并广播。
+    replace_tools_shared(tool_registry, registry.clone())?;
+    replace_statuses_shared(mcp_server_statuses, statuses.clone())?;
+    if let Some(emit) = emit {
+        emit(StateChange::Tools);
+    }
+
+    for (idx, cfg) in servers.mcp_servers.iter().enumerate() {
         if cfg.disabled {
-            statuses.push(McpServerStatus {
-                name: cfg.name.clone(),
-                transport: cfg.transport.clone(),
-                status: McpServerStatusKind::Disabled,
-                tool_count: 0,
-                error: None,
-            });
             continue;
         }
         let name = cfg.name.clone();
         let transport = cfg.transport.clone();
-        match tauri::async_runtime::block_on(McpServerClient::connect(cfg)) {
-            Ok(client) => match tauri::async_runtime::block_on(client.discover_tools()) {
+        let status = match McpServerClient::connect(cfg.clone()).await {
+            Ok(client) => match client.discover_tools().await {
                 Ok(tools) => {
                     let tool_count = tools.len();
                     if tool_count == 0 {
@@ -854,38 +914,68 @@ fn assemble_mcp_servers(
                     for tool in tools {
                         registry.register_source(tool, ToolSource::Mcp);
                     }
-                    statuses.push(McpServerStatus {
+                    McpServerStatus {
                         name,
                         transport,
                         status: McpServerStatusKind::Connected,
                         tool_count,
                         error: None,
-                    });
+                    }
                 }
                 Err(error) => {
                     tracing::warn!(server = %name, error = %error, "mcp server tools/list failed; skipped");
-                    statuses.push(McpServerStatus {
+                    McpServerStatus {
                         name,
                         transport,
                         status: McpServerStatusKind::Failed,
                         tool_count: 0,
                         error: Some(error.to_string()),
-                    });
+                    }
                 }
             },
             Err(error) => {
                 tracing::warn!(server = %name, error = %error, "mcp server connect failed; skipped");
-                statuses.push(McpServerStatus {
+                McpServerStatus {
                     name,
                     transport,
                     status: McpServerStatusKind::Failed,
                     tool_count: 0,
                     error: Some(error.to_string()),
-                });
+                }
             }
+        };
+        statuses[idx] = status;
+        replace_tools_shared(tool_registry, registry.clone())?;
+        replace_statuses_shared(mcp_server_statuses, statuses.clone())?;
+        if let Some(emit) = emit {
+            emit(StateChange::Tools);
         }
     }
-    Ok(statuses)
+    Ok((registry, statuses))
+}
+
+/// 原子替换共享 tool registry（在飞工具调用持有旧 Arc 引用，不受影响）。
+fn replace_tools_shared(
+    tool_registry: &Arc<RwLock<ToolRegistry>>,
+    new_registry: ToolRegistry,
+) -> AppResult<()> {
+    let mut reg = tool_registry
+        .write()
+        .map_err(|e| AppError::RuntimeError(format!("tool registry lock: {e}")))?;
+    *reg = new_registry;
+    Ok(())
+}
+
+/// 原子替换共享 MCP server 状态。
+fn replace_statuses_shared(
+    mcp_server_statuses: &Arc<RwLock<Vec<McpServerStatus>>>,
+    new_statuses: Vec<McpServerStatus>,
+) -> AppResult<()> {
+    let mut status = mcp_server_statuses
+        .write()
+        .map_err(|e| AppError::RuntimeError(format!("mcp status lock: {e}")))?;
+    *status = new_statuses;
+    Ok(())
 }
 
 #[cfg(test)]

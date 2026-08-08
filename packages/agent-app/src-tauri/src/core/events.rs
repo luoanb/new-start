@@ -28,6 +28,9 @@ pub enum StateChange {
     Sessions,
     /// 神经元权重/连接变化（人工评价、人工调整），前端应刷新神经元面板。
     Neurons,
+    /// 工具装配进度/结果变化（启动后台装配、刷新、保存配置），
+    /// 前端应重新拉取 tools 与 MCP server 状态。
+    Tools,
 }
 
 /// 状态事件发射器：由 `lib.rs` setup 构造（捕获 AppHandle），

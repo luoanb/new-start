@@ -36,7 +36,8 @@ export type StateChangePayload =
   | { kind: "conversations" }
   | { kind: "poller"; status: PollerStatus }
   | { kind: "sessions" }
-  | { kind: "neurons" };
+  | { kind: "neurons" }
+  | { kind: "tools" };
 
 const state = $state({
   ready: false,
@@ -52,6 +53,7 @@ const state = $state({
   poller: null as PollerStatus | null,
   runningSessions: [] as RunningSession[],
   neuronsVersion: 0,
+  toolsVersion: 0,
 });
 
 let unlisten: UnlistenFn | null = null;
@@ -100,6 +102,8 @@ async function handleStateChanged(payload: StateChangePayload): Promise<void> {
       await refreshRunningSessions();
     } else if (payload.kind === "neurons") {
       state.neuronsVersion++;
+    } else if (payload.kind === "tools") {
+      state.toolsVersion++;
     }
   } catch (e) {
     state.error = `State refresh failed: ${formatInvokeError(e)}`;
