@@ -164,6 +164,66 @@
         background-color: var(--color-elevated);
         color: var(--color-text);
       }
+
+      /* ── 全局按钮词汇：所有面板共用（组件内 scoped 定义优先）── */
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-1);
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+        font-size: var(--fs-sm);
+        font-weight: 500;
+        line-height: 1;
+        padding: 6px 12px;
+        background: var(--color-surface);
+        color: var(--color-text);
+        border: var(--border-width) solid var(--color-border);
+        transition: background var(--duration-fast) var(--ease-out),
+                    border-color var(--duration-fast) var(--ease-out),
+                    color var(--duration-fast) var(--ease-out);
+      }
+      .btn:hover:not(:disabled) {
+        background: var(--color-hover);
+        border-color: color-mix(in oklch, var(--color-border) 60%, var(--color-text));
+      }
+      .btn:focus-visible {
+        outline: 2px solid var(--color-primary);
+        outline-offset: 1px;
+      }
+      .btn:active:not(:disabled) {
+        transform: translateY(0.5px);
+      }
+      .btn:disabled {
+        opacity: 0.45;
+        cursor: default;
+      }
+      .btn-primary {
+        background: var(--color-primary);
+        border-color: transparent;
+        color: var(--color-on-primary);
+      }
+      .btn-primary:hover:not(:disabled) {
+        background: var(--color-primary-dim);
+      }
+      .btn-danger {
+        color: var(--color-error);
+        border-color: color-mix(in oklch, var(--color-error) 35%, transparent);
+      }
+      .btn-danger:hover:not(:disabled) {
+        background: color-mix(in oklch, var(--color-error) 10%, transparent);
+      }
+      .btn-done {
+        color: var(--color-success);
+        border-color: color-mix(in oklch, var(--color-success) 35%, transparent);
+      }
+      .btn-done:hover:not(:disabled) {
+        background: color-mix(in oklch, var(--color-success) 10%, transparent);
+      }
+      .btn-sm {
+        padding: 4px 8px;
+        font-size: var(--fs-xs);
+      }
     </style>
   </head>
   <body data-sveltekit-preload-data="hover">

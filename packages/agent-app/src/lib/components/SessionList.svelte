@@ -1,6 +1,7 @@
 <script lang="ts">
   import { t } from "$lib/i18n";
   import { useViewContext } from "$lib/layout/viewContext";
+  import type { Conversation } from "$lib/types";
 
   // 数据/命令统一来自 ViewContext；collapsed 是纯视觉 prop（窄侧栏形态）。
   const ctx = useViewContext();
@@ -23,16 +24,28 @@
     assistant: "Assistant",
   };
 
-  function shortId(id: string): string {
-    if (id.length <= 16) return id;
-    return `${id.slice(0, 8)}..${id.slice(-4)}`;
-  }
-
   function formatTime(ts: number): string {
     const d = new Date(ts);
-    const h = d.getHours().toString().padStart(2, "0");
-    const m = d.getMinutes().toString().padStart(2, "0");
-    return `${h}:${m}`;
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const dayMs = 86_400_000;
+    if (ts >= startOfToday) {
+      const h = d.getHours().toString().padStart(2, "0");
+      const m = d.getMinutes().toString().padStart(2, "0");
+      return `${h}:${m}`;
+    }
+    if (ts >= startOfToday - dayMs) return t("sessionList.yesterday");
+    if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}/${d.getDate()}`;
+    return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+  }
+
+  // 会话标题：取首条 user/assistant 文本消息，无则显示占位。
+  function sessionTitle(conv: Conversation): string {
+    const textMsg = conv.messages.find(
+      (m) => m.body.kind === "text" && (m.role === "user" || m.role === "assistant"),
+    );
+    const content = textMsg?.body.kind === "text" ? textMsg.body.content.trim() : "";
+    return content || t("sessionList.newSession");
   }
 </script>
 
@@ -41,18 +54,18 @@
     {#if !collapsed}
       <h2>{t("sessionList.title")}</h2>
       <div class="header-actions">
-        <button class="icon-btn" onclick={onCreate} title={t("sessionList.create")}>
+        <button class="icon-btn" onclick={onCreate} title={t("sessionList.newButton")}>
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         </button>
-        <button class="icon-btn" onclick={onToggle} title="Collapse sidebar">
+        <button class="icon-btn" onclick={onToggle} title={t("sessionList.collapseSidebar")}>
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
       </div>
     {:else}
-      <button class="icon-btn expand-btn" onclick={onToggle} title="Expand sidebar">
+      <button class="icon-btn expand-btn" onclick={onToggle} title={t("sessionList.expandSidebar")}>
         <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
       </button>
-      <button class="icon-btn" onclick={onCreate} title={t("sessionList.create")}>
+      <button class="icon-btn" onclick={onCreate} title={t("sessionList.newButton")}>
         <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       </button>
     {/if}
@@ -62,8 +75,11 @@
     <div class="session-list">
       {#if conversations.length === 0}
         <div class="empty">
-          <p>{t("sessionList.empty")}</p>
-          <button class="create-btn" onclick={onCreate}>{t("sessionList.create")}</button>
+          <svg class="empty-icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5Z" />
+          </svg>
+          <p>{t("sessionList.emptyHint")}</p>
+          <button class="btn btn-primary" onclick={onCreate}>{t("sessionList.newButton")}</button>
         </div>
       {:else}
         {#each conversations as conv}
@@ -74,10 +90,10 @@
           >
             <div class="session-indicator" class:active={conv.id === activeId}></div>
             <div class="session-info">
-              <span class="session-id" title={conv.id}>
-                {shortId(conv.id)}
+              <span class="session-title" title={sessionTitle(conv)}>
+                {sessionTitle(conv)}
                 {#if runningSessionIds.has(conv.id)}
-                  <span class="running-badge" title="Running">●</span>
+                  <span class="running-badge" title={t("sessionList.running")}>●</span>
                 {/if}
               </span>
               <span class="session-meta">
@@ -95,7 +111,7 @@
                 role="button"
                 tabindex="-1"
                 onclick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(conv.id); }}
-                title="Copy session id"
+                title={t("sessionList.copyId")}
               >⧉</span>
               {#if conv.mode === "assistant"}
                 <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -104,7 +120,7 @@
                   role="button"
                   tabindex="-1"
                   onclick={(e) => { e.stopPropagation(); onClose(conv.id); }}
-                  title="Close session"
+                  title={t("sessionList.closeSession")}
                 >×</span>
               {/if}
             </div>
@@ -122,20 +138,20 @@
   .sidebar.collapsed .sidebar-header { flex-direction: column; gap: var(--space-2); padding: var(--space-2); }
   .sidebar-header h2 { margin: 0; font-size: var(--fs-base); font-weight: 600; }
   .header-actions { display: flex; gap: var(--space-1); }
-  .icon-btn { background: none; border: var(--border-width) solid var(--color-border); border-radius: var(--radius-sm); cursor: pointer; padding: var(--space-1) var(--space-2); font-size: var(--fs-base); color: var(--color-text); display: flex; align-items: center; justify-content: center; min-width: 28px; min-height: 28px; transition: background var(--duration-fast) var(--ease-out); }
-  .icon-btn:hover { background: var(--color-hover); }
-  .ic { width: 16px; height: 16px; }
+  .icon-btn { background: none; border: none; border-radius: var(--radius-sm); cursor: pointer; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; font-size: var(--fs-base); color: var(--color-text-muted); transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out); }
+  .icon-btn:hover { background: var(--color-hover); color: var(--color-text); }
+  .ic { width: 15px; height: 15px; }
   .session-list { flex: 1; overflow-y: auto; padding: var(--space-2); }
-  .empty { text-align: center; padding: var(--space-6) var(--space-2); color: var(--color-text-muted); font-size: var(--fs-sm); }
-  .create-btn { margin-top: var(--space-2); padding: var(--space-1) var(--space-4); border-radius: var(--radius-sm); border: var(--border-width) solid var(--color-primary); background: transparent; color: var(--color-primary); cursor: pointer; font-size: var(--fs-sm); }
-  .create-btn:hover { background: var(--color-primary); color: var(--color-on-primary); }
+  .empty { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); text-align: center; padding: var(--space-8) var(--space-3); color: var(--color-text-muted); font-size: var(--fs-sm); }
+  .empty-icon { opacity: 0.5; }
   .session-item { display: flex; align-items: center; gap: var(--space-2); width: 100%; padding: var(--space-2) var(--space-2); margin-bottom: 2px; border-radius: var(--radius-md); border: none; background: transparent; cursor: pointer; text-align: left; transition: background var(--duration-fast) var(--ease-out); color: var(--color-text); }
   .session-item:hover { background: var(--color-hover); }
-  .session-item.active { background: var(--color-hover); }
+  .session-item.active { background: color-mix(in oklch, var(--color-primary) 10%, transparent); }
   .session-indicator { flex-shrink: 0; width: 3px; align-self: stretch; border-radius: 2px; background: transparent; }
   .session-indicator.active { background: var(--color-primary); }
   .session-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-  .session-id { display: flex; align-items: center; gap: var(--space-1); font-size: var(--fs-sm); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session-title { display: flex; align-items: center; gap: var(--space-1); font-size: var(--fs-sm); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session-item.active .session-title { font-weight: 600; }
   .running-badge { flex-shrink: 0; font-size: 9px; color: var(--color-success); animation: running-pulse 1.6s var(--ease-out) infinite; }
   @keyframes running-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
   .session-meta { display: flex; align-items: center; gap: var(--space-2); font-size: var(--fs-xs); color: var(--color-text-muted); }
@@ -147,8 +163,8 @@
   .session-actions { flex-shrink: 0; display: flex; align-items: center; gap: 2px; }
   .copy-btn { background: none; border: none; cursor: pointer; font-size: 14px; color: inherit; opacity: 0; padding: 2px 4px; border-radius: var(--radius-sm); line-height: 1; transition: opacity var(--duration-fast) var(--ease-out); }
   .session-item:hover .copy-btn { opacity: 0.6; }
-  .copy-btn:hover { opacity: 1 !important; background: rgba(0, 0, 0, 0.1); }
+  .copy-btn:hover { opacity: 1 !important; background: var(--color-hover); }
   .close-btn { background: none; border: none; cursor: pointer; font-size: 16px; color: inherit; opacity: 0; padding: 2px 4px; border-radius: var(--radius-sm); line-height: 1; transition: opacity var(--duration-fast) var(--ease-out); }
   .session-item:hover .close-btn { opacity: 0.6; }
-  .close-btn:hover { opacity: 1 !important; background: rgba(0, 0, 0, 0.1); }
+  .close-btn:hover { opacity: 1 !important; background: var(--color-hover); }
 </style>

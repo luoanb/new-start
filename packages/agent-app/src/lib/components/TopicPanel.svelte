@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { TopicStatus } from "$lib/types";
-  import { t } from "$lib/i18n";
+  import { t, tMap } from "$lib/i18n";
   import { errorMessage } from "$lib/errorMessage";
   import { dataStore } from "$lib/stores/dataStore.svelte";
 
@@ -8,7 +8,8 @@
   let topics = $derived(dataStore.state.topics);
 
   // ── State ──
-  let filterStatus: TopicStatus | "" = $state("");
+  type TopicFilter = "all" | "active" | "done";
+  let filter = $state<TopicFilter>("all");
   let expandedId = $state<string | null>(null);
   let showCreateForm = $state(false);
   let createName = $state("");
@@ -22,37 +23,20 @@
   let newScopeContract = $state("");
   let addingScope = $state(false);
 
+  // 三段式聚合：未完成 = todo+in_progress+paused；已完成 = done+cancelled。
+  const ACTIVE: TopicStatus[] = ["todo", "in_progress", "paused"];
+  const DONE: TopicStatus[] = ["done", "cancelled"];
+
   // ── Derived ──
   let filteredTopics = $derived(
-    filterStatus
-      ? topics.filter((t) => t.status === filterStatus)
-      : topics
+    filter === "active"
+      ? topics.filter((t) => ACTIVE.includes(t.status))
+      : filter === "done"
+        ? topics.filter((t) => DONE.includes(t.status))
+        : topics
   );
 
-  const statusFilters: { value: TopicStatus | ""; label: string }[] = [
-    { value: "", label: t("topicPanel.all") },
-    { value: "todo", label: "Todo" },
-    { value: "in_progress", label: "In Progress" },
-    { value: "paused", label: "Paused" },
-    { value: "done", label: "Done" },
-    { value: "cancelled", label: "Cancelled" },
-  ];
-
-  const statusColors: Record<TopicStatus, string> = {
-    todo: "var(--color-text-muted)",
-    in_progress: "var(--color-primary)",
-    paused: "var(--color-warning, #f59e0b)",
-    done: "var(--color-success, #22c55e)",
-    cancelled: "var(--color-danger, #ef4444)",
-  };
-
-  const statusLabels: Record<TopicStatus, string> = {
-    todo: "Todo",
-    in_progress: "In Progress",
-    paused: "Paused",
-    done: "Done",
-    cancelled: "Cancelled",
-  };
+  const topicFilters: TopicFilter[] = ["active", "all", "done"];
 
   function formatTime(ts: number): string {
     const d = new Date(ts);
@@ -72,7 +56,7 @@
       showCreateForm = false;
       expandedId = topic.id;
     } catch (e) {
-      errorMsg = `Create failed: ${errorMessage(e)}`;
+      errorMsg = t("topicPanel.createFailed", { error: errorMessage(e) });
     } finally {
       creating = false;
     }
@@ -83,7 +67,7 @@
     try {
       await dataStore.pauseTopic(id);
     } catch (e) {
-      errorMsg = `Pause failed: ${errorMessage(e)}`;
+      errorMsg = t("topicPanel.pauseFailed", { error: errorMessage(e) });
     }
   }
 
@@ -92,7 +76,7 @@
     try {
       await dataStore.resumeTopic(id);
     } catch (e) {
-      errorMsg = `Resume failed: ${errorMessage(e)}`;
+      errorMsg = t("topicPanel.resumeFailed", { error: errorMessage(e) });
     }
   }
 
@@ -103,7 +87,7 @@
       await dataStore.deleteTopic(id);
       if (expandedId === id) expandedId = null;
     } catch (e) {
-      errorMsg = `Delete failed: ${errorMessage(e)}`;
+      errorMsg = t("topicPanel.deleteFailed", { error: errorMessage(e) });
     }
   }
 
@@ -116,7 +100,7 @@
       newScopeGoal = "";
       newScopeContract = "";
     } catch (e) {
-      errorMsg = `Add scope item failed: ${errorMessage(e)}`;
+      errorMsg = t("topicPanel.addScopeFailed", { error: errorMessage(e) });
     } finally {
       addingScope = false;
     }
@@ -127,7 +111,7 @@
     try {
       await dataStore.completeScopeItem(topicId, itemId);
     } catch (e) {
-      errorMsg = `Complete scope item failed: ${errorMessage(e)}`;
+      errorMsg = t("topicPanel.completeScopeFailed", { error: errorMessage(e) });
     }
   }
 
@@ -136,7 +120,7 @@
     try {
       await dataStore.deleteScopeItem(topicId, itemId);
     } catch (e) {
-      errorMsg = `Delete scope item failed: ${errorMessage(e)}`;
+      errorMsg = t("topicPanel.deleteScopeFailed", { error: errorMessage(e) });
     }
   }
 </script>
@@ -147,24 +131,36 @@
     <div class="error-banner" onclick={() => (errorMsg = "")}>{errorMsg}</div>
   {/if}
 
-  <!-- Status filters -->
-  <div class="filter-bar">
-    {#each statusFilters as sf}
+  <!-- 面板标题 + 新建入口（对齐 ToolPanel 的 panel-toolbar 词汇） -->
+  <div class="panel-toolbar">
+    <span class="panel-title">{t("topicPanel.topics")}</span>
+    <div class="toolbar-actions">
       <button
-        class="filter-btn"
-        class:active={filterStatus === sf.value}
-        onclick={() => (filterStatus = sf.value)}
+        class="icon-btn"
+        onclick={() => (showCreateForm = !showCreateForm)}
+        title={t("topicPanel.create")}
+        aria-label={t("topicPanel.create")}
       >
-        {sf.label}
+        <svg class="icon" aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       </button>
-    {/each}
+    </div>
   </div>
 
-  <!-- Create button -->
-  <div class="toolbar">
-    <button class="btn btn-primary" onclick={() => (showCreateForm = !showCreateForm)}>
-      + {t("topicPanel.create")}
-    </button>
+  <!-- Status filters: 全部 / 未完成 / 已完成 -->
+  <div class="filter-bar" role="group" aria-label={t("topicPanel.status")}>
+    {#each topicFilters as f}
+      <button
+        class="filter-btn"
+        class:active={filter === f}
+        onclick={() => (filter = f)}
+      >
+        {f === "all"
+          ? t("topicPanel.all")
+          : f === "active"
+            ? t("topicPanel.filterActive")
+            : t("topicPanel.filterDone")}
+      </button>
+    {/each}
   </div>
 
   <!-- Create form -->
@@ -199,9 +195,30 @@
           <div class="topic-summary" onclick={() => (expandedId = expandedId === topic.id ? null : topic.id)}>
             <div class="topic-header">
               <span class="topic-name">{topic.name}</span>
-              <span class="status-badge" style="background: {statusColors[topic.status]}">
-                {statusLabels[topic.status]}
-              </span>
+              <div class="topic-header-actions">
+                <span class="status-badge {topic.status}">
+                  {tMap("topicPanel.topicStatus", topic.status)}
+                </span>
+                {#if deleteConfirmId === topic.id}
+                  <span class="delete-confirm" title={t("topicPanel.deleteConfirm")}>
+                    <button class="btn btn-sm btn-danger" onclick={() => handleDelete(topic.id)}>
+                      {t("topicPanel.confirm")}
+                    </button>
+                    <button class="btn btn-sm" onclick={() => (deleteConfirmId = null)}>
+                      {t("topicPanel.cancel")}
+                    </button>
+                  </span>
+                {:else}
+                  <button
+                    class="icon-btn danger"
+                    onclick={() => (deleteConfirmId = topic.id)}
+                    title={t("topicPanel.confirm")}
+                    aria-label={t("topicPanel.confirm")}
+                  >
+                    <svg class="icon" aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                  </button>
+                {/if}
+              </div>
             </div>
             <div class="progress-row">
               <div class="progress-bar-bg">
@@ -235,6 +252,17 @@
                 <div class="scope-header">
                   <span class="detail-label">{t("topicPanel.scopeItems")}</span>
                   <span>({topic.scope_in.filter((s) => s.status === "completed").length}/{topic.scope_in.length})</span>
+                  {#if topic.status !== "paused"}
+                    <button
+                      class="icon-btn"
+                      onclick={() => handleAddScopeItem(topic.id)}
+                      disabled={addingScope || !newScopeGoal.trim() || !newScopeContract.trim()}
+                      title={t("topicPanel.scopeAdd")}
+                      aria-label={t("topicPanel.scopeAdd")}
+                    >
+                      <svg class="icon" aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    </button>
+                  {/if}
                 </div>
 
                 {#if topic.status !== "paused"}
@@ -251,13 +279,6 @@
                       bind:value={newScopeContract}
                       disabled={addingScope}
                     />
-                    <button
-                      class="btn btn-sm"
-                      onclick={() => handleAddScopeItem(topic.id)}
-                      disabled={addingScope || !newScopeGoal.trim() || !newScopeContract.trim()}
-                    >
-                      {t("topicPanel.scopeAdd")}
-                    </button>
                   </div>
                 {/if}
 
@@ -271,22 +292,24 @@
                       <div class="scope-item-actions">
                         {#if item.status !== "completed"}
                           <button
-                            class="btn btn-sm btn-done"
+                            class="icon-btn done"
                             onclick={() => handleCompleteScopeItem(topic.id, item.id)}
                             disabled={topic.status === "paused"}
                             title={t("topicPanel.scopeStatusDone")}
+                            aria-label={t("topicPanel.scopeStatusDone")}
                           >
-                            ✓
+                            <svg class="icon" aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
                           </button>
                         {:else}
-                          <span class="scope-done-badge">{t("topicPanel.scopeStatusDone")}</span>
+                          <span class="status-badge done">{t("topicPanel.scopeStatusDone")}</span>
                         {/if}
                         <button
-                          class="btn btn-sm btn-danger"
+                          class="icon-btn danger"
                           onclick={() => handleDeleteScopeItem(topic.id, item.id)}
                           title={t("topicPanel.confirm")}
+                          aria-label={t("topicPanel.confirm")}
                         >
-                          ×
+                          <svg class="icon" aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                         </button>
                       </div>
                     </div>
@@ -305,21 +328,6 @@
                     {t("topicPanel.pause")}
                   </button>
                 {/if}
-                {#if deleteConfirmId === topic.id}
-                  <span class="delete-confirm">
-                    {t("topicPanel.deleteConfirm")}
-                    <button class="btn btn-sm btn-danger" onclick={() => handleDelete(topic.id)}>
-                      {t("topicPanel.confirm")}
-                    </button>
-                    <button class="btn btn-sm" onclick={() => (deleteConfirmId = null)}>
-                      {t("topicPanel.cancel")}
-                    </button>
-                  </span>
-                {:else}
-                  <button class="btn btn-sm btn-danger" onclick={() => (deleteConfirmId = topic.id)}>
-                    {t("topicPanel.confirm")}
-                  </button>
-                {/if}
               </div>
             </div>
           {/if}
@@ -330,12 +338,75 @@
 </div>
 
 <style>
-  .topic-panel { display: flex; flex-direction: column; gap: var(--space-2); height: 100%; overflow-y: auto; }
-  .error-banner { background: var(--color-danger, #ef4444); color: #fff; padding: var(--space-1) var(--space-2); border-radius: var(--radius-md); font-size: var(--fs-xs); cursor: pointer; }
-  .filter-bar { display: flex; flex-wrap: wrap; gap: var(--space-1); }
-  .filter-btn { font-size: var(--fs-xs); padding: 2px 8px; border: var(--border-width) solid var(--color-border); border-radius: var(--radius-sm); background: transparent; color: var(--color-text-muted); cursor: pointer; }
-  .filter-btn.active { background: var(--color-primary); color: var(--color-on-primary); border-color: var(--color-primary); }
-  .toolbar { display: flex; gap: var(--space-1); }
+  /* 面板容器：对齐 ToolPanel 的 .tools-panel 间距（padding / gap / flex 约束） */
+  .topic-panel {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    gap: var(--space-6);
+    padding: var(--space-3) var(--space-4);
+    overflow: auto;
+  }
+  .error-banner { background: var(--color-error); color: #fff; padding: var(--space-1) var(--space-2); border-radius: var(--radius-md); font-size: var(--fs-xs); cursor: pointer; }
+  /* 面板标题栏：对齐 ToolPanel 的 panel-toolbar / panel-title / toolbar-actions 词汇 */
+  .panel-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .panel-title {
+    font-size: var(--fs-base);
+    font-weight: 600;
+    color: var(--color-text);
+  }
+  .toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+  .filter-bar {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    border: var(--border-width) solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+  }
+  .filter-btn {
+    flex: 1;
+    font-size: var(--fs-xs);
+    padding: 3px 10px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+  }
+  .filter-btn:hover { background: var(--color-hover); color: var(--color-text); }
+  .filter-btn.active { background: var(--color-primary); color: var(--color-on-primary); }
+  /* 与全项目 icon-btn 词汇一致：无边框方形 + hover tint */
+  .icon-btn {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    width: 26px;
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-muted);
+    transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+  }
+  .icon-btn:hover { background: var(--color-hover); color: var(--color-text); }
+  .icon-btn:disabled { opacity: 0.4; cursor: default; }
+  .icon-btn.done { color: var(--color-success); }
+  .icon-btn.danger { color: var(--color-error); }
+  .icon-btn .icon { display: block; }
   .create-form { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-2); background: var(--color-surface); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-md); }
   .create-form input { font-size: var(--fs-sm); padding: var(--space-1) var(--space-2); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-bg); color: var(--color-text); }
   .empty { text-align: center; color: var(--color-text-muted); font-size: var(--fs-sm); padding: var(--space-4); }
@@ -343,9 +414,27 @@
   .topic-card { border: var(--border-width) solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg); overflow: hidden; }
   .topic-card.expanded { border-color: var(--color-primary); }
   .topic-summary { padding: var(--space-2); cursor: pointer; }
-  .topic-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-1); }
+  .topic-header { display: flex; justify-content: space-between; align-items: center; gap: var(--space-1); margin-bottom: var(--space-1); }
+  .topic-header-actions { display: flex; align-items: center; gap: var(--space-1); }
   .topic-name { font-size: var(--fs-sm); font-weight: 600; }
-  .status-badge { font-size: 10px; font-weight: 600; padding: 1px 8px; border-radius: var(--radius-sm); color: #fff; }
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--color-hover);
+    color: var(--color-text-muted);
+    white-space: nowrap;
+  }
+  .status-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .status-badge.todo { color: var(--color-text-muted); }
+  .status-badge.in_progress { background: color-mix(in oklch, var(--color-primary) 12%, transparent); color: var(--color-primary); }
+  .status-badge.paused { background: color-mix(in oklch, var(--color-warning) 12%, transparent); color: var(--color-warning); }
+  .status-badge.done { background: color-mix(in oklch, var(--color-success) 12%, transparent); color: var(--color-success); }
+  .status-badge.cancelled { background: color-mix(in oklch, var(--color-error) 12%, transparent); color: var(--color-error); }
   .progress-row { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-1); }
   .progress-bar-bg { flex: 1; height: 4px; background: var(--color-border); border-radius: 2px; overflow: hidden; }
   .progress-bar-fill { height: 100%; background: var(--color-primary); border-radius: 2px; transition: width var(--duration-normal) var(--ease-out); }
@@ -353,11 +442,13 @@
   .topic-meta { font-size: var(--fs-xs); color: var(--color-text-muted); }
   .topic-detail { padding: 0 var(--space-2) var(--space-2); border-top: var(--border-width) solid var(--color-border); }
   .detail-row { display: flex; gap: var(--space-2); font-size: var(--fs-xs); padding: var(--space-1) 0; }
-  .detail-label { font-weight: 600; color: var(--color-text-muted); min-width: 60px; }
+  .detail-label { flex-shrink: 0; font-weight: 600; color: var(--color-text-muted); }
+  .detail-row > :not(.detail-label) { flex: 1; min-width: 0; }
   .mono { font-family: monospace; font-size: var(--fs-xs); }
   .scope-section { margin-top: var(--space-1); }
   .scope-header { display: flex; gap: var(--space-1); font-size: var(--fs-xs); padding: var(--space-1) 0; }
-  .scope-add-form { display: flex; gap: var(--space-1); margin-bottom: var(--space-1); }
+  .scope-header .icon-btn { margin-left: auto; }
+  .scope-add-form { display: flex; flex-direction: column; gap: var(--space-1); margin-bottom: var(--space-1); }
   .scope-add-form input { flex: 1; font-size: var(--fs-xs); padding: 2px 6px; border: var(--border-width) solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-bg); color: var(--color-text); }
   .scope-list { display: flex; flex-direction: column; gap: 2px; }
   .scope-item { display: flex; align-items: center; gap: var(--space-1); padding: var(--space-1); border-radius: var(--radius-sm); background: var(--color-surface); font-size: var(--fs-xs); }
@@ -366,15 +457,6 @@
   .scope-goal { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .scope-contract { color: var(--color-text-muted); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .scope-item-actions { display: flex; gap: 2px; align-items: center; }
-  .scope-done-badge { font-size: 10px; color: var(--color-success, #22c55e); font-weight: 600; }
   .topic-actions { display: flex; gap: var(--space-1); margin-top: var(--space-2); padding-top: var(--space-1); border-top: var(--border-width) solid var(--color-border); }
-  .delete-confirm { display: flex; gap: var(--space-1); align-items: center; font-size: var(--fs-xs); color: var(--color-danger, #ef4444); }
-
-  /* ── Shared button styles (match SidePanel pattern) ── */
-  .btn { font-size: var(--fs-xs); padding: 2px 10px; border: var(--border-width) solid var(--color-border); border-radius: var(--radius-sm); background: transparent; color: var(--color-text); cursor: pointer; white-space: nowrap; }
-  .btn-primary { background: var(--color-primary); color: var(--color-on-primary); border-color: var(--color-primary); }
-  .btn-sm { font-size: 10px; padding: 1px 8px; }
-  .btn-danger { border-color: var(--color-danger, #ef4444); color: var(--color-danger, #ef4444); }
-  .btn-done { border-color: var(--color-success, #22c55e); color: var(--color-success, #22c55e); }
-  .btn:disabled { opacity: 0.4; cursor: default; }
+  .delete-confirm { display: flex; gap: var(--space-1); align-items: center; font-size: var(--fs-xs); color: var(--color-error); }
 </style>

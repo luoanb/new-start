@@ -18,8 +18,17 @@ export type Translations = {
   sessionList: {
     title: string;
     empty: string;
+    emptyHint: string;
     create: string;
+    newButton: string;
     msgs: string;
+    newSession: string;
+    yesterday: string;
+    running: string;
+    copyId: string;
+    closeSession: string;
+    collapseSidebar: string;
+    expandSidebar: string;
   };
   chatArea: {
     emptyTitle: string;
@@ -84,6 +93,8 @@ export type Translations = {
   topicPanel: {
     topics: string;
     all: string;
+    filterActive: string;
+    filterDone: string;
     create: string;
     createTitle: string;
     createName: string;
@@ -109,6 +120,14 @@ export type Translations = {
     updated: string;
     sessionId: string;
     name: string;
+    topicStatus: Record<string, string>;
+    createFailed: string;
+    pauseFailed: string;
+    resumeFailed: string;
+    deleteFailed: string;
+    addScopeFailed: string;
+    completeScopeFailed: string;
+    deleteScopeFailed: string;
   };
   pollerPanel: {
     poller: string;
@@ -266,8 +285,17 @@ export const en: Translations = {
   sessionList: {
     title: "Sessions",
     empty: "No sessions yet.",
+    emptyHint: "Start a conversation to see it here",
     create: "Create one",
+    newButton: "New session",
     msgs: "msgs",
+    newSession: "New session",
+    yesterday: "Yesterday",
+    running: "Running",
+    copyId: "Copy session ID",
+    closeSession: "Close session",
+    collapseSidebar: "Collapse sidebar",
+    expandSidebar: "Expand sidebar",
   },
   chatArea: {
     emptyTitle: "Start a conversation",
@@ -338,6 +366,8 @@ export const en: Translations = {
   topicPanel: {
     topics: "Topics",
     all: "All",
+    filterActive: "Active",
+    filterDone: "Done",
     create: "New Topic",
     createTitle: "Create Topic",
     createName: "Name",
@@ -363,6 +393,20 @@ export const en: Translations = {
     updated: "Updated",
     sessionId: "Session",
     name: "Name",
+    topicStatus: {
+      todo: "Todo",
+      in_progress: "In Progress",
+      paused: "Paused",
+      done: "Done",
+      cancelled: "Cancelled",
+    },
+    createFailed: "Create failed: {error}",
+    pauseFailed: "Pause failed: {error}",
+    resumeFailed: "Resume failed: {error}",
+    deleteFailed: "Delete failed: {error}",
+    addScopeFailed: "Add scope item failed: {error}",
+    completeScopeFailed: "Complete scope item failed: {error}",
+    deleteScopeFailed: "Delete scope item failed: {error}",
   },
   pollerPanel: {
     poller: "Poller",
@@ -525,8 +569,17 @@ export const zh: Translations = {
   sessionList: {
     title: "会话列表",
     empty: "暂无会话。",
+    emptyHint: "开始对话后会显示在这里",
     create: "创建一个",
+    newButton: "新建会话",
     msgs: "条消息",
+    newSession: "新会话",
+    yesterday: "昨天",
+    running: "运行中",
+    copyId: "复制会话 ID",
+    closeSession: "关闭会话",
+    collapseSidebar: "收起侧栏",
+    expandSidebar: "展开侧栏",
   },
   chatArea: {
     emptyTitle: "开始对话",
@@ -597,6 +650,8 @@ export const zh: Translations = {
   topicPanel: {
     topics: "课题",
     all: "全部",
+    filterActive: "进行中",
+    filterDone: "已完成",
     create: "新建课题",
     createTitle: "创建课题",
     createName: "名称",
@@ -622,6 +677,20 @@ export const zh: Translations = {
     updated: "更新于",
     sessionId: "会话",
     name: "名称",
+    topicStatus: {
+      todo: "待办",
+      in_progress: "进行中",
+      paused: "已暂停",
+      done: "已完成",
+      cancelled: "已取消",
+    },
+    createFailed: "创建失败：{error}",
+    pauseFailed: "暂停失败：{error}",
+    resumeFailed: "恢复失败：{error}",
+    deleteFailed: "删除失败：{error}",
+    addScopeFailed: "添加范围项失败：{error}",
+    completeScopeFailed: "完成范围项失败：{error}",
+    deleteScopeFailed: "删除范围项失败：{error}",
   },
   pollerPanel: {
     poller: "轮询器",
