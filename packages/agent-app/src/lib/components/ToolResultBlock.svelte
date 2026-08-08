@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Message } from "$lib/types";
   import { t } from "$lib/i18n";
+  import CopyButton from "./CopyButton.svelte";
 
   let { message }: { message: Message } = $props();
 
@@ -47,16 +48,20 @@
 </script>
 
 <div class="toolresult-block" class:expanded class:cmd-shape={isCmdShape}>
-  <button class="summary" onclick={toggle}>
-    <span class="toggle-icon">{expanded ? "▾" : "▸"}</span>
-    <span class="label">🖥 {label}</span>
-    {#if isCmdShape}
-      {#if result!.timed_out}
-        <span class="badge timeout">{t("toolResult.timedOut")}</span>
+  <div class="block-header">
+    <button class="summary" onclick={toggle}>
+      <span class="toggle-icon">{expanded ? "▾" : "▸"}</span>
+      <span class="label">🖥 {label}</span>
+      {#if isCmdShape}
+        {#if result!.timed_out}
+          <span class="badge timeout">{t("toolResult.timedOut")}</span>
+        {/if}
+        <span class="exit" class:error={!isSuccess}>{result!.exit_code}</span>
       {/if}
-      <span class="exit" class:error={!isSuccess}>{result!.exit_code}</span>
-    {/if}
-  </button>
+    </button>
+    <!-- 工具结果的复制：仅复制工具输出（content） -->
+    <CopyButton text={content} />
+  </div>
 
   {#if expanded}
     <div class="detail">
@@ -95,11 +100,13 @@
   .toolresult-block:has(.timeout) {
     border-left-color: color-mix(in srgb, var(--color-warning) 55%, transparent);
   }
+  .block-header { display: flex; align-items: center; gap: var(--space-1); padding-right: var(--space-1); }
   .summary {
     display: flex;
     align-items: center;
     gap: 6px;
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     padding: var(--space-2) var(--space-3);
     border: none;
     background: transparent;

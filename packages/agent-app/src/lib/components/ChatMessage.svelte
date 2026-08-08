@@ -32,14 +32,10 @@
     message.body.kind === "tool_call" ? message.body.tool_calls : []
   );
 
-  // 操作栏显隐：工具调用/工具回复/系统消息/轮询简报无操作栏，其余有。
-  const showActions = $derived(
-    !isSystem &&
-      !isCompaction &&
-      !isToolResult &&
-      !isNudge &&
-      message.body.kind !== "tool_call"
-  );
+  // 操作栏显隐：仅系统消息/压缩摘要无操作栏。
+  // 工具结果与轮询简报的复制已内嵌在各折叠块头部（CopyButton），此处不再显示；
+  // 助手消息（含带 tool_call 的）保留底部复制（仅 content）与评分。
+  const showActions = $derived(!isSystem && !isCompaction && !isToolResult && !isNudge);
 
   // 打分区间与模型约束一致：-5..5 且非 0（去掉 0），一行 10 个。
   const scoreList = [-5, -4, -3, -2, -1, 1, 2, 3, 4, 5];

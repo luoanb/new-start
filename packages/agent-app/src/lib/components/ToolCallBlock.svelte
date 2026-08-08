@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ToolCall } from "$lib/types";
   import { t } from "$lib/i18n";
+  import CopyButton from "./CopyButton.svelte";
 
   let { toolCalls }: { toolCalls: ToolCall[] } = $props();
 
@@ -13,13 +14,19 @@
   let summary = $derived(
     toolCalls.map((tc) => tc.name).join(", ")
   );
+
+  // 复制内容 = 完整的工具调用信息（工具名 + 参数），不含思考文本。
+  let copyText = $derived(JSON.stringify(toolCalls, null, 2));
 </script>
 
 <div class="toolcall-block" class:expanded>
-  <button class="summary" onclick={toggle}>
-    <span class="toggle-icon">{expanded ? "▾" : "▸"}</span>
-    <span class="label">🛠 {summary}</span>
-  </button>
+  <div class="block-header">
+    <button class="summary" onclick={toggle}>
+      <span class="toggle-icon">{expanded ? "▾" : "▸"}</span>
+      <span class="label">🛠 {summary}</span>
+    </button>
+    <CopyButton text={copyText} />
+  </div>
 
   {#if expanded}
     <div class="detail">
@@ -41,7 +48,8 @@
 
 <style>
   .toolcall-block { margin-top: var(--space-2); border-radius: var(--radius-md); background: color-mix(in srgb, var(--color-surface) 45%, var(--color-bg)); border: var(--border-width) solid color-mix(in srgb, var(--color-border) 45%, transparent); border-left: 3px solid color-mix(in srgb, var(--color-primary) 55%, transparent); overflow: hidden; }
-  .summary { display: flex; align-items: center; gap: 6px; width: 100%; padding: var(--space-2) var(--space-3); border: none; background: transparent; color: var(--color-text); font-size: var(--fs-sm); cursor: pointer; text-align: left; transition: background var(--duration-fast) var(--ease-out); }
+  .block-header { display: flex; align-items: center; gap: var(--space-1); padding-right: var(--space-1); }
+  .summary { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; padding: var(--space-2) var(--space-3); border: none; background: transparent; color: var(--color-text); font-size: var(--fs-sm); cursor: pointer; text-align: left; transition: background var(--duration-fast) var(--ease-out); }
   .summary:hover { background: var(--color-hover); }
   .toggle-icon { font-size: 11px; color: var(--color-text-muted); flex-shrink: 0; }
   .label { font-family: var(--font-mono, monospace); font-size: var(--fs-xs); color: var(--color-text-muted); }

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import CopyButton from "./CopyButton.svelte";
+
   let { content }: { content: string } = $props();
 
   let expanded = $state(false);
@@ -14,10 +16,14 @@
 </script>
 
 <div class="nudge-block" class:expanded>
-  <button class="summary" onclick={toggle}>
-    <span class="toggle-icon">{expanded ? "▾" : "▸"}</span>
-    <span class="preview">{preview}</span>
-  </button>
+  <div class="block-header">
+    <button class="summary" onclick={toggle}>
+      <span class="toggle-icon">{expanded ? "▾" : "▸"}</span>
+      <span class="preview">{preview}</span>
+    </button>
+    <!-- 轮询简报的复制：仅复制简报全文（content） -->
+    <CopyButton text={content} />
+  </div>
 
   {#if expanded}
     <div class="detail">
@@ -35,11 +41,13 @@
     border-left: 3px solid color-mix(in srgb, var(--color-text-muted) 55%, transparent);
     overflow: hidden;
   }
+  .block-header { display: flex; align-items: center; gap: var(--space-1); padding-right: var(--space-1); }
   .summary {
     display: flex;
     align-items: center;
     gap: 6px;
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     padding: var(--space-2) var(--space-3);
     border: none;
     background: transparent;
