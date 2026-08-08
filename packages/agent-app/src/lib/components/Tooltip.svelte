@@ -1,14 +1,33 @@
 <script lang="ts">
+  import type { Snippet } from "svelte";
+
   let {
     label = "",
     position = "bottom",
-  }: { label?: string; position?: "top" | "bottom" | "left" | "right" } = $props();
+    children,
+  }: {
+    label?: string;
+    position?: "top" | "bottom" | "left" | "right";
+    children?: Snippet;
+  } = $props();
+
+  // JS 驱动显示：纯 CSS :hover 在点击触发重新渲染（按钮变 disabled/spinning）后
+  // 会残留 hover 状态导致 tooltip 不消失，因此改用事件管理 + 点击即隐藏。
+  let visible = $state(false);
+
+  function show() {
+    visible = true;
+  }
+  function hide() {
+    visible = false;
+  }
 </script>
 
-<span class="tooltip {position}">
-  <slot />
+<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+<span class="tooltip" role="presentation" onmouseenter={show} onmouseleave={hide} onfocusin={show} onfocusout={hide} onclick={hide}>
+  {@render children?.()}
   {#if label}
-    <span class="tooltip-tip" role="tooltip">{label}</span>
+    <span class="tooltip-tip {position}" class:show={visible} role="tooltip">{label}</span>
   {/if}
 </span>
 
@@ -35,28 +54,25 @@
                 transform var(--duration-fast) var(--ease-out);
   }
 
-  .tooltip:hover .tooltip-tip,
-  .tooltip:focus-within .tooltip-tip {
+  .tooltip-tip.show {
     opacity: 1;
   }
 
-  .tooltip.bottom .tooltip-tip {
+  .tooltip-tip.bottom {
     top: calc(100% + 6px);
     left: 50%;
     transform: translateX(-50%) scale(0.95);
   }
-  .tooltip.bottom:hover .tooltip-tip,
-  .tooltip.bottom:focus-within .tooltip-tip {
+  .tooltip-tip.bottom.show {
     transform: translateX(-50%) scale(1);
   }
 
-  .tooltip.top .tooltip-tip {
+  .tooltip-tip.top {
     bottom: calc(100% + 6px);
     left: 50%;
     transform: translateX(-50%) scale(0.95);
   }
-  .tooltip.top:hover .tooltip-tip,
-  .tooltip.top:focus-within .tooltip-tip {
+  .tooltip-tip.top.show {
     transform: translateX(-50%) scale(1);
   }
 </style>
