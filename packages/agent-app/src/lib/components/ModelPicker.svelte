@@ -91,7 +91,7 @@
     border-radius: var(--radius-sm);
     background: var(--color-bg);
     color: var(--color-text);
-    font-size: var(--fs-sm);
+    font-size: var(--fs-xs);
     font-family: var(--font-mono, monospace);
     cursor: pointer;
     white-space: nowrap;

@@ -87,13 +87,13 @@
   .toolresult-block {
     margin-top: var(--space-2);
     border-radius: var(--radius-md);
-    background: var(--color-surface);
-    border: var(--border-width) solid var(--color-border);
-    border-left: 3px solid var(--color-success);
+    background: color-mix(in srgb, var(--color-surface) 45%, var(--color-bg));
+    border: var(--border-width) solid color-mix(in srgb, var(--color-border) 45%, transparent);
+    border-left: 3px solid color-mix(in srgb, var(--color-success) 55%, transparent);
     overflow: hidden;
   }
   .toolresult-block:has(.timeout) {
-    border-left-color: var(--color-warning);
+    border-left-color: color-mix(in srgb, var(--color-warning) 55%, transparent);
   }
   .summary {
     display: flex;

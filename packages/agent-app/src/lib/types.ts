@@ -28,7 +28,8 @@ export type MessageBody =
   | { kind: "text"; content: string }
   | { kind: "tool_call"; content: string; tool_calls: ToolCall[] }
   | { kind: "tool_result"; tool_call_id: string; tool_name: string; content: string }
-  | { kind: "compaction"; summary_of: string[]; content: string };
+  | { kind: "compaction"; summary_of: string[]; content: string }
+  | { kind: "nudge"; content: string };
 
 export type Message = {
   role: MessageRole;

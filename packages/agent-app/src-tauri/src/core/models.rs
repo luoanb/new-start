@@ -29,6 +29,8 @@ pub enum MessageBody {
     },
     /// 压缩摘要：summary_of 为被摘要消息的时间戳集合。
     Compaction { summary_of: Vec<String>, content: String },
+    /// 轮询推进简报：机器人自发推进时记录的模型输入（审计/展示用），不参与后续模型输入组装。
+    Nudge { content: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -45,7 +47,8 @@ impl Message {
             MessageBody::Text { content }
             | MessageBody::ToolCall { content, .. }
             | MessageBody::ToolResult { content, .. }
-            | MessageBody::Compaction { content, .. } => content,
+            | MessageBody::Compaction { content, .. }
+            | MessageBody::Nudge { content } => content,
         }
     }
 

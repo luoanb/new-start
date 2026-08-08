@@ -40,7 +40,7 @@
 </div>
 
 <style>
-  .toolcall-block { margin-top: var(--space-2); border-radius: var(--radius-md); background: var(--color-surface); border: var(--border-width) solid var(--color-border); border-left: 3px solid var(--color-primary); overflow: hidden; }
+  .toolcall-block { margin-top: var(--space-2); border-radius: var(--radius-md); background: color-mix(in srgb, var(--color-surface) 45%, var(--color-bg)); border: var(--border-width) solid color-mix(in srgb, var(--color-border) 45%, transparent); border-left: 3px solid color-mix(in srgb, var(--color-primary) 55%, transparent); overflow: hidden; }
   .summary { display: flex; align-items: center; gap: 6px; width: 100%; padding: var(--space-2) var(--space-3); border: none; background: transparent; color: var(--color-text); font-size: var(--fs-sm); cursor: pointer; text-align: left; transition: background var(--duration-fast) var(--ease-out); }
   .summary:hover { background: var(--color-hover); }
   .toggle-icon { font-size: 11px; color: var(--color-text-muted); flex-shrink: 0; }

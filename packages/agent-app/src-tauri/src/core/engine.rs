@@ -394,5 +394,13 @@ fn message_to_model_message(message: &Message) -> ModelMessage {
                 tool_call_id: None,
             }
         }
+        // nudge 仅由 Assistant 会话轮询产生（role=User），engine（Chat/Agent）会话不会实际遇到；
+        // 兜底按 User 文本处理以保持穷尽性。
+        MessageBody::Nudge { content } => ModelMessage {
+            role: ModelMessageRole::User,
+            content: content.clone(),
+            tool_calls: None,
+            tool_call_id: None,
+        },
     }
 }

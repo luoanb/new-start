@@ -488,9 +488,22 @@ impl AssistantMode {
             user_input
         } else if matches!(ctx.trigger, RoundTrigger::ManualStep | RoundTrigger::Poller) {
             // 轮询 / 手动推进：注入课题简报，让模型明确目标、进度与待办，避免盲目推进。
-            ctx.topic_brief.clone().unwrap_or_else(|| {
+            let brief = ctx.topic_brief.clone().unwrap_or_else(|| {
                 "Continue advancing the bound topic using available tools if needed.".to_string()
-            })
+            });
+            // 轮询简报落库为 nudge（role=User, kind=nudge）：记录本轮发给模型的输入，
+            // 保证历史因果链完整；不参与后续模型输入组装（message_to_model 过滤）。
+            if matches!(ctx.trigger, RoundTrigger::Poller) {
+                let nudge = Message {
+                    role: MessageRole::User,
+                    body: MessageBody::Nudge {
+                        content: brief.clone(),
+                    },
+                    timestamp: now_ms(),
+                };
+                self.store.add_message(&ctx.session_id, nudge)?;
+            }
+            brief
         } else {
             String::new()
         };
@@ -1453,6 +1466,9 @@ fn message_to_model(message: &Message) -> Option<ModelMessage> {
                 tool_call_id: None,
             })
         }
+        // 轮询简报（nudge）仅作审计/展示/压缩记录，不拼回后续模型输入，
+        // 避免历史简报反复进 context 造成膨胀。
+        MessageBody::Nudge { .. } => None,
     }
 }
 

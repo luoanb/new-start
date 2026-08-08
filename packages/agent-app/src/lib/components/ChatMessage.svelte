@@ -3,6 +3,7 @@
   import MarkdownRenderer from "./MarkdownRenderer.svelte";
   import ToolCallBlock from "./ToolCallBlock.svelte";
   import ToolResultBlock from "./ToolResultBlock.svelte";
+  import NudgeBlock from "./NudgeBlock.svelte";
   import { t } from "$lib/i18n";
 
   let {
@@ -23,6 +24,7 @@
   const isCompaction = $derived(message.role === "compaction");
   const isTool = $derived(message.role === "tool");
   const isToolResult = $derived(message.body.kind === "tool_result");
+  const isNudge = $derived(message.body.kind === "nudge");
   const hasToolCalls = $derived(
     message.body.kind === "tool_call" && message.body.tool_calls.length > 0
   );
@@ -30,9 +32,13 @@
     message.body.kind === "tool_call" ? message.body.tool_calls : []
   );
 
-  // 操作栏显隐：工具调用/工具回复/系统消息无操作栏，其余有。
+  // 操作栏显隐：工具调用/工具回复/系统消息/轮询简报无操作栏，其余有。
   const showActions = $derived(
-    !isSystem && !isCompaction && !isToolResult && message.body.kind !== "tool_call"
+    !isSystem &&
+      !isCompaction &&
+      !isToolResult &&
+      !isNudge &&
+      message.body.kind !== "tool_call"
   );
 
   // 打分区间与模型约束一致：-5..5 且非 0（去掉 0），一行 10 个。
@@ -81,6 +87,7 @@
   class:user={isUser}
   class:assistant={isAssistant}
   class:system={isSystem}
+  class:nudge={isNudge}
 >
   <div class="msg-col">
     <div class="bubble">
@@ -90,6 +97,8 @@
             {t("chatMessage.system")}
           {:else if isCompaction}
             {t("chatMessage.compaction")}
+          {:else if isNudge}
+            {t("chatMessage.nudge")}
           {:else if isTool}
             {t("chatMessage.tool")}
           {:else if isAssistant}
@@ -118,6 +127,8 @@
         <div class="content compaction-content">
           <MarkdownRenderer content={message.body.content} />
         </div>
+      {:else if isNudge}
+        <NudgeBlock content={message.body.content} />
       {:else}
         <div class="content markdown-content">
           <MarkdownRenderer content={message.body.content} />
@@ -218,11 +229,16 @@
   .message.assistant, .message.system, .message.tool { justify-content: flex-start; }
   .msg-col { display: flex; flex-direction: column; gap: var(--space-1); width: 100%; min-width: 0; }
   .message.user .msg-col { align-items: flex-end; }
-  .message.assistant .msg-col, .message.system .msg-col, .message.tool .msg-col { align-items: flex-start; }
-  .bubble { max-width: 75%; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--color-surface); border: var(--border-width) solid var(--color-border); }
-  .message.user .bubble { background: var(--color-primary); color: var(--color-on-primary); border-color: var(--color-primary); border-bottom-right-radius: var(--space-1); }
-  .message.assistant .bubble { border-bottom-left-radius: var(--space-1); border: none; max-width: 100%; }
-  .message.system .bubble, .message.compaction .bubble { background: transparent; border: none; text-align: center; max-width: 100%; padding: var(--space-1) var(--space-3); }
+  /* 非 user：子项拉伸全宽，保证折叠块（tool_call/tool_result/nudge）等宽 */
+  .message.assistant .msg-col, .message.system .msg-col, .message.tool .msg-col, .message.nudge .msg-col { align-items: stretch; }
+  /* 默认气泡：仅 user 使用；其余消息无外壳（透明、无边框、无内边距、全宽） */
+  .bubble { max-width: 100%; padding: 0; border-radius: var(--radius-md); background: transparent; border: none; }
+  .message.user .bubble { max-width: 75%; padding: var(--space-2) var(--space-3); background: var(--color-primary); color: var(--color-on-primary); border: var(--border-width) solid var(--color-primary); border-bottom-right-radius: var(--space-1); }
+  .message.system .bubble, .message.compaction .bubble { text-align: center; padding: var(--space-1) var(--space-3); }
+  /* 轮询简报：容器左对齐，气泡透明无壳（NudgeBlock 自带外壳与边框）；
+     需显式重置 user 气泡泄漏（nudge 消息 role=user，同时命中 .message.user .bubble） */
+  .message.nudge { justify-content: flex-start; }
+  .message.nudge .bubble { max-width: 100%; padding: 0; background: transparent; border: none; color: var(--color-text); }
   .role-bar { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-1); }
   .role-label { font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.6; }
   .timestamp { font-size: var(--fs-xs); opacity: 0.4; }

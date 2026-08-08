@@ -41,6 +41,7 @@ export type Translations = {
     system: string;
     tool: string;
     compaction: string;
+    nudge: string;
     copy: string;
     rate: string;
     copied: string;
@@ -308,6 +309,7 @@ export const en: Translations = {
     system: "system",
     tool: "tool",
     compaction: "summary",
+    nudge: "polling advance",
     copy: "Copy",
     rate: "Rate",
     copied: "Copied",
@@ -592,6 +594,7 @@ export const zh: Translations = {
     system: "系统",
     tool: "工具",
     compaction: "摘要",
+    nudge: "轮询推进",
     copy: "复制",
     rate: "评价",
     copied: "已复制",

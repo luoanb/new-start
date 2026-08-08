@@ -27,7 +27,7 @@
   let historyIndex = $state(-1);
   let textareaEl: HTMLTextAreaElement | undefined = $state();
 
-  const MAX_HEIGHT = 160; // 约 5 行，之后滚动
+  const MAX_HEIGHT = 218; // 约 10 行（10 × 21px 行高 + 上下内边距 8px），之后滚动
 
   function handleCompositionStart() { composing = true; }
   function handleCompositionEnd() { composing = false; }
@@ -128,10 +128,10 @@
 </div>
 
 <style>
-  .input-area { display: flex; justify-content: center; padding: var(--space-2) var(--space-4) var(--space-4); background: var(--color-bg); }
-  .input-box { display: flex; flex-direction: column; width: 100%; max-width: 720px; padding: var(--space-2); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-surface); transition: border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out); }
+  .input-area { display: flex; justify-content: center; padding: var(--space-1) var(--space-3) var(--space-3); background: var(--color-bg); }
+  .input-box { display: flex; flex-direction: column; width: 100%; padding: var(--space-1); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-surface); transition: border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out); }
   .input-box:focus-within { border-color: var(--color-primary); box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-primary) 14%, transparent); }
-  textarea { width: 100%; min-height: 24px; max-height: 160px; border: none; background: transparent; resize: none; outline: none; padding: var(--space-1) var(--space-2); font-size: var(--fs-base); font-family: inherit; line-height: 1.5; color: var(--color-text); }
+  textarea { width: 100%; min-height: 24px; max-height: 218px; border: none; background: transparent; resize: none; outline: none; padding: var(--space-1) var(--space-2); font-size: var(--fs-base); font-family: inherit; line-height: 1.5; color: var(--color-text); }
   textarea::placeholder { color: var(--color-text-muted); }
   textarea:disabled { opacity: 0.5; }
   .input-footer { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-2); }
