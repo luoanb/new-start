@@ -27,15 +27,15 @@ A clean, cool-leaning neutral palette. Crisp white with subtle cool undertone. H
 Deep cool charcoal. Not pure black, not blue-black. Rich, modern, with enough lightness for clarity.
 
 ```
---color-bg:        oklch(0.105 0.005 265)     /* deep cool charcoal */
---color-surface:   oklch(0.145 0.006 265)     /* elevated surface */
---color-elevated:  oklch(0.19 0.007 265)      /* overlay/dropdown */
+--color-bg:        oklch(0.16 0.005 265)      /* deep cool charcoal, medium-lightened */
+--color-surface:   oklch(0.20 0.006 265)      /* elevated surface */
+--color-elevated:  oklch(0.245 0.007 265)     /* overlay/dropdown */
 --color-text:      oklch(0.95 0.004 265)      /* bright off-white */
---color-muted:     oklch(0.58 0.01 265)       /* secondary text */
---color-border:    oklch(0.23 0.006 265)      /* subtle border */
---color-accent:    oklch(0.68 0.24 258)       /* vibrant blue accent for dark bg */
---color-accent-dim: oklch(0.58 0.2 258)       /* hover state */
---color-on-accent: oklch(0.11 0.005 265)      /* text on accent */
+--color-muted:     oklch(0.62 0.01 265)       /* secondary text */
+--color-border:    oklch(0.28 0.006 265)      /* subtle border */
+--color-accent:    oklch(0.70 0.24 258)       /* vibrant blue accent for dark bg */
+--color-accent-dim: oklch(0.60 0.2 258)       /* hover state */
+--color-on-accent: oklch(0.12 0.005 265)      /* text on accent */
 ```
 
 Key choice: Both themes share the same hue angle (265 = subtle cool-purple) for neutrals and (~260 = blue) for accent. This creates a coherent brand feel across themes without mechanical inversion. Cold neutrals and vibrant accent replace the vintage warm palette for a younger, more energetic feel.
@@ -47,7 +47,7 @@ Key choice: Both themes share the same hue angle (265 = subtle cool-purple) for 
 --color-warning:   oklch(0.65 0.18 85)        /* attention state */
 --color-error:     oklch(0.55 0.2 30)         /* error state */
 --color-error-bg:  oklch(0.9 0.05 30)         /* light: error background */
---color-error-bg-dark: oklch(0.2 0.05 30)     /* dark: error background */
+--color-error-bg-dark: oklch(0.22 0.05 30)     /* dark: error background */
 ```
 
 ## Typography

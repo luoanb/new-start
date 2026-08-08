@@ -54,5 +54,5 @@
   .call-section { margin-bottom: var(--space-1); }
   .call-section:last-child { margin-bottom: 0; }
   .section-label { font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); display: block; margin-bottom: var(--space-1); }
-  .json { margin: 0; padding: var(--space-2) var(--space-2); border-radius: var(--radius-sm); background: oklch(0.15 0.005 75); color: oklch(0.88 0.004 75); font-family: var(--font-mono, monospace); font-size: var(--fs-xs); line-height: 1.4; overflow-x: auto; white-space: pre; }
+  .json { margin: 0; padding: var(--space-2) var(--space-2); border-radius: var(--radius-sm); background: oklch(0.20 0.005 75); color: oklch(0.88 0.004 75); font-family: var(--font-mono, monospace); font-size: var(--fs-xs); line-height: 1.4; overflow-x: auto; white-space: pre; }
 </style>

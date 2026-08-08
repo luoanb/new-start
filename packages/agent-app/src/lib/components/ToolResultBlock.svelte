@@ -168,7 +168,7 @@
     margin: 0;
     padding: var(--space-2);
     border-radius: var(--radius-sm);
-    background: oklch(0.15 0.005 75);
+    background: oklch(0.20 0.005 75);
     color: oklch(0.88 0.004 75);
     font-family: var(--font-mono, monospace);
     font-size: var(--fs-xs);

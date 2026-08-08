@@ -129,7 +129,7 @@
   .markdown-body :global(.code-block) {
     margin: 0.5em 0;
     border-radius: 8px;
-    background: oklch(0.15 0.005 75);
+    background: oklch(0.20 0.005 75);
     overflow: hidden;
   }
 
@@ -141,7 +141,7 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: oklch(0.6 0.01 75);
-    background: oklch(0.18 0.005 75);
+    background: oklch(0.24 0.005 75);
   }
 
   .markdown-body :global(.code-block pre) {
