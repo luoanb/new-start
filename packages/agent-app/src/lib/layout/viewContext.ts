@@ -24,8 +24,8 @@ export type ViewCommands = {
 };
 
 /** 会话级 UI 状态（组合根持有，$state 保证响应式传播）。
- * 运行状态以 dataStore.runningSessions 为权威来源（后端多会话并行）；
- * sendingIds 仅为前端发送请求的瞬时集合，用于防止同一会话连点。 */
+ * 运行状态以 dataStore.runningSessions 为唯一权威来源（后端多会话并行）；
+ * sendingIds 仅为发送按钮防抖锁，拦截同一会话连点重复发送，不参与运行状态判定。 */
 export type ViewUiState = {
   activeProviderId: string;
   activeModelId: string;

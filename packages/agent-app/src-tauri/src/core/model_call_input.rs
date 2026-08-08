@@ -29,7 +29,21 @@ impl ModelCallInput {
     /// Replace the first system prompt in `history`, or prepend one if absent.
     ///
     /// Does not mutate `history`; returns a new list.
+    ///
+    /// Empty `system_prompt`: never insert an empty System message (the LLM API
+    /// validates non-empty content for non-tool messages). Instead, drop any
+    /// leftover empty-content System messages while keeping non-empty ones
+    /// (e.g. compaction summaries).
     pub fn replace_system(history: &[ModelMessage], system_prompt: &str) -> Vec<ModelMessage> {
+        if system_prompt.trim().is_empty() {
+            return history
+                .iter()
+                .filter(|m| {
+                    !(m.role == ModelMessageRole::System && m.content.trim().is_empty())
+                })
+                .cloned()
+                .collect();
+        }
         let mut out = history.to_vec();
         let system = Self::message(ModelMessageRole::System, system_prompt);
         if let Some(idx) = out
@@ -300,6 +314,34 @@ mod tests {
                 msg(ModelMessageRole::System, "new"),
                 msg(ModelMessageRole::User, "u1"),
                 msg(ModelMessageRole::System, "keep"),
+            ]
+        );
+    }
+
+    #[test]
+    fn replace_system_with_empty_prompt_never_inserts_empty_system() {
+        let history = vec![
+            msg(ModelMessageRole::User, "u1"),
+            msg(ModelMessageRole::Assistant, "a1"),
+        ];
+        let out = ModelCallInput::replace_system(&history, "");
+        assert_eq!(out, history);
+    }
+
+    #[test]
+    fn replace_system_with_empty_prompt_drops_empty_system_keeps_nonempty() {
+        let history = vec![
+            msg(ModelMessageRole::System, ""),
+            msg(ModelMessageRole::User, "u1"),
+            // 压缩摘要以 System 角色携带，非空时必须保留
+            msg(ModelMessageRole::System, "[Previous conversation summary]: ..."),
+        ];
+        let out = ModelCallInput::replace_system(&history, "");
+        assert_eq!(
+            out,
+            vec![
+                msg(ModelMessageRole::User, "u1"),
+                msg(ModelMessageRole::System, "[Previous conversation summary]: ..."),
             ]
         );
     }

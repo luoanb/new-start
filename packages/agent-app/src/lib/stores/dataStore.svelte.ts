@@ -60,6 +60,18 @@ let unlisten: UnlistenFn | null = null;
 
 // ── 内部刷新 ──
 
+// runningSessions 刷新版本守卫：register/update/unregister 每次变化都会触发一次
+// 全量 invoke，响应可能乱序；只允许"最后一次发起的刷新"写入，丢弃过期旧快照，
+// 防止已结束的会话残留（表现为永久"思考中"）。
+let runningSessionsSeq = 0;
+
+async function refreshRunningSessions(): Promise<void> {
+  const seq = ++runningSessionsSeq;
+  const list = await invoke<RunningSession[]>("list_running_sessions");
+  if (seq !== runningSessionsSeq) return;
+  state.runningSessions = list;
+}
+
 async function refreshMessages(): Promise<void> {
   if (!state.activeConversationId) {
     state.messages = [];
@@ -82,10 +94,6 @@ async function refreshTopics(): Promise<void> {
 
 async function refreshPoller(): Promise<void> {
   state.poller = await invoke<PollerStatus>("poll_status");
-}
-
-async function refreshRunningSessions(): Promise<void> {
-  state.runningSessions = await invoke<RunningSession[]>("list_running_sessions");
 }
 
 // ── 事件订阅 ──

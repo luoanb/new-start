@@ -14,15 +14,13 @@
   let selectedProviderId = $derived(ctx.ui.activeProviderId);
   let selectedModelId = $derived(ctx.ui.activeModelId);
 
-  // 会话级运行状态：以后端 runningSessions 为权威来源（多会话并行互不影响），
-  // sendingIds 兜底覆盖发送请求尚未被后端事件刷新的瞬时窗口。
+  // 会话级运行状态：单一真相源 = 后端 runningSessions（多会话并行互不影响）。
+  // 发送按钮防抖锁 sendingIds 不参与运行状态判定，避免其残留导致永久"思考中"。
   let activeConversationId = $derived(ctx.stores.data.state.activeConversationId ?? "");
   let runningSession = $derived(
     ctx.stores.data.state.runningSessions.find((s) => s.session_id === activeConversationId)
   );
-  let isRunning = $derived(
-    !!runningSession || ctx.ui.sendingIds.has(activeConversationId)
-  );
+  let isRunning = $derived(!!runningSession);
 
   const onSend = (text: string) => void ctx.commands.sendMessage(text);
   const onModelChange = (providerId: string, modelId: string) =>

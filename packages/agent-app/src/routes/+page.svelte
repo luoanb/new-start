@@ -105,7 +105,10 @@
   }
 
   async function handleSend(text: string) {
-    if (!activeConversationId) {
+    // 发送目标在发起时固定：期间切换会话不得改变校验/清理目标，
+    // 否则 sendingIds 会残留错误会话（该会话永久显示"思考中"且无法发送）。
+    const conversationId = dataStore.state.activeConversationId;
+    if (!conversationId) {
       error = "No active session. Create a new session first.";
       return;
     }
@@ -113,17 +116,18 @@
       error = "Select a provider and model before sending.";
       return;
     }
-    // 仅拦截当前会话自身的并发发送；其他会话并行不受影响
-    if (ui.sendingIds.has(activeConversationId)) return;
+    // sendingIds 仅为发送按钮防抖锁：运行状态由后端 runningSessions 权威驱动，
+    // 此处拦截后端 register 事件回来前的同会话连点重复发送。
+    if (ui.sendingIds.has(conversationId)) return;
     error = "";
-    ui.sendingIds = new Set(ui.sendingIds).add(activeConversationId);
+    ui.sendingIds = new Set(ui.sendingIds).add(conversationId);
     try {
       await dataStore.sendMessage(text, ui.activeProviderId, ui.activeModelId);
     } catch (e) {
       error = `Send failed: ${formatInvokeError(e)}`;
     } finally {
       const next = new Set(ui.sendingIds);
-      next.delete(activeConversationId);
+      next.delete(conversationId);
       ui.sendingIds = next;
     }
   }
