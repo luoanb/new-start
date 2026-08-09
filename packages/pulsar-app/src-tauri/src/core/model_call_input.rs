@@ -38,18 +38,13 @@ impl ModelCallInput {
         if system_prompt.trim().is_empty() {
             return history
                 .iter()
-                .filter(|m| {
-                    !(m.role == ModelMessageRole::System && m.content.trim().is_empty())
-                })
+                .filter(|m| !(m.role == ModelMessageRole::System && m.content.trim().is_empty()))
                 .cloned()
                 .collect();
         }
         let mut out = history.to_vec();
         let system = Self::message(ModelMessageRole::System, system_prompt);
-        if let Some(idx) = out
-            .iter()
-            .position(|m| m.role == ModelMessageRole::System)
-        {
+        if let Some(idx) = out.iter().position(|m| m.role == ModelMessageRole::System) {
             out[idx] = system;
         } else {
             out.insert(0, system);
@@ -132,10 +127,7 @@ impl ModelCallInput {
         if body.is_empty() {
             return with_system;
         }
-        Self::append(
-            &with_system,
-            Self::message(ModelMessageRole::User, &body),
-        )
+        Self::append(&with_system, Self::message(ModelMessageRole::User, &body))
     }
 
     /// Normalize tool-call/tool-result pairing before sending to the model.
@@ -238,8 +230,8 @@ fn render_manual_template(content: &str, user_input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::models::ToolCall;
+    use super::*;
 
     fn msg(role: ModelMessageRole, content: &str) -> ModelMessage {
         ModelMessage {
@@ -334,14 +326,20 @@ mod tests {
             msg(ModelMessageRole::System, ""),
             msg(ModelMessageRole::User, "u1"),
             // 压缩摘要以 System 角色携带，非空时必须保留
-            msg(ModelMessageRole::System, "[Previous conversation summary]: ..."),
+            msg(
+                ModelMessageRole::System,
+                "[Previous conversation summary]: ...",
+            ),
         ];
         let out = ModelCallInput::replace_system(&history, "");
         assert_eq!(
             out,
             vec![
                 msg(ModelMessageRole::User, "u1"),
-                msg(ModelMessageRole::System, "[Previous conversation summary]: ..."),
+                msg(
+                    ModelMessageRole::System,
+                    "[Previous conversation summary]: ..."
+                ),
             ]
         );
     }
@@ -394,8 +392,8 @@ mod tests {
     #[test]
     fn insert_at_out_of_range_errors() {
         let history = vec![msg(ModelMessageRole::User, "u1")];
-        let err = ModelCallInput::insert_at(&history, 2, msg(ModelMessageRole::User, "x"))
-            .unwrap_err();
+        let err =
+            ModelCallInput::insert_at(&history, 2, msg(ModelMessageRole::User, "x")).unwrap_err();
         assert!(matches!(err, AppError::InvalidInput(_)));
     }
 
@@ -466,19 +464,13 @@ mod tests {
 
     #[test]
     fn with_user_input_skips_empty_sides() {
-        let neuron_only = ModelCallInput::with_user_input_for_append(
-            "hint",
-            "",
-            ModelAppendTemplate::Neuron,
-        );
+        let neuron_only =
+            ModelCallInput::with_user_input_for_append("hint", "", ModelAppendTemplate::Neuron);
         assert!(neuron_only.contains("## 角色与能力\n\nhint"));
         assert!(!neuron_only.contains("## 本轮输入"));
 
-        let manual_only = ModelCallInput::with_user_input_for_append(
-            "",
-            "hello",
-            ModelAppendTemplate::Manual,
-        );
+        let manual_only =
+            ModelCallInput::with_user_input_for_append("", "hello", ModelAppendTemplate::Manual);
         assert!(manual_only.contains("## 待处理输入\n\nhello"));
         assert!(!manual_only.contains("## 操作说明书（工具与输出契约）"));
 
@@ -490,13 +482,7 @@ mod tests {
 
     #[test]
     fn assemble_empty_history_folds_body_into_system() {
-        let out = ModelCallInput::assemble(
-            &[],
-            "role",
-            "c",
-            "u",
-            ModelAppendTemplate::Neuron,
-        );
+        let out = ModelCallInput::assemble(&[], "role", "c", "u", ModelAppendTemplate::Neuron);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].role, ModelMessageRole::System);
         assert!(out[0].content.starts_with("role\n\n【神经元】"));
@@ -520,7 +506,9 @@ mod tests {
         assert_eq!(out[0], msg(ModelMessageRole::System, "role"));
         assert_eq!(out[1], msg(ModelMessageRole::User, "u1"));
         assert_eq!(out[2].role, ModelMessageRole::User);
-        assert!(out[2].content.contains("## 操作说明书（工具与输出契约）\n\nmanual"));
+        assert!(out[2]
+            .content
+            .contains("## 操作说明书（工具与输出契约）\n\nmanual"));
         assert!(out[2].content.contains("## 待处理输入\n\npayload"));
     }
 }

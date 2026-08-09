@@ -5,8 +5,8 @@
 //! 读取范式仿 `NeuronConfigReader`：文件缺失返回默认空；非法配置返回可读错误，
 //! 由调用方（gateway 装配 / 保存校验）决定 warn + skip 或拒绝保存。
 
-use crate::core::error::{AppError, AppResult};
 use crate::core::cmd_exec;
+use crate::core::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -139,8 +139,9 @@ impl ToolConfigReader {
     /// 原子写回：写入临时文件后 rename，避免写一半的 JSON 被装配读到。
     fn write_json<T: Serialize>(&self, file: &str, value: &T) -> AppResult<()> {
         let path = self.storage_root.join(file);
-        fs::create_dir_all(&self.storage_root)
-            .map_err(|_| AppError::RuntimeError(format!("创建配置目录失败: {}", self.storage_root.display())))?;
+        fs::create_dir_all(&self.storage_root).map_err(|_| {
+            AppError::RuntimeError(format!("创建配置目录失败: {}", self.storage_root.display()))
+        })?;
         let content = serde_json::to_string_pretty(value)
             .map_err(|e| AppError::RuntimeError(format!("序列化 {file} 失败: {e}")))?;
         let tmp = path.with_extension("json.tmp");
@@ -220,7 +221,9 @@ pub fn validate_tool_config(view: &ToolConfigView) -> AppResult<()> {
     let mut cmd_names = HashSet::new();
     for tool in &view.command_tools {
         if tool.name.trim().is_empty() {
-            return Err(AppError::InvalidInput("Command tool 的 name 不能为空".into()));
+            return Err(AppError::InvalidInput(
+                "Command tool 的 name 不能为空".into(),
+            ));
         }
         if !cmd_names.insert(tool.name.clone()) {
             return Err(AppError::InvalidInput(format!(
@@ -305,7 +308,10 @@ mod tests {
         assert_eq!(file.mcp_servers[0].command.as_deref(), Some("npx"));
         assert_eq!(file.mcp_servers[1].transport, "http");
         assert_eq!(
-            file.mcp_servers[1].headers.get("Authorization").map(String::as_str),
+            file.mcp_servers[1]
+                .headers
+                .get("Authorization")
+                .map(String::as_str),
             Some("Bearer x")
         );
     }
@@ -347,7 +353,10 @@ mod tests {
                 name: "filesystem".into(),
                 transport: "stdio".into(),
                 command: Some("npx".into()),
-                args: vec!["-y".into(), "@modelcontextprotocol/server-filesystem".into()],
+                args: vec![
+                    "-y".into(),
+                    "@modelcontextprotocol/server-filesystem".into(),
+                ],
                 env: Default::default(),
                 url: None,
                 headers: Default::default(),

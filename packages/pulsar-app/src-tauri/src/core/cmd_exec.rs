@@ -25,8 +25,14 @@ pub(crate) const DANGEROUS_PREFIXES: &[&str] = &[
 ];
 
 /// 需要词边界的前缀（避免误伤 shutdowner / sudoku 等普通词）。
-pub(crate) const DANGEROUS_WORD_PREFIXES: &[&str] =
-    &["sudo", "shutdown", "reboot", "poweroff", "halt", "cryptsetup"];
+pub(crate) const DANGEROUS_WORD_PREFIXES: &[&str] = &[
+    "sudo",
+    "shutdown",
+    "reboot",
+    "poweroff",
+    "halt",
+    "cryptsetup",
+];
 
 pub(crate) fn is_denied(command: &str) -> bool {
     let trimmed = command.trim();
@@ -79,9 +85,9 @@ pub(crate) async fn read_pipe<R: AsyncReadExt + Unpin>(reader: Option<R>) -> App
     match reader {
         Some(mut r) => {
             let mut buf = Vec::new();
-            r.read_to_end(&mut buf)
-                .await
-                .map_err(|e| AppError::RuntimeError(format!("execute_command: read pipe failed: {e}")))?;
+            r.read_to_end(&mut buf).await.map_err(|e| {
+                AppError::RuntimeError(format!("execute_command: read pipe failed: {e}"))
+            })?;
             Ok(buf)
         }
         None => Ok(Vec::new()),
@@ -124,7 +130,9 @@ impl Tool for ExecuteCommandTool {
             .get("command")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
-                AppError::InvalidInput("execute_command: missing required argument 'command'".into())
+                AppError::InvalidInput(
+                    "execute_command: missing required argument 'command'".into(),
+                )
             })?
             .to_string();
 
@@ -149,7 +157,13 @@ impl Tool for ExecuteCommandTool {
             AppError::RuntimeError(format!("execute_command: semaphore acquire failed: {e}"))
         })?;
 
-        run_guarded_shell("execute_command", &command, cwd.as_deref(), Some(timeout_ms)).await
+        run_guarded_shell(
+            "execute_command",
+            &command,
+            cwd.as_deref(),
+            Some(timeout_ms),
+        )
+        .await
     }
 }
 
@@ -177,15 +191,16 @@ pub(crate) async fn run_guarded_shell(
         cmd.current_dir(dir);
     }
 
-    let mut child = cmd.spawn().map_err(|e| {
-        AppError::RuntimeError(format!("{tool_name}: failed to spawn: {e}"))
-    })?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| AppError::RuntimeError(format!("{tool_name}: failed to spawn: {e}")))?;
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
     let status = match tokio::time::timeout(timeout, child.wait()).await {
-        Ok(status) => status
-            .map_err(|e| AppError::RuntimeError(format!("{tool_name}: wait failed: {e}")))?,
+        Ok(status) => {
+            status.map_err(|e| AppError::RuntimeError(format!("{tool_name}: wait failed: {e}")))?
+        }
         Err(_elapsed) => {
             let _ = child.kill().await;
             let _ = child.wait().await;
@@ -276,7 +291,10 @@ mod tests {
     #[tokio::test]
     async fn execute_echo_returns_stdout() {
         let tool = ExecuteCommandTool::new();
-        let out = tool.execute(json!({"command": "echo hello-cmd"})).await.unwrap();
+        let out = tool
+            .execute(json!({"command": "echo hello-cmd"}))
+            .await
+            .unwrap();
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["exit_code"], 0);
         assert!(v["stdout"].as_str().unwrap().contains("hello-cmd"));
@@ -286,10 +304,7 @@ mod tests {
     #[tokio::test]
     async fn execute_nonzero_exit_code() {
         let tool = ExecuteCommandTool::new();
-        let out = tool
-            .execute(json!({"command": "exit 7"}))
-            .await
-            .unwrap();
+        let out = tool.execute(json!({"command": "exit 7"})).await.unwrap();
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["exit_code"], 7);
     }

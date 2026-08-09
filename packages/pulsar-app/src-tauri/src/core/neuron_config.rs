@@ -2,7 +2,10 @@ use std::{fs, path::PathBuf};
 
 use serde::Deserialize;
 
-use super::{config::NeuronSection, error::AppResult};
+use super::{
+    config::{NeuronSection, SessionDefaultsSection},
+    error::AppResult,
+};
 
 /// 活跃神经元数量默认上限。
 pub const DEFAULT_NEURON_CAPACITY: usize = 300;
@@ -95,6 +98,14 @@ impl NeuronConfigReader {
             .read_neuron_section()?
             .recycle_interval_ms
             .unwrap_or(DEFAULT_NEURON_RECYCLE_INTERVAL_MS))
+    }
+
+    /// 会话规格默认值（顶层 `neuron.session_defaults`）；缺省空（调用方回落硬编码默认）。
+    pub fn session_defaults(&self) -> AppResult<SessionDefaultsSection> {
+        Ok(self
+            .read_neuron_section()?
+            .session_defaults
+            .unwrap_or_default())
     }
 
     fn read_neuron_section(&self) -> AppResult<NeuronSection> {

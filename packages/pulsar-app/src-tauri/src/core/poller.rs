@@ -9,10 +9,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use super::{
-    config::ConfigStore,
-    error::AppResult,
-};
+use super::{config::ConfigStore, error::AppResult};
 
 /// Defaults when `config.json` omits `poller` fields.
 pub const DEFAULT_POLLER_BASE_INTERVAL_MS: u64 = 1000;
@@ -198,7 +195,11 @@ impl Poller {
         let force_all = self.pending_trigger;
         self.pending_trigger = false;
         if force_all {
-            tracing::info!(phase = "poller_tick", tick = self.tick_count, "trigger consumed: force_all firing all handlers");
+            tracing::info!(
+                phase = "poller_tick",
+                tick = self.tick_count,
+                "trigger consumed: force_all firing all handlers"
+            );
         }
 
         for task in &mut self.tasks {

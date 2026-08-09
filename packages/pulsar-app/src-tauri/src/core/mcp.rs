@@ -96,7 +96,9 @@ impl McpServerClient {
                 )))
             }
         };
-        Ok(Arc::new(Self::from_running(name, transport, running).await?))
+        Ok(Arc::new(
+            Self::from_running(name, transport, running).await?,
+        ))
     }
 
     /// 内部：从已建立的连接构造 client（测试可注入自定义 transport）。
@@ -165,7 +167,10 @@ impl McpServerClient {
             ))
         })?
         .map_err(|e| {
-            AppError::RuntimeError(format!("mcp[{}]: 工具 {tool_name} 调用失败: {e}", self.name))
+            AppError::RuntimeError(format!(
+                "mcp[{}]: 工具 {tool_name} 调用失败: {e}",
+                self.name
+            ))
         })?;
 
         match result {
@@ -253,9 +258,10 @@ async fn connect_stdio(
 async fn connect_http(
     cfg: &McpServerConfig,
 ) -> AppResult<RunningService<RoleClient, AgentClientHandler>> {
-    let url = cfg.url.as_ref().ok_or_else(|| {
-        AppError::InvalidInput(format!("mcp[{}]: http 传输缺少 url", cfg.name))
-    })?;
+    let url = cfg
+        .url
+        .as_ref()
+        .ok_or_else(|| AppError::InvalidInput(format!("mcp[{}]: http 传输缺少 url", cfg.name)))?;
     let mut headers: HashMap<HeaderName, HeaderValue> = HashMap::new();
     for (key, value) in &cfg.headers {
         let name = HeaderName::from_bytes(key.as_bytes()).map_err(|e| {
@@ -287,9 +293,7 @@ where
         AgentClientHandler.serve(transport),
     )
     .await
-    .map_err(|_elapsed| {
-        AppError::RuntimeError(format!("mcp[{}]: 连接超时", cfg.name))
-    })?
+    .map_err(|_elapsed| AppError::RuntimeError(format!("mcp[{}]: 连接超时", cfg.name)))?
     .map_err(|e| AppError::RuntimeError(format!("mcp[{}]: 连接失败: {e}", cfg.name)))
 }
 
@@ -353,7 +357,10 @@ fn truncate_text(s: &str, max: usize) -> String {
 mod tests {
     use super::*;
     use crate::core::tool_registry::Tool;
-    use rmcp::model::{ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool as McpModelTool};
+    use rmcp::model::{
+        ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo,
+        Tool as McpModelTool,
+    };
     use rmcp::service::{RequestContext, RoleServer};
     use rmcp::transport::streamable_http_server::{
         session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
@@ -574,7 +581,10 @@ mod tests {
         let long = "a".repeat(100);
         let out = truncate_text(&long, 10);
         assert!(out.contains("[truncated"));
-        assert_eq!(out.chars().count(), 10 + 1 + "[truncated: result exceeds 10 chars]".len());
+        assert_eq!(
+            out.chars().count(),
+            10 + 1 + "[truncated: result exceeds 10 chars]".len()
+        );
     }
 
     #[test]

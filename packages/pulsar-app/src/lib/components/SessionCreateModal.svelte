@@ -1,10 +1,11 @@
 <script lang="ts">
   import { t } from "$lib/i18n";
 
-  let { open, onCreate, onClose }: {
+  let { open, onCreate, onClose, onOpenSpecs }: {
     open: boolean;
     onCreate: (mode: string) => void;
     onClose: () => void;
+    onOpenSpecs?: () => void;
   } = $props();
 
   const modes = [
@@ -33,6 +34,12 @@
             </button>
           {/each}
         </div>
+        {#if onOpenSpecs}
+          <button class="mode-card spec-card" onclick={onOpenSpecs}>
+            <strong>{t("createModal.bySpec")}</strong>
+            <span class="mode-desc">{t("sessionSpecsPanel.launchHint")}</span>
+          </button>
+        {/if}
       </div>
     </div>
   </div>

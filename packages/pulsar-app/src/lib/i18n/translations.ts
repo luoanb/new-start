@@ -75,6 +75,39 @@ export type Translations = {
     agentDesc: string;
     assistantLabel: string;
     assistantDesc: string;
+    bySpec: string;
+  };
+  sessionSpecsPanel: {
+    title: string;
+    empty: string;
+    newButton: string;
+    systemType: string;
+    systemTypeHint: string;
+    content: string;
+    contentHint: string;
+    behavior: string;
+    selection: string;
+    tools: string;
+    insertId: string;
+    none: string;
+    fixed: string;
+    neighborhood: string;
+    global: string;
+    globalLimit: string;
+    toolNone: string;
+    toolFromNeuron: string;
+    toolAllowlist: string;
+    allowlistHint: string;
+    bound: string;
+    unbound: string;
+    create: string;
+    save: string;
+    cancel: string;
+    launch: string;
+    launchHint: string;
+    edit: string;
+    contentRequired: string;
+    operationFailed: string;
   };
   themeSwitcher: {
     light: string;
@@ -285,6 +318,7 @@ export type Translations = {
     chat: string;
     neurons: string;
     toolEditor: string;
+    sessionSpecs: string;
   };
 };
 
@@ -371,6 +405,39 @@ export const en: Translations = {
     agentDesc: "Can call tools for tasks.",
     assistantLabel: "Assistant",
     assistantDesc: "Autonomous progression.",
+    bySpec: "By spec",
+  },
+  sessionSpecsPanel: {
+    title: "Session Specs",
+    empty: "No session specs yet.",
+    newButton: "New spec",
+    systemType: "System type",
+    systemTypeHint: "e.g. session.my_spec (must start with session.)",
+    content: "Content",
+    contentHint: "System prompt template for this spec.",
+    behavior: "Behavior",
+    selection: "Selection",
+    tools: "Tools",
+    insertId: "Contract insert id",
+    none: "None",
+    fixed: "Fixed",
+    neighborhood: "Neighborhood",
+    global: "Global",
+    globalLimit: "Global limit",
+    toolNone: "None",
+    toolFromNeuron: "From neuron",
+    toolAllowlist: "Allowlist",
+    allowlistHint: "Comma-separated tool ids",
+    bound: "Bound",
+    unbound: "Unbound",
+    create: "Create",
+    save: "Save",
+    cancel: "Cancel",
+    launch: "Launch",
+    launchHint: "Open a session with this spec",
+    edit: "Edit",
+    contentRequired: "Fixed selection requires content.",
+    operationFailed: "Operation failed",
   },
   themeSwitcher: {
     light: "Light",
@@ -592,6 +659,7 @@ export const en: Translations = {
     chat: "Chat",
     neurons: "Neurons",
     toolEditor: "Tool config",
+    sessionSpecs: "Session specs",
   },
 };
 
@@ -678,6 +746,39 @@ export const zh: Translations = {
     agentDesc: "可调用工具完成任务。",
     assistantLabel: "助手",
     assistantDesc: "自主推进模式。",
+    bySpec: "按规格发起",
+  },
+  sessionSpecsPanel: {
+    title: "会话规格",
+    empty: "暂无会话规格。",
+    newButton: "新建规格",
+    systemType: "系统类型",
+    systemTypeHint: "如 session.my_spec（需以 session. 开头）",
+    content: "内容",
+    contentHint: "该规格的系统提示词模板。",
+    behavior: "行为",
+    selection: "选型策略",
+    tools: "工具策略",
+    insertId: "契约段 id",
+    none: "无",
+    fixed: "固定",
+    neighborhood: "邻域",
+    global: "全域",
+    globalLimit: "全域数量",
+    toolNone: "无",
+    toolFromNeuron: "取神经元",
+    toolAllowlist: "白名单",
+    allowlistHint: "逗号分隔的工具 id",
+    bound: "已绑定",
+    unbound: "未绑定",
+    create: "新建",
+    save: "保存",
+    cancel: "取消",
+    launch: "发起",
+    launchHint: "以该规格开启会话",
+    edit: "编辑",
+    contentRequired: "选型为 Fixed 时需要填写内容。",
+    operationFailed: "操作失败",
   },
   themeSwitcher: {
     light: "浅色",
@@ -899,5 +1000,6 @@ export const zh: Translations = {
     chat: "对话",
     neurons: "神经元",
     toolEditor: "工具配置",
+    sessionSpecs: "会话规格",
   },
 };

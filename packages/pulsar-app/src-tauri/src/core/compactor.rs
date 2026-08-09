@@ -1,9 +1,7 @@
 use super::{
     error::{AppError, AppResult},
     model_call_input::{ModelAppendTemplate, ModelCallInput},
-    models::{
-        CompactionConfig, Conversation, Message, MessageBody, MessageRole, ModelCallRequest,
-    },
+    models::{CompactionConfig, Conversation, Message, MessageBody, MessageRole, ModelCallRequest},
     providers::ProviderRegistry,
 };
 
@@ -198,13 +196,7 @@ impl Compactor {
         model: &super::models::ChatModelSelection,
         prompt: &str,
     ) -> AppResult<String> {
-        let messages = ModelCallInput::assemble(
-            &[],
-            prompt,
-            "",
-            "",
-            ModelAppendTemplate::Neuron,
-        );
+        let messages = ModelCallInput::assemble(&[], prompt, "", "", ModelAppendTemplate::Neuron);
         let response = providers
             .call_model(ModelCallRequest {
                 provider_id: model.provider_id.clone(),
@@ -259,6 +251,7 @@ mod tests {
             messages,
             created_at: now_ms(),
             updated_at: now_ms(),
+            extra: None,
         }
     }
 
@@ -308,6 +301,7 @@ mod tests {
             messages,
             created_at: now_ms(),
             updated_at: now_ms(),
+            extra: None,
         };
 
         assert!(compactor.needs_compaction(&conv, 1000));

@@ -1,8 +1,5 @@
 use std::fmt;
-use std::sync::{
-    atomic::Ordering,
-    Arc, Mutex, RwLock,
-};
+use std::sync::{atomic::Ordering, Arc, Mutex};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -10,21 +7,18 @@ use serde_json::json;
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::{
+    call_service::{
+        message_to_model, read_session_state, write_session_state, AssistantRoundContext,
+        NeuronCallService, RoundTrigger,
+    },
     conversation_store::{now_ms, ConversationStore},
     error::{AppError, AppResult},
-    insert_catalog::InsertCatalog,
-    log_redact::{preview_default, preview_json_for_log},
-    model_call_input::{ModelAppendTemplate, ModelCallInput},
-    models::{
-        AssistantCandidateScope, ChatModelSelection, ChatResponse, Message, MessageBody,
-        MessageRole, ModelCallRequest, ModelMessage, ModelMessageRole, Neuron, ScopeInItem, Topic,
-        TopicStatus, TopicUpdate,
-    },
+    model_call_input::ModelCallInput,
+    models::{ChatModelSelection, ChatResponse, ScopeInItem, Topic, TopicStatus, TopicUpdate},
     neuron_manager::NeuronManager,
     neuron_store::NeuronStore,
     poller::{PollHandler, Poller, SharedPollParallelism},
     providers::ProviderRegistry,
-    tool_registry::ToolRegistry,
     topic_store::TopicStore,
 };
 
@@ -34,49 +28,8 @@ pub const SYSTEM_TYPE_COMPLETE_SCOPE: &str = "assistant_complete_scope";
 pub const SYSTEM_TYPE_SCORE_FEEDBACK: &str = "assistant_score_feedback";
 pub const ASSISTANT_POLL_TASK: &str = "assistant_advance";
 
-pub const INSERT_SCORE_FEEDBACK: &str = "assistant.score_feedback";
-pub const INSERT_MATCH_TOPIC: &str = "assistant.match_topic";
-pub const INSERT_COMPLETE_SCOPE: &str = "assistant.complete_scope";
-
 /// Re-export default interval ticks (overridable via `config.json` → `poller`).
 pub use super::poller::DEFAULT_ASSISTANT_POLL_TICKS;
-
-fn insert_id_for_system_type(system_type: &str) -> AppResult<&'static str> {
-    match system_type {
-        SYSTEM_TYPE_SCORE_FEEDBACK => Ok(INSERT_SCORE_FEEDBACK),
-        SYSTEM_TYPE_MATCH_TOPIC => Ok(INSERT_MATCH_TOPIC),
-        SYSTEM_TYPE_COMPLETE_SCOPE => Ok(INSERT_COMPLETE_SCOPE),
-        other => Err(AppError::InvalidInput(format!(
-            "no tool insert mapped for system_type={other}"
-        ))),
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RoundTrigger {
-    UserInput,
-    ManualStep,
-    Poller,
-}
-
-#[derive(Debug, Clone)]
-pub struct AssistantRoundContext {
-    pub session_id: String,
-    pub topic_id: Option<String>,
-    /// 轮询 / 手动推进时注入的课题简报（目标、进度、待办清单），避免模型盲目推进。
-    pub topic_brief: Option<String>,
-    pub trigger: RoundTrigger,
-    pub user_input: Option<String>,
-    pub system_prompt: Option<String>,
-    pub selected_neuron: Option<Neuron>,
-    pub authorized_tool_ids: Vec<String>,
-    pub messages: Vec<ModelMessage>,
-    pub model_output: Option<String>,
-    pub tool_result: Option<String>,
-    pub poll_count_for_topic: u64,
-    pub last_selected_neuron_id: Option<String>,
-    pub switched_session: bool,
-}
 
 #[async_trait]
 pub trait BeforeHook: Send + Sync {
@@ -100,8 +53,8 @@ pub struct AssistantMode {
     neuron_manager: Arc<NeuronManager>,
     topic_store: Arc<Mutex<TopicStore>>,
     neuron_store: Arc<Mutex<NeuronStore>>,
-    /// 共享工具注册表（与 Gateway 同一 `Arc<RwLock>`）：读锁 clone 后立即释放，不跨 await。
-    tool_registry: Arc<RwLock<ToolRegistry>>,
+    /// 执行面：规格解析 / 选型 / 模型调用 / 会话态（收敛 SelectNeuronBeforeHook + authorize_tools + run_core）。
+    call_service: Arc<NeuronCallService>,
     step_tx: UnboundedSender<AssistantStepRequest>,
     session_tracker: super::session_tracker::SessionTracker,
     /// 与 Poller 共享的轮询并发推进数量（运行时可变，前端可调）。
@@ -121,7 +74,7 @@ impl AssistantMode {
         neuron_manager: Arc<NeuronManager>,
         topic_store: Arc<Mutex<TopicStore>>,
         neuron_store: Arc<Mutex<NeuronStore>>,
-        tool_registry: Arc<RwLock<ToolRegistry>>,
+        call_service: Arc<NeuronCallService>,
         step_tx: UnboundedSender<AssistantStepRequest>,
         session_tracker: super::session_tracker::SessionTracker,
         poll_parallelism: SharedPollParallelism,
@@ -132,7 +85,7 @@ impl AssistantMode {
             neuron_manager,
             topic_store,
             neuron_store,
-            tool_registry,
+            call_service,
             step_tx,
             session_tracker,
             poll_parallelism,
@@ -175,7 +128,11 @@ impl AssistantMode {
             "context built"
         );
 
-        tracing::info!(phase = "assistant_converse", step = "score_feedback", "beforehook start");
+        tracing::info!(
+            phase = "assistant_converse",
+            step = "score_feedback",
+            "beforehook start"
+        );
         if let Err(error) = (ScoreFeedbackBeforeHook { assistant: self })
             .run(&mut ctx)
             .await
@@ -189,9 +146,17 @@ impl AssistantMode {
             );
             return Err(error);
         }
-        tracing::info!(phase = "assistant_converse", step = "score_feedback", "beforehook ok");
+        tracing::info!(
+            phase = "assistant_converse",
+            step = "score_feedback",
+            "beforehook ok"
+        );
 
-        tracing::info!(phase = "assistant_converse", step = "match_topic", "beforehook start");
+        tracing::info!(
+            phase = "assistant_converse",
+            step = "match_topic",
+            "beforehook start"
+        );
         if let Err(error) = (MatchTopicBeforeHook { assistant: self })
             .run(&mut ctx)
             .await
@@ -210,46 +175,43 @@ impl AssistantMode {
             step = "match_topic",
             session_id = %ctx.session_id,
             topic_id = ctx.topic_id.as_deref().unwrap_or(""),
-            switched = ctx.switched_session,
             "match_topic ok"
         );
-        tracing::info!(phase = "assistant_converse", step = "select_neuron", "beforehook start");
-        if let Err(error) = (SelectNeuronBeforeHook { assistant: self })
-            .run(&mut ctx)
-            .await
-        {
+        tracing::info!(
+            phase = "assistant_converse",
+            step = "resolve_round",
+            "spec resolve start"
+        );
+        if let Err(error) = self.call_service.resolve_round(&mut ctx).await {
             tracing::error!(
                 phase = "assistant_converse",
-                step = "select_neuron",
+                step = "resolve_round",
                 error_code = error.code(),
                 error = %error,
-                "beforehook failed"
+                "resolve_round failed"
             );
             return Err(error);
         }
-        tracing::info!(phase = "assistant_converse", step = "select_neuron", "beforehook ok");
-
-        self.authorize_tools(&mut ctx);
         tracing::info!(
             phase = "assistant_converse",
-            step = "run_core",
+            step = "execute_round",
             neuron_id = ctx
                 .selected_neuron
                 .as_ref()
                 .map(|n| n.id.as_str())
                 .unwrap_or(""),
             tools = ctx.authorized_tool_ids.len(),
-            "entering run_core"
+            "entering execute_round"
         );
-        let response = match self.run_core(&mut ctx, model).await {
+        let response = match self.call_service.execute_round(&mut ctx, model).await {
             Ok(response) => response,
             Err(error) => {
                 tracing::error!(
                     phase = "assistant_converse",
-                    step = "run_core",
+                    step = "execute_round",
                     error_code = error.code(),
                     error = %error,
-                    "run_core failed"
+                    "execute_round failed"
                 );
                 return Err(error);
             }
@@ -292,11 +254,8 @@ impl AssistantMode {
                 "Assistant step requires a topic bound to the session".into(),
             ));
         }
-        SelectNeuronBeforeHook { assistant: self }
-            .run(&mut ctx)
-            .await?;
-        self.authorize_tools(&mut ctx);
-        let response = self.run_core(&mut ctx, model).await?;
+        self.call_service.resolve_round(&mut ctx).await?;
+        let response = self.call_service.execute_round(&mut ctx, model).await?;
         if let Err(error) = (CompleteScopeAfterHook { assistant: self })
             .run(&mut ctx)
             .await
@@ -327,26 +286,22 @@ impl AssistantMode {
                 "Assistant poller step requires a topic bound to the session".into(),
             ));
         }
-        if let Err(error) = (SelectNeuronBeforeHook { assistant: self })
-            .run(&mut ctx)
-            .await
-        {
+        if let Err(error) = self.call_service.resolve_round(&mut ctx).await {
             tracing::error!(
                 phase = "assistant_poller",
-                step = "select_neuron",
+                step = "resolve_round",
                 error = %error,
-                "beforehook failed"
+                "resolve failed"
             );
-            eprintln!("assistant poller beforehook failed: {error}");
+            eprintln!("assistant poller resolve failed: {error}");
             return Err(error);
         }
-        self.authorize_tools(&mut ctx);
-        let response = match self.run_core(&mut ctx, model).await {
+        let response = match self.call_service.execute_round(&mut ctx, model).await {
             Ok(response) => response,
             Err(error) => {
                 tracing::error!(
                     phase = "assistant_poller",
-                    step = "run_core",
+                    step = "execute_round",
                     error = %error,
                     "core failed"
                 );
@@ -380,7 +335,10 @@ impl AssistantMode {
     ) {
         match request {
             AssistantStepRequest::PollAll => {
-                tracing::info!(phase = "assistant_poll_handler", "PollAll received in process_step_request");
+                tracing::info!(
+                    phase = "assistant_poll_handler",
+                    "PollAll received in process_step_request"
+                );
                 let topics = match self.topics().and_then(|store| store.list_unfinished()) {
                     Ok(topics) => topics,
                     Err(error) => {
@@ -388,7 +346,11 @@ impl AssistantMode {
                         return;
                     }
                 };
-                tracing::info!(phase = "assistant_poll_handler", topic_count = topics.len(), "PollAll topic list resolved");
+                tracing::info!(
+                    phase = "assistant_poll_handler",
+                    topic_count = topics.len(),
+                    "PollAll topic list resolved"
+                );
 
                 // 跨课题受限并发推进：每个课题绑定唯一会话、互不干扰，
                 // 同一时刻最多“当前配置的并发数”个课题在跑；全局 step_guard 仍保证
@@ -413,7 +375,9 @@ impl AssistantMode {
                             eprintln!("assistant poll register failed for {topic_id}: {error}");
                             return;
                         }
-                        let _ = assistant.session_tracker.update_step(&session_id, "polling");
+                        let _ = assistant
+                            .session_tracker
+                            .update_step(&session_id, "polling");
                         if let Err(error) = assistant.step_poller(&session_id, &model).await {
                             eprintln!("assistant poll step failed for {topic_id}: {error}");
                         }
@@ -432,7 +396,26 @@ impl AssistantMode {
     ) -> AppResult<AssistantRoundContext> {
         let conversation = self.store.require_conversation(session_id)?;
         let topic = self.topics()?.find_by_session_id(session_id)?;
-        let state = topic.as_ref().map(read_assistant_state).unwrap_or_default();
+        // poll_count 仍留 topic.extra.assistant。
+        let poll_count = topic
+            .as_ref()
+            .map(read_assistant_state)
+            .unwrap_or_default()
+            .poll_count;
+        // 会话运行态（last_selected 等）从 conversation.extra.session.state 读；
+        // 旧 topic.extra.assistant.last_selected_neuron_id 缺失时回退读取一次（写入走新位置）。
+        let session_state = read_session_state(&conversation);
+        let last_selected_neuron_id = session_state.last_selected_neuron_id.clone().or_else(|| {
+            // 旧数据回退：topic.extra.assistant.last_selected_neuron_id（写入走新位置）。
+            topic.as_ref().and_then(|t| {
+                t.extra
+                    .as_ref()
+                    .and_then(|extra| extra.get("assistant"))
+                    .and_then(|a| a.get("last_selected_neuron_id"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            })
+        });
         let messages = ModelCallInput::sanitize_tool_pairs(
             &conversation
                 .messages
@@ -452,295 +435,11 @@ impl AssistantMode {
             messages,
             model_output: None,
             tool_result: None,
-            poll_count_for_topic: state.poll_count,
-            last_selected_neuron_id: state.last_selected_neuron_id,
-            switched_session: false,
+            poll_count_for_topic: poll_count,
+            last_selected_neuron_id,
+            spec_neuron_id: None,
+            behavior: None,
         })
-    }
-
-    fn authorize_tools(&self, ctx: &mut AssistantRoundContext) {
-        let Some(neuron) = ctx.selected_neuron.as_ref() else {
-            ctx.authorized_tool_ids.clear();
-            return;
-        };
-        let guard = self
-            .tool_registry
-            .read()
-            .expect("tool registry lock should not be poisoned");
-        ctx.authorized_tool_ids = filter_authorized_tool_ids(&guard, &neuron.tool_ids);
-    }
-
-    async fn run_core(
-        &self,
-        ctx: &mut AssistantRoundContext,
-        model: &ChatModelSelection,
-    ) -> AppResult<ChatResponse> {
-        let role_system = ctx.system_prompt.clone().unwrap_or_default();
-        let user_input = if let Some(user_input) = ctx.user_input.clone() {
-            let user_message = Message {
-                role: MessageRole::User,
-                body: MessageBody::Text {
-                    content: user_input.clone(),
-                },
-                timestamp: now_ms(),
-            };
-            self.store.add_message(&ctx.session_id, user_message)?;
-            user_input
-        } else if matches!(ctx.trigger, RoundTrigger::ManualStep | RoundTrigger::Poller) {
-            // 轮询 / 手动推进：注入课题简报，让模型明确目标、进度与待办，避免盲目推进。
-            let brief = ctx.topic_brief.clone().unwrap_or_else(|| {
-                "Continue advancing the bound topic using available tools if needed.".to_string()
-            });
-            // 轮询简报落库为 nudge（role=User, kind=nudge）：记录本轮发给模型的输入，
-            // 保证历史因果链完整；不参与后续模型输入组装（message_to_model 过滤）。
-            if matches!(ctx.trigger, RoundTrigger::Poller) {
-                let nudge = Message {
-                    role: MessageRole::User,
-                    body: MessageBody::Nudge {
-                        content: brief.clone(),
-                    },
-                    timestamp: now_ms(),
-                };
-                self.store.add_message(&ctx.session_id, nudge)?;
-            }
-            brief
-        } else {
-            String::new()
-        };
-
-        let messages = ModelCallInput::assemble(
-            &ctx.messages,
-            &role_system,
-            "",
-            &user_input,
-            ModelAppendTemplate::Neuron,
-        );
-
-        let tools = if ctx.authorized_tool_ids.is_empty() {
-            None
-        } else {
-            Some(
-                self.tool_registry
-                    .read()
-                    .map(|reg| reg.definitions_for(&ctx.authorized_tool_ids))
-                    .unwrap_or_default(),
-            )
-        };
-
-        tracing::info!(
-            phase = "assistant_run_core",
-            session_id = %ctx.session_id,
-            provider = %model.provider_id,
-            model = %model.model_id,
-            message_count = messages.len(),
-            tool_defs = tools.as_ref().map(|t| t.len()).unwrap_or(0),
-            "model call start"
-        );
-        let model_response = match self
-            .providers
-            .call_model(ModelCallRequest {
-                provider_id: model.provider_id.clone(),
-                model_id: model.model_id.clone(),
-                messages: messages.clone(),
-                tools,
-            })
-            .await
-        {
-            Ok(response) => response,
-            Err(error) => {
-                tracing::error!(
-                    phase = "assistant_run_core",
-                    error_code = error.code(),
-                    error = %error,
-                    "model call failed"
-                );
-                return Err(error);
-            }
-        };
-        tracing::info!(
-            phase = "assistant_run_core",
-            output_len = model_response.output.len(),
-            tool_calls = model_response
-                .tool_calls
-                .as_ref()
-                .map(|c| c.len())
-                .unwrap_or(0),
-            "model call ok"
-        );
-
-        let mut output = model_response.output.clone();
-        let mut tool_result = None;
-
-        if let Some(tool_calls) = model_response.tool_calls.clone() {
-            if let Some(first) = tool_calls.first() {
-                if !ctx.authorized_tool_ids.iter().any(|id| id == &first.name) {
-                    return Err(AppError::InvalidInput(format!(
-                        "Tool '{}' is not authorized for selected neuron",
-                        first.name
-                    )));
-                }
-                tracing::info!(
-                    phase = "assistant_run_core",
-                    tool = %first.name,
-                    "tool execute start"
-                );
-                // 读锁内仅 clone 工具引用（释放锁后再 await execute，锁不跨 await）。
-                let tool = self
-                    .tool_registry
-                    .read()
-                    .ok()
-                    .and_then(|reg| reg.get_tool(&first.name));
-                let result = match tool {
-                    Some(tool) => tool.execute(first.arguments.clone()).await?,
-                    None => return Err(AppError::SkillNotFound(first.name.clone())),
-                };
-                tracing::info!(
-                    phase = "assistant_run_core",
-                    tool = %first.name,
-                    result_len = result.len(),
-                    "tool execute ok"
-                );
-                tool_result = Some(result.clone());
-                let tool_msg = Message {
-                    role: MessageRole::Assistant,
-                    body: MessageBody::ToolCall {
-                        content: output.clone(),
-                        tool_calls: vec![first.clone()],
-                    },
-                    timestamp: now_ms(),
-                };
-                self.store.add_message(&ctx.session_id, tool_msg)?;
-                let result_msg = Message {
-                    role: MessageRole::Tool,
-                    body: MessageBody::ToolResult {
-                        tool_call_id: first.id.clone(),
-                        tool_name: first.name.clone(),
-                        content: result.clone(),
-                    },
-                    timestamp: now_ms(),
-                };
-                self.store.add_message(&ctx.session_id, result_msg)?;
-                output = if output.trim().is_empty() {
-                    result
-                } else {
-                    format!("{output}\n\n[tool:{name}] {result}", name = first.name)
-                };
-            }
-        } else {
-            let assistant_msg = Message {
-                role: MessageRole::Assistant,
-                body: MessageBody::Text {
-                    content: output.clone(),
-                },
-                timestamp: now_ms(),
-            };
-            self.store.add_message(&ctx.session_id, assistant_msg)?;
-        }
-
-        ctx.model_output = Some(output.clone());
-        ctx.tool_result = tool_result;
-        self.persist_selected_neuron(ctx)?;
-
-        Ok(ChatResponse {
-            conversation_id: ctx.session_id.clone(),
-            response: output,
-        })
-    }
-
-    async fn call_system_prompt_json(
-        &self,
-        system_type: &str,
-        user_payload: serde_json::Value,
-        model: &ChatModelSelection,
-        history: &[ModelMessage],
-    ) -> AppResult<serde_json::Value> {
-        let user_preview = preview_json_for_log(&user_payload, 240);
-        tracing::info!(
-            phase = "assistant_system_json",
-            system_type,
-            provider = %model.provider_id,
-            model = %model.model_id,
-            history_len = history.len(),
-            user_preview = %user_preview,
-            "ensure + model call start"
-        );
-        let prompt_neuron = self
-            .neuron_manager
-            .ensure_system_neuron(
-                system_type,
-                crate::core::models::EnsureSystemOpts { reset: false },
-            )
-            .await?;
-        let insert_id = insert_id_for_system_type(system_type)?;
-        let insert = InsertCatalog::require(insert_id);
-        // Manual append subject = insert; neuron stays in role_system. Does not add_message.
-        let messages = ModelCallInput::assemble(
-            history,
-            &prompt_neuron.content,
-            insert,
-            &user_payload.to_string(),
-            ModelAppendTemplate::Manual,
-        );
-        tracing::info!(
-            phase = "assistant_system_json",
-            system_type,
-            insert_id,
-            neuron_id = %prompt_neuron.id,
-            message_count = messages.len(),
-            "messages assembled; calling model"
-        );
-        let response = match self
-            .providers
-            .call_model(ModelCallRequest {
-                provider_id: model.provider_id.clone(),
-                model_id: model.model_id.clone(),
-                messages,
-                tools: None,
-            })
-            .await
-        {
-            Ok(response) => response,
-            Err(error) => {
-                tracing::error!(
-                    phase = "assistant_system_json",
-                    system_type,
-                    error_code = error.code(),
-                    error = %error,
-                    user_preview = %user_preview,
-                    "model call failed"
-                );
-                return Err(error);
-            }
-        };
-        match extract_json_object(&response.output) {
-            Ok(value) => {
-                tracing::info!(
-                    phase = "assistant_system_json",
-                    system_type,
-                    output_len = response.output.len(),
-                    "json ok"
-                );
-                Ok(value)
-            }
-            Err(error) => {
-                let output_preview = preview_default(&response.output);
-                tracing::error!(
-                    phase = "assistant_system_json",
-                    system_type,
-                    error_code = error.code(),
-                    error = %error,
-                    provider = %model.provider_id,
-                    model = %model.model_id,
-                    user_preview = %user_preview,
-                    output_len = response.output.len(),
-                    output_preview = %output_preview,
-                    "json parse failed"
-                );
-                Err(AppError::InvalidInput(format!(
-                    "{error} (system_type={system_type}, output_preview={output_preview})"
-                )))
-            }
-        }
     }
 
     fn topics(&self) -> AppResult<std::sync::MutexGuard<'_, TopicStore>> {
@@ -755,29 +454,7 @@ impl AssistantMode {
             .map_err(|e| AppError::StorageError(format!("NeuronStore lock failed: {e}")))
     }
 
-    fn persist_selected_neuron(&self, ctx: &AssistantRoundContext) -> AppResult<()> {
-        let Some(topic_id) = ctx.topic_id.as_ref() else {
-            return Ok(());
-        };
-        let Some(neuron) = ctx.selected_neuron.as_ref() else {
-            return Ok(());
-        };
-        let topic = self
-            .topics()?
-            .get(topic_id)?
-            .ok_or_else(|| AppError::ConversationNotFound(topic_id.clone()))?;
-        let mut state = read_assistant_state(&topic);
-        state.last_selected_neuron_id = Some(neuron.id.clone());
-        if !state
-            .intervention_neuron_ids
-            .iter()
-            .any(|id| id == &neuron.id)
-        {
-            state.intervention_neuron_ids.push(neuron.id.clone());
-        }
-        write_assistant_state(&self.topic_store, topic_id, state)
-    }
-
+    /// 轮询推进计数：poll_count 仍留 topic.extra.assistant（会话运行态已迁至 conversation）。
     fn bump_poll_count(&self, ctx: &AssistantRoundContext) -> AppResult<()> {
         let Some(topic_id) = ctx.topic_id.as_ref() else {
             return Ok(());
@@ -788,28 +465,19 @@ impl AssistantMode {
             .ok_or_else(|| AppError::ConversationNotFound(topic_id.clone()))?;
         let mut state = read_assistant_state(&topic);
         state.poll_count = state.poll_count.saturating_add(1);
-        if let Some(neuron) = ctx.selected_neuron.as_ref() {
-            state.last_selected_neuron_id = Some(neuron.id.clone());
-        }
         write_assistant_state(&self.topic_store, topic_id, state)
     }
 
+    /// 用户干预标记：写会话态（conversation.extra.session.state），topic 不再承载。
     fn mark_user_intervention(&self, ctx: &AssistantRoundContext) -> AppResult<()> {
-        let Some(topic_id) = ctx.topic_id.as_ref() else {
-            return Ok(());
-        };
-        let topic = self
-            .topics()?
-            .get(topic_id)?
-            .ok_or_else(|| AppError::ConversationNotFound(topic_id.clone()))?;
-        let mut state = read_assistant_state(&topic);
+        let mut state = read_session_state(&self.store.require_conversation(&ctx.session_id)?);
         state.last_intervention_at = Some(now_ms());
         state.intervention_neuron_ids.clear();
         if let Some(neuron) = ctx.selected_neuron.as_ref() {
             state.intervention_neuron_ids.push(neuron.id.clone());
             state.last_selected_neuron_id = Some(neuron.id.clone());
         }
-        write_assistant_state(&self.topic_store, topic_id, state)
+        write_session_state(&self.store, &ctx.session_id, &state)
     }
 
     fn default_model_or_error(&self) -> AppResult<ChatModelSelection> {
@@ -818,13 +486,17 @@ impl AssistantMode {
             .ok_or(AppError::ModelNotSelected)
     }
 
-    /// 读取 topic 的干预窗口；窗口为空返回空 Vec（由调用方决定跳过或报错）。
+    /// 读取 topic 的干预窗口（经会话态）；窗口为空返回空 Vec（由调用方决定跳过或报错）。
     pub fn intervention_window(&self, topic_id: &str) -> AppResult<Vec<String>> {
         let topic = self
             .topics()?
             .get(topic_id)?
             .ok_or_else(|| AppError::ConversationNotFound(topic_id.to_string()))?;
-        Ok(read_assistant_state(&topic).intervention_neuron_ids)
+        let Some(session_id) = topic.session_id.clone() else {
+            return Ok(Vec::new());
+        };
+        let conversation = self.store.require_conversation(&session_id)?;
+        Ok(read_session_state(&conversation).intervention_neuron_ids)
     }
 
     /// 对窗口内每个介入神经元应用 delta：节点权重 + 关联边 + lineage 归因 + 变体演进。
@@ -846,9 +518,9 @@ impl AssistantMode {
             let connections = self.neurons()?.get_connections(neuron_id)?;
             for edge in connections {
                 if edge.target == *neuron_id || edge.source == *neuron_id {
-                    let _ = self
-                        .neurons()?
-                        .adjust_connection_weight(&edge.source, &edge.target, delta);
+                    let _ =
+                        self.neurons()?
+                            .adjust_connection_weight(&edge.source, &edge.target, delta);
                 }
             }
             // Lineage attribution: the score also flows back to the creator
@@ -883,9 +555,7 @@ impl AssistantMode {
             .topics()?
             .find_by_session_id(session_id)?
             .ok_or_else(|| {
-                AppError::ConversationNotFound(format!(
-                    "no topic bound to session {session_id}"
-                ))
+                AppError::ConversationNotFound(format!("no topic bound to session {session_id}"))
             })?
             .id;
         let neuron_ids = self.intervention_window(&topic_id)?;
@@ -912,51 +582,11 @@ struct AssistantPollHandler {
 
 impl PollHandler for AssistantPollHandler {
     fn on_tick(&mut self) {
-        tracing::info!(phase = "assistant_poll_handler", "on_tick fired, sending PollAll");
+        tracing::info!(
+            phase = "assistant_poll_handler",
+            "on_tick fired, sending PollAll"
+        );
         let _ = self.tx.send(AssistantStepRequest::PollAll);
-    }
-}
-
-struct SelectNeuronBeforeHook<'a> {
-    assistant: &'a AssistantMode,
-}
-
-#[async_trait]
-impl BeforeHook for SelectNeuronBeforeHook<'_> {
-    async fn run(&self, ctx: &mut AssistantRoundContext) -> AppResult<()> {
-        let self_id = ctx.last_selected_neuron_id.clone();
-        tracing::info!(
-            phase = "select_neuron_hook",
-            self_id = self_id.as_deref().unwrap_or(""),
-            "candidate assembly start"
-        );
-        let scope = match self_id {
-            Some(self_id) => AssistantCandidateScope::neighborhood_default(self_id),
-            None => AssistantCandidateScope::global_default(),
-        };
-        let candidates = self
-            .assistant
-            .neuron_manager
-            .select_assistant_candidates(scope)
-            .await?;
-        tracing::info!(
-            phase = "select_neuron_hook",
-            candidate_count = candidates.len(),
-            "candidate assembly ok; select_one start"
-        );
-        let selected = self
-            .assistant
-            .neuron_manager
-            .select_one_from_with_history(&candidates, &ctx.messages)
-            .await?;
-        tracing::info!(
-            phase = "select_neuron_hook",
-            neuron_id = %selected.id,
-            "select_one ok"
-        );
-        ctx.system_prompt = Some(selected.content.clone());
-        ctx.selected_neuron = Some(selected);
-        Ok(())
     }
 }
 
@@ -977,7 +607,8 @@ impl BeforeHook for MatchTopicBeforeHook<'_> {
         );
         let decision = self
             .assistant
-            .call_system_prompt_json(
+            .call_service
+            .call_system_prompt(
                 SYSTEM_TYPE_MATCH_TOPIC,
                 json!({
                     "user_input": ctx.user_input,
@@ -994,6 +625,7 @@ impl BeforeHook for MatchTopicBeforeHook<'_> {
                 }),
                 &model,
                 &ctx.messages,
+                true,
             )
             .await?;
 
@@ -1048,7 +680,6 @@ impl BeforeHook for MatchTopicBeforeHook<'_> {
                             "switching session"
                         );
                         ctx.session_id = bound_session;
-                        ctx.switched_session = true;
                         let rebuilt = self
                             .assistant
                             .build_context(&ctx.session_id, ctx.trigger)
@@ -1129,8 +760,7 @@ impl MatchTopicBeforeHook<'_> {
         scope_in: Vec<ScopeInItem>,
     ) -> AppResult<Topic> {
         let name = name.unwrap_or_else(|| default_topic_name(ctx));
-        let description =
-            description.unwrap_or_else(|| ctx.user_input.clone().unwrap_or_default());
+        let description = description.unwrap_or_else(|| ctx.user_input.clone().unwrap_or_default());
         let created = self.assistant.topics()?.create(
             &name,
             &description,
@@ -1181,9 +811,8 @@ fn parse_scope_in_from_decision(decision: &serde_json::Value) -> AppResult<Vec<S
     let Some(value) = decision.get("scope_in") else {
         return Ok(Vec::new());
     };
-    let items: Vec<ScopeInItem> = serde_json::from_value(value.clone()).map_err(|e| {
-        AppError::InvalidInput(format!("match topic invalid scope_in: {e}"))
-    })?;
+    let items: Vec<ScopeInItem> = serde_json::from_value(value.clone())
+        .map_err(|e| AppError::InvalidInput(format!("match topic invalid scope_in: {e}")))?;
     Ok(items)
 }
 
@@ -1195,10 +824,7 @@ struct ScoreFeedbackBeforeHook<'a> {
 impl BeforeHook for ScoreFeedbackBeforeHook<'_> {
     async fn run(&self, ctx: &mut AssistantRoundContext) -> AppResult<()> {
         let Some(topic_id) = ctx.topic_id.clone() else {
-            tracing::info!(
-                phase = "score_feedback_hook",
-                "skip: no topic bound yet"
-            );
+            tracing::info!(phase = "score_feedback_hook", "skip: no topic bound yet");
             return Ok(());
         };
         let topic = match self.assistant.topics()?.get(&topic_id)? {
@@ -1208,7 +834,19 @@ impl BeforeHook for ScoreFeedbackBeforeHook<'_> {
                 return Ok(());
             }
         };
-        let state = read_assistant_state(&topic);
+        // 干预窗口自会话态读取（旧 topic.extra.assistant 数据已迁移）。
+        let Some(session_id) = topic.session_id.clone() else {
+            tracing::info!(phase = "score_feedback_hook", topic_id = %topic_id, "skip: topic not bound to session");
+            return Ok(());
+        };
+        let conversation = match self.assistant.store.require_conversation(&session_id) {
+            Ok(conversation) => conversation,
+            Err(_) => {
+                tracing::info!(phase = "score_feedback_hook", topic_id = %topic_id, "skip: conversation missing");
+                return Ok(());
+            }
+        };
+        let state = read_session_state(&conversation);
         if state.last_intervention_at.is_none() || state.intervention_neuron_ids.is_empty() {
             tracing::info!(
                 phase = "score_feedback_hook",
@@ -1226,7 +864,8 @@ impl BeforeHook for ScoreFeedbackBeforeHook<'_> {
         let model = self.assistant.default_model_or_error()?;
         let decision = match self
             .assistant
-            .call_system_prompt_json(
+            .call_service
+            .call_system_prompt(
                 SYSTEM_TYPE_SCORE_FEEDBACK,
                 json!({
                     "user_input": ctx.user_input,
@@ -1235,6 +874,7 @@ impl BeforeHook for ScoreFeedbackBeforeHook<'_> {
                 }),
                 &model,
                 &ctx.messages,
+                true,
             )
             .await
         {
@@ -1260,7 +900,11 @@ impl BeforeHook for ScoreFeedbackBeforeHook<'_> {
                 "score must be in -5..=5 and non-zero, got {score}"
             )));
         }
-        tracing::info!(phase = "score_feedback_hook", score, "applying weight delta");
+        tracing::info!(
+            phase = "score_feedback_hook",
+            score,
+            "applying weight delta"
+        );
         // 与人工评价共用同一评分逻辑：节点权重 + 关联边 + lineage 归因 + 变体演进。
         self.assistant
             .apply_score_feedback(&topic_id, score as f64)
@@ -1303,7 +947,8 @@ impl AfterHook for CompleteScopeAfterHook<'_> {
         let model = self.assistant.default_model_or_error()?;
         let decision = self
             .assistant
-            .call_system_prompt_json(
+            .call_service
+            .call_system_prompt(
                 SYSTEM_TYPE_COMPLETE_SCOPE,
                 json!({
                     "topic_id": topic_id,
@@ -1314,6 +959,7 @@ impl AfterHook for CompleteScopeAfterHook<'_> {
                 }),
                 &model,
                 &ctx.messages,
+                true,
             )
             .await?;
         let ids = decision
@@ -1339,16 +985,11 @@ impl AfterHook for CompleteScopeAfterHook<'_> {
     }
 }
 
+/// topic 侧残留的助手状态：仅轮询计数（会话运行态已迁至 conversation.extra.session.state）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct AssistantTopicState {
     #[serde(default)]
     poll_count: u64,
-    #[serde(default)]
-    last_selected_neuron_id: Option<String>,
-    #[serde(default)]
-    last_intervention_at: Option<u128>,
-    #[serde(default)]
-    intervention_neuron_ids: Vec<String>,
 }
 
 fn read_assistant_state(topic: &Topic) -> AssistantTopicState {
@@ -1389,23 +1030,6 @@ fn write_assistant_state(
     Ok(())
 }
 
-pub fn filter_authorized_tool_ids(registry: &ToolRegistry, tool_ids: &[String]) -> Vec<String> {
-    let known: std::collections::HashSet<String> = registry
-        .list_definitions()
-        .into_iter()
-        .map(|d| d.name)
-        .collect();
-    let mut out = Vec::new();
-    for id in tool_ids {
-        if known.contains(id) {
-            out.push(id.clone());
-        } else {
-            eprintln!("assistant ignoring unknown tool id: {id}");
-        }
-    }
-    out
-}
-
 pub fn extract_json_object(text: &str) -> AppResult<serde_json::Value> {
     let trimmed = text.trim();
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
@@ -1428,50 +1052,6 @@ pub fn extract_json_object(text: &str) -> AppResult<serde_json::Value> {
         .map_err(|e| AppError::InvalidInput(format!("Failed to parse LLM JSON: {e}")))
 }
 
-fn message_to_model(message: &Message) -> Option<ModelMessage> {
-    match &message.body {
-        // Compaction 摘要按 System 角色携带（与 engine 对齐），避免长会话压缩后丢失上下文。
-        MessageBody::Compaction { content, .. } => Some(ModelMessage {
-            role: ModelMessageRole::System,
-            content: format!("[Previous conversation summary]: {content}"),
-            tool_calls: None,
-            tool_call_id: None,
-        }),
-        // 工具结果必须按 tool 角色发送，否则 OpenAI 兼容接口（如 DeepSeek）会以
-        // 「tool_calls 后缺少 tool 消息」拒绝请求。
-        MessageBody::ToolResult { tool_call_id, content, .. } => Some(ModelMessage {
-            role: ModelMessageRole::Tool,
-            content: content.clone(),
-            tool_calls: None,
-            tool_call_id: Some(tool_call_id.clone()),
-        }),
-        MessageBody::ToolCall { content, tool_calls } => Some(ModelMessage {
-            role: ModelMessageRole::Assistant,
-            content: content.clone(),
-            tool_calls: Some(tool_calls.clone()),
-            tool_call_id: None,
-        }),
-        MessageBody::Text { content } => {
-            let role = match message.role {
-                MessageRole::User => ModelMessageRole::User,
-                // Tool 角色不会携带 Text 正文（Tool 只对应 ToolResult），兜底按 Assistant 发送。
-                MessageRole::Assistant | MessageRole::Tool => ModelMessageRole::Assistant,
-                MessageRole::System => ModelMessageRole::System,
-                MessageRole::Compaction => unreachable!("handled above"),
-            };
-            Some(ModelMessage {
-                role,
-                content: content.clone(),
-                tool_calls: None,
-                tool_call_id: None,
-            })
-        }
-        // 轮询简报（nudge）仅作审计/展示/压缩记录，不拼回后续模型输入，
-        // 避免历史简报反复进 context 造成膨胀。
-        MessageBody::Nudge { .. } => None,
-    }
-}
-
 /// 为轮询 / 手动推进回合构建课题简报：目标、进度与 scope_in 待办清单（含验收标准）。
 fn build_topic_brief(topic: &Topic) -> String {
     let mut out = String::from("【课题简报】\n");
@@ -1485,7 +1065,11 @@ fn build_topic_brief(topic: &Topic) -> String {
         out.push_str("- （无待办项）\n");
     } else {
         for item in &topic.scope_in {
-            let mark = if item.status == "completed" { "[x]" } else { "[ ]" };
+            let mark = if item.status == "completed" {
+                "[x]"
+            } else {
+                "[ ]"
+            };
             out.push_str(&format!(
                 "- {mark} {}\n    验收：{}\n",
                 item.goal.trim(),
@@ -1502,6 +1086,7 @@ fn build_topic_brief(topic: &Topic) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::call_service::filter_authorized_tool_ids;
     use crate::core::tool_registry::ToolRegistry;
 
     #[test]

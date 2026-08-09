@@ -1175,7 +1175,10 @@ impl TuiApp {
                 Err(error) => self.error_banner = Some(TuiErrorView::from(error)),
             },
             "ensure-system" if args.len() >= 2 => {
-                match manager.ensure_system_neuron(&args[1], EnsureSystemOpts { reset: false }).await {
+                match manager
+                    .ensure_system_neuron(&args[1], EnsureSystemOpts { reset: false })
+                    .await
+                {
                     Ok(neuron) => self.messages.push(TuiMessage::status(format!(
                         "System neuron ready: type={} id={}",
                         args[1], neuron.id
@@ -1184,7 +1187,10 @@ impl TuiApp {
                 }
             }
             "reset-system" if args.len() >= 2 => {
-                match manager.ensure_system_neuron(&args[1], EnsureSystemOpts { reset: true }).await {
+                match manager
+                    .ensure_system_neuron(&args[1], EnsureSystemOpts { reset: true })
+                    .await
+                {
                     Ok(neuron) => self.messages.push(TuiMessage::status(format!(
                         "System neuron reset: type={} id={}",
                         args[1], neuron.id

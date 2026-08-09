@@ -41,12 +41,10 @@ impl InsertCatalog {
         }
 
         let path = Self::path_for(id);
-        let file = Inserts::get(&path).ok_or_else(|| {
-            AppError::RuntimeError(format!("missing insert: inserts/{path}"))
-        })?;
-        let text = std::str::from_utf8(file.data.as_ref()).map_err(|e| {
-            AppError::RuntimeError(format!("insert {path} is not utf-8: {e}"))
-        })?;
+        let file = Inserts::get(&path)
+            .ok_or_else(|| AppError::RuntimeError(format!("missing insert: inserts/{path}")))?;
+        let text = std::str::from_utf8(file.data.as_ref())
+            .map_err(|e| AppError::RuntimeError(format!("insert {path} is not utf-8: {e}")))?;
         let leaked: &'static str = Box::leak(text.to_string().into_boxed_str());
         cache()
             .lock()
@@ -126,7 +124,10 @@ mod tests {
             assert!(InsertCatalog::exists(id), "expected insert for {id}");
             let text = InsertCatalog::require(id);
             assert!(text.contains("## 工具"), "{id} missing 工具");
-            assert!(text.contains("## 对模型的期待"), "{id} missing 对模型的期待");
+            assert!(
+                text.contains("## 对模型的期待"),
+                "{id} missing 对模型的期待"
+            );
         }
         assert!(!InsertCatalog::exists("neuron.ensure_system"));
         assert!(!InsertCatalog::exists("neuron.bootstrap_system"));

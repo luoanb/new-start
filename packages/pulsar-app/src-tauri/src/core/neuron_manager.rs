@@ -7,18 +7,20 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use super::{
+    config::SessionDefaultsSection,
     error::{AppError, AppResult},
     insert_catalog::InsertCatalog,
     model_call_input::{ModelAppendTemplate, ModelCallInput},
     models::{
         AssistantCandidateScope, BootstrapReport, CandidateQuery, Connection, CreateNeuronInput,
         EnsureSystemOpts, GeneratedNeuronDraft, ModelMessage, NeighborhoodPoolPolicy, Neuron,
-        NeuronCreate, NeuronSubgraph, NeuronUpdate, NeuronVariant, SystemPromptStatus,
-        DEFAULT_ASSISTANT_GLOBAL_LIMIT,
+        NeuronCreate, NeuronSubgraph, NeuronUpdate, NeuronVariant, SelectionPolicy,
+        SessionBehavior, SystemPromptStatus, ToolPolicy, DEFAULT_ASSISTANT_GLOBAL_LIMIT,
     },
     neuron_config::NeuronConfigReader,
     neuron_model::NeuronModelCaller,
     neuron_store::NeuronStore,
+    spec_manager::SessionSpecManager,
     tool_registry::{Tool, ToolRegistry},
 };
 
@@ -39,6 +41,35 @@ pub const REBOOTSTRAP_SYSTEM_TYPES: &[&str] = &[
 const DEFAULT_SELECT_N: usize = DEFAULT_ASSISTANT_GLOBAL_LIMIT;
 const MAX_CREATE_NEURON_COUNT: usize = 10;
 
+/// 内建会话规格：助手主对话（默认行为）。
+pub const SESSION_ASSISTANT_DIALOGUE: &str = "session.assistant_dialogue";
+
+/// 裁决类系统神经元 → 默认 behavior：`Fixed` + 各自契约段（统一入口兜底，行为与现状一致：
+/// 用自己 content + 契约段）。非裁决类返回 `None`。
+pub fn default_behavior_for_system_type(system_type: &str) -> Option<SessionBehavior> {
+    let insert_id = match system_type {
+        "assistant_match_topic" => Some("assistant.match_topic"),
+        "assistant_score_feedback" => Some("assistant.score_feedback"),
+        "assistant_complete_scope" => Some("assistant.complete_scope"),
+        _ => None,
+    };
+    insert_id.map(|id| SessionBehavior {
+        selection: SelectionPolicy::Fixed,
+        tools: ToolPolicy::None,
+        insert_id: Some(id.to_string()),
+    })
+}
+
+/// 助手主对话的默认行为：有 config（`neuron.session_defaults.assistant_dialogue`）覆盖则用，
+/// 无则回落现状硬编码默认（邻域选型 + FromNeuron 工具 + 无契约段）。
+pub fn default_assistant_dialogue_behavior(
+    session_defaults: Option<&SessionDefaultsSection>,
+) -> SessionBehavior {
+    session_defaults
+        .and_then(|defaults| defaults.assistant_dialogue.clone())
+        .unwrap_or_else(SessionDefaultsSection::fallback_assistant_dialogue)
+}
+
 pub struct NeuronManager {
     store: Arc<Mutex<NeuronStore>>,
     model_caller: Arc<dyn NeuronModelCaller>,
@@ -46,6 +77,8 @@ pub struct NeuronManager {
     creator_id: Mutex<Option<String>>,
     /// 共享工具注册表（与 Gateway 同一 `Arc<RwLock>`）：读锁 clone 后立即释放，不跨 await。
     tool_registry: Arc<RwLock<ToolRegistry>>,
+    /// 会话规格管理子组件（behavior 只读/写路径统一收敛于此）。
+    pub specs: SessionSpecManager,
 }
 
 impl std::fmt::Debug for NeuronManager {
@@ -62,6 +95,7 @@ impl NeuronManager {
         tool_registry: Arc<RwLock<ToolRegistry>>,
     ) -> Self {
         Self {
+            specs: SessionSpecManager::new(Arc::clone(&store)),
             store,
             model_caller,
             config,
@@ -183,6 +217,7 @@ impl NeuronManager {
             out.push(SystemPromptStatus {
                 system_type: (*system_type).to_string(),
                 neuron_id,
+                behavior: None,
             });
         }
         Ok(out)
@@ -414,11 +449,9 @@ impl NeuronManager {
 
         let direct_parent = self.store()?.select_direct_upstream(self_id)?;
         if let Some(parent) = direct_parent {
-            let siblings = self.store()?.list_direct_downstream(
-                &parent.id,
-                policy.siblings,
-                &selected_ids,
-            )?;
+            let siblings =
+                self.store()?
+                    .list_direct_downstream(&parent.id, policy.siblings, &selected_ids)?;
             for sibling in siblings {
                 if selected_ids.insert(sibling.id.clone()) {
                     selected.push(sibling);
@@ -642,6 +675,12 @@ impl NeuronManager {
             lineage_parent_id: None,
             variant_state: None,
         })?;
+        // 裁决类系统神经元创建即注册默认 behavior（Fixed + 各自 insert_id），
+        // 使统一入口 `call_system_prompt` 无需额外映射即可按 Fixed 语义取提示词。
+        if let Some(default_behavior) = default_behavior_for_system_type(system_type) {
+            self.store()?
+                .set_behavior(&created.id, Some(&default_behavior))?;
+        }
         tracing::info!(
             phase = "ensure_system_neuron",
             system_type,
@@ -650,6 +689,63 @@ impl NeuronManager {
         );
         self.ensure_own_candidate_pool(&created.id).await?;
         Ok(created)
+    }
+
+    /// 懒创建规格神经元（复用 ensure_system_neuron 骨架：存在复用 / reset 重建）。
+    /// 新建时经 `specs` 写 behavior 与 content；已存在不覆盖。
+    pub async fn ensure_session_neuron(
+        &self,
+        system_type: &str,
+        behavior: SessionBehavior,
+        content: Option<String>,
+        opts: EnsureSystemOpts,
+    ) -> AppResult<Neuron> {
+        let system_type = system_type.trim();
+        if system_type.is_empty() || !system_type.starts_with("session.") {
+            return Err(AppError::InvalidInput(format!(
+                "session spec system_type must start with 'session.': {system_type}"
+            )));
+        }
+        if opts.reset {
+            if let Some(existing) = self.get_by_system_type(system_type)? {
+                let _ = self.store()?.unlink_all_edges_of(&existing.id)?;
+                let _ = self.delete_for_admin(&existing.id)?;
+                tracing::info!(
+                    phase = "ensure_session_neuron",
+                    system_type,
+                    neuron_id = %existing.id,
+                    "reset deleted existing session spec"
+                );
+            }
+        }
+        self.specs
+            .ensure_session_neuron(system_type, &behavior, content)
+    }
+
+    /// 只读：取会话规格的 behavior（校验 system_type + behavior 非空）。
+    pub fn get_session_behavior(&self, neuron_id: &str) -> AppResult<SessionBehavior> {
+        self.specs.get_session_behavior(neuron_id)
+    }
+
+    /// 管理面更新入口：只写 behavior（specs 子组件），不触碰 content。
+    pub fn update_behavior_for_admin(
+        &self,
+        id: &str,
+        behavior: SessionBehavior,
+    ) -> AppResult<Neuron> {
+        self.specs.update_behavior_for_admin(id, behavior)
+    }
+
+    /// 列出所有 `session.%` 规格神经元（含 behavior 摘要）。
+    pub fn list_session_specs(&self) -> AppResult<Vec<SystemPromptStatus>> {
+        self.specs.list_specs()
+    }
+
+    /// 记录神经元使用信号（n=1 硬规则短路选中时调用）；忽略失败，不阻塞选择流程。
+    pub fn mark_used_for_assistant(&self, neuron_id: &str) {
+        if let Ok(store) = self.store() {
+            let _ = store.mark_used(neuron_id);
+        }
     }
 
     /// Startup readiness: creator + selector only.
@@ -673,6 +769,35 @@ impl NeuronManager {
                 return Err(error);
             }
         };
+        // 内建会话规格懒注册（失败不阻断启动；可通过管理面手动补建）。
+        let session_defaults = self.config.session_defaults()?;
+        match self
+            .ensure_session_neuron(
+                SESSION_ASSISTANT_DIALOGUE,
+                default_assistant_dialogue_behavior(Some(&session_defaults)),
+                None,
+                EnsureSystemOpts { reset: false },
+            )
+            .await
+        {
+            Ok(neuron) => {
+                tracing::info!(
+                    phase = "bootstrap",
+                    session_spec = SESSION_ASSISTANT_DIALOGUE,
+                    neuron_id = %neuron.id,
+                    "session spec ensured"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(
+                    phase = "bootstrap",
+                    session_spec = SESSION_ASSISTANT_DIALOGUE,
+                    error_code = error.code(),
+                    error = %error,
+                    "failed to ensure session spec; continuing bootstrap"
+                );
+            }
+        }
         tracing::info!(
             phase = "bootstrap",
             create_neuron_id = %creator.id,
@@ -725,7 +850,10 @@ impl NeuronManager {
             *cached_id = None;
         }
 
-        if let Some(neuron) = self.store()?.get_neuron_by_system_type(CREATOR_SYSTEM_TYPE)? {
+        if let Some(neuron) = self
+            .store()?
+            .get_neuron_by_system_type(CREATOR_SYSTEM_TYPE)?
+        {
             *cached_id = Some(neuron.id.clone());
             tracing::info!(
                 phase = "ensure_creator",
@@ -879,12 +1007,7 @@ impl NeuronManager {
                 ..Default::default()
             },
         )?;
-        store.insert_neuron_version(
-            variant_id,
-            &version.content,
-            "rollback",
-            Some(&version.id),
-        )?;
+        store.insert_neuron_version(variant_id, &version.content, "rollback", Some(&version.id))?;
         store.set_variant_state(variant_id, Some("active"))?;
         tracing::info!(
             phase = "rollback_variant_if_regressed",
@@ -1142,11 +1265,8 @@ impl NeuronManager {
                 "Fill {count} distinct single-responsibility neurons for a global candidate pool."
             ),
         };
-        let user_prompt = self.create_neuron_user_prompt(
-            &CreateNeuronInput::Purpose(purpose),
-            count,
-            source_id,
-        )?;
+        let user_prompt =
+            self.create_neuron_user_prompt(&CreateNeuronInput::Purpose(purpose), count, source_id)?;
         let drafts = self
             .generate_drafts(&prompt_content, &user_prompt, count, &[])
             .await?;
@@ -1239,19 +1359,11 @@ impl NeuronManager {
 
     /// 前端手动创建：store 直持久化，不触发 LLM 草稿生成。
     /// link_to = None => 孤立神经元；Some(id) => 该神经元的下游神经元（自动建边，边权重 0）。
-    pub fn create_plain(
-        &self,
-        create: NeuronCreate,
-        link_to: Option<&str>,
-    ) -> AppResult<Neuron> {
+    pub fn create_plain(&self, create: NeuronCreate, link_to: Option<&str>) -> AppResult<Neuron> {
         self.persist_plain(create, link_to)
     }
 
-    fn persist_plain(
-        &self,
-        mut create: NeuronCreate,
-        link_to: Option<&str>,
-    ) -> AppResult<Neuron> {
+    fn persist_plain(&self, mut create: NeuronCreate, link_to: Option<&str>) -> AppResult<Neuron> {
         create.system_type = None;
         create.weight = 0.0;
         match link_to {
@@ -1264,7 +1376,13 @@ impl NeuronManager {
     }
 
     fn persist_system_root(&self, mut create: NeuronCreate) -> AppResult<Neuron> {
-        if create.system_type.as_deref().unwrap_or("").trim().is_empty() {
+        if create
+            .system_type
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        {
             return Err(AppError::InvalidInput(
                 "persist_system_root requires system_type".into(),
             ));
@@ -1575,15 +1693,12 @@ impl Tool for UpdateNeuronTool {
                 .get("content")
                 .and_then(Value::as_str)
                 .map(str::to_string),
-            tool_ids: args
-                .get("tool_ids")
-                .and_then(Value::as_array)
-                .map(|a| {
-                    a.iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_string)
-                        .collect()
-                }),
+            tool_ids: args.get("tool_ids").and_then(Value::as_array).map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            }),
         };
         let neuron = self.manager.update_content_for_ai(id, update)?;
         serde_json::to_string(&neuron).map_err(|e| AppError::StorageError(e.to_string()))
@@ -1761,12 +1876,7 @@ mod tests {
     fn prompt_blob_from_messages(messages: &[ModelMessage]) -> String {
         messages
             .iter()
-            .filter(|m| {
-                matches!(
-                    m.role,
-                    ModelMessageRole::System | ModelMessageRole::User
-                )
-            })
+            .filter(|m| matches!(m.role, ModelMessageRole::System | ModelMessageRole::User))
             .map(|m| m.content.as_str())
             .collect::<Vec<_>>()
             .join("\n")
@@ -1781,9 +1891,12 @@ mod tests {
                 .split("exactly ")
                 .nth(1)
                 .and_then(|rest| {
-                    rest.split_whitespace()
-                        .next()
-                        .and_then(|token| token.trim_matches(|c: char| !c.is_ascii_digit()).parse().ok())
+                    rest.split_whitespace().next().and_then(|token| {
+                        token
+                            .trim_matches(|c: char| !c.is_ascii_digit())
+                            .parse()
+                            .ok()
+                    })
                 })
                 .unwrap_or(1usize);
             if count <= 1 {
@@ -2162,11 +2275,7 @@ mod tests {
     async fn create_neuron_batch_returns_requested_count() {
         let (manager, root) = test_manager();
         let neurons = manager
-            .create_neuron(
-                CreateNeuronInput::Purpose("batch purpose".into()),
-                None,
-                3,
-            )
+            .create_neuron(CreateNeuronInput::Purpose("batch purpose".into()), None, 3)
             .await
             .unwrap();
         assert_eq!(neurons.len(), 3);
@@ -2195,7 +2304,9 @@ mod tests {
             .unwrap();
         // Creator may gain kids when create_neuron picks a creation prompt; selector pool must be under selector.
         assert!(selector_kids.iter().all(|n| n.system_type.is_none()));
-        assert!(!selector_kids.iter().any(|n| creator_kids.iter().any(|c| c.id == n.id)));
+        assert!(!selector_kids
+            .iter()
+            .any(|n| creator_kids.iter().any(|c| c.id == n.id)));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -2314,7 +2425,11 @@ mod tests {
         assert_eq!(idle_state.as_deref(), Some("observing"));
 
         // Regression (negative delta) without history: stays observing.
-        manager.store().unwrap().accumulate_variant_delta(&a, -1.0).unwrap();
+        manager
+            .store()
+            .unwrap()
+            .accumulate_variant_delta(&a, -1.0)
+            .unwrap();
         manager.maybe_evolve_creator_variants().await.unwrap();
         let a_state = {
             let store = manager.store().unwrap();
@@ -2329,8 +2444,16 @@ mod tests {
         assert_eq!(a_state.as_deref(), Some("observing"));
 
         // Clear the regression, then a used observing variant gets promoted.
-        manager.store().unwrap().accumulate_variant_delta(&a, 1.0).unwrap();
-        manager.store().unwrap().increment_variant_usage(&b).unwrap();
+        manager
+            .store()
+            .unwrap()
+            .accumulate_variant_delta(&a, 1.0)
+            .unwrap();
+        manager
+            .store()
+            .unwrap()
+            .increment_variant_usage(&b)
+            .unwrap();
         manager.maybe_evolve_creator_variants().await.unwrap();
         let b_state = {
             let store = manager.store().unwrap();
@@ -2605,12 +2728,7 @@ mod tests {
 
         let recycled = manager.recycle_if_over_capacity().unwrap();
         assert_eq!(recycled, 1);
-        let remaining: Vec<String> = manager
-            .list()
-            .unwrap()
-            .into_iter()
-            .map(|n| n.id)
-            .collect();
+        let remaining: Vec<String> = manager.list().unwrap().into_iter().map(|n| n.id).collect();
         assert!(remaining.contains(&used.id), "used neuron must survive");
         drop(manager);
         fs::remove_dir_all(root).unwrap();

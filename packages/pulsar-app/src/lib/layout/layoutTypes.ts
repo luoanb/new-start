@@ -6,7 +6,7 @@ export type SplitOrientation = "horizontal" | "vertical";
 export type ViewContainerId = "sidebar" | "info" | "panel";
 
 /** main 区可插入的面板类型。同一类型全局唯一（多个会话共享同一个 chat 面板）。 */
-export type MainPanelType = "chat" | "neurons" | "tool-editor";
+export type MainPanelType = "chat" | "neurons" | "tool-editor" | "session-specs";
 
 /** main 区面板实例（insertPanel 返回其 id，供外部关闭）。 */
 export type MainPanel = {

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::error::{AppError, AppResult};
+use super::models::{NeighborhoodPoolPolicy, SelectionPolicy, SessionBehavior, ToolPolicy};
 
 /// 统一的 `config.json` 读写入口。
 ///
@@ -42,6 +43,30 @@ pub struct NeuronSection {
     /// 回收定时任务周期（毫秒）。默认 3_600_000（1h）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recycle_interval_ms: Option<u64>,
+    /// 会话规格默认值（顶层 `neuron.session_defaults`）；缺省回落硬编码默认。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_defaults: Option<SessionDefaultsSection>,
+}
+
+/// 会话规格默认值配置（`neuron.session_defaults`）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionDefaultsSection {
+    /// `session.assistant_dialogue` 的默认 behavior；缺省回落现状硬编码默认。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assistant_dialogue: Option<SessionBehavior>,
+}
+
+impl SessionDefaultsSection {
+    /// 回落现状硬编码默认：Neighborhood 邻域选 + FromNeuron 工具 + 无契约段。
+    pub fn fallback_assistant_dialogue() -> SessionBehavior {
+        SessionBehavior {
+            selection: SelectionPolicy::Neighborhood {
+                policy: NeighborhoodPoolPolicy::default(),
+            },
+            tools: ToolPolicy::FromNeuron,
+            insert_id: None,
+        }
+    }
 }
 
 pub struct ConfigStore {
@@ -82,11 +107,9 @@ impl ConfigStore {
                 AppError::StorageError(format!("Failed to create {}: {e}", parent.display()))
             })?;
         }
-        let json = serde_json::to_string_pretty(&config).map_err(|e| {
-            AppError::StorageError(format!("Failed to serialize config.json: {e}"))
-        })?;
-        fs::write(&path, json).map_err(|e| {
-            AppError::StorageError(format!("Failed to write {}: {e}", path.display()))
-        })
+        let json = serde_json::to_string_pretty(&config)
+            .map_err(|e| AppError::StorageError(format!("Failed to serialize config.json: {e}")))?;
+        fs::write(&path, json)
+            .map_err(|e| AppError::StorageError(format!("Failed to write {}: {e}", path.display())))
     }
 }

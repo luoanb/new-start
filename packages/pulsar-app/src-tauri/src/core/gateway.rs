@@ -6,24 +6,23 @@ use tokio::sync::mpsc;
 
 use super::{
     assistant_mode::{AssistantMode, AssistantStepRequest},
+    call_service::{ModelCaller, NeuronCallService, RoundTrigger},
     cmd_exec::ExecuteCommandTool,
+    compactor::Compactor,
     conversation_store::{now_ms, ConversationStore},
     dynamic_tool::{CommandTool, HttpTool},
-    engine::Engine,
     error::{AppError, AppResult},
     mcp::{McpServerClient, McpServerStatus, McpServerStatusKind},
     models::{
         ChatModelSelection, ChatOptions, ChatResponse, Conversation, ConversationMode, Message,
         MessageBody, MessageRole, ModelCallRequest, ModelCallResponse, ModelInfo, ProviderInfo,
-        RuntimeStatus, SkillInfo, ToolInfo, ToolSource,
+        RuntimeStatus, SkillInfo, SystemPromptStatus, ToolInfo, ToolSource,
     },
     neuron_config::NeuronConfigReader,
     neuron_manager::NeuronManager,
     neuron_model::DefaultNeuronModelCaller,
     neuron_store::NeuronStore,
-    poller::{
-        new_shared_poll_parallelism, Poller, PollerConfigReader, PollerStatus,
-    },
+    poller::{new_shared_poll_parallelism, Poller, PollerConfigReader, PollerStatus},
     providers::ProviderRegistry,
     session_tracker::SessionTracker,
     tool_config::{
@@ -36,9 +35,14 @@ use super::{
 
 use super::events::{StateChange, StateEmitter};
 
+/// Agent 工具循环护栏（随 `Engine::agent_mode` 迁移到 Gateway 层组装）。
+const AGENT_MAX_ITERATIONS: u32 = 20;
+
 #[derive(Debug, Clone)]
 pub struct Gateway {
-    engine: Engine,
+    /// 手动压缩（/compact 命令）：Chat/Agent 会话过长时可显式触发；自动压缩已随
+    /// `Engine` 退役（Chat = execute_round 退化形态，压缩由用户按需触发）。
+    compactor: Compactor,
     store: ConversationStore,
     providers: ProviderRegistry,
     /// 共享工具注册表：启动期装配 + 运行期手动重装配（保存即生效）共用。
@@ -48,6 +52,8 @@ pub struct Gateway {
     neuron_store: Option<Arc<Mutex<NeuronStore>>>,
     neuron_manager: Arc<NeuronManager>,
     assistant: Arc<AssistantMode>,
+    /// 执行面（规格会话）：open_session / converse_session / 会话态。
+    call_service: Arc<NeuronCallService>,
     poller: Arc<Mutex<Poller>>,
     session_tracker: SessionTracker,
     /// Shared so Gateway can be used via `&self` / Tauri State without holding an outer lock across await.
@@ -72,6 +78,27 @@ impl Gateway {
     pub fn with_state_emitter(
         store: ConversationStore,
         state_emit: Option<StateEmitter>,
+    ) -> AppResult<Self> {
+        Self::build(store, state_emit, None, None)
+    }
+
+    /// 测试专用构造：注入模型调用替身与工具注册表，使 Chat/Agent 收敛路径
+    /// （execute_round / agent_loop）可在无真实 provider 环境下验证。
+    #[cfg(test)]
+    pub(crate) fn with_injected_for_test(
+        store: ConversationStore,
+        model_caller: Arc<dyn ModelCaller>,
+        tool_registry: Arc<RwLock<ToolRegistry>>,
+    ) -> AppResult<Self> {
+        Self::build(store, None, Some(model_caller), Some(tool_registry))
+    }
+
+    /// 统一构造：`test_model_caller` / `test_tool_registry` 仅供测试注入。
+    fn build(
+        store: ConversationStore,
+        state_emit: Option<StateEmitter>,
+        test_model_caller: Option<Arc<dyn ModelCaller>>,
+        test_tool_registry: Option<Arc<RwLock<ToolRegistry>>>,
     ) -> AppResult<Self> {
         let providers = ProviderRegistry::new(store.root().to_path_buf());
         let current_conversation_id = match store.list_conversations()?.first() {
@@ -107,15 +134,21 @@ impl Gateway {
 
         // 工具装配：本地通道（native + config）同步就绪、启动即可用；MCP 通道
         // 改为后台异步装配（不阻塞应用启动，连接完成自动登记并广播 Tools）。
-        let local_registry = assemble_local_tools(&store.root())?;
-        let tool_registry = Arc::new(RwLock::new(local_registry));
+        // 测试注入注册表时直接使用注入值（跳过本地/MCP 装配）。
+        let tool_registry = match &test_tool_registry {
+            Some(registry) => Arc::clone(registry),
+            None => {
+                let local_registry = assemble_local_tools(&store.root())?;
+                Arc::new(RwLock::new(local_registry))
+            }
+        };
         let mcp_server_statuses: Arc<RwLock<Vec<McpServerStatus>>> =
             Arc::new(RwLock::new(Vec::new()));
         let assemble_lock: Arc<tokio::sync::Mutex<()>> = Arc::new(tokio::sync::Mutex::new(()));
 
         // 启动期后台装配 MCP：应用先起来（本地工具可用），MCP server 逐个连接，
         // 状态由 Connecting → Connected/Failed，前端经 StateChange::Tools 自动刷新。
-        if let Some(emit) = state_emit.as_ref() {
+        if let (Some(emit), None) = (state_emit.as_ref(), test_tool_registry.as_ref()) {
             let emit = Arc::clone(emit);
             let tool_registry = Arc::clone(&tool_registry);
             let mcp_server_statuses = Arc::clone(&mcp_server_statuses);
@@ -152,12 +185,7 @@ impl Gateway {
             neuron_config,
             Arc::clone(&tool_registry),
         ));
-        let engine = Engine::with_tools(
-            store.clone(),
-            providers.clone(),
-            CompactionConfig::default(),
-            Arc::clone(&tool_registry),
-        );
+        let compactor = Compactor::new(CompactionConfig::default());
 
         let (step_tx, step_rx) = mpsc::unbounded_channel::<AssistantStepRequest>();
 
@@ -175,13 +203,24 @@ impl Gateway {
         let poll_parallelism =
             new_shared_poll_parallelism(poller_settings.assistant_poll_parallelism as usize);
 
+        // 执行面：会话级规格执行（不持有 topic_store；课题副作用由 AssistantMode hooks 负责）。
+        let call_service = Arc::new(NeuronCallService::new(
+            match test_model_caller {
+                Some(caller) => caller,
+                None => Arc::new(providers.clone()) as Arc<dyn ModelCaller>,
+            },
+            Arc::clone(&neuron_manager),
+            store.clone(),
+            Arc::clone(&tool_registry),
+        ));
+
         let assistant = Arc::new(AssistantMode::new(
             store.clone(),
             providers.clone(),
             Arc::clone(&neuron_manager),
             Arc::clone(&topic_store),
             Arc::clone(&neuron_store),
-            Arc::clone(&tool_registry),
+            Arc::clone(&call_service),
             step_tx,
             session_tracker.clone(),
             Arc::clone(&poll_parallelism),
@@ -220,7 +259,7 @@ impl Gateway {
         );
 
         Ok(Self {
-            engine,
+            compactor,
             store,
             providers,
             tool_registry,
@@ -228,6 +267,7 @@ impl Gateway {
             neuron_store: Some(neuron_store),
             neuron_manager,
             assistant,
+            call_service,
             poller,
             session_tracker,
             current_conversation_id: Arc::new(Mutex::new(current_conversation_id)),
@@ -305,6 +345,30 @@ impl Gateway {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// 开启规格会话：校验规格神经元（system_type + behavior）并创建 conversation。
+    pub fn open_session(
+        &self,
+        spec_neuron_id: &str,
+        mode: ConversationMode,
+    ) -> AppResult<Conversation> {
+        self.call_service.open_session(spec_neuron_id, mode)
+    }
+
+    /// 规格会话一轮端到端：resolve_round → execute_round（无课题 hooks）。
+    pub async fn converse_session(
+        &self,
+        session_id: &str,
+        input: &str,
+        model: &ChatModelSelection,
+    ) -> AppResult<ChatResponse> {
+        self.call_service.converse(session_id, input, model).await
+    }
+
+    /// 列出所有 `session.%` 规格神经元（含 behavior 摘要，供前端「管理好后发起会话」）。
+    pub fn list_session_specs(&self) -> AppResult<Vec<SystemPromptStatus>> {
+        self.neuron_manager.list_session_specs()
     }
 
     /// 工具治理视图：全量工具（native / config / mcp）供前端 DockPane 展示。
@@ -445,35 +509,54 @@ impl Gateway {
         let conversation_id = self.resolve_conversation_id(options.conversation_id.clone())?;
         let conversation = self.store.require_conversation(&conversation_id)?;
         let mode = conversation.mode;
+        let model = ChatModelSelection {
+            provider_id: options.provider_id.clone(),
+            model_id: options.model_id.clone(),
+        };
 
         // Clone handles before any network await — callers must not hold an outer Gateway lock.
         let assistant = Arc::clone(&self.assistant);
-        let engine = self.engine.clone();
+        let call_service = Arc::clone(&self.call_service);
         let session_tracker = self.session_tracker.clone();
         session_tracker.register(&conversation_id, None)?;
 
-        let result = if mode == ConversationMode::Assistant {
-            tracing::info!(
-                phase = "send_model_message",
-                mode = "assistant",
-                conversation_id = %conversation_id,
-                "routing to assistant.converse"
-            );
-            let model = ChatModelSelection {
-                provider_id: options.provider_id.clone(),
-                model_id: options.model_id.clone(),
-            };
-            assistant.converse(&conversation_id, input, &model).await
-        } else {
-            tracing::info!(
-                phase = "send_model_message",
-                mode = ?mode,
-                conversation_id = %conversation_id,
-                "routing to engine.chat"
-            );
-            engine
-                .chat(input, conversation_id.clone(), options)
-                .await
+        // ConversationMode 路由收敛到 Gateway：
+        // - Assistant → assistant.converse（课题 hooks 编排保留在 AssistantMode）
+        // - Chat     → execute_round 退化形态（无规格/无工具，Neuron 模板）
+        // - Agent    → Gateway 层多轮 execute_round（AGENT_MAX_ITERATIONS 护栏）
+        let result = match mode {
+            ConversationMode::Assistant => {
+                tracing::info!(
+                    phase = "send_model_message",
+                    mode = "assistant",
+                    conversation_id = %conversation_id,
+                    "routing to assistant.converse"
+                );
+                assistant.converse(&conversation_id, input, &model).await
+            }
+            ConversationMode::Chat => {
+                tracing::info!(
+                    phase = "send_model_message",
+                    mode = "chat",
+                    conversation_id = %conversation_id,
+                    "routing to call_service.execute_round (legacy chat)"
+                );
+                let mut ctx = call_service
+                    .build_context(&conversation_id, RoundTrigger::UserInput)
+                    .await?;
+                ctx.user_input = Some(input.to_string());
+                call_service.execute_round(&mut ctx, &model).await
+            }
+            ConversationMode::Agent => {
+                tracing::info!(
+                    phase = "send_model_message",
+                    mode = "agent",
+                    conversation_id = %conversation_id,
+                    "routing to gateway agent_loop"
+                );
+                self.agent_loop(&call_service, &conversation_id, input, &model)
+                    .await
+            }
         };
 
         session_tracker.unregister(&conversation_id);
@@ -493,6 +576,67 @@ impl Gateway {
         };
         self.set_current_conversation_id(response.conversation_id.clone())?;
         Ok(response)
+    }
+
+    /// Agent 多轮工具循环（组装在 Gateway，不新增 service 方法）：
+    /// 授权注册表全部工具，连续 `execute_round` 直到收敛（无工具调用）；
+    /// 超 `AGENT_MAX_ITERATIONS` 报 `AppError::AgentMaxIterations`。
+    ///
+    /// 首轮以用户输入落库；后续轮由 execute_round 的 ManualStep 分支注入
+    /// 继续指令（不重复落库 user 消息），历史中的 tool_call / tool_result
+    /// 经 build_context 自动并入下一轮上下文。
+    async fn agent_loop(
+        &self,
+        call_service: &Arc<NeuronCallService>,
+        conversation_id: &str,
+        input: &str,
+        model: &ChatModelSelection,
+    ) -> AppResult<ChatResponse> {
+        // 与 Engine.agent_mode 语义一致：注册表全部工具。
+        let authorized_tool_ids = self
+            .tool_registry
+            .read()
+            .map(|reg| {
+                reg.list_definitions()
+                    .into_iter()
+                    .map(|d| d.name)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let mut iterations = 0u32;
+        let mut first_round = true;
+        loop {
+            iterations += 1;
+            if iterations > AGENT_MAX_ITERATIONS {
+                return Err(AppError::AgentMaxIterations(format!(
+                    "Agent exceeded max iterations ({})",
+                    AGENT_MAX_ITERATIONS
+                )));
+            }
+
+            let trigger = if first_round {
+                RoundTrigger::UserInput
+            } else {
+                RoundTrigger::ManualStep
+            };
+            let mut ctx = call_service.build_context(conversation_id, trigger).await?;
+            if first_round {
+                ctx.user_input = Some(input.to_string());
+            } else {
+                ctx.topic_brief =
+                    Some("Continue the agent loop using the latest tool results.".to_string());
+            }
+            ctx.authorized_tool_ids = authorized_tool_ids.clone();
+            let response = call_service.execute_round(&mut ctx, model).await?;
+
+            first_round = false;
+            if ctx.tool_result.is_some() {
+                // 本轮执行了工具：继续循环（历史已含 tool_call + tool_result）。
+                continue;
+            }
+            return Ok(response);
+        }
     }
 
     pub async fn assistant_step(
@@ -561,15 +705,19 @@ impl Gateway {
     }
 
     /// Manually trigger compaction for the current conversation.
-    pub async fn compact_conversation(
-        &self,
-        conversation_id: Option<String>,
-    ) -> AppResult<String> {
+    pub async fn compact_conversation(&self, conversation_id: Option<String>) -> AppResult<String> {
         let id = self.resolve_existing_conversation_id(conversation_id)?;
         let model = self
             .default_model_selection()?
             .ok_or(AppError::ModelNotSelected)?;
-        self.engine.compact(&id, &model).await?;
+        let mut conversation = self.store.require_conversation(&id)?;
+        let compacted = self
+            .compactor
+            .compact(&mut conversation, &self.providers, &model)
+            .await?;
+        if compacted {
+            self.store.save_conversation(&conversation)?;
+        }
         Ok(format!("Compacted conversation {id}"))
     }
 
@@ -638,7 +786,10 @@ impl Gateway {
     }
 
     pub async fn bootstrap_neurons(&self) -> AppResult<()> {
-        tracing::info!(phase = "bootstrap_neurons", "gateway bootstrap_neurons start");
+        tracing::info!(
+            phase = "bootstrap_neurons",
+            "gateway bootstrap_neurons start"
+        );
         match self.neuron_manager.bootstrap().await {
             Ok(report) => {
                 tracing::info!(
@@ -981,8 +1132,145 @@ fn replace_statuses_shared(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::tool_config::{HttpToolConfig, McpServerConfig};
-    use std::{fs, path::PathBuf};
+    use crate::core::{
+        call_service::ModelCaller,
+        models::ToolCall,
+        tool_config::{HttpToolConfig, McpServerConfig},
+        tool_registry::Tool,
+    };
+    use async_trait::async_trait;
+    use std::{fs, path::PathBuf, sync::Mutex as StdMutex};
+
+    /// Agent 循环测试替身：可编程响应序列（顺序消耗，耗尽后报错）。
+    struct ScriptedModelCaller {
+        responses: Arc<StdMutex<Vec<ModelCallResponse>>>,
+    }
+
+    #[async_trait]
+    impl ModelCaller for ScriptedModelCaller {
+        async fn call_model(&self, _request: ModelCallRequest) -> AppResult<ModelCallResponse> {
+            let mut guard = self
+                .responses
+                .lock()
+                .map_err(|e| AppError::RuntimeError(format!("scripted caller lock: {e}")))?;
+            if guard.is_empty() {
+                return Err(AppError::RuntimeError(
+                    "scripted model caller exhausted".into(),
+                ));
+            }
+            Ok(guard.remove(0))
+        }
+    }
+
+    struct EchoTool;
+    #[async_trait]
+    impl Tool for EchoTool {
+        fn name(&self) -> &str {
+            "echo"
+        }
+        fn description(&self) -> &str {
+            "echo tool"
+        }
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        async fn execute(&self, args: serde_json::Value) -> AppResult<String> {
+            Ok(format!("echo:{args}"))
+        }
+    }
+
+    fn tool_call_response() -> ModelCallResponse {
+        ModelCallResponse {
+            provider_id: "fake".into(),
+            model_id: "fake".into(),
+            output: "calling echo".into(),
+            tool_calls: Some(vec![ToolCall {
+                id: "call_1".into(),
+                name: "echo".into(),
+                arguments: serde_json::json!({"text": "hi"}),
+            }]),
+            finish_reason: "tool_calls".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_loop_converges_after_tool_round() {
+        let store = ConversationStore::new(test_root("agent_loop_converges_after_tool_round"))
+            .expect("test store should initialize");
+        let mut registry = ToolRegistry::new();
+        registry.register_source(EchoTool, ToolSource::Config);
+        let caller: Arc<dyn ModelCaller> = Arc::new(ScriptedModelCaller {
+            responses: Arc::new(StdMutex::new(vec![
+                tool_call_response(),
+                ModelCallResponse {
+                    provider_id: "fake".into(),
+                    model_id: "fake".into(),
+                    output: "task done".into(),
+                    tool_calls: None,
+                    finish_reason: "stop".into(),
+                },
+            ])),
+        });
+        let gateway =
+            Gateway::with_injected_for_test(store, caller, Arc::new(RwLock::new(registry)))
+                .expect("test gateway should initialize");
+        let conv = gateway
+            .store
+            .create_conversation(None, ConversationMode::Agent)
+            .expect("agent conversation should be created");
+        let model = ChatModelSelection {
+            provider_id: "fake".into(),
+            model_id: "fake".into(),
+        };
+
+        let response = gateway
+            .agent_loop(&gateway.call_service, &conv.id, "do it", &model)
+            .await
+            .expect("agent loop should converge");
+
+        assert_eq!(response.response, "task done");
+        // 历史：user + assistant(tool_call) + tool(result) + assistant(text)。
+        let history = gateway.history(Some(conv.id)).expect("history should load");
+        assert_eq!(history.len(), 4);
+        assert_eq!(history[0].role, MessageRole::User);
+        assert!(matches!(history[1].body, MessageBody::ToolCall { .. }));
+        assert!(matches!(history[2].body, MessageBody::ToolResult { .. }));
+        assert_eq!(history[3].role, MessageRole::Assistant);
+        assert_eq!(history[3].text(), "task done");
+    }
+
+    #[tokio::test]
+    async fn agent_loop_hits_max_iterations_guard() {
+        let store = ConversationStore::new(test_root("agent_loop_hits_max_iterations_guard"))
+            .expect("test store should initialize");
+        let mut registry = ToolRegistry::new();
+        registry.register_source(EchoTool, ToolSource::Config);
+        // 固定返回 tool_calls：20 轮工具执行后触发 AGENT_MAX_ITERATIONS 护栏。
+        let caller: Arc<dyn ModelCaller> = Arc::new(ScriptedModelCaller {
+            responses: Arc::new(StdMutex::new(
+                (0..AGENT_MAX_ITERATIONS)
+                    .map(|_| tool_call_response())
+                    .collect(),
+            )),
+        });
+        let gateway =
+            Gateway::with_injected_for_test(store, caller, Arc::new(RwLock::new(registry)))
+                .expect("test gateway should initialize");
+        let conv = gateway
+            .store
+            .create_conversation(None, ConversationMode::Agent)
+            .expect("agent conversation should be created");
+        let model = ChatModelSelection {
+            provider_id: "fake".into(),
+            model_id: "fake".into(),
+        };
+
+        let err = gateway
+            .agent_loop(&gateway.call_service, &conv.id, "loop", &model)
+            .await
+            .expect_err("agent loop should exceed max iterations");
+        assert_eq!(err.code(), "agent_max_iterations");
+    }
 
     #[test]
     fn send_message_persists_user_and_assistant_messages() {
@@ -1137,7 +1425,10 @@ mod tests {
         }
         let store = ConversationStore::new(root.clone()).expect("test store should initialize");
         let gateway = Gateway::new(store).expect("test gateway should initialize");
-        assert!(!gateway.list_tool_info().iter().any(|t| t.name == "lookup_wiki"));
+        assert!(!gateway
+            .list_tool_info()
+            .iter()
+            .any(|t| t.name == "lookup_wiki"));
 
         // 模拟外部修改配置：直接写 dynamic_tools.json。
         ToolConfigReader::new(&root)

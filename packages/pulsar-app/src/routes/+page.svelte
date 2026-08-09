@@ -197,6 +197,12 @@
     if (panel) layoutStore.closePanel(panel.id);
   }
 
+  /** 按规格发起：关闭创建弹窗并打开会话规格管理面板。 */
+  function openSessionSpecs() {
+    showCreateModal = false;
+    layoutStore.insertPanel("session-specs");
+  }
+
   const viewCtx: ViewContext = {
     stores: { data: dataStore, layout: layoutStore },
     ui,
@@ -509,6 +515,7 @@
   open={showCreateModal}
   onCreate={handleCreateSession}
   onClose={() => (showCreateModal = false)}
+  onOpenSpecs={openSessionSpecs}
 />
 
 {#if !ready}

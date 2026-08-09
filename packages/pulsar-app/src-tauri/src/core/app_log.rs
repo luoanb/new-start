@@ -18,7 +18,9 @@ use tracing_subscriber::{
     fmt,
     layer::{Context, Layer, SubscriberExt},
     registry::LookupSpan,
-    reload, util::SubscriberInitExt, EnvFilter, Registry,
+    reload,
+    util::SubscriberInitExt,
+    EnvFilter, Registry,
 };
 
 pub const LOG_EVENT: &str = "app://logs";
@@ -183,9 +185,7 @@ pub fn init(
             .try_init()
             .map_err(|error| error.to_string())?;
     } else {
-        registry
-            .try_init()
-            .map_err(|error| error.to_string())?;
+        registry.try_init().map_err(|error| error.to_string())?;
     }
 
     let _ = CONTROLS.set(controls);
@@ -314,10 +314,7 @@ impl SizeRotatingWriter {
     ) -> std::io::Result<Self> {
         let path = dir.join(file_name);
         let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
+        let file = OpenOptions::new().create(true).append(true).open(&path)?;
         Ok(Self {
             inner: Arc::new(SizeRotatingInner {
                 dir: dir.to_path_buf(),
@@ -368,10 +365,7 @@ impl SizeRotatingWriter {
             let _ = fs::remove_file(&base);
         }
 
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&base)?;
+        let file = OpenOptions::new().create(true).append(true).open(&base)?;
         *self.inner.file.lock() = file;
         self.inner.size.store(0, Ordering::Relaxed);
         Ok(())
@@ -383,9 +377,7 @@ impl Write for SizeRotatingWriter {
         self.rotate_if_needed(buf.len() as u64)?;
         let mut file = self.inner.file.lock();
         let written = file.write(buf)?;
-        self.inner
-            .size
-            .fetch_add(written as u64, Ordering::Relaxed);
+        self.inner.size.fetch_add(written as u64, Ordering::Relaxed);
         Ok(written)
     }
 

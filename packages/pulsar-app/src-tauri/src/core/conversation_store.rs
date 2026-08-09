@@ -55,6 +55,7 @@ impl ConversationStore {
             messages: Vec::new(),
             created_at: now,
             updated_at: now,
+            extra: None,
         };
 
         self.save_conversation(&conversation)?;

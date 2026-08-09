@@ -7,7 +7,9 @@
 //! 来源标记 `Config`，豁免 insert 门禁（声明即 schema）。
 
 use crate::core::{
-    cmd_exec, error::AppResult, tool_config::{CommandToolConfig, HttpToolConfig},
+    cmd_exec,
+    error::AppResult,
+    tool_config::{CommandToolConfig, HttpToolConfig},
     tool_registry::Tool,
 };
 use async_trait::async_trait;
@@ -42,12 +44,7 @@ fn extract_placeholders(template: &str) -> Vec<String> {
 fn build_params_schema(keys: &[String]) -> serde_json::Value {
     let properties = keys
         .iter()
-        .map(|k| {
-            (
-                k.clone(),
-                json!({"type": "string", "description": k}),
-            )
-        })
+        .map(|k| (k.clone(), json!({"type": "string", "description": k})))
         .collect::<serde_json::Map<_, _>>();
     json!({
         "type": "object",
@@ -283,7 +280,10 @@ mod tests {
 
     #[test]
     fn extract_placeholders_dedupes_and_keeps_order() {
-        assert_eq!(extract_placeholders("a{query}b{query}c{page}"), vec!["query", "page"]);
+        assert_eq!(
+            extract_placeholders("a{query}b{query}c{page}"),
+            vec!["query", "page"]
+        );
         assert_eq!(extract_placeholders("no-placeholder"), Vec::<String>::new());
     }
 

@@ -11,13 +11,13 @@ use crate::core::{
     providers::ProviderRegistry,
     session_tracker::{RunningSession, SessionTracker},
     storage,
-    topic_store::TopicStore,
-    ChatOptions, ChatResponse, Connection, Conversation, ConversationMode, Gateway, Message,
-    ModelCallRequest, ModelCallResponse, ModelInfo, Neuron, NeuronCreate, NeuronSubgraph,
-    NeuronUpdate, StateChange, StateEmitter, STATE_CHANGED_EVENT,
-    PollerStatus, ProviderInfo, RuntimeStatus, SkillInfo, ToolInfo, Topic, TopicStatus, TopicUpdate,
-    McpServerStatus,
     tool_config::ToolConfigView,
+    topic_store::TopicStore,
+    ChatModelSelection, ChatOptions, ChatResponse, Connection, Conversation, ConversationMode,
+    EnsureSystemOpts, Gateway, McpServerStatus, Message, ModelCallRequest, ModelCallResponse,
+    ModelInfo, Neuron, NeuronCreate, NeuronSubgraph, NeuronUpdate, PollerStatus, ProviderInfo,
+    RuntimeStatus, SessionBehavior, SkillInfo, StateChange, StateEmitter, SystemPromptStatus,
+    ToolInfo, Topic, TopicStatus, TopicUpdate, STATE_CHANGED_EVENT,
 };
 use std::{
     path::PathBuf,
@@ -107,10 +107,7 @@ async fn close_session(
 async fn list_running_sessions(
     sessions: State<'_, SessionTracker>,
 ) -> TauriResult<Vec<RunningSession>> {
-    sessions
-        .inner()
-        .list()
-        .map_err(|error| error.payload())
+    sessions.inner().list().map_err(|error| error.payload())
 }
 
 // ── Info ──
@@ -568,6 +565,111 @@ async fn score_feedback(
     Ok(())
 }
 
+// ── Session Specs ──
+
+/// 开启规格会话：校验规格神经元（system_type + behavior）并创建 conversation。
+#[tauri::command]
+async fn open_session(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    spec_neuron_id: String,
+    mode: String,
+) -> TauriResult<Conversation> {
+    let conv_mode = match mode.to_lowercase().as_str() {
+        "assistant" => ConversationMode::Assistant,
+        "agent" => ConversationMode::Agent,
+        _ => ConversationMode::Chat,
+    };
+    let conversation = gateway
+        .inner()
+        .open_session(&spec_neuron_id, conv_mode)
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Conversations);
+    Ok(conversation)
+}
+
+/// 规格会话一轮端到端（resolve_round → execute_round）。
+#[tauri::command]
+async fn converse_session(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    session_id: String,
+    input: String,
+    provider_id: String,
+    model_id: String,
+) -> TauriResult<ChatResponse> {
+    let model = ChatModelSelection {
+        provider_id,
+        model_id,
+    };
+    let response = gateway
+        .inner()
+        .converse_session(&session_id, &input, &model)
+        .await
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Conversations);
+    Ok(response)
+}
+
+/// 列出所有 `session.%` 规格神经元（含 behavior 摘要）。
+#[tauri::command]
+async fn list_session_specs(gateway: State<'_, Gateway>) -> TauriResult<Vec<SystemPromptStatus>> {
+    gateway
+        .inner()
+        .list_session_specs()
+        .map_err(|error| error.payload())
+}
+
+/// 管理面新建会话规格：懒创建（存在不覆盖），支持传入 content 与 behavior。
+/// 返回新建/已存在的规格摘要（system_type + neuron_id + behavior）。
+#[tauri::command]
+async fn create_session_spec(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    system_type: String,
+    content: Option<String>,
+    behavior: Option<SessionBehavior>,
+) -> TauriResult<SystemPromptStatus> {
+    let neuron = gateway
+        .inner()
+        .neuron_manager()
+        .ensure_session_neuron(
+            &system_type,
+            behavior.unwrap_or_default(),
+            content,
+            EnsureSystemOpts { reset: false },
+        )
+        .await
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Neurons);
+    Ok(SystemPromptStatus {
+        system_type: neuron.system_type.unwrap_or(system_type),
+        neuron_id: Some(neuron.id),
+        behavior: neuron.behavior,
+    })
+}
+
+/// 管理面更新规格 behavior：只写 behavior，不触碰 content。
+#[tauri::command]
+async fn update_session_spec_behavior(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    id: String,
+    behavior: SessionBehavior,
+) -> TauriResult<SystemPromptStatus> {
+    let neuron = gateway
+        .inner()
+        .neuron_manager()
+        .update_behavior_for_admin(&id, behavior)
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Neurons);
+    Ok(SystemPromptStatus {
+        system_type: neuron.system_type.unwrap_or_default(),
+        neuron_id: Some(neuron.id),
+        behavior: neuron.behavior,
+    })
+}
+
 // ── Logs ──
 
 #[tauri::command]
@@ -582,9 +684,8 @@ fn logs_get_level() -> String {
 
 #[tauri::command]
 fn logs_set_level(level: String) -> TauriResult<String> {
-    app_log::set_level(&level).map_err(|message| {
-        crate::core::AppError::InvalidInput(message).payload()
-    })
+    app_log::set_level(&level)
+        .map_err(|message| crate::core::AppError::InvalidInput(message).payload())
 }
 
 #[tauri::command]
@@ -652,11 +753,9 @@ pub fn run() {
                 let _ = state_emit_handle.emit(STATE_CHANGED_EVENT, change);
             });
 
-            let store = ConversationStore::new(&storage_root)
+            let store = ConversationStore::new(&storage_root).map_err(|error| error.to_string())?;
+            let gateway = Gateway::with_state_emitter(store, Some(state_emit.clone()))
                 .map_err(|error| error.to_string())?;
-            let gateway =
-                Gateway::with_state_emitter(store, Some(state_emit.clone()))
-                    .map_err(|error| error.to_string())?;
 
             // Domain states (no outer Mutex across network).
             let neuron_manager = gateway.neuron_manager();
@@ -747,6 +846,12 @@ pub fn run() {
             adjust_neuron_weight,
             adjust_edge_weight,
             score_feedback,
+            // Session Specs
+            open_session,
+            converse_session,
+            list_session_specs,
+            create_session_spec,
+            update_session_spec_behavior,
             // Logs
             logs_snapshot,
             logs_get_level,

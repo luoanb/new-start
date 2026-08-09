@@ -23,6 +23,8 @@ import type {
   Topic,
   PollerStatus,
   RunningSession,
+  SystemPromptStatus,
+  SessionBehavior,
 } from "$lib/types";
 import { formatInvokeError } from "$lib/utils/formatInvokeError";
 
@@ -52,6 +54,7 @@ const state = $state({
   topics: [] as Topic[],
   poller: null as PollerStatus | null,
   runningSessions: [] as RunningSession[],
+  sessionSpecs: [] as SystemPromptStatus[],
   neuronsVersion: 0,
   toolsVersion: 0,
 });
@@ -92,6 +95,10 @@ async function refreshTopics(): Promise<void> {
   state.topics = await invoke<Topic[]>("list_topics");
 }
 
+async function refreshSessionSpecs(): Promise<void> {
+  state.sessionSpecs = await invoke<SystemPromptStatus[]>("list_session_specs");
+}
+
 async function refreshPoller(): Promise<void> {
   state.poller = await invoke<PollerStatus>("poll_status");
 }
@@ -110,6 +117,8 @@ async function handleStateChanged(payload: StateChangePayload): Promise<void> {
       await refreshRunningSessions();
     } else if (payload.kind === "neurons") {
       state.neuronsVersion++;
+      // 规格管理（新建/编辑 behavior）也广播 Neurons：同步刷新规格列表。
+      await refreshSessionSpecs();
     } else if (payload.kind === "tools") {
       state.toolsVersion++;
     }
@@ -144,6 +153,7 @@ async function bootstrap(): Promise<void> {
       topicsRes,
       pollerRes,
       runningSessionsRes,
+      sessionSpecsRes,
     ] = await Promise.all([
       invoke<ProviderInfo[]>("list_providers"),
       invoke<ModelInfo[]>("list_models"),
@@ -153,6 +163,7 @@ async function bootstrap(): Promise<void> {
       invoke<Topic[]>("list_topics"),
       invoke<PollerStatus>("poll_status"),
       invoke<RunningSession[]>("list_running_sessions"),
+      invoke<SystemPromptStatus[]>("list_session_specs"),
     ]);
 
     state.providers = providersRes;
@@ -163,6 +174,7 @@ async function bootstrap(): Promise<void> {
     state.topics = topicsRes;
     state.poller = pollerRes;
     state.runningSessions = runningSessionsRes;
+    state.sessionSpecs = sessionSpecsRes;
     state.error = "";
 
     // 默认选中第一个会话（若存在），并加载其消息。
@@ -243,6 +255,66 @@ async function clearConversation(): Promise<void> {
 // 人工评价：对当前会话绑定 topic 的干预窗口应用评分 delta（后端 emit Neurons 触发刷新）。
 async function scoreFeedback(conversationId: string, score: number): Promise<void> {
   await invoke("score_feedback", { conversationId, score });
+}
+
+// ── 会话规格（系统神经元管理）actions ──
+
+async function listSessionSpecs(): Promise<SystemPromptStatus[]> {
+  const specs = await invoke<SystemPromptStatus[]>("list_session_specs");
+  state.sessionSpecs = specs;
+  return specs;
+}
+
+async function createSessionSpec(
+  systemType: string,
+  content: string | null,
+  behavior: SessionBehavior,
+): Promise<SystemPromptStatus> {
+  const spec = await invoke<SystemPromptStatus>("create_session_spec", {
+    systemType,
+    content,
+    behavior,
+  });
+  await refreshSessionSpecs();
+  return spec;
+}
+
+async function updateSessionSpecBehavior(
+  id: string,
+  behavior: SessionBehavior,
+): Promise<SystemPromptStatus> {
+  const spec = await invoke<SystemPromptStatus>("update_session_spec_behavior", {
+    id,
+    behavior,
+  });
+  await refreshSessionSpecs();
+  return spec;
+}
+
+/** 按规格发起会话（assistant 模式），选中新会话并跳转会话视图。 */
+async function openSession(
+  specNeuronId: string,
+  mode: string = "assistant",
+): Promise<Conversation> {
+  const conv = await invoke<Conversation>("open_session", { specNeuronId, mode });
+  state.activeConversationId = conv.id;
+  await refreshConversations();
+  return conv;
+}
+
+/** 规格会话一轮直调（resolve_round → execute_round）。 */
+async function converseSession(
+  sessionId: string,
+  input: string,
+  providerId: string,
+  modelId: string,
+): Promise<ChatResponse> {
+  return invoke<ChatResponse>("converse_session", {
+    sessionId,
+    input,
+    providerId,
+    modelId,
+  });
 }
 
 // Topic actions
@@ -326,6 +398,7 @@ export const dataStore = {
   refreshConversations,
   refreshPoller,
   refreshRunningSessions,
+  refreshSessionSpecs,
   // actions
   selectConversation,
   createConversation,
@@ -333,6 +406,11 @@ export const dataStore = {
   sendMessage,
   clearConversation,
   scoreFeedback,
+  listSessionSpecs,
+  createSessionSpec,
+  updateSessionSpecBehavior,
+  openSession,
+  converseSession,
   createTopic,
   pauseTopic,
   resumeTopic,

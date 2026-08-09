@@ -7,7 +7,7 @@ use super::{
     error::{AppError, AppResult},
     models::{
         Connection as NeuronConnection, Neuron, NeuronCreate, NeuronSubgraph, NeuronUpdate,
-        NeuronVariant, NeuronVersion,
+        NeuronVariant, NeuronVersion, SessionBehavior,
     },
 };
 
@@ -72,13 +72,10 @@ impl NeuronStore {
         })?;
         // ── Creator self-iteration columns (nullable/defaulted for legacy rows) ──
         if !has_column(&conn, "neurons", "lineage_parent_id")? {
-            conn.execute(
-                "ALTER TABLE neurons ADD COLUMN lineage_parent_id TEXT",
-                [],
-            )
-            .map_err(|e| {
-                AppError::StorageError(format!("Failed to add lineage_parent_id: {}", e))
-            })?;
+            conn.execute("ALTER TABLE neurons ADD COLUMN lineage_parent_id TEXT", [])
+                .map_err(|e| {
+                    AppError::StorageError(format!("Failed to add lineage_parent_id: {}", e))
+                })?;
         }
         if !has_column(&conn, "neurons", "use_count")? {
             conn.execute(
@@ -97,40 +94,31 @@ impl NeuronStore {
             })?;
         }
         if !has_column(&conn, "neurons", "last_used_at")? {
-            conn.execute(
-                "ALTER TABLE neurons ADD COLUMN last_used_at INTEGER",
-                [],
-            )
-            .map_err(|e| {
-                AppError::StorageError(format!("Failed to add last_used_at: {}", e))
-            })?;
+            conn.execute("ALTER TABLE neurons ADD COLUMN last_used_at INTEGER", [])
+                .map_err(|e| {
+                    AppError::StorageError(format!("Failed to add last_used_at: {}", e))
+                })?;
         }
         if !has_column(&conn, "neurons", "variant_state")? {
-            conn.execute(
-                "ALTER TABLE neurons ADD COLUMN variant_state TEXT",
-                [],
-            )
-            .map_err(|e| {
-                AppError::StorageError(format!("Failed to add variant_state: {}", e))
-            })?;
+            conn.execute("ALTER TABLE neurons ADD COLUMN variant_state TEXT", [])
+                .map_err(|e| {
+                    AppError::StorageError(format!("Failed to add variant_state: {}", e))
+                })?;
         }
         if !has_column(&conn, "neurons", "manual_edited")? {
             conn.execute(
                 "ALTER TABLE neurons ADD COLUMN manual_edited INTEGER NOT NULL DEFAULT 0",
                 [],
             )
-            .map_err(|e| {
-                AppError::StorageError(format!("Failed to add manual_edited: {}", e))
-            })?;
+            .map_err(|e| AppError::StorageError(format!("Failed to add manual_edited: {}", e)))?;
         }
         if !has_column(&conn, "neurons", "deleted_at")? {
-            conn.execute(
-                "ALTER TABLE neurons ADD COLUMN deleted_at INTEGER",
-                [],
-            )
-            .map_err(|e| {
-                AppError::StorageError(format!("Failed to add deleted_at: {}", e))
-            })?;
+            conn.execute("ALTER TABLE neurons ADD COLUMN deleted_at INTEGER", [])
+                .map_err(|e| AppError::StorageError(format!("Failed to add deleted_at: {}", e)))?;
+        }
+        if !has_column(&conn, "neurons", "behavior")? {
+            conn.execute("ALTER TABLE neurons ADD COLUMN behavior TEXT", [])
+                .map_err(|e| AppError::StorageError(format!("Failed to add behavior: {}", e)))?;
         }
         conn.execute(
             "CREATE TABLE IF NOT EXISTS neuron_versions (
@@ -143,17 +131,13 @@ impl NeuronStore {
             )",
             [],
         )
-        .map_err(|e| {
-            AppError::StorageError(format!("Failed to init neuron_versions: {}", e))
-        })?;
+        .map_err(|e| AppError::StorageError(format!("Failed to init neuron_versions: {}", e)))?;
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_neuron_versions_neuron
              ON neuron_versions(neuron_id, created_at DESC)",
             [],
         )
-        .map_err(|e| {
-            AppError::StorageError(format!("Failed to index neuron_versions: {}", e))
-        })?;
+        .map_err(|e| AppError::StorageError(format!("Failed to index neuron_versions: {}", e)))?;
         Ok(())
     }
 
@@ -209,6 +193,7 @@ impl NeuronStore {
             use_count: 0,
             last_used_at: None,
             deleted_at: None,
+            behavior: None,
         })
     }
 
@@ -220,7 +205,7 @@ impl NeuronStore {
         let mut stmt = conn
             .prepare(
                 "SELECT id, desc, content, weight, system_type, tool_ids, created_at, updated_at,
-                        use_count, last_used_at, deleted_at
+                        use_count, last_used_at, deleted_at, behavior
                  FROM neurons WHERE id = ?1 AND deleted_at IS NULL",
             )
             .map_err(|e| AppError::StorageError(format!("Failed to prepare: {}", e)))?;
@@ -242,7 +227,7 @@ impl NeuronStore {
         let mut stmt = conn
             .prepare(
                 "SELECT id, desc, content, weight, system_type, tool_ids, created_at, updated_at,
-                        use_count, last_used_at, deleted_at
+                        use_count, last_used_at, deleted_at, behavior
                  FROM neurons WHERE deleted_at IS NULL ORDER BY created_at DESC",
             )
             .map_err(|e| AppError::StorageError(format!("Failed to prepare: {}", e)))?;
@@ -265,7 +250,7 @@ impl NeuronStore {
         let mut stmt = conn
             .prepare(
                 "SELECT id, desc, content, weight, system_type, tool_ids, created_at, updated_at,
-                        use_count, last_used_at, deleted_at
+                        use_count, last_used_at, deleted_at, behavior
                  FROM neurons WHERE system_type = ?1 AND deleted_at IS NULL",
             )
             .map_err(|e| AppError::StorageError(format!("Failed to prepare: {}", e)))?;
@@ -300,9 +285,8 @@ impl NeuronStore {
             param_values.push(Box::new(c.clone()));
         }
         if let Some(ref t) = update.tool_ids {
-            let encoded = serde_json::to_string(t).map_err(|e| {
-                AppError::InvalidInput(format!("Failed to encode tool_ids: {}", e))
-            })?;
+            let encoded = serde_json::to_string(t)
+                .map_err(|e| AppError::InvalidInput(format!("Failed to encode tool_ids: {}", e)))?;
             set_parts.push("tool_ids = ?".to_string());
             param_values.push(Box::new(encoded));
         }
@@ -484,6 +468,7 @@ impl NeuronStore {
             use_count: 0,
             last_used_at: None,
             deleted_at: None,
+            behavior: None,
         };
         let connection = NeuronConnection {
             source: source_id.to_string(),
@@ -634,7 +619,7 @@ impl NeuronStore {
         let mut stmt = conn
             .prepare(
                 "SELECT n.id, n.desc, n.content, n.weight, n.system_type, n.tool_ids,
-                        n.created_at, n.updated_at, n.use_count, n.last_used_at, n.deleted_at
+                        n.created_at, n.updated_at, n.use_count, n.last_used_at, n.deleted_at, n.behavior
                  FROM connections c
                  JOIN neurons n ON n.id = c.target
                  WHERE c.source = ?1
@@ -679,7 +664,7 @@ impl NeuronStore {
                 "SELECT n.id, n.desc, n.content, n.weight, n.system_type, n.tool_ids,
                         n.created_at, n.updated_at, n.lineage_parent_id,
                         n.use_count, n.accumulated_delta, n.last_used_at,
-                        n.variant_state, n.manual_edited, n.deleted_at
+                        n.variant_state, n.manual_edited, n.deleted_at, n.behavior
                  FROM connections c
                  JOIN neurons n ON n.id = c.target
                  WHERE c.source = ?1
@@ -721,9 +706,8 @@ impl NeuronStore {
         if affected == 0 {
             return Err(AppError::NeuronNotFound(variant_id.to_string()));
         }
-        self.get_neuron(variant_id)?.ok_or_else(|| {
-            AppError::NeuronNotFound(variant_id.to_string())
-        })
+        self.get_neuron(variant_id)?
+            .ok_or_else(|| AppError::NeuronNotFound(variant_id.to_string()))
     }
 
     /// Accumulate a signed delta onto a variant's accumulated score.
@@ -748,9 +732,8 @@ impl NeuronStore {
         if affected == 0 {
             return Err(AppError::NeuronNotFound(variant_id.to_string()));
         }
-        self.get_neuron(variant_id)?.ok_or_else(|| {
-            AppError::NeuronNotFound(variant_id.to_string())
-        })
+        self.get_neuron(variant_id)?
+            .ok_or_else(|| AppError::NeuronNotFound(variant_id.to_string()))
     }
 
     /// Set a variant's pool state (`active` / `observing`); NULL clears it.
@@ -772,9 +755,8 @@ impl NeuronStore {
         if affected == 0 {
             return Err(AppError::NeuronNotFound(variant_id.to_string()));
         }
-        self.get_neuron(variant_id)?.ok_or_else(|| {
-            AppError::NeuronNotFound(variant_id.to_string())
-        })
+        self.get_neuron(variant_id)?
+            .ok_or_else(|| AppError::NeuronNotFound(variant_id.to_string()))
     }
 
     /// Mark a neuron as manually edited (locked out of auto-rewrite).
@@ -796,9 +778,8 @@ impl NeuronStore {
         if affected == 0 {
             return Err(AppError::NeuronNotFound(neuron_id.to_string()));
         }
-        self.get_neuron(neuron_id)?.ok_or_else(|| {
-            AppError::NeuronNotFound(neuron_id.to_string())
-        })
+        self.get_neuron(neuron_id)?
+            .ok_or_else(|| AppError::NeuronNotFound(neuron_id.to_string()))
     }
 
     /// Record an immutable version entry (seed / evolve / rollback).
@@ -886,7 +867,7 @@ impl NeuronStore {
             .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
         conn.query_row(
             "SELECT n.id, n.desc, n.content, n.weight, n.system_type, n.tool_ids,
-                    n.created_at, n.updated_at, n.use_count, n.last_used_at, n.deleted_at
+                    n.created_at, n.updated_at, n.use_count, n.last_used_at, n.deleted_at, n.behavior
              FROM connections c
              JOIN neurons n ON n.id = c.source
              WHERE c.target = ?1 AND n.deleted_at IS NULL
@@ -911,7 +892,7 @@ impl NeuronStore {
         let mut stmt = conn
             .prepare(
                 "SELECT id, desc, content, weight, system_type, tool_ids, created_at, updated_at,
-                        use_count, last_used_at, deleted_at
+                        use_count, last_used_at, deleted_at, behavior
                  FROM neurons
                  WHERE deleted_at IS NULL
                    AND system_type IS NULL
@@ -981,7 +962,9 @@ impl NeuronStore {
 
         let neuron_ids: std::collections::HashSet<&str> =
             neurons.iter().map(|n| n.id.as_str()).collect();
-        connections.retain(|c| neuron_ids.contains(c.source.as_str()) && neuron_ids.contains(c.target.as_str()));
+        connections.retain(|c| {
+            neuron_ids.contains(c.source.as_str()) && neuron_ids.contains(c.target.as_str())
+        });
 
         Ok(NeuronSubgraph {
             seed_id: seed_id.to_string(),
@@ -1033,9 +1016,7 @@ impl NeuronStore {
             .map_err(|e| AppError::StorageError(format!("Failed to query: {}", e)))?;
         let mut ids = Vec::new();
         for row in rows {
-            ids.push(
-                row.map_err(|e| AppError::StorageError(format!("Failed to read: {}", e)))?,
-            );
+            ids.push(row.map_err(|e| AppError::StorageError(format!("Failed to read: {}", e)))?);
         }
         Ok(ids)
     }
@@ -1084,6 +1065,43 @@ impl NeuronStore {
         self.get_neuron(id)?
             .ok_or_else(|| AppError::NeuronNotFound(id.to_string()))
     }
+
+    /// 写会话规格的 behavior（写路径统一收敛到 SessionSpecManager，不触碰 content）。
+    pub fn set_behavior(&self, id: &str, behavior: Option<&SessionBehavior>) -> AppResult<Neuron> {
+        let encoded = match behavior {
+            Some(b) => Some(serde_json::to_string(b).map_err(|e| {
+                AppError::StorageError(format!("Failed to encode behavior: {}", e))
+            })?),
+            None => None,
+        };
+        let now = now_ms();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let affected = conn
+            .execute(
+                "UPDATE neurons SET behavior = ?1, updated_at = ?2
+                 WHERE id = ?3 AND deleted_at IS NULL",
+                params![encoded, now as i64, id],
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to set behavior: {}", e)))?;
+        drop(conn);
+        if affected == 0 {
+            return Err(AppError::NeuronNotFound(id.to_string()));
+        }
+        self.get_neuron(id)?
+            .ok_or_else(|| AppError::NeuronNotFound(id.to_string()))
+    }
+}
+
+/// 宽容解析 behavior 列：缺失 / 空 / 非法 JSON 一律回落 None（旧行兼容）。
+fn parse_behavior(raw: Option<String>) -> Option<SessionBehavior> {
+    match raw {
+        None => None,
+        Some(s) if s.trim().is_empty() => None,
+        Some(s) => serde_json::from_str(&s).ok(),
+    }
 }
 
 fn row_to_neuron(row: &rusqlite::Row) -> rusqlite::Result<Neuron> {
@@ -1103,6 +1121,7 @@ fn row_to_neuron(row: &rusqlite::Row) -> rusqlite::Result<Neuron> {
         use_count: row.get(8)?,
         last_used_at: row.get::<_, Option<i64>>(9)?.map(|v| v as u128),
         deleted_at: row.get::<_, Option<i64>>(10)?.map(|v| v as u128),
+        behavior: parse_behavior(row.get::<_, Option<String>>(11)?),
     })
 }
 
@@ -1124,6 +1143,7 @@ fn row_to_neuron_variant(row: &rusqlite::Row) -> rusqlite::Result<NeuronVariant>
             use_count: row.get(9)?,
             last_used_at: row.get::<_, Option<i64>>(11)?.map(|v| v as u128),
             deleted_at: row.get::<_, Option<i64>>(14)?.map(|v| v as u128),
+            behavior: parse_behavior(row.get::<_, Option<String>>(15)?),
         },
         lineage_parent_id: row.get(8)?,
         use_count: row.get(9)?,
@@ -1475,7 +1495,8 @@ mod tests {
             })
             .unwrap();
         let observing = create(&s, "observing", "", 0.0);
-        s.set_variant_state(&observing.id, Some("observing")).unwrap();
+        s.set_variant_state(&observing.id, Some("observing"))
+            .unwrap();
 
         let candidates = s
             .list_global_candidates(10, &std::collections::HashSet::new())
