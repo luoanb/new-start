@@ -14,7 +14,7 @@
   import ViewHost from "$lib/layout/ViewHost.svelte";
   import ViewContainer from "$lib/layout/ViewContainer.svelte";
   import { layoutStore } from "$lib/layout/LayoutStore.svelte";
-  import { activityItems, mainViews, mainTabs } from "$lib/layout/views";
+  import { activityItems, mainViews, mainPanelMeta } from "$lib/layout/views";
   import { setViewContext, type ViewContext } from "$lib/layout/viewContext";
   import { t } from "$lib/i18n";
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
@@ -67,12 +67,17 @@
 
   // ── Layout (store-driven) ──
   let mainRef = $state<HTMLElement | null>(null);
-  // split 状态的唯一真源：main.splits 非空即处于 chat|neurons 分栏
-  let isNeuronSplit = $derived(
-    layoutStore.state.main.splits.length > 0
-  );
-  let splitRatio = $derived(
-    layoutStore.state.main.splits[0]?.ratio ?? 0.5
+  // main 区面板：用户交互插入/关闭，默认空；同一类型全局唯一
+  let mainPanes = $derived(layoutStore.state.main.panes);
+  let activePaneId = $derived(layoutStore.state.main.activePaneId);
+  let neuronActive = $derived(mainPanes.some((p) => p.panels.some((x) => x.type === "neurons")));
+  // 当前激活分栏（用于 ActivityBar 高亮判定）
+  let activePane = $derived(mainPanes.find((p) => p.id === activePaneId));
+  // ActivityBar 高亮：chat 面板激活时点亮对话入口，否则跟随侧栏活动
+  let activityBarActive = $derived(
+    activePane?.panels.some((x) => x.id === activePane.activePanelId && x.type === "chat")
+      ? "chat"
+      : layoutStore.state.activity.active
   );
   let sidebarStyle = $derived(
     layoutStore.state.sidebar.visible
@@ -166,6 +171,8 @@
 
   function handleSelectConversation(id: string) {
     void dataStore.selectConversation(id);
+    // 保证会话面板存在（同一类型全局唯一，已存在则激活）
+    layoutStore.insertPanel("chat");
     drawerSidebar = false;
   }
 
@@ -177,8 +184,18 @@
   }
 
   // ── ViewContext：容器与内容解耦的边界（容器只消费注册表，视图组件自取 context）──
-  const chatView = mainViews.find((v) => v.id === "chat")!;
-  const neuronsView = mainViews.find((v) => v.id === "neurons")!;
+  function viewForType(type: string) {
+    return mainViews.find((v) => v.id === type)!;
+  }
+
+  // 工具配置编辑面板：插入/激活 tool-editor 面板（默认第 0 栏，同一类型全局唯一）
+  function openToolEditor() {
+    layoutStore.insertPanel("tool-editor");
+  }
+  function closeToolEditor() {
+    const panel = mainPanes.flatMap((p) => p.panels).find((x) => x.type === "tool-editor");
+    if (panel) layoutStore.closePanel(panel.id);
+  }
 
   const viewCtx: ViewContext = {
     stores: { data: dataStore, layout: layoutStore },
@@ -196,21 +213,19 @@
       },
       showError: (msg) => (error = msg),
       dismissError: () => (error = ""),
+      openToolEditor,
+      closeToolEditor,
     },
   };
   setViewContext(viewCtx);
 
   // ── Activity Bar / 布局操作 ──
 
-  /** 打开/关闭 neuron split（chat | neurons 并排）。状态真源 = main.splits */
-  function toggleNeuronSplit() {
-    if (layoutStore.state.main.splits.length > 0) {
-      layoutStore.setActivity("chat");
-      layoutStore.setMainSplits([]);
-    } else {
-      layoutStore.setActivity("neurons");
-      layoutStore.setMainSplits([{ id: "chat", orientation: "vertical", ratio: 0.5 }]);
-    }
+  /** 神经元面板：只注册一个（默认创建到第 2 栏），再次点击关闭。 */
+  function toggleNeuronPanel() {
+    const panel = mainPanes.flatMap((p) => p.panels).find((x) => x.type === "neurons");
+    if (panel) layoutStore.closePanel(panel.id);
+    else layoutStore.insertPanel("neurons", 2);
   }
 
   function handleActivitySelect(id: string) {
@@ -227,19 +242,53 @@
       if (!layoutStore.state.info.visible) layoutStore.toggleInfo();
       return;
     }
-    if (id === "neurons") { toggleNeuronSplit(); return; }
-    if (id === "chat") { layoutStore.setActivity("chat"); return; }
+    if (id === "chat") { layoutStore.insertPanel("chat"); return; }
+    if (id === "neurons") { toggleNeuronPanel(); return; }
   }
 
-  /** 主区 tab ✕ 关闭：关闭对应面板，恢复单视图（保留另一个） */
-  function handleTabClose(id: string) {
-    layoutStore.setMainSplits([]);
-    layoutStore.setActivity(id === "chat" ? "neurons" : "chat");
+  /** 分栏内 tab ✕ 关闭：关闭对应面板（分栏空则自动收缩）。 */
+  function handleTabClose(panelId: string) {
+    layoutStore.closePanel(panelId);
   }
 
-  function handleSplitResize(delta: number) {
+  /** 分栏内 tab 列表：由该分栏的面板动态生成。 */
+  function paneTabs(pane: (typeof mainPanes)[number]) {
+    return pane.panels.map((p) => ({
+      id: p.id,
+      label: mainPanelMeta[p.type].label,
+      icon: mainPanelMeta[p.type].icon,
+    }));
+  }
+
+  /** 拖拽第 i 个分栏分隔条：调整相邻两栏 grow 权重。 */
+  function handlePaneResize(i: number, delta: number) {
     const containerW = mainRef?.clientWidth ?? 800;
-    layoutStore.updateMainSplitRatio(splitRatio + delta / containerW, false);
+    const left = mainPanes[i];
+    const right = mainPanes[i + 1];
+    if (!left || !right) return;
+    const total = left.grow + right.grow;
+    const leftPx = containerW * (left.grow / total);
+    const ratio = Math.max(-0.9, Math.min(0.9, delta / Math.max(1, leftPx)));
+    const newLeftGrow = left.grow * (1 + ratio);
+    const newRightGrow = Math.max(0.2, total - newLeftGrow);
+    layoutStore.setPaneGrow(left.id, newLeftGrow, false);
+    layoutStore.setPaneGrow(right.id, newRightGrow, false);
+  }
+
+  /** 拖拽经过分栏（内容区/空白区）时允许放置，作为跨分栏移动的落点。 */
+  function handlePaneDragOver(e: DragEvent) {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+  }
+
+  /** 拖拽到分栏内容区：追加面板到该分栏（tab 栏上的放置由 EditorTabs 拦截处理）。 */
+  function handlePaneDrop(e: DragEvent, paneId: string) {
+    e.preventDefault();
+    const panelId = e.dataTransfer?.getData("text/plain");
+    if (!panelId) return;
+    const pane = mainPanes.find((p) => p.id === paneId);
+    if (!pane) return;
+    layoutStore.movePanel(panelId, paneId, pane.panels.length);
   }
 
   // ── 快捷键服务（单例）──
@@ -265,7 +314,7 @@
       layoutStore.toggleInfo()
     );
     hotkeyService.registerHotkey({ key: "\\", ctrl: true }, () => {
-      toggleNeuronSplit();
+      toggleNeuronPanel();
     });
   }
 
@@ -289,7 +338,7 @@
   <nav class="activity-area">
     <ActivityBar
       items={activityItems}
-      activeId={layoutStore.state.activity.active}
+      activeId={activityBarActive}
       onSelect={handleActivitySelect}
     />
   </nav>
@@ -299,7 +348,7 @@
       appName={runtimeStatus?.app_name ?? "星脉"}
       sessionId={activeConversationId}
       mode={activeMode}
-      neuronActive={isNeuronSplit}
+      neuronActive={neuronActive}
       sidebarVisible={layoutStore.state.sidebar.visible}
       infoVisible={layoutStore.state.info.visible}
       panelVisible={layoutStore.state.panel.visible}
@@ -312,7 +361,7 @@
         else layoutStore.toggleInfo();
       }}
       onTogglePanel={() => layoutStore.togglePanel()}
-      onToggleNeuron={() => handleActivitySelect("neurons")}
+      onToggleNeuron={() => toggleNeuronPanel()}
     />
   </header>
 
@@ -332,28 +381,50 @@
     <!-- Center column: editor + bottom panel -->
     <div class="center-column">
       <main class="chat-area" bind:this={mainRef}>
-        <EditorTabs
-          tabs={mainTabs}
-          activeId={layoutStore.state.activity.active}
-          split={isNeuronSplit}
-          onSelect={(id) => layoutStore.setActivity(id)}
-          onClose={handleTabClose}
-        />
         <div class="chat-content">
-          {#if isNeuronSplit}
-            <div class="main-split" style="--split-ratio: {splitRatio}">
-              <ViewHost registration={chatView} />
-              <Splitter
-                orientation="vertical"
-                onResize={handleSplitResize}
-                onResizeEnd={() => layoutStore.persistNow()}
-              />
-              <ViewHost registration={neuronsView} />
+          {#if mainPanes.length === 0}
+            <div class="main-empty">
+              <p>{t("common.mainEmpty")}</p>
             </div>
-          {:else if layoutStore.state.activity.active === "neurons"}
-            <ViewHost registration={neuronsView} />
           {:else}
-            <ViewHost registration={chatView} />
+            <div class="main-panes">
+              {#each mainPanes as pane, i (pane.id)}
+                {#if i > 0}
+                  <Splitter
+                    orientation="vertical"
+                    onResize={(delta) => handlePaneResize(i - 1, delta)}
+                    onResizeEnd={() => layoutStore.persistNow()}
+                  />
+                {/if}
+                <div
+                  class="main-pane"
+                  role="group"
+                  class:active={pane.id === activePaneId}
+                  style="flex-grow: {pane.grow};"
+                  ondragover={handlePaneDragOver}
+                  ondrop={(e) => handlePaneDrop(e, pane.id)}
+                >
+                  <!-- 每个分栏一个独立 tab 列表（分栏内面板可切换/拖拽重排/跨分栏移动） -->
+                  <EditorTabs
+                    tabs={paneTabs(pane)}
+                    activeId={pane.activePanelId}
+                    paneId={pane.id}
+                    onSelect={(panelId) => layoutStore.setActivePanel(panelId)}
+                    onClose={handleTabClose}
+                    onDrop={(panelId, targetPaneId, targetIndex) =>
+                      layoutStore.movePanel(panelId, targetPaneId, targetIndex)}
+                    onDropToNewPane={(panelId) => layoutStore.movePanelToNewPane(panelId)}
+                  />
+                  <div class="pane-content">
+                    {#each pane.panels as panel (panel.id)}
+                      <div class="pane-view" class:visible={panel.id === pane.activePanelId}>
+                        <ViewHost registration={viewForType(panel.type)} />
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+              {/each}
+            </div>
           {/if}
         </div>
       </main>
@@ -525,6 +596,57 @@
     flex-direction: column;
   }
 
+  /* main 区空态：默认无面板，提示从入口插入 */
+  .main-empty {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-muted);
+    font-size: var(--fs-sm);
+  }
+
+  /* main 区分栏：flex 并排，分栏间由 Splitter 分隔；激活栏边框高亮 */
+  .main-panes {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+  }
+  .main-pane {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    border-right: var(--border-width) solid transparent;
+  }
+  .main-pane.active {
+    border-right-color: var(--color-border);
+  }
+  /* 分栏内容区：tab 栏下方占据剩余高度 */
+  .pane-content {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  /* 分栏内面板：仅激活面板可见，其余保持挂载（隐藏）以保留状态 */
+  .pane-view {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: none;
+  }
+  /* 列方向 flex：子元素（视图组件）在交叉轴（宽度）上 stretch 继承外层宽度 */
+  .pane-view.visible {
+    display: flex;
+    flex-direction: column;
+  }
+
   .info-area {
     flex: none;
     width: 280px;
@@ -544,17 +666,6 @@
   }
 
   .error-area { grid-area: error; }
-
-  .main-split {
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-    display: grid;
-    grid-template-columns:
-      minmax(0, calc(var(--split-ratio) * (100% - 4px))) auto
-      minmax(0, calc((1 - var(--split-ratio)) * (100% - 4px)));
-  }
-  .main-split > :global(*) { min-width: 0; min-height: 0; }
 
   .loading-overlay {
     position: fixed; inset: 0;

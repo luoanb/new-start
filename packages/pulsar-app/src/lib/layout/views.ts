@@ -16,6 +16,8 @@ import ToolPanel from "$lib/components/ToolPanel.svelte";
 import LogPanel from "$lib/components/LogPanel.svelte";
 import ChatArea from "$lib/components/ChatArea.svelte";
 import NeuronManager from "$lib/components/NeuronManager.svelte";
+import ToolEditor from "$lib/components/ToolEditor.svelte";
+import type { MainPanelType } from "./layoutTypes";
 
 export type { ViewContainerId } from "./layoutTypes";
 
@@ -50,26 +52,41 @@ export const viewRegistry: Record<string, ViewRegistration> = {
 export const mainViews: ViewRegistration[] = [
   { id: "chat", title: "views.chat", component: ChatArea },
   { id: "neurons", title: "views.neurons", component: NeuronManager },
+  { id: "tool-editor", title: "views.toolEditor", component: ToolEditor },
 ];
 
-/** Activity Bar 入口（icon 轨）。 */
+/** Activity Bar 入口（icon 轨）。chat 用于向 main 区插入会话面板。 */
 export const activityItems: ViewMeta[] = [
   {
     id: "sessions",
     label: "views.sessions",
     icon: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.8-.9L3 21l1.9-5.7a8.5 8.5 0 0 1-.9-3.8A8.38 8.38 0 0 1 12.5 3 8.38 8.38 0 0 1 21 11.5z"/></svg>',
   },
-];
-
-/** 主区（chat-area）tab 栏：VS Code editor group 风格，split 时并排显示。 */
-export const mainTabs: ViewMeta[] = [
-  { id: "chat", label: "views.chat", icon: "🖥" },
   {
-    id: "neurons",
-    label: "views.neurons",
-    icon: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="2"/><circle cx="19" cy="7" r="2"/><circle cx="12" cy="18" r="2"/><line x1="6.5" y1="7" x2="11" y2="16"/><line x1="17.5" y1="8" x2="13" y2="16"/></svg>',
+    id: "chat",
+    label: "views.chat",
+    icon: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
   },
 ];
+
+/**
+ * main 区面板元数据（tab 栏 / 空态提示共用）。
+ * icon 统一 16x16 SVG，与侧栏视图图标风格对齐。
+ */
+export const mainPanelMeta: Record<MainPanelType, { label: string; icon: string }> = {
+  chat: {
+    label: "views.chat",
+    icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+  },
+  neurons: {
+    label: "views.neurons",
+    icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="2"/><circle cx="19" cy="7" r="2"/><circle cx="12" cy="18" r="2"/><line x1="6.5" y1="7" x2="11" y2="16"/><line x1="17.5" y1="8" x2="13" y2="16"/></svg>',
+  },
+  "tool-editor": {
+    label: "views.toolEditor",
+    icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.83 2.83 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>',
+  },
+};
 
 export function getRegistration(id: string): ViewRegistration | undefined {
   return viewRegistry[id];

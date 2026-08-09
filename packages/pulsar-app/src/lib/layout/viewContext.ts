@@ -21,6 +21,10 @@ export type ViewCommands = {
   openCreateModal: () => void;
   showError: (msg: string) => void;
   dismissError: () => void;
+  /** 在 main 区打开工具配置编辑面板（与对话同级的独立面板）。 */
+  openToolEditor: () => void;
+  /** 关闭工具配置编辑面板，回到打开前的 main 区视图。 */
+  closeToolEditor: () => void;
 };
 
 /** 会话级 UI 状态（组合根持有，$state 保证响应式传播）。

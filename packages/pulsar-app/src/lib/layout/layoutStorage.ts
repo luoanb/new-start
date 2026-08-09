@@ -1,4 +1,4 @@
-import type { LayoutState } from "./layoutTypes";
+import type { LayoutState, MainPane, MainPanel } from "./layoutTypes";
 import { DEFAULT_LAYOUT } from "./layoutTypes";
 
 // 抽象存储接口 —— 未来可替换为后端文件存储（如 Tauri fs 插件），LayoutStore 零改动
@@ -47,8 +47,20 @@ export class LocalStorageLayoutStorage implements LayoutStorage {
 // 未知字段丢弃；version 匹配时逐段浅合并，缺字段补默认值。
 // 旧版本迁移：保留面板宽度/高度/激活视图，视图归属回退默认。
 function normalize(parsed: Partial<LayoutState>): LayoutState {
+  // v8 及更早统一迁移 main（v7 的 splits → v8 的 panes；v8 直接沿用）
+  const migratedMain = migrateMain(parsed);
+
   if (parsed.version === DEFAULT_LAYOUT.version) {
-    return sanitizeLegacyInfo(merge(parsed));
+    const merged = merge(parsed);
+    if (migratedMain) merged.main = migratedMain;
+    return sanitizeLegacyInfo(merged);
+  }
+
+  // v7：仅 main 结构变化（splits → panes），其余与 v8 相同
+  if (parsed.version === 7) {
+    const merged = merge(parsed);
+    if (migratedMain) merged.main = migratedMain;
+    return sanitizeLegacyInfo(merged);
   }
 
   // v3/v4/v5/v6 → v7：v3 的 Info 是单一组合视图 "info"，v4 起拆为三个独立面板；
@@ -59,14 +71,16 @@ function normalize(parsed: Partial<LayoutState>): LayoutState {
   if (parsed.version === 6 || parsed.version === 5 || parsed.version === 4 || parsed.version === 3) {
     const merged = merge(parsed, parsed.version === 3);
     const withTopics = placeTopicsInSidebar(merged, parsed.version === 3);
-    return sanitizeLegacyInfo(placeToolsInSidebar(withTopics));
+    const placed = sanitizeLegacyInfo(placeToolsInSidebar(withTopics));
+    if (migratedMain) placed.main = migratedMain;
+    return placed;
   }
 
   if (parsed.version === 2) {
     const old = parsed as Partial<LayoutState> & {
       panel?: { visible?: boolean; height?: number; activeView?: string };
     };
-    return {
+    const result: LayoutState = {
       version: DEFAULT_LAYOUT.version,
       sidebar: { ...DEFAULT_LAYOUT.sidebar, ...old.sidebar },
       info: { ...DEFAULT_LAYOUT.info, ...old.info },
@@ -82,9 +96,52 @@ function normalize(parsed: Partial<LayoutState>): LayoutState {
       main: { ...DEFAULT_LAYOUT.main, ...old.main },
       activity: { ...DEFAULT_LAYOUT.activity, ...old.activity },
     };
+    if (migratedMain) result.main = migratedMain;
+    return result;
   }
 
   return { ...DEFAULT_LAYOUT };
+}
+
+/** v7 及更早的 main.splits（chat|neurons 并排）→ v8 panes。v8 数据无 splits，返回 null 沿用原结构。 */
+function migrateMain(parsed: Partial<LayoutState>): LayoutState["main"] | null {
+  const raw = parsed.main as { splits?: { id?: string }[] } | null | undefined;
+  const splits = raw?.splits;
+  if (!Array.isArray(splits) || splits.length === 0) return null;
+  const panes: MainPane[] = splits.map((s, i) => {
+    const panel: MainPanel = {
+      id: `panel-${i}-${Math.random().toString(36).slice(2, 8)}`,
+      type: s.id === "neuron" ? "neurons" : "chat",
+    };
+    return {
+      id: `pane-${i}-${Math.random().toString(36).slice(2, 8)}`,
+      grow: 1,
+      panels: [panel],
+      activePanelId: panel.id,
+    };
+  });
+  return { panes, activePaneId: panes[0]?.id ?? null };
+}
+
+/** 分栏面板归一化：旧 v8 单 `panel` 形态 → `panels[]` 形态；校验 activePanelId 悬空回退。 */
+function normalizePanes(panes: MainPane[]): MainPane[] {
+  return panes.map((p) => {
+    const legacy = p as MainPane & { panel?: MainPanel };
+    const panels = Array.isArray(legacy.panels)
+      ? legacy.panels
+      : legacy.panel
+        ? [legacy.panel]
+        : [];
+    const activePanelId = panels.some((x) => x.id === p.activePanelId)
+      ? p.activePanelId
+      : panels[0]?.id ?? null;
+    return {
+      id: p.id,
+      grow: typeof p.grow === "number" && Number.isFinite(p.grow) ? p.grow : 1,
+      panels,
+      activePanelId,
+    };
+  });
 }
 
 /** 按默认布局浅合并用户持久化数据；resetInfo 时 info 容器强制使用默认（旧组合视图场景）。 */
@@ -161,7 +218,7 @@ function placeToolsInSidebar(state: LayoutState): LayoutState {
   return { ...state, containers: containers as LayoutState["containers"] };
 }
 
-/** 兜底清理旧版组合视图 "info" 的残留 id（已被 providers/models/topics 取代）。 */
+/** 兜底清理旧版组合视图 "info" 的残留 id（已被 providers/models/topics 取代），并修正 main 一致性。 */
 function sanitizeLegacyInfo(state: LayoutState): LayoutState {
   const LEGACY = "info";
   const containers = { ...state.containers } as Record<string, { views: string[]; activeView: string }>;
@@ -171,9 +228,20 @@ function sanitizeLegacyInfo(state: LayoutState): LayoutState {
       containers[cid].activeView === LEGACY ? views[0] ?? "" : containers[cid].activeView;
     containers[cid] = { views, activeView };
   }
+  // main 一致性：panes 缺失或 activePaneId 悬空时回退（默认空 / 首个分栏）；分栏面板归一化为 panels[] 形态
+  const main = Array.isArray(state.main?.panes)
+    ? {
+        ...state.main,
+        panes: normalizePanes(state.main.panes),
+        activePaneId: state.main.panes.some((p) => p.id === state.main.activePaneId)
+          ? state.main.activePaneId
+          : state.main.panes[0]?.id ?? null,
+      }
+    : { ...DEFAULT_LAYOUT.main };
   return {
     ...state,
     containers: containers as LayoutState["containers"],
     hiddenViews: state.hiddenViews.filter((v) => v !== LEGACY),
+    main,
   };
 }

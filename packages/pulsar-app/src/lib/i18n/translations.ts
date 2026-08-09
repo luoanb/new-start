@@ -10,6 +10,8 @@ export type Translations = {
     selectAll: string;
     clickToCopy: string;
     copied: string;
+    mainEmpty: string;
+    newPane: string;
   };
   statusBar: {
     appName: string;
@@ -282,6 +284,7 @@ export type Translations = {
     logs: string;
     chat: string;
     neurons: string;
+    toolEditor: string;
   };
 };
 
@@ -297,6 +300,8 @@ export const en: Translations = {
     selectAll: "Select all",
     clickToCopy: "Click to copy",
     copied: "Copied",
+    mainEmpty: "Open a panel from the activity bar to get started.",
+    newPane: "New Pane",
   },
   statusBar: {
     appName: "Pulsar",
@@ -586,6 +591,7 @@ export const en: Translations = {
     logs: "Logs",
     chat: "Chat",
     neurons: "Neurons",
+    toolEditor: "Tool config",
   },
 };
 
@@ -601,6 +607,8 @@ export const zh: Translations = {
     selectAll: "全选",
     clickToCopy: "点击复制",
     copied: "已复制",
+    mainEmpty: "从左侧入口打开一个面板开始使用",
+    newPane: "新建分栏",
   },
   statusBar: {
     appName: "星脉",
@@ -890,5 +898,6 @@ export const zh: Translations = {
     logs: "日志",
     chat: "对话",
     neurons: "神经元",
+    toolEditor: "工具配置",
   },
 };
