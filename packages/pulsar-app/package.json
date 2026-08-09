@@ -1,0 +1,35 @@
+{
+  "name": "pulsar-app",
+  "version": "0.1.0",
+  "description": "Pulsar（星脉）— 自主推进的 AI Agent 桌面客户端",
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+    "cli": "cargo run --manifest-path src-tauri/Cargo.toml --bin pulsar-cli --",
+    "tui": "cargo run --manifest-path src-tauri/Cargo.toml --bin pulsar-tui",
+    "tauri": "tauri"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-opener": "^2",
+    "@xyflow/svelte": "^1.6.2",
+    "dompurify": "^3.4.12",
+    "marked": "^18.0.7"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-static": "^3.0.6",
+    "@sveltejs/kit": "^2.9.0",
+    "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "@tauri-apps/cli": "^2",
+    "@types/dompurify": "^3.2.0",
+    "svelte": "^5.0.0",
+    "svelte-check": "^4.0.0",
+    "typescript": "~5.6.2",
+    "vite": "^6.0.3"
+  }
+}

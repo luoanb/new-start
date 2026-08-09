@@ -1,6 +1,6 @@
 # Design
 
-Visual design system for Agent App — Svelte + Tauri AI Agent desktop client.
+Visual design system for Pulsar（星脉）— Svelte + Tauri AI Agent desktop client.
 
 ## Theme
 

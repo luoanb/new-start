@@ -1,0 +1,46 @@
+[package]
+name = "pulsar-app"
+version = "0.1.0"
+description = "Pulsar — an autonomous AI agent desktop client"
+authors = ["you"]
+edition = "2021"
+default-run = "pulsar-app"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "pulsar_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+async-openai = { version = "0.41.1", features = ["chat-completion"] }
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "time", "sync", "process"] }
+ratatui = "0.30"
+crossterm = "0.28"
+ratatui-textarea = "0.9"
+async-trait = "0.1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "registry"] }
+parking_lot = "0.12"
+rust-embed = "8"
+rmcp = { version = "3", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+http = "1"
+
+[dev-dependencies]
+# 仅测试用：本地 mock MCP server（stdio 走 in-memory duplex；http 走 axum 暴露的 streamable-http server）。
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+rmcp = { version = "3", features = ["server", "transport-streamable-http-server"] }
+tokio = { version = "1.53.1", features = ["io-util"] }
+

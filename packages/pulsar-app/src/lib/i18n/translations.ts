@@ -1,0 +1,882 @@
+export type Translations = {
+  locale: { label: string };
+  common: {
+    send: string;
+    sending: string;
+    thinking: string;
+    noModel: string;
+    session: string;
+    selected: string;
+    selectAll: string;
+  };
+  statusBar: {
+    appName: string;
+    toggleSidebar: string;
+    toggleInfo: string;
+    togglePanel: string;
+  };
+  sessionList: {
+    title: string;
+    empty: string;
+    emptyHint: string;
+    create: string;
+    newButton: string;
+    msgs: string;
+    newSession: string;
+    yesterday: string;
+    running: string;
+    copyId: string;
+    closeSession: string;
+    collapseSidebar: string;
+    expandSidebar: string;
+  };
+  chatArea: {
+    emptyTitle: string;
+    emptyDesc: string;
+    chatInputPlaceholder: string;
+  };
+  chatMessage: {
+    you: string;
+    assistant: string;
+    system: string;
+    tool: string;
+    compaction: string;
+    nudge: string;
+    copy: string;
+    rate: string;
+    copied: string;
+  };
+  sidePanel: {
+    providers: string;
+    models: string;
+    noProviders: string;
+    noModels: string;
+    id: string;
+    auth: string;
+    api: string;
+    kind: string;
+    context: string;
+    output: string;
+    tokens: string;
+    mIn: string;
+    mOut: string;
+    caps: Record<string, string>;
+  };
+  createModal: {
+    title: string;
+    hint: string;
+    chatLabel: string;
+    chatDesc: string;
+    agentLabel: string;
+    agentDesc: string;
+    assistantLabel: string;
+    assistantDesc: string;
+  };
+  themeSwitcher: {
+    light: string;
+    dark: string;
+    system: string;
+  };
+  toolCall: {
+    arguments: string;
+  };
+  toolResult: {
+    executed: string;
+    timedOut: string;
+    empty: string;
+    stdout: string;
+    stderr: string;
+  };
+  drawer: {
+    sessions: string;
+    info: string;
+  };
+  topicPanel: {
+    topics: string;
+    all: string;
+    filterActive: string;
+    filterDone: string;
+    create: string;
+    createTitle: string;
+    createName: string;
+    createDesc: string;
+    createSubmit: string;
+    creating: string;
+    noTopics: string;
+    deleteConfirm: string;
+    cancel: string;
+    confirm: string;
+    pause: string;
+    resume: string;
+    progress: string;
+    scopeItems: string;
+    addScopeItem: string;
+    scopeGoal: string;
+    scopeContract: string;
+    scopeAdd: string;
+    scopeStatusPending: string;
+    scopeStatusDone: string;
+    status: string;
+    description: string;
+    updated: string;
+    sessionId: string;
+    name: string;
+    topicStatus: Record<string, string>;
+    createFailed: string;
+    pauseFailed: string;
+    resumeFailed: string;
+    deleteFailed: string;
+    addScopeFailed: string;
+    completeScopeFailed: string;
+    deleteScopeFailed: string;
+  };
+  pollerPanel: {
+    poller: string;
+    status: string;
+    running: string;
+    paused: string;
+    tickCount: string;
+    taskCount: string;
+    interval: string;
+    parallelism: string;
+    parallelismHint: string;
+    save: string;
+    pause: string;
+    resume: string;
+    trigger: string;
+    triggering: string;
+    noPoller: string;
+    pendingTrigger: string;
+  };
+  neuronPanel: {
+    neurons: string;
+    list: string;
+    detail: string;
+    network: string;
+    noNeurons: string;
+    weight: string;
+    delta: string;
+    apply: string;
+    systemType: string;
+    description: string;
+    content: string;
+    toolIds: string;
+    createdAt: string;
+    updatedAt: string;
+    edit: string;
+    save: string;
+    saving: string;
+    cancel: string;
+    connections: string;
+    source: string;
+    target: string;
+    connectionWeight: string;
+    networkTitle: string;
+    networkDepth: string;
+    viewModeGraph: string;
+    viewModeTree: string;
+    edgeWeight: string;
+    depthLabel: string;
+    coreSelect: string;
+    edgeTypeLabel: string;
+    edgeFloating: string;
+    edgeBezier: string;
+    edgeSmoothstep: string;
+    edgeStep: string;
+    edgeStraight: string;
+    back: string;
+    viewNetwork: string;
+    jumpTo: string;
+    loading: string;
+    search: string;
+    filterAll: string;
+    connectionsCount: string;
+    emptyTitle: string;
+    emptyHint: string;
+    startAssistant: string;
+    focusNode: string;
+    drawerTitle: string;
+    close: string;
+    create: string;
+    createTitle: string;
+    createOrphan: string;
+    createDownstream: string;
+    createSource: string;
+    createSourcePlaceholder: string;
+    createDescLabel: string;
+    createDescPlaceholder: string;
+    createContentLabel: string;
+    createContentPlaceholder: string;
+    createDescRequired: string;
+    createSourceRequired: string;
+    createConfirm: string;
+    creating: string;
+    createDownstreamFromHere: string;
+    createToolIdsLabel: string;
+    createToolIdsPlaceholder: string;
+    noToolsAvailable: string;
+    id: string;
+    copy: string;
+    copied: string;
+    layoutLabel: string;
+    layoutForce: string;
+    layoutLayered: string;
+    setAsSeed: string;
+  };
+  toolPanel: {
+    title: string;
+    reload: string;
+    editConfig: string;
+    loading: string;
+    mcpSection: string;
+    toolsSection: string;
+    httpToolsSection: string;
+    commandToolsSection: string;
+    toolsCount: string;
+    noMcpServers: string;
+    noTools: string;
+    status: Record<string, string>;
+    modalTitle: string;
+    modalAria: string;
+    close: string;
+    loadingConfig: string;
+    add: string;
+    delete: string;
+    emptyMcp: string;
+    emptyHttp: string;
+    emptyCommand: string;
+    name: string;
+    transport: string;
+    method: string;
+    command: string;
+    args: string;
+    url: string;
+    timeoutMs: string;
+    desc: string;
+    template: string;
+    disabled: string;
+    transportHint: string;
+    httpUrlHint: string;
+    commandHint: string;
+    saveHint: string;
+    optional: string;
+    descPlaceholder: string;
+    cancel: string;
+    save: string;
+    saving: string;
+    loadFailed: string;
+    reassembleFailed: string;
+    loadListFailed: string;
+  };
+  views: {
+    sessions: string;
+    providers: string;
+    models: string;
+    topics: string;
+    poller: string;
+    tools: string;
+    logs: string;
+    chat: string;
+    neurons: string;
+  };
+};
+
+export const en: Translations = {
+  locale: { label: "English" },
+  common: {
+    send: "Send",
+    sending: "Sending...",
+    thinking: "Thinking...",
+    noModel: "No model selected",
+    session: "Session",
+    selected: "Selected: {count}",
+    selectAll: "Select all",
+  },
+  statusBar: {
+    appName: "Pulsar",
+    toggleSidebar: "Toggle sidebar",
+    toggleInfo: "Toggle info panel",
+    togglePanel: "Toggle bottom panel",
+  },
+  sessionList: {
+    title: "Sessions",
+    empty: "No sessions yet.",
+    emptyHint: "Start a conversation to see it here",
+    create: "Create one",
+    newButton: "New session",
+    msgs: "msgs",
+    newSession: "New session",
+    yesterday: "Yesterday",
+    running: "Running",
+    copyId: "Copy session ID",
+    closeSession: "Close session",
+    collapseSidebar: "Collapse sidebar",
+    expandSidebar: "Expand sidebar",
+  },
+  chatArea: {
+    emptyTitle: "Start a conversation",
+    emptyDesc: "Send a message below to begin",
+    chatInputPlaceholder: "Type a message... (Enter to send, Shift+Enter for new line)",
+  },
+  chatMessage: {
+    you: "You",
+    assistant: "Assistant",
+    system: "system",
+    tool: "tool",
+    compaction: "summary",
+    nudge: "polling advance",
+    copy: "Copy",
+    rate: "Rate",
+    copied: "Copied",
+  },
+  sidePanel: {
+    providers: "Providers",
+    models: "Models",
+    noProviders: "No providers configured.",
+    noModels: "No models available.",
+    id: "ID",
+    auth: "Auth",
+    api: "API",
+    kind: "Kind",
+    context: "Context",
+    output: "Output",
+    tokens: "tokens",
+    mIn: "M in",
+    mOut: "M out",
+    caps: {
+      chat: "Chat",
+      tools: "Tools",
+      streaming: "Stream",
+      structured_output: "JSON",
+      vision: "Vision",
+    },
+  },
+  createModal: {
+    title: "New Session",
+    hint: "Choose the session mode:",
+    chatLabel: "Chat",
+    chatDesc: "Simple conversation, no tools.",
+    agentLabel: "Agent",
+    agentDesc: "Can call tools for tasks.",
+    assistantLabel: "Assistant",
+    assistantDesc: "Autonomous progression.",
+  },
+  themeSwitcher: {
+    light: "Light",
+    dark: "Dark",
+    system: "System",
+  },
+  toolCall: {
+    arguments: "Arguments",
+  },
+  toolResult: {
+    executed: "Command executed",
+    timedOut: "timed out",
+    empty: "No output",
+    stdout: "stdout",
+    stderr: "stderr",
+  },
+  drawer: {
+    sessions: "Sessions",
+    info: "Info",
+  },
+  topicPanel: {
+    topics: "Topics",
+    all: "All",
+    filterActive: "Active",
+    filterDone: "Done",
+    create: "New Topic",
+    createTitle: "Create Topic",
+    createName: "Name",
+    createDesc: "Description",
+    createSubmit: "Create",
+    creating: "Creating...",
+    noTopics: "No topics yet.",
+    deleteConfirm: "Are you sure you want to delete this topic?",
+    cancel: "Cancel",
+    confirm: "Delete",
+    pause: "Pause",
+    resume: "Resume",
+    progress: "Progress",
+    scopeItems: "Scope Items",
+    addScopeItem: "Add Item",
+    scopeGoal: "Goal",
+    scopeContract: "Done Contract",
+    scopeAdd: "Add",
+    scopeStatusPending: "Pending",
+    scopeStatusDone: "Done",
+    status: "Status",
+    description: "Description",
+    updated: "Updated",
+    sessionId: "Session",
+    name: "Name",
+    topicStatus: {
+      todo: "Todo",
+      in_progress: "In Progress",
+      paused: "Paused",
+      done: "Done",
+      cancelled: "Cancelled",
+    },
+    createFailed: "Create failed: {error}",
+    pauseFailed: "Pause failed: {error}",
+    resumeFailed: "Resume failed: {error}",
+    deleteFailed: "Delete failed: {error}",
+    addScopeFailed: "Add scope item failed: {error}",
+    completeScopeFailed: "Complete scope item failed: {error}",
+    deleteScopeFailed: "Delete scope item failed: {error}",
+  },
+  pollerPanel: {
+    poller: "Poller",
+    status: "Status",
+    running: "Running",
+    paused: "Paused",
+    tickCount: "Ticks",
+    taskCount: "Tasks",
+    interval: "Interval",
+    parallelism: "Parallelism",
+    parallelismHint: "Topics advanced per poll round (1–8); saved & applied immediately.",
+    save: "Save",
+    pause: "Pause",
+    resume: "Resume",
+    trigger: "Trigger",
+    triggering: "Triggering...",
+    noPoller: "Poller not available.",
+    pendingTrigger: "Pending Trigger",
+  },
+  neuronPanel: {
+    neurons: "Neurons",
+    list: "Neuron List",
+    detail: "Neuron Detail",
+    network: "Network View",
+    noNeurons: "No neurons yet.",
+    weight: "Weight",
+    delta: "Delta",
+    apply: "Apply",
+    systemType: "System Type",
+    description: "Description",
+    content: "Content",
+    toolIds: "Tool IDs",
+    createdAt: "Created",
+    updatedAt: "Updated",
+    edit: "Edit",
+    save: "Save",
+    saving: "Saving...",
+    cancel: "Cancel",
+    connections: "Connections",
+    source: "Source",
+    target: "Target",
+    connectionWeight: "Weight",
+    networkTitle: "Network (depth: {depth})",
+    networkDepth: "Depth",
+    viewModeGraph: "Graph",
+    viewModeTree: "Tree",
+    edgeWeight: "Edge",
+    depthLabel: "Depth",
+    coreSelect: "Core",
+    edgeTypeLabel: "Edge",
+    edgeFloating: "Auto",
+    edgeBezier: "Bezier",
+    edgeSmoothstep: "Smooth",
+    edgeStep: "Step",
+    edgeStraight: "Straight",
+    back: "Back",
+    viewNetwork: "View Network",
+    jumpTo: "View",
+    loading: "Loading...",
+    search: "Search neurons...",
+    filterAll: "All",
+    connectionsCount: "{count} links",
+    emptyTitle: "No neurons yet",
+    emptyHint: "Talk in Assistant mode to grow your neuron network.",
+    startAssistant: "Start in Assistant mode",
+    focusNode: "Focus",
+    drawerTitle: "Neuron",
+    close: "Close",
+    create: "New Neuron",
+    createTitle: "Create Neuron",
+    createOrphan: "Orphan",
+    createDownstream: "Downstream",
+    createSource: "Upstream neuron",
+    createSourcePlaceholder: "Select upstream neuron...",
+    createDescLabel: "Description",
+    createDescPlaceholder: "Short description of the neuron",
+    createContentLabel: "Content",
+    createContentPlaceholder: "Knowledge / content of the neuron (optional)",
+    createDescRequired: "Description is required.",
+    createSourceRequired: "Please select an upstream neuron.",
+    createConfirm: "Create",
+    creating: "Creating...",
+    createDownstreamFromHere: "Create downstream neuron",
+    createToolIdsLabel: "Tools",
+    createToolIdsPlaceholder: "Select tools this neuron can use (leave empty for none)",
+    noToolsAvailable: "No tools available",
+    id: "ID",
+    copy: "Copy",
+    copied: "Copied",
+    layoutLabel: "Layout",
+    layoutForce: "Force-directed",
+    layoutLayered: "Layered",
+    setAsSeed: "Set as seed",
+  },
+  toolPanel: {
+    title: "Tools",
+    reload: "Reload",
+    editConfig: "Edit config",
+    loading: "Loading…",
+    mcpSection: "MCP Servers",
+    toolsSection: "Tools",
+    httpToolsSection: "HTTP Tools",
+    commandToolsSection: "Command Tools",
+    toolsCount: "{count} tools",
+    noMcpServers: "No MCP servers. Click \"Edit config\" in the top-right to add one.",
+    noTools: "No tools available",
+    status: {
+      connecting: "Connecting",
+      connected: "Connected",
+      failed: "Failed",
+      disabled: "Disabled",
+    },
+    modalTitle: "Tool configuration",
+    modalAria: "Edit tool configuration",
+    close: "Close",
+    loadingConfig: "Loading config…",
+    add: "Add",
+    delete: "Delete",
+    emptyMcp: "No MCP servers",
+    emptyHttp: "No HTTP tools",
+    emptyCommand: "No command tools",
+    name: "Name",
+    transport: "Transport",
+    method: "Method",
+    command: "Command",
+    args: "Args (comma separated)",
+    url: "URL",
+    timeoutMs: "Timeout (ms)",
+    desc: "Description",
+    template: "Template (command)",
+    disabled: "Disabled",
+    transportHint: "stdio requires command; http requires URL",
+    httpUrlHint: "Fixed endpoint; {query} filled by the model",
+    commandHint: "Command passes safety rails: denylist / timeout / concurrency",
+    saveHint: "Saved immediately: writes JSON and reassembles tools",
+    optional: "Optional",
+    descPlaceholder: "Tool description",
+    cancel: "Cancel",
+    save: "Save",
+    saving: "Saving…",
+    loadFailed: "Failed to load config",
+    reassembleFailed: "Reassemble failed: {error}",
+    loadListFailed: "Failed to load tools: {error}",
+  },
+  views: {
+    sessions: "Sessions",
+    providers: "Providers",
+    models: "Models",
+    topics: "Topics",
+    poller: "Poller",
+    tools: "Tools",
+    logs: "Logs",
+    chat: "Chat",
+    neurons: "Neurons",
+  },
+};
+
+export const zh: Translations = {
+  locale: { label: "中文" },
+  common: {
+    send: "发送",
+    sending: "发送中...",
+    thinking: "思考中...",
+    noModel: "未选择模型",
+    session: "会话",
+    selected: "已选 {count}",
+    selectAll: "全选",
+  },
+  statusBar: {
+    appName: "星脉",
+    toggleSidebar: "切换左栏",
+    toggleInfo: "切换右栏",
+    togglePanel: "切换底栏",
+  },
+  sessionList: {
+    title: "会话列表",
+    empty: "暂无会话。",
+    emptyHint: "开始对话后会显示在这里",
+    create: "创建一个",
+    newButton: "新建会话",
+    msgs: "条消息",
+    newSession: "新会话",
+    yesterday: "昨天",
+    running: "运行中",
+    copyId: "复制会话 ID",
+    closeSession: "关闭会话",
+    collapseSidebar: "收起侧栏",
+    expandSidebar: "展开侧栏",
+  },
+  chatArea: {
+    emptyTitle: "开始对话",
+    emptyDesc: "在下方输入消息开始对话",
+    chatInputPlaceholder: "输入消息... (Enter 发送, Shift+Enter 换行)",
+  },
+  chatMessage: {
+    you: "你",
+    assistant: "助手",
+    system: "系统",
+    tool: "工具",
+    compaction: "摘要",
+    nudge: "轮询推进",
+    copy: "复制",
+    rate: "评价",
+    copied: "已复制",
+  },
+  sidePanel: {
+    providers: "服务商",
+    models: "模型",
+    noProviders: "未配置服务商。",
+    noModels: "无可用模型。",
+    id: "ID",
+    auth: "认证",
+    api: "API",
+    kind: "类型",
+    context: "上下文",
+    output: "输出",
+    tokens: "tokens",
+    mIn: "M 输入",
+    mOut: "M 输出",
+    caps: {
+      chat: "对话",
+      tools: "工具",
+      streaming: "流式",
+      structured_output: "JSON",
+      vision: "视觉",
+    },
+  },
+  createModal: {
+    title: "新建会话",
+    hint: "选择会话模式：",
+    chatLabel: "对话",
+    chatDesc: "简单对话，不调用工具。",
+    agentLabel: "智能体",
+    agentDesc: "可调用工具完成任务。",
+    assistantLabel: "助手",
+    assistantDesc: "自主推进模式。",
+  },
+  themeSwitcher: {
+    light: "浅色",
+    dark: "深色",
+    system: "跟随系统",
+  },
+  toolCall: {
+    arguments: "参数",
+  },
+  toolResult: {
+    executed: "命令执行",
+    timedOut: "已超时",
+    empty: "无输出",
+    stdout: "标准输出",
+    stderr: "标准错误",
+  },
+  drawer: {
+    sessions: "会话列表",
+    info: "信息",
+  },
+  topicPanel: {
+    topics: "课题",
+    all: "全部",
+    filterActive: "进行中",
+    filterDone: "已完成",
+    create: "新建课题",
+    createTitle: "创建课题",
+    createName: "名称",
+    createDesc: "描述",
+    createSubmit: "创建",
+    creating: "创建中...",
+    noTopics: "暂无课题。",
+    deleteConfirm: "确定要删除此课题吗？",
+    cancel: "取消",
+    confirm: "删除",
+    pause: "暂停",
+    resume: "恢复",
+    progress: "进度",
+    scopeItems: "范围项",
+    addScopeItem: "添加项",
+    scopeGoal: "目标",
+    scopeContract: "完成条件",
+    scopeAdd: "添加",
+    scopeStatusPending: "待办",
+    scopeStatusDone: "完成",
+    status: "状态",
+    description: "描述",
+    updated: "更新于",
+    sessionId: "会话",
+    name: "名称",
+    topicStatus: {
+      todo: "待办",
+      in_progress: "进行中",
+      paused: "已暂停",
+      done: "已完成",
+      cancelled: "已取消",
+    },
+    createFailed: "创建失败：{error}",
+    pauseFailed: "暂停失败：{error}",
+    resumeFailed: "恢复失败：{error}",
+    deleteFailed: "删除失败：{error}",
+    addScopeFailed: "添加范围项失败：{error}",
+    completeScopeFailed: "完成范围项失败：{error}",
+    deleteScopeFailed: "删除范围项失败：{error}",
+  },
+  pollerPanel: {
+    poller: "轮询器",
+    status: "状态",
+    running: "运行中",
+    paused: "已暂停",
+    tickCount: "Tick 数",
+    taskCount: "任务数",
+    interval: "间隔",
+    parallelism: "并发推进",
+    parallelismHint: "单次轮询同时推进的课题数（1–8），保存后立即生效。",
+    save: "保存",
+    pause: "暂停",
+    resume: "恢复",
+    trigger: "触发",
+    triggering: "触发中...",
+    noPoller: "Poller 不可用。",
+    pendingTrigger: "待触发",
+  },
+  neuronPanel: {
+    neurons: "神经元",
+    list: "神经元列表",
+    detail: "神经元详情",
+    network: "网络视图",
+    noNeurons: "暂无神经元。",
+    weight: "权重",
+    delta: "增量",
+    apply: "应用",
+    systemType: "系统类型",
+    description: "描述",
+    content: "内容",
+    toolIds: "工具 ID",
+    createdAt: "创建于",
+    updatedAt: "更新于",
+    edit: "编辑",
+    save: "保存",
+    saving: "保存中...",
+    cancel: "取消",
+    connections: "连接",
+    source: "来源",
+    target: "目标",
+    connectionWeight: "权重",
+    networkTitle: "网络视图（深度: {depth}）",
+    networkDepth: "深度",
+    viewModeGraph: "图",
+    viewModeTree: "树",
+    edgeWeight: "边权",
+    depthLabel: "深度",
+    coreSelect: "核心",
+    edgeTypeLabel: "连线",
+    edgeFloating: "自动",
+    edgeBezier: "曲线",
+    edgeSmoothstep: "圆角",
+    edgeStep: "直角",
+    edgeStraight: "直线",
+    back: "返回",
+    viewNetwork: "查看网络",
+    jumpTo: "查看",
+    loading: "加载中...",
+    search: "搜索神经元...",
+    filterAll: "全部",
+    connectionsCount: "{count} 条连接",
+    emptyTitle: "暂无神经元",
+    emptyHint: "在 Assistant 模式下对话，让神经元网络生长。",
+    startAssistant: "进入 Assistant 模式",
+    focusNode: "聚焦",
+    drawerTitle: "神经元",
+    close: "关闭",
+    create: "创建神经元",
+    createTitle: "创建神经元",
+    createOrphan: "孤立",
+    createDownstream: "下游",
+    createSource: "上游神经元",
+    createSourcePlaceholder: "选择上游神经元...",
+    createDescLabel: "描述",
+    createDescPlaceholder: "神经元的简短描述",
+    createContentLabel: "内容",
+    createContentPlaceholder: "神经元承载的知识 / 内容（可选）",
+    createDescRequired: "描述为必填项。",
+    createSourceRequired: "请选择上游神经元。",
+    createConfirm: "创建",
+    creating: "创建中...",
+    createDownstreamFromHere: "创建下游神经元",
+    createToolIdsLabel: "工具",
+    createToolIdsPlaceholder: "选择该神经元可用的工具（留空则无工具）",
+    noToolsAvailable: "当前没有可用工具",
+    id: "ID",
+    copy: "复制",
+    copied: "已复制",
+    layoutLabel: "布局",
+    layoutForce: "力导向",
+    layoutLayered: "分层",
+    setAsSeed: "设为画布核心",
+  },
+  toolPanel: {
+    title: "工具",
+    reload: "重新加载",
+    editConfig: "编辑配置",
+    loading: "加载中…",
+    mcpSection: "MCP Servers",
+    toolsSection: "工具",
+    httpToolsSection: "HTTP Tools",
+    commandToolsSection: "Command Tools",
+    toolsCount: "{count} 个工具",
+    noMcpServers: "暂无 MCP server，点右上角「编辑配置」添加",
+    noTools: "暂无可用工具",
+    status: {
+      connecting: "连接中",
+      connected: "已连接",
+      failed: "失败",
+      disabled: "已停用",
+    },
+    modalTitle: "工具配置",
+    modalAria: "编辑工具配置",
+    close: "关闭",
+    loadingConfig: "加载配置中…",
+    add: "添加",
+    delete: "删除",
+    emptyMcp: "暂无 MCP server",
+    emptyHttp: "暂无 HTTP tool",
+    emptyCommand: "暂无 command tool",
+    name: "名称",
+    transport: "传输方式",
+    method: "方法",
+    command: "命令",
+    args: "参数（逗号分隔）",
+    url: "地址",
+    timeoutMs: "超时（毫秒）",
+    desc: "描述",
+    template: "模板（命令模板）",
+    disabled: "停用",
+    transportHint: "stdio 需 command；http 需 url",
+    httpUrlHint: "端点固定，{query} 由模型填充",
+    commandHint: "命令经过安全护栏：denylist / 超时 / 并发",
+    saveHint: "保存即生效：写回 JSON 并触发全量重装配",
+    optional: "可选",
+    descPlaceholder: "工具描述",
+    cancel: "取消",
+    save: "保存",
+    saving: "保存中…",
+    loadFailed: "加载配置失败",
+    reassembleFailed: "重新装配失败：{error}",
+    loadListFailed: "加载工具失败：{error}",
+  },
+  views: {
+    sessions: "会话列表",
+    providers: "服务商",
+    models: "模型",
+    topics: "课题",
+    poller: "轮询器",
+    tools: "工具",
+    logs: "日志",
+    chat: "对话",
+    neurons: "神经元",
+  },
+};
