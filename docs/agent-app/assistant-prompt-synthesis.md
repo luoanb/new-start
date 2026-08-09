@@ -45,7 +45,7 @@ Insert 文件目录：`packages/agent-app/src-tauri/inserts/<id>.md`（`rust-emb
 3. SelectNeuronBeforeHook
       ├─ 第一步 select_assistant_candidates(scope)
       │    ├─ 首轮（无 last_selected）→ Global（默认 7，可覆盖）
-      │    └─ 后续轮 → Neighborhood（默认下游 6 + self/兄弟最多 3 + 三层上游最多 3，可覆盖）
+      │    └─ 后续轮 → Neighborhood（默认下游 6 + self/兄弟最多 3 + 三层上游最多 3 + 全局权重 top5，可覆盖）
       └─ 第二步 select_one_from_with_history(candidates, ctx.messages) → 选型模型
 4. authorize_tools
 5. run_core                     → 主对话模型（可 tools；Neuron 模板）
@@ -185,7 +185,7 @@ tools = ToolRegistry.definitions_for(authorized_tool_ids) 或 None
 | 时机 | converse / step / poller |
 | 选型源 | 仅无 `last_selected_neuron_id` 时取全局 7；否则三种入口均以 last selected 为 self |
 | 第一步：候选池 | `select_assistant_candidates(scope)`；Global/Neighborhood 强类型作用域；Policy 可控制既有下游、新建下游、缺口补齐、兄弟数和上游深度 |
-| 默认邻域池 | 下游 6（既有最多 4，固定新建 2，既有缺口也新建补齐）+ self/兄弟最多 3 + 父/爷/爷的父最多 3；按 id 去重 |
+| 默认邻域池 | 下游 6（既有最多 4，固定新建 2，既有缺口也新建补齐）+ self/兄弟最多 3 + 父/爷/爷的父最多 3 + 全局权重 top5（去重并入池尾）；按 id 去重 |
 | 多父规则 | 每层选节点 weight 最高的直接父节点；最高权重并列随机；兄弟取第一层父节点的其他直接子节点 |
 | 第二步：选 1 | `select_one_from_with_history(candidates, ctx.messages)`；`Manual` + `neuron.select_one`；失败按 weight 回退 |
 | 写入 ctx | `selected_neuron`；`system_prompt = selected.content` |
@@ -299,3 +299,4 @@ tools = ToolRegistry.definitions_for(authorized_tool_ids) 或 None
 | 2026-08-02 | 接入 `ModelCallInput`：Hook 只读拼历史；`Neuron`/`Manual` 模板；insert 进 assemble `content`；反写本报告 |
 | 2026-08-03 | 助手选型改为首轮全局、后续统一使用 last selected 邻域池；记录 6+3+3 配额与三层上游规则 |
 | 2026-08-03 | 恢复候选池构造与 LLM 选 1 两个显式阶段；新增强类型 Scope/Policy 控制配额，默认值暂不进入 config |
+| 2026-08-09 | 邻域池在既有装配后并入全局权重 top5（按 id 去重），保证高分节点在任意轮次可被选中；`list_global_candidates` 口径收紧为排除系统提示词与 observing 变体 |

@@ -445,6 +445,8 @@ pub struct NeighborhoodPoolPolicy {
     pub fill_downstream_shortage: bool,
     pub siblings: usize,
     pub upstream_depth: usize,
+    /// 全局权重 top N 补充配额：装配完邻域后并入全库 weight 最高的 N 个（按 id 去重）；0 = 不补充。
+    pub global_top_weight: usize,
 }
 
 impl Default for NeighborhoodPoolPolicy {
@@ -455,6 +457,7 @@ impl Default for NeighborhoodPoolPolicy {
             fill_downstream_shortage: true,
             siblings: 2,
             upstream_depth: 3,
+            global_top_weight: 5,
         }
     }
 }

@@ -45,6 +45,7 @@ pub struct NeighborhoodPoolPolicy {
     pub fill_downstream_shortage: bool,
     pub siblings: usize,
     pub upstream_depth: usize,
+    pub global_top_weight: usize, // 全局权重 top N 补充配额，默认 5；0 = 不补充
 }
 
 pub enum AssistantCandidateScope {
@@ -69,7 +70,7 @@ pub async fn select_one_from_with_history(
 ) -> AppResult<Neuron>;
 ```
 
-- `NeighborhoodPoolPolicy::default()`：`existing_downstream=4`、`new_downstream=2`、`fill_downstream_shortage=true`、`siblings=2`、`upstream_depth=3`。
+- `NeighborhoodPoolPolicy::default()`：`existing_downstream=4`、`new_downstream=2`、`fill_downstream_shortage=true`、`siblings=2`、`upstream_depth=3`、`global_top_weight=5`。
 - `AssistantCandidateScope::global_default()` 返回全局 7；`neighborhood_default(self_id)` 使用默认邻域策略。调用方也可直接构造自定义配额。
 - Manager 校验全局 limit 非零、算术不溢出，以及本轮实际新建数量不超过 `MAX_CREATE_NEURON_COUNT`。
 - self 邻域组装顺序：
@@ -78,6 +79,7 @@ pub async fn select_one_from_with_history(
   3. 加入 self；若存在直接父节点，从该父节点的下游中取最多 `siblings` 个兄弟。
   4. 从该父节点开始，沿每层最高权重父节点追溯最多 `upstream_depth` 层。
   5. 全程按 neuron id 去重；不为兄弟或上游缺口补位。
+  6. 装配完成后，按 `global_top_weight`（默认 5）并入全库 `weight DESC` 最高的 N 个普通神经元（排除已删除、系统提示词、observing 变体），按 id 去重追加到池尾。
 
 ## Goal Alignment Check
 
@@ -106,6 +108,7 @@ pub async fn select_one_from_with_history(
 - 2026-08-03：用户指出一步式接口隐藏配额控制；先反写契约为强类型 Scope/Policy + 显式两阶段，默认值暂不接入 config。
 - 2026-08-03：完成接口纠偏：新增 `AssistantCandidateScope` / `NeighborhoodPoolPolicy`，Hook 显式先构造候选池、再基于历史选 1。
 - 2026-08-03：新增自定义配额、全局零配额和新建批次上限测试，并反写实现态快照。
+- 2026-08-09：邻域候选池补充全局权重 top5——`NeighborhoodPoolPolicy` 新增 `global_top_weight`（默认 5）；`list_global_candidates` 口径收紧为排除系统提示词与 observing 变体；装配末尾并入全库 weight 最高的 N 个（按 id 去重）。详见 [`docs/micro_specs/2026-08-09_12-00_neuron-pool-top-weight-5.md`](../micro_specs/2026-08-09_12-00_neuron-pool-top-weight-5.md)。
 
 ## Validation
 

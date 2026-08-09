@@ -365,6 +365,7 @@ impl NeuronManager {
             .and_then(|total| total.checked_add(1))
             .and_then(|total| total.checked_add(policy.siblings))
             .and_then(|total| total.checked_add(policy.upstream_depth))
+            .and_then(|total| total.checked_add(policy.global_top_weight))
             .ok_or_else(|| {
                 AppError::InvalidInput("assistant candidate quotas overflow usize".into())
             })?;
@@ -436,6 +437,18 @@ impl NeuronManager {
             }
         }
 
+        // 全局权重 top N 补充：保证高分节点在任意轮次都有机会被 LLM 选中（按 id 去重）。
+        if policy.global_top_weight > 0 {
+            let top = self
+                .store()?
+                .list_global_candidates(policy.global_top_weight, &selected_ids)?;
+            for neuron in top {
+                if selected_ids.insert(neuron.id.clone()) {
+                    selected.push(neuron);
+                }
+            }
+        }
+
         tracing::info!(
             phase = "select_assistant_candidates",
             self_id,
@@ -444,6 +457,7 @@ impl NeuronManager {
             fill_downstream_shortage = policy.fill_downstream_shortage,
             siblings = policy.siblings,
             upstream_depth = policy.upstream_depth,
+            global_top_weight = policy.global_top_weight,
             total = selected.len(),
             candidate_ids = ?selected.iter().map(|n| n.id.clone()).collect::<Vec<_>>(),
             "assistant neighborhood candidates assembled"
@@ -1956,6 +1970,7 @@ mod tests {
             fill_downstream_shortage: false,
             siblings: 0,
             upstream_depth: 0,
+            global_top_weight: 0,
         };
 
         let candidates = manager
@@ -1976,6 +1991,61 @@ mod tests {
         assert_eq!(candidates.len(), 3);
         assert!(candidate_ids.contains(self_neuron.id.as_str()));
         assert!(candidate_ids.contains(existing_child.id.as_str()));
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn assistant_candidates_appends_global_top_weight_neurons() {
+        let (manager, root) = test_manager();
+        let self_neuron = insert_plain(&manager, "self", "self");
+        insert_downstream(&manager, &self_neuron.id, "child");
+        // 高权重孤立节点：不在 self 邻域内，weight 远超其余节点，应被 top5 补充进池。
+        let top = insert_plain(&manager, "top-weighted", "top");
+        manager.adjust_weight(&top.id, 50.0).unwrap();
+
+        let candidates = manager
+            .select_assistant_candidates(AssistantCandidateScope::neighborhood_default(
+                self_neuron.id.clone(),
+            ))
+            .await
+            .unwrap();
+        let ids: HashSet<&str> = candidates.iter().map(|n| n.id.as_str()).collect();
+        assert!(
+            ids.contains(top.id.as_str()),
+            "global top weighted node must be appended to neighborhood pool"
+        );
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn assistant_candidates_zero_top_weight_skips_global_append() {
+        let (manager, root) = test_manager();
+        let self_neuron = insert_plain(&manager, "self", "self");
+        let top = insert_plain(&manager, "top-weighted", "top");
+        manager.adjust_weight(&top.id, 50.0).unwrap();
+
+        let candidates = manager
+            .select_assistant_candidates(AssistantCandidateScope::Neighborhood {
+                self_id: self_neuron.id.clone(),
+                policy: NeighborhoodPoolPolicy {
+                    existing_downstream: 0,
+                    new_downstream: 1,
+                    fill_downstream_shortage: false,
+                    siblings: 0,
+                    upstream_depth: 0,
+                    global_top_weight: 0,
+                },
+            })
+            .await
+            .unwrap();
+        let ids: HashSet<&str> = candidates.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.contains(self_neuron.id.as_str()));
+        assert!(
+            !ids.contains(top.id.as_str()),
+            "zero global_top_weight must not append top weighted node"
+        );
         drop(manager);
         fs::remove_dir_all(root).unwrap();
     }
@@ -2004,6 +2074,7 @@ mod tests {
                     fill_downstream_shortage: false,
                     siblings: 0,
                     upstream_depth: 0,
+                    global_top_weight: 0,
                 },
             })
             .await;

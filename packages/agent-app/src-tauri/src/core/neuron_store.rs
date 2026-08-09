@@ -912,7 +912,10 @@ impl NeuronStore {
             .prepare(
                 "SELECT id, desc, content, weight, system_type, tool_ids, created_at, updated_at,
                         use_count, last_used_at, deleted_at
-                 FROM neurons WHERE deleted_at IS NULL
+                 FROM neurons
+                 WHERE deleted_at IS NULL
+                   AND system_type IS NULL
+                   AND (variant_state IS NULL OR variant_state != 'observing')
                  ORDER BY weight DESC, RANDOM()",
             )
             .map_err(|e| AppError::StorageError(format!("Failed to prepare: {}", e)))?;
@@ -1456,6 +1459,32 @@ mod tests {
             .any(|n| n.id == c.id));
         // 重复删除幂等。
         assert_eq!(s.mark_deleted(&[c.id]).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_list_global_candidates_excludes_system_and_observing() {
+        let s = test_store();
+        let plain = create(&s, "plain", "", 0.0);
+        s.adjust_weight(&plain.id, 9.0).unwrap();
+        let sys = s
+            .create_neuron(NeuronCreate {
+                desc: "sys".into(),
+                content: "prompt".into(),
+                system_type: Some("selector".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let observing = create(&s, "observing", "", 0.0);
+        s.set_variant_state(&observing.id, Some("observing")).unwrap();
+
+        let candidates = s
+            .list_global_candidates(10, &std::collections::HashSet::new())
+            .unwrap();
+        let ids: std::collections::HashSet<&str> =
+            candidates.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.contains(plain.id.as_str()));
+        assert!(!ids.contains(sys.id.as_str()));
+        assert!(!ids.contains(observing.id.as_str()));
     }
 
     #[test]
