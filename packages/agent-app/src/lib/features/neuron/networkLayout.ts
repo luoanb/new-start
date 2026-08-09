@@ -102,12 +102,63 @@ export type LayoutNode = {
     weight: number;
     systemType?: string | null;
     isSeed: boolean;
+    /** 0..1，相对当前 subgraph 权重范围归一化（渲染尺寸/配色同源）。 */
+    weightNorm: number;
   };
 };
 
+/** 权重归一化：相对当前图 min/max 映射到 0..1（单节点图 = 1）。 */
+export function weightNorm(weight: number, minW: number, maxW: number): number {
+  const span = maxW - minW || 1;
+  return (weight - minW) / span;
+}
+
+/** 节点尺寸 ∝ 归一化权重：宽度 140→260px，高度固定。布局斥力/碰撞与渲染共用。 */
+export function nodeSizeFor(weight: number, minW: number, maxW: number): { w: number; h: number } {
+  return { w: Math.round(140 + weightNorm(weight, minW, maxW) * 120), h: 56 };
+}
+
+/** 布局算法注册表：新增排版只需在此注册一个实现，画布工具栏自动列出。 */
+export type LayoutId = "force" | "layered";
+
+export type LayoutOptions = {
+  seedId: string;
+  minW: number;
+  maxW: number;
+  /** 与渲染同源的节点尺寸（内部会按需预计算，避免热循环内重复归一化）。 */
+  nodeSize: (id: string) => { w: number; h: number };
+};
+
+export type LayoutAlgorithm = {
+  id: LayoutId;
+  labelKey: string;
+  run: (subgraph: NeuronSubgraph, opts: LayoutOptions) => LayoutNode[];
+};
+
+const LAYOUT_PREF_KEY = "neuron-canvas-layout";
+
+export function readLayoutPref(): LayoutId {
+  try {
+    return localStorage.getItem(LAYOUT_PREF_KEY) === "layered" ? "layered" : "force";
+  } catch {
+    return "force";
+  }
+}
+
+export function writeLayoutPref(id: LayoutId): void {
+  try {
+    localStorage.setItem(LAYOUT_PREF_KEY, id);
+  } catch {
+    // 忽略持久化失败
+  }
+}
+
 /** Layered layout for Svelte Flow (horizontal layers by depth). */
-export function layoutFlowNodes(subgraph: NeuronSubgraph): LayoutNode[] {
-  const depths = computeDepths(subgraph.seed_id, subgraph.connections);
+export function runLayeredLayout(
+  subgraph: NeuronSubgraph,
+  opts: LayoutOptions,
+): LayoutNode[] {
+  const depths = computeDepths(opts.seedId, subgraph.connections);
   const byDepth = new Map<number, Neuron[]>();
   for (const n of subgraph.neurons) {
     const d = depths.get(n.id) ?? 0;
@@ -134,7 +185,8 @@ export function layoutFlowNodes(subgraph: NeuronSubgraph): LayoutNode[] {
           label: n.desc || n.id.slice(0, 8),
           weight: n.weight,
           systemType: n.system_type,
-          isSeed: n.id === subgraph.seed_id,
+          isSeed: n.id === opts.seedId,
+          weightNorm: weightNorm(n.weight, opts.minW, opts.maxW),
         },
       });
     });
@@ -153,14 +205,6 @@ export function layoutFlowNodes(subgraph: NeuronSubgraph): LayoutNode[] {
  * - Repulsion uses node bounding boxes (effective distance), and a collide
  *   pass pushes overlapping nodes apart.
  */
-
-/** Node bounding-box estimation, aligned with NeuronFlowNode sizing. */
-export function estimateNodeSize(label: string): { w: number; h: number } {
-  const labelLen = (label || "").length;
-  // NeuronFlowNode: min-width 140, max-width 200 + label char width ~8px + padding 12
-  const w = Math.min(200, Math.max(140, labelLen * 8)) + 12;
-  return { w, h: 56 };
-}
 
 /**
  * Sparse skeleton for spring forces: keep each node's top-k heaviest incident
@@ -186,12 +230,12 @@ export function selectSpringEdges(
   return [...chosen];
 }
 
-export function layoutForceNodes(
+export function runForceLayout(
   subgraph: NeuronSubgraph,
-  options?: { iterations?: number; seed?: number },
+  opts: LayoutOptions,
 ): LayoutNode[] {
-  const iterations = options?.iterations ?? 400;
-  const seed = options?.seed ?? 1337;
+  const iterations = 400;
+  const seed = 1337;
 
   const ids = subgraph.neurons.map((n) => n.id);
   const n = ids.length;
@@ -210,8 +254,7 @@ export function layoutForceNodes(
   // Node sizes (bbox) for effective-distance repulsion + collide pass
   const sizes = new Map<string, { w: number; h: number }>();
   for (const neuron of subgraph.neurons) {
-    const label = neuron.desc || neuron.id.slice(0, 8);
-    sizes.set(neuron.id, estimateNodeSize(label));
+    sizes.set(neuron.id, opts.nodeSize(neuron.id));
   }
   const radiusOf = (id: string) => {
     const { w, h } = sizes.get(id)!;
@@ -338,7 +381,16 @@ export function layoutForceNodes(
       label: neuron.desc || neuron.id.slice(0, 8),
       weight: neuron.weight,
       systemType: neuron.system_type,
-      isSeed: neuron.id === subgraph.seed_id,
+      isSeed: neuron.id === opts.seedId,
+      weightNorm: weightNorm(neuron.weight, opts.minW, opts.maxW),
     },
   }));
 }
+
+/** 布局算法注册表：切换/新增排版在此登记，画布工具栏自动列出。 */
+export const layoutRegistry: Record<LayoutId, LayoutAlgorithm> = {
+  force: { id: "force", labelKey: "neuronPanel.layoutForce", run: runForceLayout },
+  layered: { id: "layered", labelKey: "neuronPanel.layoutLayered", run: runLayeredLayout },
+};
+
+export const layoutOptions: LayoutAlgorithm[] = Object.values(layoutRegistry);

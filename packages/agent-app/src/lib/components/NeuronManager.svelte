@@ -7,6 +7,12 @@
   import NeuronDetailDrawer from "./NeuronDetailDrawer.svelte";
   import Select from "./Select.svelte";
   import MultiSelect from "./MultiSelect.svelte";
+  import {
+    readLayoutPref,
+    writeLayoutPref,
+    layoutOptions,
+    type LayoutId,
+  } from "$lib/features/neuron/networkLayout";
   import { errorMessage } from "$lib/errorMessage";
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
   import { dataStore } from "$lib/stores/dataStore.svelte";
@@ -21,6 +27,11 @@
   // Graph-first 状态
   let selectedId = $state<string | null>(null);
   let subgraph = $state<NeuronSubgraph>({ seed_id: "", neurons: [], connections: [] });
+
+  // 画布 seed：与顶栏 coreSelection 解耦（顶栏单向同步到画布，画布内可独立切换）
+  let canvasSeed = $state<string | null>(null);
+  // 布局算法（力导向/分层），选择持久化到 localStorage
+  let layoutId = $state<LayoutId>(readLayoutPref());
 
   // 抽屉
   let drawerNeuron = $state<Neuron | null>(null);
@@ -54,22 +65,30 @@
   // 可见节点 id 集合（过滤后）
   let visibleIds = $derived(new Set(filteredNeurons.map((n) => n.id)));
 
-  // 构建全局图的 subgraph：以用户勾选的核心节点为起点，按 depth 展开
-  function buildSubgraph(): NeuronSubgraph {
-    if (coreSelection.length === 0 || filteredNeurons.length === 0)
+  // 构建全局图的 subgraph：以画布 seed 为起点，按 depth 展开（seed 是唯一展开根）
+  function buildSubgraph(seedId: string): NeuronSubgraph {
+    if (filteredNeurons.length === 0)
       return { seed_id: "", neurons: [], connections: [] };
 
-    const coreIds = new Set(coreSelection);
+    const coreIds = new Set([seedId]);
 
-    // 从核心集合 BFS 展开 depth 跳（核心 + 跳内节点）
+    // 从 seed 节点 BFS 展开 depth 跳（seed + 跳内节点）
     const finalIds = pruneByDepth(coreIds, depth);
 
     const subNeurons = filteredNeurons.filter((n) => finalIds.has(n.id));
     const subConns = allConnections.filter(
       (c) => finalIds.has(c.source) && finalIds.has(c.target),
     );
-    return { seed_id: coreSelection[0], neurons: subNeurons, connections: subConns };
+    return { seed_id: seedId, neurons: subNeurons, connections: subConns };
   }
+
+  // 当前 subgraph 内权重 min/max：节点尺寸/配色归一化（布局与渲染同源）
+  const { minW, maxW } = $derived.by(() => {
+    const ws = subgraph.neurons.map((n) => n.weight);
+    return ws.length
+      ? { minW: Math.min(...ws), maxW: Math.max(...ws) }
+      : { minW: 0, maxW: 1 };
+  });
 
   // 从核心节点按 BFS 限制展开深度
   function pruneByDepth(coreIds: Set<string>, maxDepth: number): Set<string> {
@@ -99,13 +118,23 @@
 
   let allConnections = $state<Connection[]>([]);
 
-  // 过滤 / 核心 / 深度变化时重建图
+  // 顶栏核心选择 → 画布 seed 单向同步（画布内切换 seed 不回写顶栏）
   $effect(() => {
-    // 依赖：filteredNeurons / depth / coreSelection / visibleIds
+    coreSelection;
+    if (coreSelection.length > 0) canvasSeed = coreSelection[0];
+  });
+
+  // 过滤 / 深度 / 画布 seed 变化时重建图
+  $effect(() => {
+    // 依赖：filteredNeurons / depth / canvasSeed / visibleIds
     filteredNeurons;
     depth;
-    coreSelection;
-    subgraph = buildSubgraph();
+    canvasSeed;
+    if (!canvasSeed) {
+      subgraph = { seed_id: "", neurons: [], connections: [] };
+      return;
+    }
+    subgraph = buildSubgraph(canvasSeed);
   });
 
   // 默认核心：权重最高节点；全取消时自动回弹（不允许全空）
@@ -146,7 +175,7 @@
       }
       allConnections = deduped;
 
-      subgraph = buildSubgraph();
+      if (canvasSeed) subgraph = buildSubgraph(canvasSeed);
     } catch (e) {
       console.error(`Failed to load neurons: ${errorMessage(e)}`);
     } finally {
@@ -174,7 +203,7 @@
         ...allConnections.filter((c) => c.source !== id && c.target !== id),
         ...cs,
       ];
-      subgraph = buildSubgraph();
+      if (canvasSeed) subgraph = buildSubgraph(canvasSeed);
     } catch {
       // 忽略刷新失败，抽屉已显示最新返回值
     }
@@ -326,6 +355,14 @@
       <input type="range" min="1" max="5" step="1" bind:value={depth} />
       <span class="depth-val">{depth}</span>
     </div>
+    <div class="layout-type">
+      <span class="depth-label">{t("neuronPanel.layoutLabel")}</span>
+      <Select
+        bind:value={layoutId}
+        options={layoutOptions.map((a) => ({ value: a.id, label: t(a.labelKey) }))}
+        onchange={(v) => writeLayoutPref(v as LayoutId)}
+      />
+    </div>
     <div class="edge-type">
       <span class="depth-label">{t("neuronPanel.edgeTypeLabel")}</span>
       <Select
@@ -361,7 +398,11 @@
             {subgraph}
             {selectedId}
             {edgeType}
+            {layoutId}
+            {minW}
+            {maxW}
             onJumpTo={selectNeuron}
+            onSetSeed={(id) => (canvasSeed = id)}
           />
         </div>
       {/if}
@@ -548,6 +589,12 @@
   }
 
   .edge-type {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .layout-type {
     display: flex;
     align-items: center;
     gap: 6px;

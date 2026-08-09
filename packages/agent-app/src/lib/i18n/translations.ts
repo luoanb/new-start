@@ -218,6 +218,10 @@ export type Translations = {
     id: string;
     copy: string;
     copied: string;
+    layoutLabel: string;
+    layoutForce: string;
+    layoutLayered: string;
+    setAsSeed: string;
   };
   toolPanel: {
     title: string;
@@ -509,6 +513,10 @@ export const en: Translations = {
     id: "ID",
     copy: "Copy",
     copied: "Copied",
+    layoutLabel: "Layout",
+    layoutForce: "Force-directed",
+    layoutLayered: "Layered",
+    setAsSeed: "Set as seed",
   },
   toolPanel: {
     title: "Tools",
@@ -805,6 +813,10 @@ export const zh: Translations = {
     id: "ID",
     copy: "复制",
     copied: "已复制",
+    layoutLabel: "布局",
+    layoutForce: "力导向",
+    layoutLayered: "分层",
+    setAsSeed: "设为画布核心",
   },
   toolPanel: {
     title: "工具",
