@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { t } from "$lib/i18n";
+
   let {
     items,
     activeId,
@@ -15,8 +17,8 @@
     <button
       class="activity-item"
       class:active={activeId === item.id}
-      title={item.label}
-      aria-label={item.label}
+      title={t(item.label)}
+      aria-label={t(item.label)}
       onclick={() => onSelect(item.id)}
     >
       <span class="activity-icon">

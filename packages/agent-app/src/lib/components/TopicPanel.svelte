@@ -9,7 +9,7 @@
 
   // ── State ──
   type TopicFilter = "all" | "active" | "done";
-  let filter = $state<TopicFilter>("all");
+  let filter = $state<TopicFilter>("active");
   let expandedId = $state<string | null>(null);
   let showCreateForm = $state(false);
   let createName = $state("");

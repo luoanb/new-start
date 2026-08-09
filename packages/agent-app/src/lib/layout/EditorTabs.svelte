@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ViewMeta } from "./views";
+  import { t } from "$lib/i18n";
 
   let {
     tabs,
@@ -25,7 +26,7 @@
         onclick={() => onSelect(tab.id)}
       >
         {#if tab.icon}<span class="icon">{@html tab.icon}</span>{/if}
-        <span class="label">{tab.label}</span>
+        <span class="label">{t(tab.label)}</span>
         <span
           class="close"
           role="button"
@@ -40,7 +41,7 @@
     {#if active}
       <button class="tab" class:active>
         {#if active.icon}<span class="icon">{@html active.icon}</span>{/if}
-        <span class="label">{active.label}</span>
+        <span class="label">{t(active.label)}</span>
         {#if active.id !== "chat"}
           <span
             class="close"

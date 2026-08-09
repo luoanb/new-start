@@ -91,7 +91,7 @@
             <div class="session-indicator" class:active={conv.id === activeId}></div>
             <div class="session-info">
               <span class="session-title" title={sessionTitle(conv)}>
-                {sessionTitle(conv)}
+                <span class="session-title-text">{sessionTitle(conv)}</span>
                 {#if runningSessionIds.has(conv.id)}
                   <span class="running-badge" title={t("sessionList.running")}>●</span>
                 {/if}
@@ -150,16 +150,18 @@
   .session-indicator { flex-shrink: 0; width: 3px; align-self: stretch; border-radius: 2px; background: transparent; }
   .session-indicator.active { background: var(--color-primary); }
   .session-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-  .session-title { display: flex; align-items: center; gap: var(--space-1); font-size: var(--fs-sm); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session-title { display: flex; align-items: center; gap: var(--space-1); font-size: var(--fs-sm); font-weight: 500; min-width: 0; }
+  .session-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .session-item.active .session-title { font-weight: 600; }
   .running-badge { flex-shrink: 0; font-size: 9px; color: var(--color-success); animation: running-pulse 1.6s var(--ease-out) infinite; }
   @keyframes running-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-  .session-meta { display: flex; align-items: center; gap: var(--space-2); font-size: var(--fs-xs); color: var(--color-text-muted); }
-  .mode-badge { font-size: 10px; font-weight: 600; text-transform: uppercase; padding: 1px 5px; border-radius: var(--radius-sm); letter-spacing: 0.03em; }
+  .session-meta { display: flex; align-items: center; gap: var(--space-2); font-size: var(--fs-xs); color: var(--color-text-muted); white-space: nowrap; overflow: hidden; min-width: 0; }
+  .mode-badge { font-size: 10px; font-weight: 600; text-transform: uppercase; padding: 1px 5px; border-radius: var(--radius-sm); letter-spacing: 0.03em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mode-badge.chat { background: color-mix(in srgb, var(--color-primary) 15%, transparent); color: var(--color-primary); }
   .mode-badge.agent { background: color-mix(in srgb, var(--color-success) 15%, transparent); color: var(--color-success); }
   .mode-badge.assistant { background: color-mix(in srgb, var(--color-warning) 15%, transparent); color: var(--color-warning); }
-  .session-time { margin-left: auto; }
+  .session-count { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session-time { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .session-actions { flex-shrink: 0; display: flex; align-items: center; gap: 2px; }
   .copy-btn { background: none; border: none; cursor: pointer; font-size: 14px; color: inherit; opacity: 0; padding: 2px 4px; border-radius: var(--radius-sm); line-height: 1; transition: opacity var(--duration-fast) var(--ease-out); }
   .session-item:hover .copy-btn { opacity: 0.6; }

@@ -264,6 +264,17 @@ export type Translations = {
     reassembleFailed: string;
     loadListFailed: string;
   };
+  views: {
+    sessions: string;
+    providers: string;
+    models: string;
+    topics: string;
+    poller: string;
+    tools: string;
+    logs: string;
+    chat: string;
+    neurons: string;
+  };
 };
 
 export const en: Translations = {
@@ -549,6 +560,17 @@ export const en: Translations = {
     reassembleFailed: "Reassemble failed: {error}",
     loadListFailed: "Failed to load tools: {error}",
   },
+  views: {
+    sessions: "Sessions",
+    providers: "Providers",
+    models: "Models",
+    topics: "Topics",
+    poller: "Poller",
+    tools: "Tools",
+    logs: "Logs",
+    chat: "Chat",
+    neurons: "Neurons",
+  },
 };
 
 export const zh: Translations = {
@@ -833,5 +855,16 @@ export const zh: Translations = {
     loadFailed: "加载配置失败",
     reassembleFailed: "重新装配失败：{error}",
     loadListFailed: "加载工具失败：{error}",
+  },
+  views: {
+    sessions: "会话列表",
+    providers: "服务商",
+    models: "模型",
+    topics: "课题",
+    poller: "轮询器",
+    tools: "工具",
+    logs: "日志",
+    chat: "对话",
+    neurons: "神经元",
   },
 };

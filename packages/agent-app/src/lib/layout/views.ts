@@ -34,39 +34,39 @@ export type ViewRegistration = {
   movableTo?: ViewContainerId[] | "*";
 };
 
-/** 视图容器注册表（sidebar / info / panel 共享）。 */
+/** 视图容器注册表（sidebar / info / panel 共享）。title/label 存 i18n key（views.*），渲染处以 t() 解析。 */
 export const viewRegistry: Record<string, ViewRegistration> = {
-  sessions: { id: "sessions", title: "Sessions", component: SessionList, movableTo: "*" },
+  sessions: { id: "sessions", title: "views.sessions", component: SessionList, movableTo: "*" },
   // 原 Info 组合面板拆分为三个独立视图（技能并入 Tools，不再单独展示）
-  providers: { id: "providers", title: "Providers", component: ProvidersPanel, movableTo: "*" },
-  models: { id: "models", title: "Models", component: ModelsPanel, movableTo: "*" },
-  topics: { id: "topics", title: "Topics", component: TopicPanel, movableTo: "*" },
-  poller: { id: "poller", title: "Poller", component: PollerPanel, movableTo: "*" },
-  tools: { id: "tools", title: "Tools", component: ToolPanel, movableTo: "*" },
-  logs: { id: "logs", title: "Logs", component: LogPanel, movableTo: "*" },
+  providers: { id: "providers", title: "views.providers", component: ProvidersPanel, movableTo: "*" },
+  models: { id: "models", title: "views.models", component: ModelsPanel, movableTo: "*" },
+  topics: { id: "topics", title: "views.topics", component: TopicPanel, movableTo: "*" },
+  poller: { id: "poller", title: "views.poller", component: PollerPanel, movableTo: "*" },
+  tools: { id: "tools", title: "views.tools", component: ToolPanel, movableTo: "*" },
+  logs: { id: "logs", title: "views.logs", component: LogPanel, movableTo: "*" },
 };
 
 /** main 区域（editor area）专用视图：走 EditorTabs + split 语义，不进入视图容器。 */
 export const mainViews: ViewRegistration[] = [
-  { id: "chat", title: "Chat", component: ChatArea },
-  { id: "neurons", title: "Neurons", component: NeuronManager },
+  { id: "chat", title: "views.chat", component: ChatArea },
+  { id: "neurons", title: "views.neurons", component: NeuronManager },
 ];
 
 /** Activity Bar 入口（icon 轨）。 */
 export const activityItems: ViewMeta[] = [
   {
     id: "sessions",
-    label: "Sessions",
+    label: "views.sessions",
     icon: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.8-.9L3 21l1.9-5.7a8.5 8.5 0 0 1-.9-3.8A8.38 8.38 0 0 1 12.5 3 8.38 8.38 0 0 1 21 11.5z"/></svg>',
   },
 ];
 
 /** 主区（chat-area）tab 栏：VS Code editor group 风格，split 时并排显示。 */
 export const mainTabs: ViewMeta[] = [
-  { id: "chat", label: "Chat", icon: "🖥" },
+  { id: "chat", label: "views.chat", icon: "🖥" },
   {
     id: "neurons",
-    label: "Neurons",
+    label: "views.neurons",
     icon: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="2"/><circle cx="19" cy="7" r="2"/><circle cx="12" cy="18" r="2"/><line x1="6.5" y1="7" x2="11" y2="16"/><line x1="17.5" y1="8" x2="13" y2="16"/></svg>',
   },
 ];

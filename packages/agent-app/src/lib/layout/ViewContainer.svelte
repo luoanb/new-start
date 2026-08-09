@@ -3,6 +3,7 @@
   import { viewRegistry, canMoveTo } from "./views";
   import { useViewContext } from "./viewContext";
   import ViewHost from "./ViewHost.svelte";
+  import { t } from "$lib/i18n";
 
   let {
     containerId,
@@ -183,7 +184,7 @@
             onclick={() => layout.setContainerView(containerId, reg.id)}
           >
             {#if reg.icon}<span class="tab-icon">{@html reg.icon}</span>{/if}
-            <span class="tab-label">{reg.title}</span>
+            <span class="tab-label">{t(reg.title)}</span>
           </button>
         {/each}
       {:else if activeView}
@@ -194,7 +195,7 @@
           onpointerdown={(e) => handleTabPointerDown(e, activeView.id)}
         >
           {#if activeView.icon}<span class="tab-icon">{@html activeView.icon}</span>{/if}
-          <span class="tab-label">{activeView.title}</span>
+          <span class="tab-label">{t(activeView.title)}</span>
         </button>
       {/if}
     </div>
@@ -226,7 +227,7 @@
         {@const visible = visibleInAnyContainer(reg.id)}
         <label class="menu-item">
           <input type="checkbox" checked={visible} onchange={() => toggleViewVisibility(reg.id)} />
-          <span class="menu-label">{reg.title}</span>
+          <span class="menu-label">{t(reg.title)}</span>
           <span class="menu-loc">{locationOf(reg.id)}</span>
         </label>
       {/each}
@@ -238,7 +239,7 @@
       class="view-drag-preview"
       use:portal
       style="position: fixed; z-index: 500; pointer-events: none; left: {preview.x + 12}px; top: {preview.y + 12}px"
-    >{preview.title}</div>
+    >{t(preview.title)}</div>
   {/if}
 </div>
 
