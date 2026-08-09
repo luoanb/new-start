@@ -113,7 +113,7 @@
                 onclick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(conv.id); }}
                 title={t("sessionList.copyId")}
               >⧉</span>
-              {#if conv.mode === "assistant"}
+              {#if runningSessionIds.has(conv.id)}
                 <!-- svelte-ignore a11y_click_events_have_key_events -->
                 <span
                   class="close-btn"
@@ -121,7 +121,9 @@
                   tabindex="-1"
                   onclick={(e) => { e.stopPropagation(); onClose(conv.id); }}
                   title={t("sessionList.closeSession")}
-                >×</span>
+                >
+                  <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+                </span>
               {/if}
             </div>
           </button>
@@ -166,7 +168,8 @@
   .copy-btn { background: none; border: none; cursor: pointer; font-size: 14px; color: inherit; opacity: 0; padding: 2px 4px; border-radius: var(--radius-sm); line-height: 1; transition: opacity var(--duration-fast) var(--ease-out); }
   .session-item:hover .copy-btn { opacity: 0.6; }
   .copy-btn:hover { opacity: 1 !important; background: var(--color-hover); }
-  .close-btn { background: none; border: none; cursor: pointer; font-size: 16px; color: inherit; opacity: 0; padding: 2px 4px; border-radius: var(--radius-sm); line-height: 1; transition: opacity var(--duration-fast) var(--ease-out); }
+  .close-btn { background: none; border: none; cursor: pointer; color: inherit; opacity: 0; padding: 2px 4px; border-radius: var(--radius-sm); line-height: 1; display: inline-flex; align-items: center; justify-content: center; transition: opacity var(--duration-fast) var(--ease-out); }
+  .close-btn svg { display: block; }
   .session-item:hover .close-btn { opacity: 0.6; }
   .close-btn:hover { opacity: 1 !important; background: var(--color-hover); }
 </style>

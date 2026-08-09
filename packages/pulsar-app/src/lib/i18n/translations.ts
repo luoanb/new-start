@@ -8,6 +8,8 @@ export type Translations = {
     session: string;
     selected: string;
     selectAll: string;
+    clickToCopy: string;
+    copied: string;
   };
   statusBar: {
     appName: string;
@@ -293,6 +295,8 @@ export const en: Translations = {
     session: "Session",
     selected: "Selected: {count}",
     selectAll: "Select all",
+    clickToCopy: "Click to copy",
+    copied: "Copied",
   },
   statusBar: {
     appName: "Pulsar",
@@ -595,6 +599,8 @@ export const zh: Translations = {
     session: "会话",
     selected: "已选 {count}",
     selectAll: "全选",
+    clickToCopy: "点击复制",
+    copied: "已复制",
   },
   statusBar: {
     appName: "星脉",
@@ -603,7 +609,7 @@ export const zh: Translations = {
     togglePanel: "切换底栏",
   },
   sessionList: {
-    title: "会话列表",
+    title: "会话",
     empty: "暂无会话。",
     emptyHint: "开始对话后会显示在这里",
     create: "创建一个",
@@ -875,7 +881,7 @@ export const zh: Translations = {
     loadListFailed: "加载工具失败：{error}",
   },
   views: {
-    sessions: "会话列表",
+    sessions: "会话",
     providers: "服务商",
     models: "模型",
     topics: "课题",

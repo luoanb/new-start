@@ -148,3 +148,7 @@ export type RunningSession = {
 - 不引入新依赖。
 - `SessionTracker` 的变更通知不改变其 TUI 使用方式（`set_on_change` 为可选项，默认无回调）。
 - `close_session` 语义不变（强制关闭运行中会话并触发 abort）。
+
+## Change Log
+
+- 2026-08-09（UI 调整）：`SessionList` 关闭按钮仅**运行中会话**显示（`runningSessionIds.has(conv.id)`，替代原 `conv.mode === "assistant"`），icon 由 `×` 改为**停止方块**（SVG），避免与「删除会话」混淆；`ErrorBanner` 点击错误文案自动复制到剪贴板（短暂显示「已复制」反馈，1.5s 恢复），保留 × 手动关闭与 5s 自动消失；新增 `common.clickToCopy` / `common.copied` i18n key。
