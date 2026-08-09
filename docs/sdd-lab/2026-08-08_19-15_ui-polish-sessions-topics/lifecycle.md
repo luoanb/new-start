@@ -34,6 +34,7 @@ owner: user
 - 11. 2026-08-08 20:45（操作入口 icon 化）：scope「添加」按钮（原 `.btn btn-sm` 文本）改为 `.icon-btn` + plus SVG；topic 操作区「删除」入口（原 `.btn btn-sm btn-danger` 文本）改为 `.icon-btn danger` + trash SVG；均带 title/aria-label。scope-add-form 右对齐选择器含 `.icon-btn`。验证：`pnpm check` 0 errors。
 - 12. 2026-08-08 20:50（+ 位置调整）：scope「添加」`+` icon 从表单右下角移到「范围项」标题行最右侧（`.scope-header .icon-btn { margin-left: auto }`）；表单只剩目标/完成条件两行输入，移除 align-self 规则。验证：`pnpm check` 0 errors。
 - 13. 2026-08-08 20:55（删除入口移到标题行 + 完成 badge 统一）：课题整体删除 trash icon 从展开详情底部操作区移到卡片标题行右侧（status-badge 旁，未展开可见；点击后就地切换为 删除/取消 文本按钮二次确认，问句承载于 title）；移除 `.scope-done-badge`，scope 项「完成」直接复用 `status-badge done`（圆点 + tint，与课题「已完成」状态完全一致）；删除废弃 `.scope-done-badge` 样式。验证：`pnpm check` 0 errors。
+- 14. 2026-08-09（课题文案单行溢出隐藏）：`.topic-name` 增加 `min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap` 并补 `title={topic.name}` 悬浮展示完整文案；`.topic-meta` 与 `.detail-row > :not(.detail-label)`（含 description 值）同样单行截断；description 值补 `title` 悬浮展示全文。`.scope-goal`/`.scope-contract` 已有单行截断，本次为两者补 `title`（goal / done_contract 悬浮展示完整）。验证：`pnpm check` 0 errors。
 
 ## Next Action / 下一步唯一动作
 

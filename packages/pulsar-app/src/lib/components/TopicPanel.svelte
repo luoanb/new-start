@@ -194,7 +194,7 @@
           <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
           <div class="topic-summary" onclick={() => (expandedId = expandedId === topic.id ? null : topic.id)}>
             <div class="topic-header">
-              <span class="topic-name">{topic.name}</span>
+              <span class="topic-name" title={topic.name}>{topic.name}</span>
               <div class="topic-header-actions">
                 {#if topic.status === "todo" || topic.status === "in_progress" || topic.status === "paused"}
                   <button
@@ -259,7 +259,7 @@
               {#if topic.description}
                 <div class="detail-row">
                   <span class="detail-label">{t("topicPanel.description")}</span>
-                  <span>{topic.description}</span>
+                  <span title={topic.description}>{topic.description}</span>
                 </div>
               {/if}
 
@@ -309,8 +309,8 @@
                   {#each topic.scope_in as item (item.id)}
                     <div class="scope-item" class:done={item.status === "completed"}>
                       <div class="scope-item-text">
-                        <div class="scope-goal">{item.goal}</div>
-                        <div class="scope-contract">{item.done_contract}</div>
+                        <div class="scope-goal" title={item.goal}>{item.goal}</div>
+                        <div class="scope-contract" title={item.done_contract}>{item.done_contract}</div>
                       </div>
                       <div class="scope-item-actions">
                         {#if item.status !== "completed"}
@@ -427,7 +427,7 @@
   .topic-summary { padding: var(--space-2); cursor: pointer; }
   .topic-header { display: flex; justify-content: space-between; align-items: center; gap: var(--space-1); margin-bottom: var(--space-1); }
   .topic-header-actions { display: flex; align-items: center; gap: var(--space-1); }
-  .topic-name { font-size: var(--fs-sm); font-weight: 600; }
+  .topic-name { font-size: var(--fs-sm); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .status-badge {
     display: inline-flex;
     align-items: center;
@@ -450,11 +450,11 @@
   .progress-bar-bg { flex: 1; height: 4px; background: var(--color-border); border-radius: 2px; overflow: hidden; }
   .progress-bar-fill { height: 100%; background: var(--color-primary); border-radius: 2px; transition: width var(--duration-normal) var(--ease-out); }
   .progress-text { font-size: var(--fs-xs); color: var(--color-text-muted); min-width: 32px; text-align: right; }
-  .topic-meta { font-size: var(--fs-xs); color: var(--color-text-muted); }
+  .topic-meta { font-size: var(--fs-xs); color: var(--color-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .topic-detail { padding: 0 var(--space-2) var(--space-2); border-top: var(--border-width) solid var(--color-border); }
   .detail-row { display: flex; gap: var(--space-2); font-size: var(--fs-xs); padding: var(--space-1) 0; }
   .detail-label { flex-shrink: 0; font-weight: 600; color: var(--color-text-muted); }
-  .detail-row > :not(.detail-label) { flex: 1; min-width: 0; }
+  .detail-row > :not(.detail-label) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mono { font-family: monospace; font-size: var(--fs-xs); }
   .scope-section { margin-top: var(--space-1); }
   .scope-header { display: flex; gap: var(--space-1); font-size: var(--fs-xs); padding: var(--space-1) 0; }
