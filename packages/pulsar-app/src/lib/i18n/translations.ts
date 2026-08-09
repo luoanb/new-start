@@ -197,6 +197,8 @@ export type Translations = {
     focusNode: string;
     drawerTitle: string;
     close: string;
+    posRight: string;
+    posBottom: string;
     create: string;
     createTitle: string;
     createOrphan: string;
@@ -492,6 +494,8 @@ export const en: Translations = {
     focusNode: "Focus",
     drawerTitle: "Neuron",
     close: "Close",
+    posRight: "Dock right",
+    posBottom: "Dock bottom",
     create: "New Neuron",
     createTitle: "Create Neuron",
     createOrphan: "Orphan",
@@ -792,6 +796,8 @@ export const zh: Translations = {
     focusNode: "聚焦",
     drawerTitle: "神经元",
     close: "关闭",
+    posRight: "停靠右侧",
+    posBottom: "停靠底部",
     create: "创建神经元",
     createTitle: "创建神经元",
     createOrphan: "孤立",

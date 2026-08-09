@@ -12,6 +12,30 @@
   export let onChanged: () => void = () => {};
   export let onRequestCreateDownstream: (sourceId: string) => void = () => {};
 
+  // 抽屉位置：右侧 / 底部，偏好持久化到 localStorage
+  type DrawerPosition = "right" | "bottom";
+  const DRAWER_POS_KEY = "neuron-drawer-position";
+
+  function readDrawerPosition(): DrawerPosition {
+    try {
+      const v = localStorage.getItem(DRAWER_POS_KEY);
+      return v === "right" || v === "bottom" ? v : "bottom";
+    } catch {
+      return "bottom";
+    }
+  }
+
+  let position: DrawerPosition = readDrawerPosition();
+
+  function togglePosition() {
+    position = position === "right" ? "bottom" : "right";
+    try {
+      localStorage.setItem(DRAWER_POS_KEY, position);
+    } catch {
+      // 忽略持久化失败
+    }
+  }
+
   let editing = false;
   let saving = false;
   let weightBusy = false;
@@ -163,12 +187,40 @@
   }
 </script>
 
-<div class="drawer" class:open={!!neuron}>
+<div class="drawer" class:open={!!neuron} class:right={position === "right"} class:bottom={position === "bottom"}>
   {#if neuron}
     <div class="drawer-head">
       <span class="type-bar" style:background={`var(--color-system-${neuron.system_type || "default"}, var(--color-system-default))`}></span>
       <span class="title">{t("neuronPanel.drawerTitle")}</span>
-      <button class="close" on:click={onClose} title={t("neuronPanel.close")}>×</button>
+      <button
+        class="pos-btn"
+        on:click={togglePosition}
+        title={position === "bottom" ? t("neuronPanel.posRight") : t("neuronPanel.posBottom")}
+        aria-label={position === "bottom" ? t("neuronPanel.posRight") : t("neuronPanel.posBottom")}
+      >
+        {#if position === "bottom"}
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <rect x="1.5" y="1.5" width="13" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>
+            <line x1="11" y1="1.5" x2="11" y2="14.5" stroke="currentColor" stroke-width="1.5"/>
+          </svg>
+        {:else}
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <rect x="1.5" y="1.5" width="13" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>
+            <line x1="1.5" y1="11" x2="14.5" y2="11" stroke="currentColor" stroke-width="1.5"/>
+          </svg>
+        {/if}
+      </button>
+      <button
+        class="close"
+        on:click={onClose}
+        title={t("neuronPanel.close")}
+        aria-label={t("neuronPanel.close")}
+      >
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+          <line x1="4" y1="4" x2="12" y2="12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          <line x1="12" y1="4" x2="4" y2="12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </button>
     </div>
 
     <div class="drawer-body">
@@ -320,16 +372,9 @@
 <style>
   .drawer {
     position: absolute;
-    top: 0;
-    right: 0;
-    height: 100%;
-    width: 320px;
     background: var(--color-surface);
-    border-left: 1px solid var(--color-border);
-    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.12);
     display: flex;
     flex-direction: column;
-    transform: translateX(100%);
     opacity: 0;
     pointer-events: none;
     transition:
@@ -338,9 +383,32 @@
     z-index: 20;
   }
   .drawer.open {
-    transform: translateX(0);
     opacity: 1;
     pointer-events: auto;
+  }
+  .drawer.bottom {
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 50%;
+    border-top: 1px solid var(--color-border);
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.12);
+    transform: translateY(100%);
+  }
+  .drawer.bottom.open {
+    transform: translateY(0);
+  }
+  .drawer.right {
+    top: 0;
+    right: 0;
+    width: 320px;
+    height: 100%;
+    border-left: 1px solid var(--color-border);
+    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.12);
+    transform: translateX(100%);
+  }
+  .drawer.right.open {
+    transform: translateX(0);
   }
 
   .drawer-head {
@@ -361,17 +429,53 @@
     font-size: 13px;
     color: var(--color-text);
   }
-  .close {
+  .pos-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
     background: none;
     border: none;
+    border-radius: 6px;
     color: var(--color-text-muted);
-    font-size: 20px;
-    line-height: 1;
     cursor: pointer;
-    padding: 0 4px;
+    transition:
+      color 0.15s ease,
+      background 0.15s ease;
+  }
+  .pos-btn:hover {
+    color: var(--color-text);
+    background: var(--color-hover);
+  }
+  .pos-btn svg {
+    display: block;
+  }
+  .close {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    background: none;
+    border: none;
+    border-radius: 6px;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition:
+      color 0.15s ease,
+      background 0.15s ease;
   }
   .close:hover {
     color: var(--color-text);
+    background: var(--color-hover);
+  }
+  .close svg {
+    display: block;
   }
 
   .drawer-body {
@@ -571,6 +675,7 @@
     width: 56px;
   }
   .btn.small {
+    flex: 0 0 auto;
     height: 26px;
     padding: 0 10px;
     font-size: 12px;

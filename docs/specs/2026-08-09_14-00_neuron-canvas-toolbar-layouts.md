@@ -120,7 +120,7 @@ export function nodeSizeFor(weight: number, minW: number, maxW: number): { w: nu
 
 - **布局切换（全局操作，顶栏）**：在顶栏「连线方式」（`edge-type`）左侧新增「布局」分组（`.layout-type`），用现有 `Select` 组件渲染 `layoutOptions`（力导向 / 分层）。切换 → `layoutId` 更新 + `writeLayoutPref` 持久化 → `NeuronNetworkGraph` 按新算法立即重新布局。
 - **节点选中（节点级操作，画布悬浮工具栏）**：使用 SvelteFlow 原生 `NodeToolbar`（@xyflow/svelte v1.6.2 已导出），悬浮在节点上方（`Position.Top` / `align=center` / `offset=14`）：
-  - 点击画布节点 → `onnodeclick` 设置 `toolbarNodeId` **并立即选中**：`onJumpTo(id)` → `selectedId = 节点` + 打开 `NeuronDetailDrawer`；工具栏与该抽屉同时展示（抽屉固定在画布右侧，工具栏悬浮在节点上方，均由同一节点触发）。
+  - 点击画布节点 → `onnodeclick` 设置 `toolbarNodeId` **并立即选中**：`onJumpTo(id)` → `selectedId = 节点` + 打开 `NeuronDetailDrawer`；工具栏与该抽屉同时展示（抽屉位置可在右侧/底部间切换、默认底部，工具栏悬浮在节点上方，均由同一节点触发）。
   - 点击画布空白 → `onpaneclick` 清除 `toolbarNodeId`，工具栏收起。
   - 工具栏仅含一个按钮：【设为画布核心】（`onSetSeed(toolbarNodeId)`）→ `canvasSeed = 节点` → 以新根重建 subgraph。
   - 无 `onSetSeed` 的消费方（`NeuronNetwork` 二级视图，无 seed 概念）不渲染工具栏；`elementsSelectable={false}` 关闭库自动选中，`selected` 完全由 `selectedId` 外部控制。
@@ -197,4 +197,7 @@ function onPaneClick() { toolbarNodeId = null; }                      // 点击�
 - 2026-08-09（交互修正，用户否掉齿轮浮层）：布局切换为**全局操作**，改为顶栏「连线方式」左侧的「布局」下拉（`Select` + `layoutOptions`，切换即重新布局并持久化）；节点选中为**节点级操作**，改为 SvelteFlow 原生 `NodeToolbar` 悬浮在节点上方（点击节点展开、不改变选中态 `elementsSelectable=false`、点击空白收起），工具栏含【选中】（选中并打开抽屉）与【设为画布核心】（`canvasSeed = 节点`）；删除 `NeuronCanvasToolbar.svelte` 与废弃 i18n key（`canvasToolbar`/`currentSeed`/`clearSeed`/`selectAndOpen`/`currentSelected`）；`selectNode` 文案改为「选中」。seed 不再有独立搜索选择器（由画布节点/顶栏设置），原 Open Question 随之关闭。
 - 2026-08-09（交互再调整）：**点击节点即选中**——`onnodeclick` 同时设置 `toolbarNodeId` 并 `onJumpTo(id)`（选中高亮 + 打开抽屉），节点悬浮工具栏与抽屉同时展示；工具栏仅保留【设为画布核心】一个按钮，无 `onSetSeed` 的视图（`NeuronNetwork`）不渲染工具栏；删除 i18n key `selectNode`。`svelte-check` 0 error。
 - 2026-08-09（性能修复）：点击节点卡顿的根因是 `NeuronNetworkGraph.rebuild()` 内部读取 `selectedId`，被 Svelte 5 `$effect` 动态追踪——每次点击选中都触发全量 `rebuild`，力导向布局（400 次迭代 O(n²) 斥力+碰撞）同步重跑阻塞主线程，分层布局开销可忽略所以无感。修复：`rebuild` 内用 `untrack(() => selectedId)` 读取选中态，布局 effect 不再依赖 `selectedId`；选中态仍由独立 effect 仅更新 `selected` 字段。`svelte-check` 0 error。
+- 2026-08-09（UI 调整）：`NeuronDetailDrawer` 由右侧滑出改为**底部弹出**——全宽、固定高度约画布一半（`height: 50%`），`translateY(100%) → 0` 动画，边框改 `border-top`、阴影向上。抽屉与节点悬浮工具栏同时展示的联动行为不变。
+- 2026-08-09（UI 调整）：`NeuronDetailDrawer` 标题栏（关闭按钮左侧）新增**位置切换图标按钮**，可在「右侧 / 底部」两种停靠方式间切换；icon 显示目标停靠位置（底部时显示「停靠右侧」图标，右侧时显示「停靠底部」图标），title/aria-label 描述切换动作；位置偏好持久化到 localStorage（key `neuron-drawer-position`，默认底部）。抽屉样式重构为 `.drawer.bottom` / `.drawer.right` 两套定位（分别 `translateY` / `translateX` 动画）。
+- 2026-08-09（UI 修正）：位置切换 icon 语义修正为**显示目标位置**（与 title 动作一致）；关闭按钮由文本 `×` 改为内联 SVG X 图标，样式与位置切换按钮统一（24px 圆角 icon 按钮 + hover 底色）。
 
