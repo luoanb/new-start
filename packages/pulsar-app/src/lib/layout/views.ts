@@ -39,16 +39,63 @@ export type ViewRegistration = {
 
 /** 视图容器注册表（sidebar / info / panel 共享）。title/label 存 i18n key（views.*），渲染处以 t() 解析。 */
 export const viewRegistry: Record<string, ViewRegistration> = {
-  sessions: { id: "sessions", title: "views.sessions", component: SessionList, movableTo: "*" },
-  // 原 Info 组合面板拆分为三个独立视图（技能并入 Tools，不再单独展示）
-  providers: { id: "providers", title: "views.providers", component: ProvidersPanel, movableTo: "*" },
-  models: { id: "models", title: "views.models", component: ModelsPanel, movableTo: "*" },
+  sessions: {
+    id: "sessions",
+    title: "views.sessions",
+    icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5Z"/></svg>',
+    component: SessionList,
+    movableTo: "*",
+  },
+  providers: {
+    id: "providers",
+    title: "views.providers",
+    icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><line x1="6" y1="6.5" x2="6.01" y2="6.5"/><line x1="6" y1="17.5" x2="6.01" y2="17.5"/></svg>',
+    component: ProvidersPanel,
+    movableTo: "*",
+  },
+  models: {
+    id: "models",
+    title: "views.models",
+    icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5"/><line x1="9" y1="2" x2="9" y2="6"/><line x1="15" y1="2" x2="15" y2="6"/><line x1="9" y1="18" x2="9" y2="22"/><line x1="15" y1="18" x2="15" y2="22"/><line x1="2" y1="9" x2="6" y2="9"/><line x1="2" y1="15" x2="6" y2="15"/><line x1="18" y1="9" x2="22" y2="9"/><line x1="18" y1="15" x2="22" y2="15"/></svg>',
+    component: ModelsPanel,
+    movableTo: "*",
+  },
   // v9: 神经元统一管理列表（info 容器，《模型》之后）
-  "neurons-list": { id: "neurons-list", title: "views.neuronsList", component: NeuronListPanel, movableTo: "*" },
-  topics: { id: "topics", title: "views.topics", component: TopicPanel, movableTo: "*" },
-  poller: { id: "poller", title: "views.poller", component: PollerPanel, movableTo: "*" },
-  tools: { id: "tools", title: "views.tools", component: ToolPanel, movableTo: "*" },
-  logs: { id: "logs", title: "views.logs", component: LogPanel, movableTo: "*" },
+  "neurons-list": {
+    id: "neurons-list",
+    title: "views.neuronsList",
+    icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="2"/><circle cx="19" cy="7" r="2"/><circle cx="12" cy="18" r="2"/><line x1="6.5" y1="7" x2="11" y2="16"/><line x1="17.5" y1="8" x2="13" y2="16"/></svg>',
+    component: NeuronListPanel,
+    movableTo: "*",
+  },
+  topics: {
+    id: "topics",
+    title: "views.topics",
+    icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>',
+    component: TopicPanel,
+    movableTo: "*",
+  },
+  poller: {
+    id: "poller",
+    title: "views.poller",
+    icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>',
+    component: PollerPanel,
+    movableTo: "*",
+  },
+  tools: {
+    id: "tools",
+    title: "views.tools",
+    icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>',
+    component: ToolPanel,
+    movableTo: "*",
+  },
+  logs: {
+    id: "logs",
+    title: "views.logs",
+    icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
+    component: LogPanel,
+    movableTo: "*",
+  },
 };
 
 /** main 区域（editor area）专用视图：走 EditorTabs + split 语义，不进入视图容器。 */

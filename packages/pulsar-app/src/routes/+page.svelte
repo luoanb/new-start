@@ -70,7 +70,6 @@
   // main 区面板：用户交互插入/关闭，默认空；同一类型全局唯一
   let mainPanes = $derived(layoutStore.state.main.panes);
   let activePaneId = $derived(layoutStore.state.main.activePaneId);
-  let neuronActive = $derived(mainPanes.some((p) => p.panels.some((x) => x.type === "neurons")));
   // 当前激活分栏（用于 ActivityBar 高亮判定）
   let activePane = $derived(mainPanes.find((p) => p.id === activePaneId));
   // ActivityBar 高亮：chat 面板激活时点亮对话入口，否则跟随侧栏活动
@@ -348,7 +347,6 @@
       appName={runtimeStatus?.app_name ?? "星脉"}
       sessionId={activeConversationId}
       mode={activeMode}
-      neuronActive={neuronActive}
       sidebarVisible={layoutStore.state.sidebar.visible}
       infoVisible={layoutStore.state.info.visible}
       panelVisible={layoutStore.state.panel.visible}
@@ -361,7 +359,6 @@
         else layoutStore.toggleInfo();
       }}
       onTogglePanel={() => layoutStore.togglePanel()}
-      onToggleNeuron={() => toggleNeuronPanel()}
     />
   </header>
 

@@ -5,6 +5,7 @@
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
   import type { Neuron, NeuronPage } from "$lib/types";
   import { systemTypeColor } from "$lib/features/neuron/systemTypeColor";
+  import Select from "./Select.svelte";
 
   const ctx = useViewContext();
   const data = ctx.stores.data;
@@ -25,6 +26,11 @@
   let kind = $state<"all" | "system" | "normal">("all");
   let multi = $derived(data.state.neuronSelectionMode === "multi");
   let selection = $derived(data.state.neuronSelection);
+  const kindOptions = [
+    { value: "all", label: t("neuronListPanel.kindAll") },
+    { value: "system", label: t("neuronListPanel.kindSystem") },
+    { value: "normal", label: t("neuronListPanel.kindNormal") },
+  ];
 
   // ── 共享状态 ──
   let listEl = $state<HTMLElement | null>(null);
@@ -110,6 +116,8 @@
     } else {
       data.setNeuronSelection([n.id]);
     }
+    // 列表项点击 → 确保主区画布打开（已打开则仅激活）
+    ctx.stores.layout.insertPanel("neurons");
   }
 
   function handleEdit(n: Neuron) {
@@ -128,11 +136,12 @@
       placeholder={t("neuronListPanel.search")}
       bind:value={search}
     />
-    <select class="kind-select" bind:value={kind}>
-      <option value="all">{t("neuronListPanel.kindAll")}</option>
-      <option value="system">{t("neuronListPanel.kindSystem")}</option>
-      <option value="normal">{t("neuronListPanel.kindNormal")}</option>
-    </select>
+    <Select
+      class="kind-select"
+      value={kind}
+      options={kindOptions}
+      onchange={(v) => (kind = v as typeof kind)}
+    />
     <label class="multi-toggle">
       <input
         type="checkbox"
@@ -144,7 +153,7 @@
       />
       {t("neuronListPanel.multiSelect")}
     </label>
-    <button class="btn btn-primary" onclick={() => data.requestCreateNeuron()}>
+    <button class="btn btn-sm btn-primary" onclick={() => data.requestCreateNeuron()}>
       ＋ {t("neuronListPanel.create")}
     </button>
   </div>
@@ -166,6 +175,40 @@
           onclick={() => handleRowClick(n)}
         >
           <div class="item-top">
+            {#if n.system_type}
+              <svg
+                class="item-icon"
+                viewBox="0 0 24 24"
+                width="14"
+                height="14"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style:color={systemTypeColor(n.system_type)}
+              >
+                <circle cx="5" cy="6" r="2" />
+                <circle cx="19" cy="7" r="2" />
+                <circle cx="12" cy="18" r="2" />
+                <line x1="6.5" y1="7" x2="11" y2="16" />
+                <line x1="17.5" y1="8" x2="13" y2="16" />
+              </svg>
+            {:else}
+              <svg
+                class="item-icon"
+                viewBox="0 0 24 24"
+                width="14"
+                height="14"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <circle cx="12" cy="12" r="4" />
+              </svg>
+            {/if}
             <span
               class="type-badge"
               class:normal={!n.system_type}
@@ -189,6 +232,18 @@
                 handleEdit(n);
               }}
             >
+              <svg
+                viewBox="0 0 24 24"
+                width="12"
+                height="12"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+              </svg>
               {t("neuronListPanel.edit")}
             </span>
             {#if n.system_type}
@@ -202,6 +257,18 @@
                   handleLaunch(n);
                 }}
               >
+                <svg
+                  viewBox="0 0 24 24"
+                  width="12"
+                  height="12"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polygon points="5 3 19 12 5 21 5 3" />
+                </svg>
                 {t("neuronListPanel.launch")}
               </span>
             {/if}
@@ -241,21 +308,13 @@
     background: var(--color-bg);
     border: var(--border-width) solid var(--color-border);
     border-radius: var(--radius-sm);
-    padding: 4px 8px;
+    padding: var(--space-1) var(--space-2);
     color: var(--color-text);
     font-size: var(--fs-xs);
   }
   .search:focus {
     outline: none;
     border-color: var(--color-primary);
-  }
-  .kind-select {
-    background: var(--color-bg);
-    border: var(--border-width) solid var(--color-border);
-    border-radius: var(--radius-sm);
-    color: var(--color-text);
-    font-size: var(--fs-xs);
-    padding: 4px 6px;
   }
   .multi-toggle {
     display: inline-flex;
@@ -268,16 +327,6 @@
   }
   .multi-toggle input {
     accent-color: var(--color-primary);
-  }
-  .btn-primary {
-    border: var(--border-width) solid var(--color-primary);
-    background: var(--color-primary);
-    color: var(--color-on-primary);
-    border-radius: var(--radius-sm);
-    padding: 3px 10px;
-    font-size: var(--fs-xs);
-    cursor: pointer;
-    white-space: nowrap;
   }
 
   .error {
@@ -328,6 +377,12 @@
     gap: var(--space-1);
     min-width: 0;
   }
+  .item-icon {
+    flex-shrink: 0;
+    display: inline-flex;
+    color: var(--color-text-muted);
+    opacity: 0.85;
+  }
   .type-badge {
     flex-shrink: 0;
     font-size: 10px;
@@ -371,9 +426,12 @@
   }
   .item-actions {
     display: flex;
-    gap: var(--space-1);
+    gap: var(--space-2);
   }
   .row-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
     font-size: var(--fs-xs);
     color: var(--color-primary);
     cursor: pointer;

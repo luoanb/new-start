@@ -6,6 +6,7 @@
     ToolPolicy,
   } from "$lib/types";
   import { t } from "$lib/i18n";
+  import Select from "./Select.svelte";
 
   /**
    * 行为表单控件（选型策略 + 工具策略 + 契约段 id），受控组件。
@@ -100,6 +101,18 @@
   let form = $state(emptyBehaviorForm());
   let lastValue = $state<SessionBehavior | null>(null);
 
+  const selectionOptions = [
+    { value: "none", label: t("neuronEditor.none") },
+    { value: "fixed", label: t("neuronEditor.fixed") },
+    { value: "neighborhood", label: t("neuronEditor.neighborhood") },
+    { value: "global", label: t("neuronEditor.global") },
+  ];
+  const toolsOptions = [
+    { value: "none", label: t("neuronEditor.toolNone") },
+    { value: "from_neuron", label: t("neuronEditor.toolFromNeuron") },
+    { value: "allowlist", label: t("neuronEditor.toolAllowlist") },
+  ];
+
   // 外部 value 引用变化（如保存后刷新）时重建表单；组件内部变更不触发。
   $effect(() => {
     if (value !== lastValue) {
@@ -116,12 +129,14 @@
 <div class="form-grid">
   <label class="field">
     <span>{t("neuronEditor.selection")}</span>
-    <select bind:value={form.selection} onchange={emit}>
-      <option value="none">{t("neuronEditor.none")}</option>
-      <option value="fixed">{t("neuronEditor.fixed")}</option>
-      <option value="neighborhood">{t("neuronEditor.neighborhood")}</option>
-      <option value="global">{t("neuronEditor.global")}</option>
-    </select>
+    <Select
+      value={form.selection}
+      options={selectionOptions}
+      onchange={(v) => {
+        form.selection = v as typeof form.selection;
+        emit();
+      }}
+    />
   </label>
   {#if form.selection === "global"}
     <label class="field">
@@ -131,11 +146,14 @@
   {/if}
   <label class="field">
     <span>{t("neuronEditor.tools")}</span>
-    <select bind:value={form.tools} onchange={emit}>
-      <option value="none">{t("neuronEditor.toolNone")}</option>
-      <option value="from_neuron">{t("neuronEditor.toolFromNeuron")}</option>
-      <option value="allowlist">{t("neuronEditor.toolAllowlist")}</option>
-    </select>
+    <Select
+      value={form.tools}
+      options={toolsOptions}
+      onchange={(v) => {
+        form.tools = v as typeof form.tools;
+        emit();
+      }}
+    />
   </label>
   {#if form.tools === "allowlist"}
     <label class="field">
@@ -162,7 +180,6 @@
     font-size: var(--fs-sm);
   }
   .field input,
-  .field select,
   .field textarea {
     padding: var(--space-1);
     border-radius: var(--radius-sm);
