@@ -16,8 +16,8 @@ import ToolPanel from "$lib/components/ToolPanel.svelte";
 import LogPanel from "$lib/components/LogPanel.svelte";
 import ChatArea from "$lib/components/ChatArea.svelte";
 import NeuronManager from "$lib/components/NeuronManager.svelte";
+import NeuronListPanel from "$lib/components/NeuronListPanel.svelte";
 import ToolEditor from "$lib/components/ToolEditor.svelte";
-import SessionSpecsPanel from "$lib/components/SessionSpecsPanel.svelte";
 import type { MainPanelType } from "./layoutTypes";
 
 export type { ViewContainerId } from "./layoutTypes";
@@ -43,6 +43,8 @@ export const viewRegistry: Record<string, ViewRegistration> = {
   // 原 Info 组合面板拆分为三个独立视图（技能并入 Tools，不再单独展示）
   providers: { id: "providers", title: "views.providers", component: ProvidersPanel, movableTo: "*" },
   models: { id: "models", title: "views.models", component: ModelsPanel, movableTo: "*" },
+  // v9: 神经元统一管理列表（info 容器，《模型》之后）
+  "neurons-list": { id: "neurons-list", title: "views.neuronsList", component: NeuronListPanel, movableTo: "*" },
   topics: { id: "topics", title: "views.topics", component: TopicPanel, movableTo: "*" },
   poller: { id: "poller", title: "views.poller", component: PollerPanel, movableTo: "*" },
   tools: { id: "tools", title: "views.tools", component: ToolPanel, movableTo: "*" },
@@ -54,7 +56,6 @@ export const mainViews: ViewRegistration[] = [
   { id: "chat", title: "views.chat", component: ChatArea },
   { id: "neurons", title: "views.neurons", component: NeuronManager },
   { id: "tool-editor", title: "views.toolEditor", component: ToolEditor },
-  { id: "session-specs", title: "views.sessionSpecs", component: SessionSpecsPanel },
 ];
 
 /** Activity Bar 入口（icon 轨）。chat 用于向 main 区插入会话面板。 */
@@ -87,10 +88,6 @@ export const mainPanelMeta: Record<MainPanelType, { label: string; icon: string 
   "tool-editor": {
     label: "views.toolEditor",
     icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.83 2.83 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>',
-  },
-  "session-specs": {
-    label: "views.sessionSpecs",
-    icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>',
   },
 };
 

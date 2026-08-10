@@ -95,13 +95,21 @@ impl SessionSpecManager {
     }
 
     /// 管理面更新入口：只写 behavior，不触碰 content（避免与 update_content_for_admin 双写）。
+    /// 校验放宽为「system_type 非空即可」——所有系统神经元（含裁决类 `assistant_*`）行为均可管理面编辑。
     pub fn update_behavior_for_admin(
         &self,
         id: &str,
         behavior: SessionBehavior,
     ) -> AppResult<Neuron> {
-        // 先校验目标确实是会话规格神经元，再写入。
-        self.get_session_behavior(id)?;
+        let neuron = self
+            .store()?
+            .get_neuron(id)?
+            .ok_or_else(|| AppError::NeuronNotFound(id.to_string()))?;
+        if neuron.system_type.as_deref().is_none() {
+            return Err(AppError::InvalidInput(format!(
+                "neuron {id} has no system_type; behavior requires a system neuron"
+            )));
+        }
         self.store()?.set_behavior(id, Some(&behavior))
     }
 

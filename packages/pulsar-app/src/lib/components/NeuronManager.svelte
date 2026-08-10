@@ -6,7 +6,6 @@
   import NeuronNetworkGraph from "./NeuronNetworkGraph.svelte";
   import NeuronDetailDrawer from "./NeuronDetailDrawer.svelte";
   import Select from "./Select.svelte";
-  import MultiSelect from "./MultiSelect.svelte";
   import {
     readLayoutPref,
     writeLayoutPref,
@@ -28,7 +27,7 @@
   let selectedId = $state<string | null>(null);
   let subgraph = $state<NeuronSubgraph>({ seed_id: "", neurons: [], connections: [] });
 
-  // 画布 seed：与顶栏 coreSelection 解耦（顶栏单向同步到画布，画布内可独立切换）
+  // 画布 seed：由列表共享选择驱动（dataStore.neuronSelection[0]），画布内切换写回共享状态
   let canvasSeed = $state<string | null>(null);
   // 布局算法（力导向/分层），选择持久化到 localStorage
   let layoutId = $state<LayoutId>(readLayoutPref());
@@ -37,37 +36,19 @@
   let drawerNeuron = $state<Neuron | null>(null);
   let drawerConns = $state<Connection[]>([]);
 
-  // 过滤 / 搜索
-  let search = $state("");
+  // 过滤 / 搜索（v9：搜索与核心筛选上移到列表视图，画布仅保留深度/布局/连线）
   let depth = $state(2);
-
-  // 核心节点选择：由用户在顶栏 Top60 多选下拉中勾选（默认权重最高节点）
-  let coreSelection = $state<string[]>([]);
-  const topNeurons = $derived(
-    [...neurons].sort((a, b) => b.weight - a.weight).slice(0, 60),
-  );
-  const coreOptions = $derived(
-    topNeurons.map((n) => ({ value: n.id, label: n.desc || n.id })),
-  );
 
   // 连线类型（力导向布局默认 floating：自动吸附卡片最近边缘点）
   type EdgeType = "bezier" | "smoothstep" | "step" | "straight" | "floating";
   let edgeType = $state<EdgeType>("floating");
 
-  let filteredNeurons = $derived(
-    neurons.filter((n) => {
-      if (search && !`${n.desc} ${n.id}`.toLowerCase().includes(search.toLowerCase()))
-        return false;
-      return true;
-    })
-  );
-
-  // 可见节点 id 集合（过滤后）
-  let visibleIds = $derived(new Set(filteredNeurons.map((n) => n.id)));
+  // 可见节点 id 集合（v9：无搜索过滤，全量可见；pruneByDepth 仍以它为界）
+  let visibleIds = $derived(new Set(neurons.map((n) => n.id)));
 
   // 构建全局图的 subgraph：以画布 seed 为起点，按 depth 展开（seed 是唯一展开根）
   function buildSubgraph(seedId: string): NeuronSubgraph {
-    if (filteredNeurons.length === 0)
+    if (neurons.length === 0)
       return { seed_id: "", neurons: [], connections: [] };
 
     const coreIds = new Set([seedId]);
@@ -75,7 +56,7 @@
     // 从 seed 节点 BFS 展开 depth 跳（seed + 跳内节点）
     const finalIds = pruneByDepth(coreIds, depth);
 
-    const subNeurons = filteredNeurons.filter((n) => finalIds.has(n.id));
+    const subNeurons = neurons.filter((n) => finalIds.has(n.id));
     const subConns = allConnections.filter(
       (c) => finalIds.has(c.source) && finalIds.has(c.target),
     );
@@ -118,16 +99,16 @@
 
   let allConnections = $state<Connection[]>([]);
 
-  // 顶栏核心选择 → 画布 seed 单向同步（画布内切换 seed 不回写顶栏）
+  // 列表共享选择 → 画布 seed 单向同步（画布内切换 seed 写回共享状态）
   $effect(() => {
-    coreSelection;
-    if (coreSelection.length > 0) canvasSeed = coreSelection[0];
+    const selection = dataStore.state.neuronSelection;
+    canvasSeed = selection.length > 0 ? selection[0] : null;
   });
 
   // 过滤 / 深度 / 画布 seed 变化时重建图
   $effect(() => {
-    // 依赖：filteredNeurons / depth / canvasSeed / visibleIds
-    filteredNeurons;
+    // 依赖：neurons / depth / canvasSeed / visibleIds
+    neurons;
     depth;
     canvasSeed;
     if (!canvasSeed) {
@@ -135,13 +116,6 @@
       return;
     }
     subgraph = buildSubgraph(canvasSeed);
-  });
-
-  // 默认核心：权重最高节点；全取消时自动回弹（不允许全空）
-  $effect(() => {
-    if (coreSelection.length === 0 && topNeurons.length > 0) {
-      coreSelection = [topNeurons[0].id];
-    }
   });
 
   async function load() {
@@ -219,11 +193,6 @@
   function closeDrawer() {
     drawerNeuron = null;
     selectedId = null;
-  }
-
-  function clearFilters() {
-    search = "";
-    depth = 2;
   }
 
   // 创建神经元弹窗
@@ -325,6 +294,39 @@
     loadAvailableTools();
   });
 
+  // 列表「编辑」→ 打开抽屉（消费后置 null）。
+  // 依赖 neurons：面板刚挂载且数据未加载完成时先不消费，等 load() 完成后重跑。
+  let lastEditRequestId = $state<string | null>(null);
+  $effect(() => {
+    const reqId = dataStore.state.neuronEditRequestId;
+    if (!reqId || reqId === lastEditRequestId) return;
+    if (!neurons.some((n) => n.id === reqId)) return;
+    lastEditRequestId = reqId;
+    dataStore.state.neuronEditRequestId = null;
+    openDrawer(reqId);
+  });
+
+  // 列表「＋ 创建」→ 打开创建弹窗（计数触发，消费）。
+  let lastCreateRequest = $state(0);
+  $effect(() => {
+    const req = dataStore.state.neuronCreateRequest;
+    if (req !== lastCreateRequest) {
+      lastCreateRequest = req;
+      openCreateOrphan();
+    }
+  });
+
+  // 画布内切换 seed：单选替换 / 多选 append（去重），写回列表共享状态
+  function handleSetSeed(id: string) {
+    if (dataStore.state.neuronSelectionMode === "multi") {
+      if (!dataStore.state.neuronSelection.includes(id)) {
+        dataStore.setNeuronSelection([...dataStore.state.neuronSelection, id]);
+      }
+    } else {
+      dataStore.setNeuronSelection([id]);
+    }
+  }
+
   // 人工评价/权重变化（StateChange::Neurons）后自动刷新列表与网络。
   let lastNeuronsVersion = 0;
   $effect(() => {
@@ -338,15 +340,6 @@
 
 <div class="neuron-manager">
   <div class="toolbar">
-    <input
-      class="search"
-      placeholder={t("neuronPanel.search")}
-      bind:value={search}
-    />
-    <div class="core-select">
-      <span class="depth-label">{t("neuronPanel.coreSelect")}</span>
-      <MultiSelect bind:value={coreSelection} options={coreOptions} />
-    </div>
     <button class="create-btn" on:click={openCreateOrphan}>
       ＋ {t("neuronPanel.create")}
     </button>
@@ -376,9 +369,6 @@
         ]}
       />
     </div>
-    {#if search}
-      <button class="clear" on:click={clearFilters}>✕</button>
-    {/if}
   </div>
 
   <div class="body">
@@ -402,7 +392,7 @@
             {minW}
             {maxW}
             onJumpTo={selectNeuron}
-            onSetSeed={(id) => (canvasSeed = id)}
+            onSetSeed={handleSetSeed}
           />
         </div>
       {/if}

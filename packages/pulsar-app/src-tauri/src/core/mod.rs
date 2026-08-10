@@ -42,10 +42,10 @@ pub use models::{
     ChatResponse, CompactionConfig, Connection, Conversation, ConversationMode, CreateNeuronInput,
     EnsureSystemOpts, GeneratedNeuronDraft, Message, MessageBody, MessageRole, ModelCallRequest,
     ModelCallResponse, ModelCapabilities, ModelInfo, ModelMessage, ModelMessageRole,
-    NeighborhoodPoolPolicy, Neuron, NeuronCreate, NeuronSubgraph, NeuronUpdate, ProviderInfo,
-    ProviderKind, RuntimeStatus, ScopeInItem, SelectionPolicy, SessionBehavior, SkillInfo,
-    SystemPromptStatus, ToolCall, ToolDefinition, ToolInfo, ToolPolicy, ToolSource, Topic,
-    TopicStatus, TopicUpdate, DEFAULT_ASSISTANT_GLOBAL_LIMIT,
+    NeighborhoodPoolPolicy, Neuron, NeuronCreate, NeuronKindFilter, NeuronPage, NeuronSubgraph,
+    NeuronUpdate, ProviderInfo, ProviderKind, RuntimeStatus, ScopeInItem, SelectionPolicy,
+    SessionBehavior, SkillInfo, SystemPromptStatus, ToolCall, ToolDefinition, ToolInfo, ToolPolicy,
+    ToolSource, Topic, TopicStatus, TopicUpdate, DEFAULT_ASSISTANT_GLOBAL_LIMIT,
 };
 pub use poller::{
     PollHandler, Poller, PollerConfigReader, PollerRunState, PollerSettings, PollerStatus,

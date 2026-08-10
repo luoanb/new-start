@@ -6,8 +6,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use super::{
     error::{AppError, AppResult},
     models::{
-        Connection as NeuronConnection, Neuron, NeuronCreate, NeuronSubgraph, NeuronUpdate,
-        NeuronVariant, NeuronVersion, SessionBehavior,
+        Connection as NeuronConnection, Neuron, NeuronCreate, NeuronKindFilter, NeuronPage,
+        NeuronSubgraph, NeuronUpdate, NeuronVariant, NeuronVersion, SessionBehavior,
     },
 };
 
@@ -240,6 +240,84 @@ impl NeuronStore {
                 .push(row.map_err(|e| AppError::StorageError(format!("Failed to read: {}", e)))?);
         }
         Ok(neurons)
+    }
+
+    /// 管理面分页列表：分页 + 搜索（desc/id 模糊）+ 类型筛选（全部/系统/普通）。
+    /// LIKE 通配符（`%` / `_` / `\`）按字面转义处理，避免搜索词影响匹配。
+    pub fn list_neurons_page(
+        &self,
+        page: usize,
+        page_size: usize,
+        search: Option<&str>,
+        kind: NeuronKindFilter,
+    ) -> AppResult<NeuronPage> {
+        let page_size = page_size.clamp(1, 100);
+        let offset = page.saturating_mul(page_size);
+
+        let mut conditions: Vec<String> = vec!["deleted_at IS NULL".to_string()];
+        match kind {
+            NeuronKindFilter::All => {}
+            NeuronKindFilter::System => conditions.push("system_type IS NOT NULL".to_string()),
+            NeuronKindFilter::Normal => conditions.push("system_type IS NULL".to_string()),
+        }
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        let trimmed = search.map(str::trim).filter(|s| !s.is_empty());
+        if let Some(term) = trimmed {
+            let escaped = term
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_");
+            conditions.push(
+                "(desc LIKE ? ESCAPE '\\' OR id LIKE ? ESCAPE '\\')".to_string(),
+            );
+            let pattern = format!("%{escaped}%");
+            params.push(Box::new(pattern.clone()));
+            params.push(Box::new(pattern));
+        }
+        let where_clause = conditions.join(" AND ");
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let total: i64 = conn
+            .query_row(
+                &format!("SELECT COUNT(*) FROM neurons WHERE {where_clause}"),
+                rusqlite::params_from_iter(params.iter()),
+                |row| row.get(0),
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to count neurons: {}", e)))?;
+
+        let sql = format!(
+            "SELECT id, desc, content, weight, system_type, tool_ids, created_at, updated_at,
+                    use_count, last_used_at, deleted_at, behavior
+             FROM neurons WHERE {where_clause}
+             ORDER BY weight DESC, id ASC LIMIT ? OFFSET ?"
+        );
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| AppError::StorageError(format!("Failed to prepare: {}", e)))?;
+        let mut page_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        page_params.extend(params);
+        page_params.push(Box::new(page_size as i64));
+        page_params.push(Box::new(offset as i64));
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(page_params.iter()), row_to_neuron)
+            .map_err(|e| AppError::StorageError(format!("Failed to query: {}", e)))?;
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(
+                row.map_err(|e| AppError::StorageError(format!("Failed to read: {}", e)))?,
+            );
+        }
+        drop(stmt);
+        drop(conn);
+        let total = total as usize;
+        Ok(NeuronPage {
+            has_more: offset + items.len() < total,
+            items,
+            total,
+        })
     }
 
     pub fn get_neuron_by_system_type(&self, system_type: &str) -> AppResult<Option<Neuron>> {

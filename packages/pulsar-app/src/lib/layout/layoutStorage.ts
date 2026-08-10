@@ -50,17 +50,25 @@ function normalize(parsed: Partial<LayoutState>): LayoutState {
   // v8 及更早统一迁移 main（v7 的 splits → v8 的 panes；v8 直接沿用）
   const migratedMain = migrateMain(parsed);
 
+  // v9+：merge 后仍确保 info 容器含 neurons-list（覆盖"v9 数据缺 neurons-list"的历史残留）
   if (parsed.version === DEFAULT_LAYOUT.version) {
     const merged = merge(parsed);
     if (migratedMain) merged.main = migratedMain;
-    return sanitizeLegacyInfo(merged);
+    return migrateV8ToV9(sanitizeLegacyInfo(merged));
+  }
+
+  // v8 → v9：info 容器补 neurons-list、清理 main 区残留 session-specs 面板
+  if (parsed.version === 8) {
+    const merged = merge(parsed);
+    if (migratedMain) merged.main = migratedMain;
+    return migrateV8ToV9(sanitizeLegacyInfo(merged));
   }
 
   // v7：仅 main 结构变化（splits → panes），其余与 v8 相同
   if (parsed.version === 7) {
     const merged = merge(parsed);
     if (migratedMain) merged.main = migratedMain;
-    return sanitizeLegacyInfo(merged);
+    return migrateV8ToV9(sanitizeLegacyInfo(merged));
   }
 
   // v3/v4/v5/v6 → v7：v3 的 Info 是单一组合视图 "info"，v4 起拆为三个独立面板；
@@ -73,7 +81,7 @@ function normalize(parsed: Partial<LayoutState>): LayoutState {
     const withTopics = placeTopicsInSidebar(merged, parsed.version === 3);
     const placed = sanitizeLegacyInfo(placeToolsInSidebar(withTopics));
     if (migratedMain) placed.main = migratedMain;
-    return placed;
+    return migrateV8ToV9(placed);
   }
 
   if (parsed.version === 2) {
@@ -97,7 +105,7 @@ function normalize(parsed: Partial<LayoutState>): LayoutState {
       activity: { ...DEFAULT_LAYOUT.activity, ...old.activity },
     };
     if (migratedMain) result.main = migratedMain;
-    return result;
+    return migrateV8ToV9(result);
   }
 
   return { ...DEFAULT_LAYOUT };
@@ -121,6 +129,41 @@ function migrateMain(parsed: Partial<LayoutState>): LayoutState["main"] | null {
     };
   });
   return { panes, activePaneId: panes[0]?.id ?? null };
+}
+
+/** v8 → v9：info 容器补 `neurons-list`（models 之后，默认位置；用户自定义 info 也仅追加）、
+ * 清理 main 区残留 `session-specs` 面板（旧会话规格面板已被统一管理取代）。 */
+function migrateV8ToV9(state: LayoutState): LayoutState {
+  const containers = { ...state.containers } as Record<
+    string,
+    { views: string[]; activeView: string }
+  >;
+  const info = containers.info;
+  if (!info.views.includes("neurons-list")) {
+    const modelsIdx = info.views.indexOf("models");
+    const views = [...info.views];
+    views.splice(modelsIdx >= 0 ? modelsIdx + 1 : views.length, 0, "neurons-list");
+    containers.info = { views, activeView: info.activeView };
+  }
+
+  const panes = (state.main?.panes ?? []).map((p) => {
+    // 迁移期过滤：移除已废弃的 session-specs 面板（类型已从 MainPanelType 移除，故按 string 比较）
+    const panels = p.panels.filter((x) => (x.type as string) !== "session-specs");
+    return {
+      ...p,
+      panels,
+      activePanelId: panels.some((x) => x.id === p.activePanelId)
+        ? p.activePanelId
+        : (panels[0]?.id ?? null),
+    };
+  });
+  return {
+    ...state,
+    containers: containers as LayoutState["containers"],
+    main: { ...state.main, panes },
+    // 升级后强制恢复神经元列表可见（不被历史隐藏状态吞掉）
+    hiddenViews: (state.hiddenViews ?? []).filter((v) => v !== "neurons-list"),
+  };
 }
 
 /** 分栏面板归一化：旧 v8 单 `panel` 形态 → `panels[]` 形态；校验 activePanelId 悬空回退。 */

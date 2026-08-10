@@ -473,6 +473,36 @@ pub struct Neuron {
     pub behavior: Option<SessionBehavior>,
 }
 
+/// 神经元分页结果（管理面列表：分页 + 搜索 + 类型筛选）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NeuronPage {
+    pub items: Vec<Neuron>,
+    pub total: usize,
+    pub has_more: bool,
+}
+
+/// 管理面列表的类型筛选维度。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NeuronKindFilter {
+    /// 全部（不区分系统/普通）。
+    All,
+    /// 仅系统神经元（`system_type IS NOT NULL`）。
+    System,
+    /// 仅普通神经元（`system_type IS NULL`）。
+    Normal,
+}
+
+impl NeuronKindFilter {
+    /// 从前端命令入参解析（"all" / "system" / "normal"），未知值回落 All。
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim().to_lowercase().as_str() {
+            "system" => NeuronKindFilter::System,
+            "normal" => NeuronKindFilter::Normal,
+            _ => NeuronKindFilter::All,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct NeuronCreate {
     pub desc: String,

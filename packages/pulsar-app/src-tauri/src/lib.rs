@@ -14,10 +14,10 @@ use crate::core::{
     tool_config::ToolConfigView,
     topic_store::TopicStore,
     ChatModelSelection, ChatOptions, ChatResponse, Connection, Conversation, ConversationMode,
-    EnsureSystemOpts, Gateway, McpServerStatus, Message, ModelCallRequest, ModelCallResponse,
-    ModelInfo, Neuron, NeuronCreate, NeuronSubgraph, NeuronUpdate, PollerStatus, ProviderInfo,
-    RuntimeStatus, SessionBehavior, SkillInfo, StateChange, StateEmitter, SystemPromptStatus,
-    ToolInfo, Topic, TopicStatus, TopicUpdate, STATE_CHANGED_EVENT,
+    Gateway, McpServerStatus, Message, ModelCallRequest, ModelCallResponse, ModelInfo, Neuron,
+    NeuronCreate, NeuronKindFilter, NeuronPage, NeuronSubgraph, NeuronUpdate, PollerStatus,
+    ProviderInfo, RuntimeStatus, SessionBehavior, SkillInfo, StateChange, StateEmitter, ToolInfo,
+    Topic, TopicStatus, TopicUpdate, STATE_CHANGED_EVENT,
 };
 use std::{
     path::PathBuf,
@@ -611,63 +611,50 @@ async fn converse_session(
     Ok(response)
 }
 
-/// 列出所有 `session.%` 规格神经元（含 behavior 摘要）。
+/// 管理面分页列表（分页 + 搜索 + 类型筛选 all/system/normal），供列表视图增量加载。
 #[tauri::command]
-async fn list_session_specs(gateway: State<'_, Gateway>) -> TauriResult<Vec<SystemPromptStatus>> {
-    gateway
-        .inner()
-        .list_session_specs()
+async fn list_neurons_page(
+    mgr: State<'_, Arc<NeuronManager>>,
+    page: usize,
+    page_size: usize,
+    search: Option<String>,
+    kind: String,
+) -> TauriResult<NeuronPage> {
+    mgr.inner()
+        .list_neurons_page(page, page_size, search.as_deref(), NeuronKindFilter::parse(&kind))
         .map_err(|error| error.payload())
 }
 
-/// 管理面新建会话规格：懒创建（存在不覆盖），支持传入 content 与 behavior。
-/// 返回新建/已存在的规格摘要（system_type + neuron_id + behavior）。
+/// 管理面设置 / 换绑 / 取消系统类型（空串或 None 视为取消绑定）。
 #[tauri::command]
-async fn create_session_spec(
-    gateway: State<'_, Gateway>,
+async fn set_neuron_system_type(
+    mgr: State<'_, Arc<NeuronManager>>,
     state_emit: State<'_, StateEmitter>,
-    system_type: String,
-    content: Option<String>,
-    behavior: Option<SessionBehavior>,
-) -> TauriResult<SystemPromptStatus> {
-    let neuron = gateway
+    id: String,
+    system_type: Option<String>,
+) -> TauriResult<Neuron> {
+    let neuron = mgr
         .inner()
-        .neuron_manager()
-        .ensure_session_neuron(
-            &system_type,
-            behavior.unwrap_or_default(),
-            content,
-            EnsureSystemOpts { reset: false },
-        )
-        .await
+        .set_system_type_for_admin(&id, system_type.as_deref())
         .map_err(|error| error.payload())?;
     state_emit.inner()(StateChange::Neurons);
-    Ok(SystemPromptStatus {
-        system_type: neuron.system_type.unwrap_or(system_type),
-        neuron_id: Some(neuron.id),
-        behavior: neuron.behavior,
-    })
+    Ok(neuron)
 }
 
-/// 管理面更新规格 behavior：只写 behavior，不触碰 content。
+/// 管理面更新系统神经元行为（所有 system_type 非空的神经元可写，含裁决类）。
 #[tauri::command]
-async fn update_session_spec_behavior(
-    gateway: State<'_, Gateway>,
+async fn update_neuron_behavior(
+    mgr: State<'_, Arc<NeuronManager>>,
     state_emit: State<'_, StateEmitter>,
     id: String,
     behavior: SessionBehavior,
-) -> TauriResult<SystemPromptStatus> {
-    let neuron = gateway
+) -> TauriResult<Neuron> {
+    let neuron = mgr
         .inner()
-        .neuron_manager()
         .update_behavior_for_admin(&id, behavior)
         .map_err(|error| error.payload())?;
     state_emit.inner()(StateChange::Neurons);
-    Ok(SystemPromptStatus {
-        system_type: neuron.system_type.unwrap_or_default(),
-        neuron_id: Some(neuron.id),
-        behavior: neuron.behavior,
-    })
+    Ok(neuron)
 }
 
 // ── Logs ──
@@ -846,12 +833,12 @@ pub fn run() {
             adjust_neuron_weight,
             adjust_edge_weight,
             score_feedback,
-            // Session Specs
+            // Neurons / 统一管理
             open_session,
             converse_session,
-            list_session_specs,
-            create_session_spec,
-            update_session_spec_behavior,
+            list_neurons_page,
+            set_neuron_system_type,
+            update_neuron_behavior,
             // Logs
             logs_snapshot,
             logs_get_level,

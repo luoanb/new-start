@@ -12,6 +12,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { layoutStore } from "$lib/layout/LayoutStore.svelte";
 import type {
   ProviderInfo,
   ModelInfo,
@@ -23,8 +24,6 @@ import type {
   Topic,
   PollerStatus,
   RunningSession,
-  SystemPromptStatus,
-  SessionBehavior,
 } from "$lib/types";
 import { formatInvokeError } from "$lib/utils/formatInvokeError";
 
@@ -54,9 +53,19 @@ const state = $state({
   topics: [] as Topic[],
   poller: null as PollerStatus | null,
   runningSessions: [] as RunningSession[],
-  sessionSpecs: [] as SystemPromptStatus[],
   neuronsVersion: 0,
   toolsVersion: 0,
+  // ── 神经元统一管理：列表 ←→ 画布共享状态 ──
+  /** 画布核心（单选=1 项，多选=数组；列表行点击驱动）。 */
+  neuronSelection: [] as string[],
+  /** 列表顶栏多选开关：single = 点击行替换核心；multi = 点击行切换勾选。 */
+  neuronSelectionMode: "single" as "single" | "multi",
+  /** 列表「编辑」→ 画布抽屉（消费后置 null）。 */
+  neuronEditRequestId: null as string | null,
+  /** 列表「创建」→ 画布创建弹窗（计数触发，消费后自增）。 */
+  neuronCreateRequest: 0,
+  /** 列表「发起」→ 打开规格会话（消费后置 null）。 */
+  neuronLaunchRequestId: null as string | null,
 });
 
 let unlisten: UnlistenFn | null = null;
@@ -95,10 +104,6 @@ async function refreshTopics(): Promise<void> {
   state.topics = await invoke<Topic[]>("list_topics");
 }
 
-async function refreshSessionSpecs(): Promise<void> {
-  state.sessionSpecs = await invoke<SystemPromptStatus[]>("list_session_specs");
-}
-
 async function refreshPoller(): Promise<void> {
   state.poller = await invoke<PollerStatus>("poll_status");
 }
@@ -116,9 +121,8 @@ async function handleStateChanged(payload: StateChangePayload): Promise<void> {
     } else if (payload.kind === "sessions") {
       await refreshRunningSessions();
     } else if (payload.kind === "neurons") {
+      // 写入（创建/编辑/绑定行为）广播 Neurons：列表与画布各自订阅刷新。
       state.neuronsVersion++;
-      // 规格管理（新建/编辑 behavior）也广播 Neurons：同步刷新规格列表。
-      await refreshSessionSpecs();
     } else if (payload.kind === "tools") {
       state.toolsVersion++;
     }
@@ -153,7 +157,6 @@ async function bootstrap(): Promise<void> {
       topicsRes,
       pollerRes,
       runningSessionsRes,
-      sessionSpecsRes,
     ] = await Promise.all([
       invoke<ProviderInfo[]>("list_providers"),
       invoke<ModelInfo[]>("list_models"),
@@ -163,7 +166,6 @@ async function bootstrap(): Promise<void> {
       invoke<Topic[]>("list_topics"),
       invoke<PollerStatus>("poll_status"),
       invoke<RunningSession[]>("list_running_sessions"),
-      invoke<SystemPromptStatus[]>("list_session_specs"),
     ]);
 
     state.providers = providersRes;
@@ -174,7 +176,6 @@ async function bootstrap(): Promise<void> {
     state.topics = topicsRes;
     state.poller = pollerRes;
     state.runningSessions = runningSessionsRes;
-    state.sessionSpecs = sessionSpecsRes;
     state.error = "";
 
     // 默认选中第一个会话（若存在），并加载其消息。
@@ -257,38 +258,37 @@ async function scoreFeedback(conversationId: string, score: number): Promise<voi
   await invoke("score_feedback", { conversationId, score });
 }
 
-// ── 会话规格（系统神经元管理）actions ──
+// ── 神经元统一管理（列表 ←→ 画布共享状态）actions ──
 
-async function listSessionSpecs(): Promise<SystemPromptStatus[]> {
-  const specs = await invoke<SystemPromptStatus[]>("list_session_specs");
-  state.sessionSpecs = specs;
-  return specs;
+/** 列表行点击：single 模式替换核心，multi 模式走 toggleNeuronSelection。 */
+function setNeuronSelection(ids: string[]): void {
+  state.neuronSelection = ids;
 }
 
-async function createSessionSpec(
-  systemType: string,
-  content: string | null,
-  behavior: SessionBehavior,
-): Promise<SystemPromptStatus> {
-  const spec = await invoke<SystemPromptStatus>("create_session_spec", {
-    systemType,
-    content,
-    behavior,
-  });
-  await refreshSessionSpecs();
-  return spec;
+/** 多选模式：切换勾选（去重）。 */
+function toggleNeuronSelection(id: string): void {
+  state.neuronSelection = state.neuronSelection.includes(id)
+    ? state.neuronSelection.filter((x) => x !== id)
+    : [...state.neuronSelection, id];
 }
 
-async function updateSessionSpecBehavior(
-  id: string,
-  behavior: SessionBehavior,
-): Promise<SystemPromptStatus> {
-  const spec = await invoke<SystemPromptStatus>("update_session_spec_behavior", {
-    id,
-    behavior,
-  });
-  await refreshSessionSpecs();
-  return spec;
+/** 列表「编辑」→ 画布打开该神经元抽屉（NeuronManager 消费后置 null；先确保画布面板存在）。 */
+function requestEditNeuron(id: string): void {
+  state.neuronEditRequestId = id;
+  layoutStore.insertPanel("neurons");
+}
+
+/** 列表「＋ 创建」→ 画布打开创建弹窗（NeuronManager 消费后自增；先确保画布面板存在）。 */
+function requestCreateNeuron(): void {
+  state.neuronCreateRequest++;
+  layoutStore.insertPanel("neurons");
+}
+
+/** 列表「发起」→ 以 chat 模式打开规格会话并插入会话面板（消费后置 null）。 */
+async function requestLaunchNeuron(id: string): Promise<void> {
+  state.neuronLaunchRequestId = null;
+  await openSession(id, "chat");
+  layoutStore.insertPanel("chat");
 }
 
 /** 按规格发起会话（assistant 模式），选中新会话并跳转会话视图。 */
@@ -398,7 +398,6 @@ export const dataStore = {
   refreshConversations,
   refreshPoller,
   refreshRunningSessions,
-  refreshSessionSpecs,
   // actions
   selectConversation,
   createConversation,
@@ -406,9 +405,12 @@ export const dataStore = {
   sendMessage,
   clearConversation,
   scoreFeedback,
-  listSessionSpecs,
-  createSessionSpec,
-  updateSessionSpecBehavior,
+  // 神经元统一管理（列表 ←→ 画布共享）
+  setNeuronSelection,
+  toggleNeuronSelection,
+  requestEditNeuron,
+  requestCreateNeuron,
+  requestLaunchNeuron,
   openSession,
   converseSession,
   createTopic,

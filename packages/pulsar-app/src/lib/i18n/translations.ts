@@ -75,17 +75,36 @@ export type Translations = {
     agentDesc: string;
     assistantLabel: string;
     assistantDesc: string;
-    bySpec: string;
   };
-  sessionSpecsPanel: {
+  neuronListPanel: {
     title: string;
+    search: string;
+    kindAll: string;
+    kindSystem: string;
+    kindNormal: string;
+    multiSelect: string;
+    create: string;
+    edit: string;
+    launch: string;
+    launchHint: string;
+    loadMore: string;
+    noMore: string;
     empty: string;
-    newButton: string;
+    loading: string;
+  };
+  neuronEditor: {
     systemType: string;
-    systemTypeHint: string;
-    content: string;
-    contentHint: string;
+    systemTypeUnbound: string;
+    bind: string;
+    rebind: string;
+    unbind: string;
+    bindPlaceholder: string;
+    bindConfirmTitle: string;
+    bindConfirmBody: string;
+    unbindConfirmTitle: string;
+    unbindConfirmBody: string;
     behavior: string;
+    saveBehavior: string;
     selection: string;
     tools: string;
     insertId: string;
@@ -98,15 +117,8 @@ export type Translations = {
     toolFromNeuron: string;
     toolAllowlist: string;
     allowlistHint: string;
-    bound: string;
-    unbound: string;
-    create: string;
-    save: string;
+    confirm: string;
     cancel: string;
-    launch: string;
-    launchHint: string;
-    edit: string;
-    contentRequired: string;
     operationFailed: string;
   };
   themeSwitcher: {
@@ -214,7 +226,6 @@ export type Translations = {
     viewModeTree: string;
     edgeWeight: string;
     depthLabel: string;
-    coreSelect: string;
     edgeTypeLabel: string;
     edgeFloating: string;
     edgeBezier: string;
@@ -318,7 +329,7 @@ export type Translations = {
     chat: string;
     neurons: string;
     toolEditor: string;
-    sessionSpecs: string;
+    neuronsList: string;
   };
 };
 
@@ -405,17 +416,36 @@ export const en: Translations = {
     agentDesc: "Can call tools for tasks.",
     assistantLabel: "Assistant",
     assistantDesc: "Autonomous progression.",
-    bySpec: "By spec",
   },
-  sessionSpecsPanel: {
-    title: "Session Specs",
-    empty: "No session specs yet.",
-    newButton: "New spec",
-    systemType: "System type",
-    systemTypeHint: "e.g. session.my_spec (must start with session.)",
-    content: "Content",
-    contentHint: "System prompt template for this spec.",
+  neuronListPanel: {
+    title: "Neurons",
+    search: "Search neurons...",
+    kindAll: "All",
+    kindSystem: "System",
+    kindNormal: "Normal",
+    multiSelect: "Multi-select",
+    create: "New",
+    edit: "Edit",
+    launch: "Launch",
+    launchHint: "Open a session with this neuron",
+    loadMore: "Load more ↓",
+    noMore: "No more",
+    empty: "No neurons yet.",
+    loading: "Loading...",
+  },
+  neuronEditor: {
+    systemType: "System Type",
+    systemTypeUnbound: "Unbound",
+    bind: "Bind",
+    rebind: "Re-bind",
+    unbind: "Unbind",
+    bindPlaceholder: "e.g. session.my_spec",
+    bindConfirmTitle: "Bind system type",
+    bindConfirmBody: "Bind this neuron as system type “{type}”? Behavior controls will appear after binding.",
+    unbindConfirmTitle: "Unbind system type",
+    unbindConfirmBody: "Remove system type and turn this back into a normal neuron? Behavior controls will be hidden.",
     behavior: "Behavior",
+    saveBehavior: "Save behavior",
     selection: "Selection",
     tools: "Tools",
     insertId: "Contract insert id",
@@ -428,15 +458,8 @@ export const en: Translations = {
     toolFromNeuron: "From neuron",
     toolAllowlist: "Allowlist",
     allowlistHint: "Comma-separated tool ids",
-    bound: "Bound",
-    unbound: "Unbound",
-    create: "Create",
-    save: "Save",
+    confirm: "Confirm",
     cancel: "Cancel",
-    launch: "Launch",
-    launchHint: "Open a session with this spec",
-    edit: "Edit",
-    contentRequired: "Fixed selection requires content.",
     operationFailed: "Operation failed",
   },
   themeSwitcher: {
@@ -550,7 +573,6 @@ export const en: Translations = {
     viewModeTree: "Tree",
     edgeWeight: "Edge",
     depthLabel: "Depth",
-    coreSelect: "Core",
     edgeTypeLabel: "Edge",
     edgeFloating: "Auto",
     edgeBezier: "Bezier",
@@ -659,7 +681,7 @@ export const en: Translations = {
     chat: "Chat",
     neurons: "Neurons",
     toolEditor: "Tool config",
-    sessionSpecs: "Session specs",
+    neuronsList: "Neurons",
   },
 };
 
@@ -746,17 +768,36 @@ export const zh: Translations = {
     agentDesc: "可调用工具完成任务。",
     assistantLabel: "助手",
     assistantDesc: "自主推进模式。",
-    bySpec: "按规格发起",
   },
-  sessionSpecsPanel: {
-    title: "会话规格",
-    empty: "暂无会话规格。",
-    newButton: "新建规格",
+  neuronListPanel: {
+    title: "神经元",
+    search: "搜索神经元...",
+    kindAll: "全部",
+    kindSystem: "系统",
+    kindNormal: "普通",
+    multiSelect: "多选",
+    create: "新建",
+    edit: "编辑",
+    launch: "发起",
+    launchHint: "以该神经元开启会话",
+    loadMore: "加载更多 ↓",
+    noMore: "没有更多了",
+    empty: "暂无神经元。",
+    loading: "加载中...",
+  },
+  neuronEditor: {
     systemType: "系统类型",
-    systemTypeHint: "如 session.my_spec（需以 session. 开头）",
-    content: "内容",
-    contentHint: "该规格的系统提示词模板。",
-    behavior: "行为",
+    systemTypeUnbound: "未绑定",
+    bind: "绑定",
+    rebind: "换绑",
+    unbind: "取消绑定",
+    bindPlaceholder: "如 session.my_spec",
+    bindConfirmTitle: "绑定系统类型",
+    bindConfirmBody: "将本神经元绑定为系统类型「{type}」？绑定后将出现行为管理控件。",
+    unbindConfirmTitle: "取消绑定",
+    unbindConfirmBody: "取消绑定后本神经元将变回普通神经元，行为管理控件将隐藏。确定继续？",
+    behavior: "行为管理",
+    saveBehavior: "保存行为",
     selection: "选型策略",
     tools: "工具策略",
     insertId: "契约段 id",
@@ -769,15 +810,8 @@ export const zh: Translations = {
     toolFromNeuron: "取神经元",
     toolAllowlist: "白名单",
     allowlistHint: "逗号分隔的工具 id",
-    bound: "已绑定",
-    unbound: "未绑定",
-    create: "新建",
-    save: "保存",
+    confirm: "确认",
     cancel: "取消",
-    launch: "发起",
-    launchHint: "以该规格开启会话",
-    edit: "编辑",
-    contentRequired: "选型为 Fixed 时需要填写内容。",
     operationFailed: "操作失败",
   },
   themeSwitcher: {
@@ -891,7 +925,6 @@ export const zh: Translations = {
     viewModeTree: "树",
     edgeWeight: "边权",
     depthLabel: "深度",
-    coreSelect: "核心",
     edgeTypeLabel: "连线",
     edgeFloating: "自动",
     edgeBezier: "曲线",
@@ -1000,6 +1033,6 @@ export const zh: Translations = {
     chat: "对话",
     neurons: "神经元",
     toolEditor: "工具配置",
-    sessionSpecs: "会话规格",
+    neuronsList: "神经元",
   },
 };

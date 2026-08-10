@@ -1,9 +1,11 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import type { Connection, Neuron } from "$lib/types";
+  import type { Connection, Neuron, SessionBehavior } from "$lib/types";
   import { t } from "$lib/i18n";
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
+  import BehaviorFields from "./BehaviorFields.svelte";
+  import { systemTypeColor } from "$lib/features/neuron/systemTypeColor";
 
   export let neuron: Neuron | null = null;
   export let connections: Connection[] = [];
@@ -11,6 +13,15 @@
   export let onJumpTo: (id: string) => void = () => {};
   export let onChanged: () => void = () => {};
   export let onRequestCreateDownstream: (sourceId: string) => void = () => {};
+
+  // ── 系统类型绑定 + 行为管理 ──
+  let bindMode = false;
+  let bindTypeInput = "";
+  let behaviorDraft: SessionBehavior | null = null;
+  let behaviorSaving = false;
+  let actionBusy = false;
+  type ConfirmAction = { kind: "bind" | "unbind"; type?: string } | null;
+  let confirmAction: ConfirmAction = null;
 
   // 抽屉位置：右侧 / 底部，偏好持久化到 localStorage
   type DrawerPosition = "right" | "bottom";
@@ -72,12 +83,72 @@
     desc = neuron.desc;
     content = neuron.content;
     toolIds = neuron.tool_ids ? [...neuron.tool_ids] : [];
+    bindMode = false;
+    bindTypeInput = "";
+    confirmAction = null;
+    behaviorDraft = neuron.behavior ?? null;
   }
 
   // 关闭抽屉时清空记忆，下次打开任意神经元都会重新初始化
   $: if (!neuron) {
     lastNeuronId = null;
     editing = false;
+    bindMode = false;
+    confirmAction = null;
+  }
+
+  // ── 系统类型绑定（换绑/取消需二次确认） ──
+  function askConfirm(action: ConfirmAction) {
+    confirmAction = action;
+  }
+
+  async function runConfirmAction() {
+    if (!neuron || !confirmAction) return;
+    actionBusy = true;
+    try {
+      const { kind, type } = confirmAction;
+      if (kind === "bind") {
+        const updated = (await invoke("set_neuron_system_type", {
+          id: neuron.id,
+          systemType: type,
+        })) as Neuron;
+        neuron = { ...neuron, system_type: updated.system_type, behavior: updated.behavior };
+        bindMode = false;
+        bindTypeInput = "";
+      } else {
+        const updated = (await invoke("set_neuron_system_type", {
+          id: neuron.id,
+          systemType: null,
+        })) as Neuron;
+        neuron = { ...neuron, system_type: updated.system_type, behavior: updated.behavior };
+      }
+      confirmAction = null;
+      onChanged();
+    } catch (e) {
+      console.error(e);
+      saveError = formatInvokeError(e);
+    } finally {
+      actionBusy = false;
+    }
+  }
+
+  async function saveBehavior() {
+    if (!neuron || !behaviorDraft) return;
+    behaviorSaving = true;
+    saveError = null;
+    try {
+      const updated = (await invoke("update_neuron_behavior", {
+        id: neuron.id,
+        behavior: behaviorDraft,
+      })) as Neuron;
+      neuron = { ...neuron, behavior: updated.behavior };
+      onChanged();
+    } catch (e) {
+      console.error(e);
+      saveError = formatInvokeError(e);
+    } finally {
+      behaviorSaving = false;
+    }
   }
 
   onMount(() => {
@@ -190,7 +261,7 @@
 <div class="drawer" class:open={!!neuron} class:right={position === "right"} class:bottom={position === "bottom"}>
   {#if neuron}
     <div class="drawer-head">
-      <span class="type-bar" style:background={`var(--color-system-${neuron.system_type || "default"}, var(--color-system-default))`}></span>
+      <span class="type-bar" style:background={systemTypeColor(neuron.system_type)}></span>
       <span class="title">{t("neuronPanel.drawerTitle")}</span>
       <button
         class="pos-btn"
@@ -225,8 +296,58 @@
 
     <div class="drawer-body">
       <div class="field">
-        <label>{t("neuronPanel.systemType")}</label>
-        <span class="value mono">{neuron.system_type || "—"}</span>
+        <label>{t("neuronEditor.systemType")}</label>
+        {#if neuron.system_type}
+          <div class="system-type-row">
+            <span class="type-badge" style:background={systemTypeColor(neuron.system_type)}>
+              {neuron.system_type}
+            </span>
+            <button class="btn small" on:click={() => (bindMode = true)}>
+              {t("neuronEditor.rebind")}
+            </button>
+            <button
+              class="btn small danger"
+              on:click={() => askConfirm({ kind: "unbind" })}
+            >
+              {t("neuronEditor.unbind")}
+            </button>
+          </div>
+        {:else}
+          <div class="system-type-row">
+            <span class="value muted">{t("neuronEditor.systemTypeUnbound")}</span>
+            <button class="btn small" on:click={() => (bindMode = true)}>
+              {t("neuronEditor.bind")}
+            </button>
+          </div>
+        {/if}
+        {#if bindMode}
+          <div class="bind-row">
+            <input
+              bind:value={bindTypeInput}
+              placeholder={t("neuronEditor.bindPlaceholder")}
+              on:keydown={(e) => {
+                if (e.key === "Enter" && bindTypeInput.trim() && !actionBusy)
+                  askConfirm({ kind: "bind", type: bindTypeInput.trim() });
+              }}
+            />
+            <button
+              class="btn small primary"
+              disabled={actionBusy || !bindTypeInput.trim()}
+              on:click={() => askConfirm({ kind: "bind", type: bindTypeInput.trim() })}
+            >
+              {t("neuronEditor.confirm")}
+            </button>
+            <button
+              class="btn small"
+              on:click={() => {
+                bindMode = false;
+                bindTypeInput = "";
+              }}
+            >
+              {t("neuronEditor.cancel")}
+            </button>
+          </div>
+        {/if}
       </div>
       <div class="field">
         <label>{t("neuronPanel.id")}</label>
@@ -315,6 +436,23 @@
         <span class="value">{fmtTime(neuron.updated_at)}</span>
       </div>
 
+      {#if neuron.system_type}
+        <div class="field col behavior-block">
+          <label>{t("neuronEditor.behavior")}</label>
+          <BehaviorFields
+            value={neuron.behavior ?? null}
+            onChange={(b) => (behaviorDraft = b)}
+          />
+          <button
+            class="btn small primary behavior-save"
+            disabled={behaviorSaving}
+            on:click={() => void saveBehavior()}
+          >
+            {behaviorSaving ? t("neuronPanel.saving") : t("neuronEditor.saveBehavior")}
+          </button>
+        </div>
+      {/if}
+
       <div class="field col">
         <label>{t("neuronPanel.connections")} ({connections.length})</label>
         {#if connections.length === 0}
@@ -351,6 +489,35 @@
 
     {#if saveError}
       <div class="drawer-error">{saveError}</div>
+    {/if}
+
+    {#if confirmAction}
+      <div class="confirm-mask" on:click={() => (confirmAction = null)}>
+        <div class="confirm-box" on:click|stopPropagation>
+          <div class="confirm-title">
+            {confirmAction.kind === "bind"
+              ? t("neuronEditor.bindConfirmTitle")
+              : t("neuronEditor.unbindConfirmTitle")}
+          </div>
+          <div class="confirm-body">
+            {confirmAction.kind === "bind"
+              ? t("neuronEditor.bindConfirmBody", { type: confirmAction.type ?? "" })
+              : t("neuronEditor.unbindConfirmBody")}
+          </div>
+          <div class="confirm-actions">
+            <button class="btn" on:click={() => (confirmAction = null)} disabled={actionBusy}>
+              {t("neuronEditor.cancel")}
+            </button>
+            <button
+              class="btn primary"
+              disabled={actionBusy}
+              on:click={() => void runConfirmAction()}
+            >
+              {actionBusy ? t("neuronPanel.saving") : t("neuronEditor.confirm")}
+            </button>
+          </div>
+        </div>
+      </div>
     {/if}
 
     <div class="drawer-foot">
@@ -751,5 +918,100 @@
   .btn.primary:disabled {
     opacity: 0.6;
     cursor: default;
+  }
+
+  .system-type-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .type-badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 6px;
+    color: var(--color-on-primary, #fff);
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .btn.danger {
+    color: var(--color-error, #e5484d);
+    border-color: var(--color-error, #e5484d);
+    background: transparent;
+  }
+  .btn.danger:hover {
+    background: color-mix(in srgb, var(--color-error, #e5484d) 10%, transparent);
+  }
+  .bind-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .bind-row input {
+    flex: 1;
+    min-width: 0;
+    background: var(--color-bg);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-family: var(--font-mono);
+  }
+  .bind-row input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+  }
+  .behavior-block {
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    background: var(--color-bg);
+  }
+  .behavior-save {
+    align-self: flex-start;
+  }
+  .confirm-mask {
+    position: absolute;
+    inset: 0;
+    background: color-mix(in srgb, var(--color-bg) 55%, transparent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 30;
+  }
+  .confirm-box {
+    width: min(300px, 90%);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .confirm-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text);
+  }
+  .confirm-body {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--color-text-muted);
+    word-break: break-word;
+  }
+  .confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .confirm-actions .btn {
+    flex: 0 0 auto;
+    min-width: 72px;
   }
 </style>

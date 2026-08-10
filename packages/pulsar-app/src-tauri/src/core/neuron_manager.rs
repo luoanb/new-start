@@ -14,8 +14,9 @@ use super::{
     models::{
         AssistantCandidateScope, BootstrapReport, CandidateQuery, Connection, CreateNeuronInput,
         EnsureSystemOpts, GeneratedNeuronDraft, ModelMessage, NeighborhoodPoolPolicy, Neuron,
-        NeuronCreate, NeuronSubgraph, NeuronUpdate, NeuronVariant, SelectionPolicy,
-        SessionBehavior, SystemPromptStatus, ToolPolicy, DEFAULT_ASSISTANT_GLOBAL_LIMIT,
+        NeuronCreate, NeuronKindFilter, NeuronPage, NeuronSubgraph, NeuronUpdate, NeuronVariant,
+        SelectionPolicy, SessionBehavior, SystemPromptStatus, ToolPolicy,
+        DEFAULT_ASSISTANT_GLOBAL_LIMIT,
     },
     neuron_config::NeuronConfigReader,
     neuron_model::NeuronModelCaller,
@@ -734,6 +735,39 @@ impl NeuronManager {
         behavior: SessionBehavior,
     ) -> AppResult<Neuron> {
         self.specs.update_behavior_for_admin(id, behavior)
+    }
+
+    /// 管理面分页列表（分页 + 搜索 + 类型筛选），供列表视图增量加载。
+    pub fn list_neurons_page(
+        &self,
+        page: usize,
+        page_size: usize,
+        search: Option<&str>,
+        kind: NeuronKindFilter,
+    ) -> AppResult<NeuronPage> {
+        self.store()?
+            .list_neurons_page(page, page_size, search, kind)
+    }
+
+    /// 管理面设置 / 换绑 / 取消系统类型（system_type 唯一约束由 store 保证）。
+    pub fn set_system_type_for_admin(
+        &self,
+        id: &str,
+        system_type: Option<&str>,
+    ) -> AppResult<Neuron> {
+        let normalized = system_type.map(str::trim).filter(|s| !s.is_empty());
+        // 唯一约束预检查：目标 system_type 已被其他神经元占用时给出友好错误。
+        if let Some(target) = normalized {
+            if let Some(existing) = self.store()?.get_neuron_by_system_type(target)? {
+                if existing.id != id {
+                    return Err(AppError::InvalidInput(format!(
+                        "system_type {target} is already bound to neuron {}",
+                        existing.id
+                    )));
+                }
+            }
+        }
+        self.store()?.set_system_type(id, normalized)
     }
 
     /// 列出所有 `session.%` 规格神经元（含 behavior 摘要）。
@@ -2743,6 +2777,139 @@ mod tests {
         let stored = manager.get(&n.id).unwrap().unwrap();
         assert_eq!(stored.use_count, 1);
         assert!(stored.last_used_at.is_some());
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    // ── 统一管理：分页 / 搜索 / 类型筛选 ─────────────────────────
+
+    #[tokio::test]
+    async fn list_neurons_page_paging_search_kind() {
+        let (manager, root) = test_manager();
+        // 3 条普通 + 2 条系统。
+        for i in 0..3 {
+            insert_plain(&manager, &format!("plain-{i}"), "c");
+        }
+        for (i, st) in ["session.a", "session.b"].iter().enumerate() {
+            manager
+                .store()
+                .unwrap()
+                .create_neuron(NeuronCreate {
+                    desc: format!("sys-{i}"),
+                    content: "c".into(),
+                    system_type: Some((*st).into()),
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+
+        // 分页：page0 size2 → 2 条、has_more、total=5；page1 不越界。
+        let page0 = manager
+            .list_neurons_page(0, 2, None, NeuronKindFilter::All)
+            .unwrap();
+        assert_eq!(page0.items.len(), 2);
+        assert!(page0.has_more);
+        assert_eq!(page0.total, 5);
+        let page2 = manager
+            .list_neurons_page(2, 2, None, NeuronKindFilter::All)
+            .unwrap();
+        assert_eq!(page2.items.len(), 1);
+        assert!(!page2.has_more);
+
+        // 搜索：desc 模糊命中；不存在的词命中 0。
+        let hit = manager
+            .list_neurons_page(0, 10, Some("plain-1"), NeuronKindFilter::All)
+            .unwrap();
+        assert_eq!(hit.items.len(), 1);
+        assert_eq!(hit.items[0].desc, "plain-1");
+        let miss = manager
+            .list_neurons_page(0, 10, Some("不存在"), NeuronKindFilter::All)
+            .unwrap();
+        assert!(miss.items.is_empty());
+
+        // 类型筛选：系统 2 条、普通 3 条。
+        let sys = manager
+            .list_neurons_page(0, 10, None, NeuronKindFilter::System)
+            .unwrap();
+        assert_eq!(sys.items.len(), 2);
+        assert!(sys.items.iter().all(|n| n.system_type.is_some()));
+        let normal = manager
+            .list_neurons_page(0, 10, None, NeuronKindFilter::Normal)
+            .unwrap();
+        assert_eq!(normal.items.len(), 3);
+        assert!(normal.items.iter().all(|n| n.system_type.is_none()));
+
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn set_system_type_for_admin_bind_switch_unbind() {
+        let (manager, root) = test_manager();
+        let n1 = insert_plain(&manager, "one", "c");
+        let n2 = insert_plain(&manager, "two", "c");
+
+        // 绑定。
+        let bound = manager
+            .set_system_type_for_admin(&n1.id, Some("session.demo"))
+            .unwrap();
+        assert_eq!(bound.system_type.as_deref(), Some("session.demo"));
+
+        // 唯一冲突：同一 system_type 不能绑到另一条。
+        let err = manager
+            .set_system_type_for_admin(&n2.id, Some("session.demo"))
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput(_)));
+
+        // 换绑：n2 换新类型成功，n1 保持原类型。
+        let switched = manager
+            .set_system_type_for_admin(&n2.id, Some("session.other"))
+            .unwrap();
+        assert_eq!(switched.system_type.as_deref(), Some("session.other"));
+        assert_eq!(
+            manager
+                .get_neuron_by_system_type("session.demo")
+                .unwrap()
+                .unwrap()
+                .id,
+            n1.id
+        );
+
+        // 取消绑定（空白视为 None）。
+        let unbound = manager
+            .set_system_type_for_admin(&n1.id, Some("  "))
+            .unwrap();
+        assert!(unbound.system_type.is_none());
+
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_behavior_for_admin_requires_system_type() {
+        let (manager, root) = test_manager();
+        let behavior = SessionBehavior {
+            selection: SelectionPolicy::Fixed,
+            tools: ToolPolicy::None,
+            insert_id: None,
+        };
+
+        // 普通神经元无 system_type：拒绝。
+        let plain = insert_plain(&manager, "plain", "c");
+        let err = manager
+            .update_behavior_for_admin(&plain.id, behavior.clone())
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput(_)));
+
+        // 绑定系统类型后可写并落库。
+        let sys = manager
+            .set_system_type_for_admin(&plain.id, Some("session.demo"))
+            .unwrap();
+        let updated = manager
+            .update_behavior_for_admin(&sys.id, behavior.clone())
+            .unwrap();
+        assert_eq!(updated.behavior, Some(behavior));
+
         drop(manager);
         fs::remove_dir_all(root).unwrap();
     }

@@ -172,6 +172,18 @@ export type Neuron = {
   tool_ids: string[];
   created_at: number;
   updated_at: number;
+  use_count?: number;
+  last_used_at?: number | null;
+  deleted_at?: number | null;
+  /** 会话规格（仅 `system_type` 非空的神经元可挂载；后端缺失回落 null）。 */
+  behavior?: SessionBehavior | null;
+};
+
+/** 管理面分页结果（list_neurons_page 返回）。 */
+export type NeuronPage = {
+  items: Neuron[];
+  total: number;
+  has_more: boolean;
 };
 
 export type Connection = {

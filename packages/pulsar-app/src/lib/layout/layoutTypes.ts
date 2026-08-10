@@ -6,7 +6,7 @@ export type SplitOrientation = "horizontal" | "vertical";
 export type ViewContainerId = "sidebar" | "info" | "panel";
 
 /** main 区可插入的面板类型。同一类型全局唯一（多个会话共享同一个 chat 面板）。 */
-export type MainPanelType = "chat" | "neurons" | "tool-editor" | "session-specs";
+export type MainPanelType = "chat" | "neurons" | "tool-editor";
 
 /** main 区面板实例（insertPanel 返回其 id，供外部关闭）。 */
 export type MainPanel = {
@@ -33,7 +33,7 @@ export type ViewContainerState = {
 };
 
 export type LayoutState = {
-  version: 8;
+  version: 9;
   sidebar: { visible: boolean; width: number };
   info: { visible: boolean; width: number };
   panel: { visible: boolean; height: number };
@@ -48,7 +48,7 @@ export type LayoutState = {
 };
 
 export const DEFAULT_LAYOUT: LayoutState = {
-  version: 8,
+  version: 9,
   sidebar: { visible: true, width: 260 },
   info: { visible: true, width: 280 },
   // v2/v3: 底部面板默认展开（对齐 VS Code 底部栏习惯）
@@ -56,7 +56,8 @@ export const DEFAULT_LAYOUT: LayoutState = {
   containers: {
     // v5/v6: topics 曾默认在 panel/topics 位置演变；v7: topics 与 tools 默认归位左侧 sidebar
     sidebar: { views: ["sessions", "topics", "tools"], activeView: "sessions" },
-    info: { views: ["providers", "models"], activeView: "providers" },
+    // v9: 新增 neurons-list（神经元统一管理列表）
+    info: { views: ["providers", "models", "neurons-list"], activeView: "providers" },
     panel: { views: ["poller", "logs"], activeView: "poller" },
   },
   hiddenViews: [],
