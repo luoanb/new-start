@@ -37,7 +37,7 @@
   let drawerConns = $state<Connection[]>([]);
 
   // 过滤 / 搜索（v9：搜索与核心筛选上移到列表视图，画布仅保留深度/布局/连线）
-  let depth = $state(2);
+  let depth = $state(1);
 
   // 连线类型（力导向布局默认 floating：自动吸附卡片最近边缘点）
   type EdgeType = "bezier" | "smoothstep" | "step" | "straight" | "floating";
