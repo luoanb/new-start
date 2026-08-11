@@ -128,7 +128,7 @@
     aria-haspopup="listbox"
     aria-expanded={open}
   >
-    <span class="value">{selectedLabel}</span>
+    <span class="value" title={selectedLabel}>{selectedLabel}</span>
     <svg
       class="caret"
       class:flip={open}
@@ -174,6 +174,7 @@
         class:highlight={i === highlight}
         role="option"
         aria-selected={opt.value === value}
+        title={opt.label}
         onmouseenter={() => (highlight = i)}
         onclick={() => choose(opt.value)}
       >

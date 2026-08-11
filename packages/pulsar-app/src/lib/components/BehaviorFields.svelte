@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
   import type {
     NeighborhoodPoolPolicy,
     SelectionPolicy,
@@ -9,7 +11,7 @@
   import Select from "./Select.svelte";
 
   /**
-   * 行为表单控件（选型策略 + 工具策略 + 契约段 id），受控组件。
+   * 行为表单控件（选型策略 + 工具策略 + 契约手册），受控组件。
    * 由系统神经元编辑场景复用：外部持有 SessionBehavior，任何字段变更即时回调 onChange。
    */
   let {
@@ -113,6 +115,32 @@
     { value: "allowlist", label: t("neuronEditor.toolAllowlist") },
   ];
 
+  // 契约手册目录：启动时从后端加载全部可用 insert id 与用途说明。
+  type InsertInfo = { id: string; hint: string };
+  let insertCatalog = $state<InsertInfo[]>([]);
+  onMount(async () => {
+    try {
+      insertCatalog = (await invoke<InsertInfo[]>("list_insert_catalog")) ?? [];
+    } catch (e) {
+      console.error("[behavior-fields] failed to load insert catalog", e);
+    }
+  });
+
+  // “无” + 可用 id；label 附带一句话用途说明，便于辨识。若当前值为目录外的旧值，也保留在选项中以便展示。
+  const insertOptions = $derived.by(() => {
+    const opts = [
+      { value: "", label: t("neuronEditor.none") },
+      ...insertCatalog.map((i) => ({
+        value: i.id,
+        label: i.hint ? `${i.id} · ${i.hint}` : i.id,
+      })),
+    ];
+    if (form.insertId && !opts.some((o) => o.value === form.insertId)) {
+      opts.push({ value: form.insertId, label: form.insertId });
+    }
+    return opts;
+  });
+
   // 外部 value 引用变化（如保存后刷新）时重建表单；组件内部变更不触发。
   $effect(() => {
     if (value !== lastValue) {
@@ -163,7 +191,14 @@
   {/if}
   <label class="field">
     <span>{t("neuronEditor.insertId")}</span>
-    <input bind:value={form.insertId} onchange={emit} placeholder="assistant.match_topic" />
+    <Select
+      value={form.insertId}
+      options={insertOptions}
+      onchange={(v) => {
+        form.insertId = String(v);
+        emit();
+      }}
+    />
   </label>
 </div>
 
@@ -179,8 +214,7 @@
     gap: var(--space-1);
     font-size: var(--fs-sm);
   }
-  .field input,
-  .field textarea {
+  .field input {
     padding: var(--space-1);
     border-radius: var(--radius-sm);
     border: var(--border-width) solid var(--color-border);

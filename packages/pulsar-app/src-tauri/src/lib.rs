@@ -6,6 +6,7 @@ use crate::core::{
     assistant_mode::AssistantMode,
     conversation_store::ConversationStore,
     error::AppErrorPayload,
+    insert_catalog::{InsertCatalog, InsertInfo},
     neuron_manager::NeuronManager,
     poller::Poller,
     providers::ProviderRegistry,
@@ -657,6 +658,12 @@ async fn update_neuron_behavior(
     Ok(neuron)
 }
 
+/// 契约段目录：全部可用 insert id 与一句话说明（供前端下拉选择，替代自由输入）。
+#[tauri::command]
+fn list_insert_catalog() -> Vec<InsertInfo> {
+    InsertCatalog::catalog()
+}
+
 // ── Logs ──
 
 #[tauri::command]
@@ -839,6 +846,7 @@ pub fn run() {
             list_neurons_page,
             set_neuron_system_type,
             update_neuron_behavior,
+            list_insert_catalog,
             // Logs
             logs_snapshot,
             logs_get_level,

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use rust_embed::Embed;
+use serde::Serialize;
 
 use super::error::{AppError, AppResult};
 
@@ -13,6 +14,13 @@ struct Inserts;
 
 /// Process-wide catalog of self-describing atom manuals.
 pub struct InsertCatalog;
+
+/// 目录条目：id + 一句话用途说明（供前端下拉展示）。
+#[derive(Debug, Clone, Serialize)]
+pub struct InsertInfo {
+    pub id: String,
+    pub hint: String,
+}
 
 fn cache() -> &'static Mutex<HashMap<String, &'static str>> {
     static CACHE: OnceLock<Mutex<HashMap<String, &'static str>>> = OnceLock::new();
@@ -27,6 +35,55 @@ impl InsertCatalog {
     /// Whether an insert file exists for `id`.
     pub fn exists(id: &str) -> bool {
         Inserts::get(&Self::path_for(id)).is_some()
+    }
+
+    /// All available insert ids (embedded basenames without `.md`), sorted.
+    pub fn list() -> Vec<String> {
+        let mut ids: Vec<String> = Inserts::iter()
+            .map(|path| path.strip_suffix(".md").map(str::to_string).unwrap_or_default())
+            .filter(|id| !id.is_empty())
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    /// 目录条目：每个 id 配一句话用途说明（`## 工具` 段首行），供前端下拉选择。
+    pub fn catalog() -> Vec<InsertInfo> {
+        Self::list()
+            .into_iter()
+            .map(|id| InsertInfo {
+                id: id.clone(),
+                hint: Self::hint(&id),
+            })
+            .collect()
+    }
+
+    /// 一句话说明：`## 工具` 段首行，去 markdown 标记并截断。
+    fn hint(id: &str) -> String {
+        let full = match Self::get(id) {
+            Ok(text) => text,
+            Err(_) => return String::new(),
+        };
+        let Some(body) = section_body(full, "工具") else {
+            return String::new();
+        };
+        let line = body
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or("");
+        let cleaned = line
+            .trim_start_matches("- ")
+            .trim_end_matches('.')
+            .replace("**", "")
+            .replace('`', "");
+        let cleaned = cleaned.trim();
+        let count = cleaned.chars().count();
+        let mut out: String = cleaned.chars().take(48).collect();
+        if count > 48 {
+            out.push('…');
+        }
+        out
     }
 
     /// Full manual text for `id`.
@@ -131,6 +188,32 @@ mod tests {
         }
         assert!(!InsertCatalog::exists("neuron.ensure_system"));
         assert!(!InsertCatalog::exists("neuron.bootstrap_system"));
+    }
+
+    #[test]
+    fn list_returns_all_embedded_ids() {
+        let ids = InsertCatalog::list();
+        for known in [
+            "assistant.score_feedback",
+            "assistant.match_topic",
+            "assistant.complete_scope",
+            "neuron.draft_from_model",
+            "neuron.select_one",
+            "execute_command",
+            "creator.variant_evolve",
+        ] {
+            assert!(ids.iter().any(|id| id == known), "expected {known}");
+        }
+        assert!(ids.windows(2).all(|w| w[0] < w[1]), "ids must be sorted");
+    }
+
+    #[test]
+    fn catalog_carries_hints() {
+        let catalog = InsertCatalog::catalog();
+        assert_eq!(catalog.len(), InsertCatalog::list().len());
+        for item in &catalog {
+            assert!(!item.hint.is_empty(), "{} missing hint", item.id);
+        }
     }
 
     #[test]
