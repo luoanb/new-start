@@ -2,7 +2,7 @@ use std::{fs, path::PathBuf};
 
 use serde::Deserialize;
 
-use super::{
+use crate::core::{
     config::{NeuronSection, SessionDefaultsSection},
     error::AppResult,
 };

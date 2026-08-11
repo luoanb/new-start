@@ -14,14 +14,27 @@ pub mod log_redact;
 pub mod mcp;
 pub mod model_call_input;
 pub mod models;
-pub mod neuron_config;
-pub mod neuron_manager;
-pub mod neuron_model;
-pub mod neuron_store;
+pub mod neuron;
+/// 兼容别名：旧 `core::neuron_*` / `core::spec_manager` 路径指向 `core::neuron` 子模块，
+/// 保持外部消费方引用不变（NeuronManager 拆分零改动目标）。
+pub mod neuron_config {
+    pub use super::neuron::config::*;
+}
+pub mod neuron_manager {
+    pub use super::neuron::manager::*;
+}
+pub mod neuron_model {
+    pub use super::neuron::model::*;
+}
+pub mod neuron_store {
+    pub use super::neuron::store::*;
+}
 pub mod poller;
 pub mod providers;
 pub mod session_tracker;
-pub mod spec_manager;
+pub mod spec_manager {
+    pub use super::neuron::spec::*;
+}
 pub mod storage;
 pub mod tool_config;
 pub mod tool_registry;

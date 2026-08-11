@@ -1,9 +1,9 @@
 use std::sync::{Arc, Mutex};
 
-use super::{
+use crate::core::{
     error::{AppError, AppResult},
     models::{Neuron, NeuronCreate, SessionBehavior, SystemPromptStatus},
-    neuron_store::NeuronStore,
+    neuron::store::NeuronStore,
 };
 
 /// Session spec management (管理面): 会话规格 = `system_type = 'session.<id>'` 的系统神经元 +

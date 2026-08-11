@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use super::{
+use crate::core::{
     error::{AppError, AppResult},
     models::{
         Connection as NeuronConnection, Neuron, NeuronCreate, NeuronKindFilter, NeuronPage,
