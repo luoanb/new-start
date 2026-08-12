@@ -86,7 +86,7 @@ flowchart TD
   A[ensure_system_neuron system_type] --> B{reset?}
   B -->|是| C[断边并删根]
   B -->|否| D{已存在?}
-  D -->|是| E[select_candidates source=本根]
+  D -->|是| E[behavior 空则补默认；select_candidates source=本根]
   C --> F[ensure_creator]
   D -->|否| F
   F --> G[generate_draft system=creator种子]
@@ -102,6 +102,7 @@ flowchart TD
 - 下游不足时一次 `generate_drafts(count=缺口)` + 挂到本根下批量补齐（禁止循环单条；不经 `create_neuron`→`select_one` 以免递归）。
 - 写系统根 content：用 `create_neuron` 种子作 model system，不借用其它根的下游当本根 pool。
 - 赋 `system_type` **只许**本方法；禁止旁路贴标。
+- 命中已存在的裁决类系统神经元时，若 `behavior` 为空则按 `default_behavior_for_system_type` 自动补写默认值（`Fixed` + 对应 `insert_id`）；已有值不覆盖。
 
 ### 2.3 普通神经元：`create_neuron(input, link_to, count)`
 

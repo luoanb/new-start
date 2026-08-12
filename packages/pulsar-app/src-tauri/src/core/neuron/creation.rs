@@ -143,6 +143,26 @@ impl NeuronCreation {
                 );
             }
         } else if let Some(existing) = self.query.get_by_system_type(system_type)? {
+            // 老数据兜底：早期创建的裁决类系统神经元可能没写 behavior（列可空），
+            // 命中已有时若为空且有默认值则补写，保证 Fixed 语义的 resolve_role 路径可用。
+            let existing = if existing.behavior.is_none() {
+                if let Some(default_behavior) = default_behavior_for_system_type(system_type) {
+                    let updated = self
+                        .store()?
+                        .set_behavior(&existing.id, Some(&default_behavior))?;
+                    tracing::info!(
+                        phase = "ensure_system_neuron",
+                        system_type,
+                        neuron_id = %existing.id,
+                        "backfilled default behavior for legacy system neuron"
+                    );
+                    updated
+                } else {
+                    existing
+                }
+            } else {
+                existing
+            };
             tracing::info!(
                 phase = "ensure_system_neuron",
                 system_type,

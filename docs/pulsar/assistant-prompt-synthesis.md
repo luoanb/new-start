@@ -67,7 +67,7 @@ Insert 文件目录：`packages/pulsar-app/src-tauri/inserts/<id>.md`（`rust-em
 
 `call_system_prompt_json` / `SelectNeuronBeforeHook` 会 `ensure_system_neuron(system_type)`：
 
-- 已存在：直接返回，并可能 `ensure_own_candidate_pool`（内部再走 `select_candidates` → 可能 `generate_drafts`）。
+- 已存在：直接返回，并可能 `ensure_own_candidate_pool`（内部再走 `select_candidates` → 可能 `generate_drafts`）。若为早期创建的裁决类系统神经元且 `behavior` 为空，会按 `default_behavior_for_system_type` 补写默认 behavior（`Fixed` + 对应 `insert_id`），避免 Fixed 语义的 `resolve_role` 缺 behavior 报错。
 - 不存在：`generate_draft(creator.content, 写 system_type 的 user_prompt)` 落库后再填候选池（装配 history=`[]`）。
 
 Bootstrap 启动时已保证 `create_neuron` + `assistant_select_neuron`；其余 hook 的 `system_type` 多为懒创建。

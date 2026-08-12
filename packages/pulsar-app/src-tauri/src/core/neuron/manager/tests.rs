@@ -466,6 +466,44 @@
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[tokio::test]
+    async fn ensure_system_neuron_backfills_default_behavior_for_legacy_system_neuron() {
+        let (manager, root) = test_manager();
+        // 模拟老数据：裁决类系统神经元存在但 behavior 为空（早期版本创建时未写）。
+        let legacy = manager
+            .store()
+            .unwrap()
+            .create_neuron(NeuronCreate {
+                desc: "主题匹配".into(),
+                content: "match topic content".into(),
+                weight: 0.0,
+                system_type: Some("assistant_match_topic".into()),
+                tool_ids: vec![],
+                lineage_parent_id: None,
+                variant_state: None,
+            })
+            .unwrap();
+        assert!(legacy.behavior.is_none());
+
+        // ensure 命中已有：自动补写默认 behavior（Fixed + 契约段）。
+        let ensured = manager
+            .ensure_system_neuron("assistant_match_topic", EnsureSystemOpts { reset: false })
+            .await
+            .unwrap();
+        let behavior = ensured.behavior.expect("behavior should be backfilled");
+        assert_eq!(behavior.selection, SelectionPolicy::Fixed);
+        assert_eq!(behavior.tools, ToolPolicy::None);
+        assert_eq!(behavior.insert_id.as_deref(), Some("assistant.match_topic"));
+
+        // 幂等：已有 behavior 不被覆盖。
+        let again = manager
+            .ensure_system_neuron("assistant_match_topic", EnsureSystemOpts { reset: false })
+            .await
+            .unwrap();
+        assert_eq!(again.behavior, Some(behavior));
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn ensure_creator_uses_default_prompt_without_config() {
         let (manager, root) = test_manager();
