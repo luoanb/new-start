@@ -10,9 +10,9 @@ use crate::core::{
     error::AppResult,
     models::{
         AssistantCandidateScope, BootstrapReport, CandidateQuery, Connection, CreateNeuronInput,
-        EnsureSystemOpts, ModelMessage, Neuron, NeuronCreate, NeuronKindFilter, NeuronPage,
-        NeuronSubgraph, NeuronUpdate, SelectionPolicy, SessionBehavior, SystemPromptStatus,
-        ToolPolicy, DEFAULT_ASSISTANT_GLOBAL_LIMIT,
+        EnsureSystemOpts, ModelMessage, NeighborhoodPoolPolicy, Neuron, NeuronCreate,
+        NeuronKindFilter, NeuronPage, NeuronSubgraph, NeuronUpdate, SelectionPolicy,
+        SessionBehavior, SystemPromptStatus, ToolPolicy, DEFAULT_ASSISTANT_GLOBAL_LIMIT,
     },
     neuron::{
         config::NeuronConfigReader,
@@ -394,6 +394,55 @@ impl NeuronManager {
     /// 变体状态机：观察→晋升 / 淘汰回滚 / 差分重写（每次调用只处理一次）。
     pub async fn maybe_evolve_creator_variants(&self) -> AppResult<()> {
         self.evolution.maybe_evolve_creator_variants().await
+    }
+
+    // ── 选型装配（converse 共用） ───────────────────────────────
+
+    /// selection → 候选池装配 scope（`resolve_role` 委托）。
+    /// `None` / `Fixed` 不涉及候选池，返回 `None`。
+    ///
+    /// - `Neighborhood`：有历史锚点 = last_selected；首轮锚点 = 规格神经元自身；
+    /// - `Global`：无历史全域池选 1；有历史退化为邻域选（锚点 = last_selected）。
+    pub(crate) fn scope_for_selection(
+        selection: &SelectionPolicy,
+        spec_neuron_id: &str,
+        last_selected: Option<&str>,
+    ) -> Option<AssistantCandidateScope> {
+        match selection {
+            SelectionPolicy::None | SelectionPolicy::Fixed => None,
+            SelectionPolicy::Neighborhood { policy } => Some(match last_selected {
+                Some(last) => AssistantCandidateScope::Neighborhood {
+                    self_id: last.to_string(),
+                    policy: *policy,
+                },
+                None => AssistantCandidateScope::Neighborhood {
+                    self_id: spec_neuron_id.to_string(),
+                    policy: *policy,
+                },
+            }),
+            SelectionPolicy::Global { limit } => Some(match last_selected {
+                Some(last) => AssistantCandidateScope::Neighborhood {
+                    self_id: last.to_string(),
+                    policy: NeighborhoodPoolPolicy::default(),
+                },
+                None => AssistantCandidateScope::Global { limit: *limit },
+            }),
+        }
+    }
+
+    /// role 解析/选型：按 scope 装配候选池；n=1 硬规则短路（跳过选型模型并记录使用信号）。
+    pub(crate) async fn select_role(
+        &self,
+        messages: &[ModelMessage],
+        scope: AssistantCandidateScope,
+    ) -> AppResult<Neuron> {
+        let candidates = self.select_assistant_candidates(scope).await?;
+        if candidates.len() == 1 {
+            let single = candidates[0].clone();
+            self.mark_used_for_assistant(&single.id);
+            return Ok(single);
+        }
+        self.select_one_from_with_history(&candidates, messages).await
     }
 }
 

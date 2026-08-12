@@ -3,7 +3,7 @@ pub mod tui;
 
 use crate::core::{
     app_log::{self, LogEntry},
-    assistant_mode::AssistantMode,
+    assistant_session::AssistantSession,
     conversation_store::ConversationStore,
     error::AppErrorPayload,
     insert_catalog::{InsertCatalog, InsertInfo},
@@ -14,11 +14,11 @@ use crate::core::{
     storage,
     tool_config::ToolConfigView,
     topic_store::TopicStore,
-    ChatModelSelection, ChatOptions, ChatResponse, Connection, Conversation, ConversationMode,
+    ChatOptions, ChatResponse, Connection, Conversation, ConversationMode,
     Gateway, McpServerStatus, Message, ModelCallRequest, ModelCallResponse, ModelInfo, Neuron,
     NeuronCreate, NeuronKindFilter, NeuronPage, NeuronSubgraph, NeuronUpdate, PollerStatus,
-    ProviderInfo, RuntimeStatus, SessionBehavior, SkillInfo, StateChange, StateEmitter, ToolInfo,
-    Topic, TopicStatus, TopicUpdate, STATE_CHANGED_EVENT,
+    ProviderInfo, RuntimeStatus, SessionBehavior, SessionSeed, SkillInfo, StateChange,
+    StateEmitter, ToolInfo, Topic, TopicStatus, TopicUpdate, STATE_CHANGED_EVENT,
 };
 use std::{
     path::PathBuf,
@@ -543,7 +543,7 @@ async fn adjust_edge_weight(
 /// 与模型打分 hook 共享 `apply_score_feedback`，仅分数来源不同（用户点击）。
 #[tauri::command]
 async fn score_feedback(
-    assistant: State<'_, Arc<AssistantMode>>,
+    assistant: State<'_, Arc<AssistantSession>>,
     state_emit: State<'_, StateEmitter>,
     conversation_id: String,
     score: i64,
@@ -568,7 +568,9 @@ async fn score_feedback(
 
 // ── Session Specs ──
 
-/// 开启规格会话：校验规格神经元（system_type + behavior）并创建 conversation。
+/// 开启会话：按 spec_neuron_id 推导种子并调用 `Gateway::start_session`。
+/// - 传神经元 → `SessionSeed::Neuron(id)`（系统神经元用 behavior，普通神经元推导领域行为）；
+/// - 不传 → Assistant 模式用 `Global`（全域首轮选 1），其余模式直连（`None`）。
 #[tauri::command]
 async fn open_session(
     gateway: State<'_, Gateway>,
@@ -581,35 +583,17 @@ async fn open_session(
         "agent" => ConversationMode::Agent,
         _ => ConversationMode::Chat,
     };
+    let seed = match spec_neuron_id.trim() {
+        "" if conv_mode == ConversationMode::Assistant => Some(SessionSeed::Global),
+        "" => None,
+        id => Some(SessionSeed::Neuron(id.to_string())),
+    };
     let conversation = gateway
         .inner()
-        .open_session(&spec_neuron_id, conv_mode)
+        .start_session(seed, conv_mode)
         .map_err(|error| error.payload())?;
     state_emit.inner()(StateChange::Conversations);
     Ok(conversation)
-}
-
-/// 规格会话一轮端到端（resolve_round → execute_round）。
-#[tauri::command]
-async fn converse_session(
-    gateway: State<'_, Gateway>,
-    state_emit: State<'_, StateEmitter>,
-    session_id: String,
-    input: String,
-    provider_id: String,
-    model_id: String,
-) -> TauriResult<ChatResponse> {
-    let model = ChatModelSelection {
-        provider_id,
-        model_id,
-    };
-    let response = gateway
-        .inner()
-        .converse_session(&session_id, &input, &model)
-        .await
-        .map_err(|error| error.payload())?;
-    state_emit.inner()(StateChange::Conversations);
-    Ok(response)
 }
 
 /// 管理面分页列表（分页 + 搜索 + 类型筛选 all/system/normal），供列表视图增量加载。
@@ -842,7 +826,6 @@ pub fn run() {
             score_feedback,
             // Neurons / 统一管理
             open_session,
-            converse_session,
             list_neurons_page,
             set_neuron_system_type,
             update_neuron_behavior,

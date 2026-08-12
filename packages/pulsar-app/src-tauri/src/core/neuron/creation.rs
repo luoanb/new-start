@@ -200,7 +200,7 @@ impl NeuronCreation {
             variant_state: None,
         })?;
         // 裁决类系统神经元创建即注册默认 behavior（Fixed + 各自 insert_id），
-        // 使统一入口 `call_system_prompt` 无需额外映射即可按 Fixed 语义取提示词。
+        // 使业务侧裁决调用无需额外映射即可按 Fixed 语义取提示词。
         if let Some(default_behavior) = default_behavior_for_system_type(system_type) {
             self.store()?
                 .set_behavior(&created.id, Some(&default_behavior))?;

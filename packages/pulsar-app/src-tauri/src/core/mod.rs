@@ -1,9 +1,12 @@
+pub mod agent_session;
 pub mod app_log;
-pub mod assistant_mode;
+pub mod assistant_session;
 pub mod call_service;
+pub mod chat_session;
 pub mod cmd_exec;
 pub mod compactor;
 pub mod config;
+pub mod conversation_runner;
 pub mod conversation_store;
 pub mod dynamic_tool;
 pub mod error;
@@ -30,6 +33,7 @@ pub mod neuron_store {
     pub use super::neuron::store::*;
 }
 pub mod poller;
+pub mod poller_step;
 pub mod providers;
 pub mod session_tracker;
 pub mod spec_manager {
@@ -42,8 +46,12 @@ pub mod topic_manager;
 pub mod topic_store;
 pub use topic_store::TopicStore;
 
-pub use assistant_mode::AssistantMode;
-pub use call_service::{NeuronCallService, RoundTrigger};
+pub use assistant_session::{
+    AssistantSession, SYSTEM_TYPE_COMPLETE_SCOPE, SYSTEM_TYPE_MATCH_TOPIC,
+    SYSTEM_TYPE_SCORE_FEEDBACK, SYSTEM_TYPE_SELECT_NEURON,
+};
+pub use call_service::{NeuronCallService, SessionSeed, SessionState};
+pub use conversation_runner::{ConversationRunner, RoundHooks};
 pub use error::{AppError, AppResult};
 pub use events::{StateChange, StateEmitter, STATE_CHANGED_EVENT};
 pub use gateway::Gateway;

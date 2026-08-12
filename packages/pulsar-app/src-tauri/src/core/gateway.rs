@@ -5,9 +5,12 @@ use tauri;
 use tokio::sync::mpsc;
 
 use super::{
-    assistant_mode::{AssistantMode, AssistantStepRequest},
-    call_service::{ModelCaller, NeuronCallService, RoundTrigger},
+    agent_session::AgentSession,
+    assistant_session::AssistantSession,
+    call_service::{ModelCaller, NeuronCallService, SessionSeed},
+    chat_session::ChatSession,
     cmd_exec::ExecuteCommandTool,
+    conversation_runner::ConversationRunner,
     compactor::Compactor,
     conversation_store::{now_ms, ConversationStore},
     dynamic_tool::{CommandTool, HttpTool},
@@ -23,6 +26,7 @@ use super::{
     neuron_model::DefaultNeuronModelCaller,
     neuron_store::NeuronStore,
     poller::{new_shared_poll_parallelism, Poller, PollerConfigReader, PollerStatus},
+    poller_step::AssistantStepRequest,
     providers::ProviderRegistry,
     session_tracker::SessionTracker,
     tool_config::{
@@ -34,9 +38,6 @@ use super::{
 };
 
 use super::events::{StateChange, StateEmitter};
-
-/// Agent 工具循环护栏（随 `Engine::agent_mode` 迁移到 Gateway 层组装）。
-const AGENT_MAX_ITERATIONS: u32 = 20;
 
 #[derive(Debug, Clone)]
 pub struct Gateway {
@@ -51,9 +52,10 @@ pub struct Gateway {
     topic_store: Option<Arc<Mutex<TopicStore>>>,
     neuron_store: Option<Arc<Mutex<NeuronStore>>>,
     neuron_manager: Arc<NeuronManager>,
-    assistant: Arc<AssistantMode>,
-    /// 执行面（规格会话）：open_session / converse_session / 会话态。
-    call_service: Arc<NeuronCallService>,
+    /// 业务接入（独立文件，业务逻辑不进入 Gateway 正文）。
+    chat: ChatSession,
+    agent: AgentSession,
+    assistant: Arc<AssistantSession>,
     poller: Arc<Mutex<Poller>>,
     session_tracker: SessionTracker,
     /// Shared so Gateway can be used via `&self` / Tauri State without holding an outer lock across await.
@@ -203,23 +205,27 @@ impl Gateway {
         let poll_parallelism =
             new_shared_poll_parallelism(poller_settings.assistant_poll_parallelism as usize);
 
-        // 执行面：会话级规格执行（不持有 topic_store；课题副作用由 AssistantMode hooks 负责）。
+        // 执行面：无状态单轮对话引擎（不持有 store；读会话/落库由 Runner + 业务文件负责）。
         let call_service = Arc::new(NeuronCallService::new(
             match test_model_caller {
                 Some(caller) => caller,
                 None => Arc::new(providers.clone()) as Arc<dyn ModelCaller>,
             },
             Arc::clone(&neuron_manager),
-            store.clone(),
             Arc::clone(&tool_registry),
         ));
 
-        let assistant = Arc::new(AssistantMode::new(
+        // 单轮编排 + 业务接入（各业务独立文件，业务逻辑不进入 Gateway）。
+        let runner = ConversationRunner::new(store.clone(), Arc::clone(&call_service));
+        let chat = ChatSession::new(runner.clone());
+        let agent = AgentSession::new(runner.clone(), Arc::clone(&tool_registry));
+        let assistant = Arc::new(AssistantSession::new(
             store.clone(),
             providers.clone(),
             Arc::clone(&neuron_manager),
             Arc::clone(&topic_store),
             Arc::clone(&neuron_store),
+            runner.clone(),
             Arc::clone(&call_service),
             step_tx,
             session_tracker.clone(),
@@ -266,8 +272,9 @@ impl Gateway {
             topic_store: Some(topic_store),
             neuron_store: Some(neuron_store),
             neuron_manager,
+            chat,
+            agent,
             assistant,
-            call_service,
             poller,
             session_tracker,
             current_conversation_id: Arc::new(Mutex::new(current_conversation_id)),
@@ -347,23 +354,49 @@ impl Gateway {
             .unwrap_or_default()
     }
 
-    /// 开启规格会话：校验规格神经元（system_type + behavior）并创建 conversation。
-    pub fn open_session(
+    /// 开启会话：建会话 + 校验种子 + 写 `extra.session`（spec_neuron_id + seed + 空 state）。
+    /// 种子元数据由命令层推导（spec_neuron_id → `Neuron(id)`，空 → `Global`）。
+    pub fn start_session(
         &self,
-        spec_neuron_id: &str,
+        seed: Option<SessionSeed>,
         mode: ConversationMode,
     ) -> AppResult<Conversation> {
-        self.call_service.open_session(spec_neuron_id, mode)
-    }
-
-    /// 规格会话一轮端到端：resolve_round → execute_round（无课题 hooks）。
-    pub async fn converse_session(
-        &self,
-        session_id: &str,
-        input: &str,
-        model: &ChatModelSelection,
-    ) -> AppResult<ChatResponse> {
-        self.call_service.converse(session_id, input, model).await
+        if let Some(SessionSeed::Neuron(id)) = &seed {
+            let neuron = self
+                .neuron_manager
+                .get(id)?
+                .ok_or_else(|| AppError::NeuronNotFound(id.clone()))?;
+            if neuron.system_type.is_some() && neuron.behavior.is_none() {
+                return Err(AppError::InvalidInput(format!(
+                    "spec neuron {id} is a system neuron without behavior"
+                )));
+            }
+        }
+        let mut conversation = self.store.create_conversation(None, mode.clone())?;
+        let mut extra = conversation.extra.take().unwrap_or_else(|| serde_json::json!({}));
+        if !extra.is_object() {
+            extra = serde_json::json!({});
+        }
+        let mut session_meta = serde_json::json!({});
+        if let Some(SessionSeed::Neuron(id)) = &seed {
+            session_meta["spec_neuron_id"] = serde_json::json!(id);
+        }
+        session_meta["state"] = serde_json::json!({});
+        if let Some(seed) = seed {
+            session_meta["seed"] = serde_json::to_value(seed).unwrap_or_default();
+        }
+        let has_seed = session_meta.get("seed").is_some();
+        extra["session"] = session_meta;
+        conversation.extra = Some(extra);
+        self.store.save_conversation(&conversation)?;
+        tracing::info!(
+            phase = "start_session",
+            conversation_id = %conversation.id,
+            mode = ?mode,
+            has_seed,
+            "session started"
+        );
+        Ok(conversation)
     }
 
     /// 列出所有 `session.%` 规格神经元（含 behavior 摘要，供前端「管理好后发起会话」）。
@@ -516,21 +549,20 @@ impl Gateway {
 
         // Clone handles before any network await — callers must not hold an outer Gateway lock.
         let assistant = Arc::clone(&self.assistant);
-        let call_service = Arc::clone(&self.call_service);
         let session_tracker = self.session_tracker.clone();
         session_tracker.register(&conversation_id, None)?;
 
-        // ConversationMode 路由收敛到 Gateway：
-        // - Assistant → assistant.converse（课题 hooks 编排保留在 AssistantMode）
-        // - Chat     → execute_round 退化形态（无规格/无工具，Neuron 模板）
-        // - Agent    → Gateway 层多轮 execute_round（AGENT_MAX_ITERATIONS 护栏）
+        // ConversationMode 路由按 mode 委托各业务 session 文件（业务逻辑不进 Gateway）：
+        // - Assistant → assistant_session.converse（课题 hooks 编排在 AssistantHooks）
+        // - Chat     → chat_session.send（直连，无选型/无工具）
+        // - Agent    → agent_session.agent_loop（全工具多轮循环 + 护栏）
         let result = match mode {
             ConversationMode::Assistant => {
                 tracing::info!(
                     phase = "send_model_message",
                     mode = "assistant",
                     conversation_id = %conversation_id,
-                    "routing to assistant.converse"
+                    "routing to assistant_session.converse"
                 );
                 assistant.converse(&conversation_id, input, &model).await
             }
@@ -539,23 +571,18 @@ impl Gateway {
                     phase = "send_model_message",
                     mode = "chat",
                     conversation_id = %conversation_id,
-                    "routing to call_service.execute_round (legacy chat)"
+                    "routing to chat_session.send"
                 );
-                let mut ctx = call_service
-                    .build_context(&conversation_id, RoundTrigger::UserInput)
-                    .await?;
-                ctx.user_input = Some(input.to_string());
-                call_service.execute_round(&mut ctx, &model).await
+                self.chat.send(&conversation_id, input, &model).await
             }
             ConversationMode::Agent => {
                 tracing::info!(
                     phase = "send_model_message",
                     mode = "agent",
                     conversation_id = %conversation_id,
-                    "routing to gateway agent_loop"
+                    "routing to agent_session.agent_loop"
                 );
-                self.agent_loop(&call_service, &conversation_id, input, &model)
-                    .await
+                self.agent.agent_loop(&conversation_id, input, &model).await
             }
         };
 
@@ -576,67 +603,6 @@ impl Gateway {
         };
         self.set_current_conversation_id(response.conversation_id.clone())?;
         Ok(response)
-    }
-
-    /// Agent 多轮工具循环（组装在 Gateway，不新增 service 方法）：
-    /// 授权注册表全部工具，连续 `execute_round` 直到收敛（无工具调用）；
-    /// 超 `AGENT_MAX_ITERATIONS` 报 `AppError::AgentMaxIterations`。
-    ///
-    /// 首轮以用户输入落库；后续轮由 execute_round 的 ManualStep 分支注入
-    /// 继续指令（不重复落库 user 消息），历史中的 tool_call / tool_result
-    /// 经 build_context 自动并入下一轮上下文。
-    async fn agent_loop(
-        &self,
-        call_service: &Arc<NeuronCallService>,
-        conversation_id: &str,
-        input: &str,
-        model: &ChatModelSelection,
-    ) -> AppResult<ChatResponse> {
-        // 与 Engine.agent_mode 语义一致：注册表全部工具。
-        let authorized_tool_ids = self
-            .tool_registry
-            .read()
-            .map(|reg| {
-                reg.list_definitions()
-                    .into_iter()
-                    .map(|d| d.name)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-
-        let mut iterations = 0u32;
-        let mut first_round = true;
-        loop {
-            iterations += 1;
-            if iterations > AGENT_MAX_ITERATIONS {
-                return Err(AppError::AgentMaxIterations(format!(
-                    "Agent exceeded max iterations ({})",
-                    AGENT_MAX_ITERATIONS
-                )));
-            }
-
-            let trigger = if first_round {
-                RoundTrigger::UserInput
-            } else {
-                RoundTrigger::ManualStep
-            };
-            let mut ctx = call_service.build_context(conversation_id, trigger).await?;
-            if first_round {
-                ctx.user_input = Some(input.to_string());
-            } else {
-                ctx.topic_brief =
-                    Some("Continue the agent loop using the latest tool results.".to_string());
-            }
-            ctx.authorized_tool_ids = authorized_tool_ids.clone();
-            let response = call_service.execute_round(&mut ctx, model).await?;
-
-            first_round = false;
-            if ctx.tool_result.is_some() {
-                // 本轮执行了工具：继续循环（历史已含 tool_call + tool_result）。
-                continue;
-            }
-            return Ok(response);
-        }
     }
 
     pub async fn assistant_step(
@@ -812,7 +778,7 @@ impl Gateway {
         }
     }
 
-    pub fn assistant(&self) -> Arc<AssistantMode> {
+    pub fn assistant(&self) -> Arc<AssistantSession> {
         Arc::clone(&self.assistant)
     }
 
@@ -886,7 +852,7 @@ impl Gateway {
 
 fn spawn_poller_runtime(
     poller: Arc<Mutex<Poller>>,
-    assistant: Arc<AssistantMode>,
+    assistant: Arc<AssistantSession>,
     providers: ProviderRegistry,
     mut step_rx: mpsc::UnboundedReceiver<AssistantStepRequest>,
     base_interval_ms: u64,
@@ -1141,6 +1107,9 @@ mod tests {
     use async_trait::async_trait;
     use std::{fs, path::PathBuf, sync::Mutex as StdMutex};
 
+    /// 与 `agent_session::AGENT_MAX_ITERATIONS` 对齐的测试护栏常量。
+    const AGENT_MAX_ITERATIONS: u32 = 20;
+
     /// Agent 循环测试替身：可编程响应序列（顺序消耗，耗尽后报错）。
     struct ScriptedModelCaller {
         responses: Arc<StdMutex<Vec<ModelCallResponse>>>,
@@ -1224,7 +1193,8 @@ mod tests {
         };
 
         let response = gateway
-            .agent_loop(&gateway.call_service, &conv.id, "do it", &model)
+            .agent
+            .agent_loop(&conv.id, "do it", &model)
             .await
             .expect("agent loop should converge");
 
@@ -1266,7 +1236,8 @@ mod tests {
         };
 
         let err = gateway
-            .agent_loop(&gateway.call_service, &conv.id, "loop", &model)
+            .agent
+            .agent_loop(&conv.id, "loop", &model)
             .await
             .expect_err("agent loop should exceed max iterations");
         assert_eq!(err.code(), "agent_max_iterations");

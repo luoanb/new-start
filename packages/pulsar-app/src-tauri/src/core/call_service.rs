@@ -2,24 +2,24 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use super::{
-    assistant_mode::extract_json_object,
-    conversation_store::{now_ms, ConversationStore},
+    conversation_store::ConversationStore,
     error::{AppError, AppResult},
     insert_catalog::InsertCatalog,
-    log_redact::preview_json_for_log,
     model_call_input::{ModelAppendTemplate, ModelCallInput},
     models::{
-        AssistantCandidateScope, ChatModelSelection, ChatResponse, Conversation, ConversationMode,
-        EnsureSystemOpts, Message, MessageBody, MessageRole, ModelCallRequest, ModelCallResponse,
-        ModelMessage, NeighborhoodPoolPolicy, Neuron, SelectionPolicy, SessionBehavior, ToolPolicy,
+        ChatModelSelection, Conversation, ModelCallRequest, ModelCallResponse, ModelMessage,
+        Message, MessageBody, MessageRole, NeighborhoodPoolPolicy, Neuron, SelectionPolicy,
+        SessionBehavior, ToolCall, ToolPolicy, DEFAULT_ASSISTANT_GLOBAL_LIMIT,
     },
-    neuron_manager::{default_behavior_for_system_type, NeuronManager},
+    neuron_manager::NeuronManager,
     providers::ProviderRegistry,
     tool_registry::ToolRegistry,
 };
+
+/// 直连（非规格会话）系统类型标记：仅用于日志/审计，不落库。
+pub const SYSTEM_TYPE_DIRECT: &str = "direct";
 
 /// 会话级运行态（`conversation.extra.session.state`）：选型/干预信号自 `topic.extra.assistant`
 /// 迁出，旧 topic 数据读取时回退兼容。
@@ -33,17 +33,33 @@ pub struct SessionState {
     pub intervention_neuron_ids: Vec<String>,
 }
 
-/// 会话元数据（`conversation.extra.session`）：规格绑定 + 运行态。
+/// 会话元数据（`conversation.extra.session`）：规格绑定 + 种子 + 运行态。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMeta {
     pub spec_neuron_id: String,
     #[serde(default)]
     pub state: SessionState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<SessionSeed>,
+}
+
+/// 会话种子：决定首轮选型起点与推进规则。
+///
+/// - `Global`：全域首轮选 1 → 写 `state.last_selected`；后续按领域推进。
+/// - `Neuron(id)`：系统神经元用 behavior（禁 Global，宽容回退 Neighborhood）；
+///   普通神经元推导默认领域行为。
+/// - `None`（缺省）：直连，不选型、role_system 为空。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "id", rename_all = "lowercase")]
+pub enum SessionSeed {
+    Global,
+    Neuron(String),
 }
 
 const EXTRA_SESSION_KEY: &str = "session";
 const EXTRA_STATE_KEY: &str = "state";
 const EXTRA_SPEC_NEURON_ID_KEY: &str = "spec_neuron_id";
+const EXTRA_SEED_KEY: &str = "seed";
 
 /// 读取会话运行态（缺失 / 非法回落默认）。
 pub fn read_session_state(conversation: &Conversation) -> SessionState {
@@ -64,23 +80,35 @@ pub fn session_spec_neuron_id(conversation: &Conversation) -> Option<String> {
         .and_then(|extra| extra.get(EXTRA_SESSION_KEY))
         .and_then(|session| session.get(EXTRA_SPEC_NEURON_ID_KEY))
         .and_then(|value| value.as_str())
+        .filter(|id| !id.is_empty())
         .map(str::to_string)
+}
+
+/// 读取会话种子：优先新字段 `extra.session.seed`；旧数据回退 `spec_neuron_id` → `Neuron(id)`。
+pub fn session_seed(conversation: &Conversation) -> Option<SessionSeed> {
+    conversation
+        .extra
+        .as_ref()
+        .and_then(|extra| extra.get(EXTRA_SESSION_KEY))
+        .and_then(|session| session.get(EXTRA_SEED_KEY))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .or_else(|| session_spec_neuron_id(conversation).map(SessionSeed::Neuron))
 }
 
 /// 将运行态写回 `extra.session.state`（保留其它 extra 键与规格绑定）。
 fn set_session_state(conversation: &mut Conversation, state: &SessionState) {
-    let mut extra = conversation.extra.take().unwrap_or_else(|| json!({}));
+    let mut extra = conversation.extra.take().unwrap_or_else(|| serde_json::json!({}));
     if !extra.is_object() {
-        extra = json!({});
+        extra = serde_json::json!({});
     }
     let session = extra
         .get(EXTRA_SESSION_KEY)
         .cloned()
-        .unwrap_or_else(|| json!({ EXTRA_SPEC_NEURON_ID_KEY: "" }));
+        .unwrap_or_else(|| serde_json::json!({ EXTRA_SPEC_NEURON_ID_KEY: "" }));
     let mut session_obj = if session.is_object() {
         session
     } else {
-        json!({ EXTRA_SPEC_NEURON_ID_KEY: "" })
+        serde_json::json!({ EXTRA_SPEC_NEURON_ID_KEY: "" })
     };
     session_obj[EXTRA_STATE_KEY] = serde_json::to_value(state).unwrap_or_default();
     extra[EXTRA_SESSION_KEY] = session_obj;
@@ -98,33 +126,32 @@ pub fn write_session_state(
     store.save_conversation(&conversation)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RoundTrigger {
-    UserInput,
-    ManualStep,
-    Poller,
+/// 单轮对话输入：全部显式传入，service 不读库、不写库、不感知会话。
+#[derive(Debug, Clone)]
+pub struct RoundInput {
+    /// 种子分派起点；`None` = 直连（不选型）。
+    pub seed: Option<SessionSeed>,
+    /// 会话运行态（last_selected 等），上层传入。
+    pub state: SessionState,
+    /// 历史消息（模型侧，sanitize 后）。
+    pub messages: Vec<ModelMessage>,
+    /// 工具授权覆盖（`None` → 按 seed/behavior 推导；Agent 传全部工具）。
+    pub tool_override: Option<Vec<String>>,
 }
 
+/// 单轮对话产物：仅模型侧结果；落库由上层（ConversationRunner）负责。
 #[derive(Debug, Clone)]
-pub struct AssistantRoundContext {
-    pub session_id: String,
-    pub topic_id: Option<String>,
-    /// 轮询 / 手动推进时注入的课题简报（目标、进度、待办清单），避免模型盲目推进。
-    pub topic_brief: Option<String>,
-    pub trigger: RoundTrigger,
-    pub user_input: Option<String>,
-    pub system_prompt: Option<String>,
-    pub selected_neuron: Option<Neuron>,
-    pub authorized_tool_ids: Vec<String>,
-    pub messages: Vec<ModelMessage>,
+pub struct RoundOutcome {
+    /// 最终文本（含工具结果拼接），返回给用户。
+    pub response: String,
+    /// 模型原始输出（tool_call 消息落库用）。
     pub model_output: Option<String>,
+    /// 模型本轮声明的工具调用（含参数，上层落 tool_call 消息用）。
+    pub tool_calls: Option<Vec<ToolCall>>,
+    /// 首个工具执行结果。
     pub tool_result: Option<String>,
-    pub poll_count_for_topic: u64,
-    pub last_selected_neuron_id: Option<String>,
-    /// 会话绑定的规格神经元 id（resolve_round 填充）。
-    pub spec_neuron_id: Option<String>,
-    /// 会话规格行为（resolve_round 填充；execute_round 读取 insert_id）。
-    pub behavior: Option<SessionBehavior>,
+    pub selected_neuron_id: Option<String>,
+    pub state: SessionState,
 }
 
 /// 模型调用抽象：生产用 [`ProviderRegistry`]，测试可注入替身。
@@ -140,14 +167,13 @@ impl ModelCaller for ProviderRegistry {
     }
 }
 
-/// 执行面：会话级「规格 → 选型/授权 → 模型调用 → 单次工具执行 → 会话态落库」闭环。
+/// 执行面：无状态单轮对话引擎（种子分派 → 选型/授权 → 模型调用 → 单次工具执行）。
 ///
-/// 不持有 topic_store：课题相关副作用（match_topic / score_feedback / complete_scope 等）
-/// 由调用方（AssistantMode 的 hooks）负责。
+/// 不持有 ConversationStore / TopicStore：读会话、落库、课题副作用均由上层
+/// （`ConversationRunner` / 各业务 session 文件）负责。
 pub struct NeuronCallService {
     model_caller: Arc<dyn ModelCaller>,
     neuron_manager: Arc<NeuronManager>,
-    store: ConversationStore,
     tool_registry: Arc<RwLock<ToolRegistry>>,
 }
 
@@ -161,486 +187,225 @@ impl NeuronCallService {
     pub fn new(
         model_caller: Arc<dyn ModelCaller>,
         neuron_manager: Arc<NeuronManager>,
-        store: ConversationStore,
         tool_registry: Arc<RwLock<ToolRegistry>>,
     ) -> Self {
         Self {
             model_caller,
             neuron_manager,
-            store,
             tool_registry,
         }
     }
 
-    /// 开启规格会话：校验规格 + 创建 conversation 并写 `extra.session` 元数据。
-    pub fn open_session(
-        &self,
-        spec_neuron_id: &str,
-        mode: ConversationMode,
-    ) -> AppResult<Conversation> {
-        // 校验目标确实是有效会话规格（system_type + behavior 非空）。
-        let spec = self.neuron_manager.get_session_behavior(spec_neuron_id)?;
-        let mut conversation = self.store.create_conversation(None, mode)?;
-        let mut extra = json!({});
-        extra[EXTRA_SESSION_KEY] = json!({
-            EXTRA_SPEC_NEURON_ID_KEY: spec_neuron_id,
-            EXTRA_STATE_KEY: SessionState::default(),
-        });
-        conversation.extra = Some(extra);
-        self.store.save_conversation(&conversation)?;
-        tracing::info!(
-            phase = "open_session",
-            session_id = %conversation.id,
-            spec_neuron_id,
-            behavior = ?spec,
-            "session opened"
-        );
-        Ok(conversation)
-    }
-
-    /// 一轮端到端（resolve_round → execute_round）。
+    /// 单轮对话：`resolve_role`（种子分派/选型/工具授权）→ 组装模型输入 → 调用模型 →
+    /// 单次工具执行 → `RoundOutcome`。全程无状态：`state` 进、`state` 出。
     pub async fn converse(
         &self,
-        session_id: &str,
-        input: &str,
+        input: RoundInput,
+        model_input: &str,
         model: &ChatModelSelection,
-    ) -> AppResult<ChatResponse> {
-        let mut ctx = self
-            .build_context(session_id, RoundTrigger::UserInput)
+    ) -> AppResult<RoundOutcome> {
+        let mut state = input.state;
+        let (selected_neuron, role_system, behavior) = self
+            .resolve_role(input.seed.as_ref(), &mut state, &input.messages)
             .await?;
-        ctx.user_input = Some(input.to_string());
-        self.resolve_round(&mut ctx).await?;
-        self.execute_round(&mut ctx, model).await
-    }
 
-    /// Phase A：规格解析 + role 解析/选型 + 工具授权 + 会话态写回（不调用最终模型）。
-    ///
-    /// selection 统一语义：
-    /// - `None`：role_system 为空，不读任何 content；
-    /// - `Fixed`：读规格神经元自己的 content，永不变化（不写 last_selected）；
-    /// - `Neighborhood`：锚点 = last_selected（首轮 = 规格神经元自身）邻域选 1；
-    /// - `Global`：无历史全域选 1，有历史退化为邻域选。
-    pub async fn resolve_round(&self, ctx: &mut AssistantRoundContext) -> AppResult<()> {
-        let conversation = self.store.require_conversation(&ctx.session_id)?;
-        let spec_neuron_id = session_spec_neuron_id(&conversation).ok_or_else(|| {
-            AppError::InvalidInput(format!(
-                "session {} is not a spec session (missing extra.session.spec_neuron_id)",
-                ctx.session_id
-            ))
-        })?;
-        let spec_neuron = self
-            .neuron_manager
-            .get(&spec_neuron_id)?
-            .ok_or_else(|| AppError::NeuronNotFound(spec_neuron_id.clone()))?;
-        let behavior = self.neuron_manager.get_session_behavior(&spec_neuron_id)?;
-        ctx.spec_neuron_id = Some(spec_neuron_id.clone());
-        ctx.behavior = Some(behavior.clone());
-
-        let mut state = read_session_state(&conversation);
-
-        match &behavior.selection {
-            SelectionPolicy::None => {
-                // 不选型：role_system 为空；清空历史锚点。
-                ctx.system_prompt = None;
-                state.last_selected_neuron_id = None;
-            }
-            SelectionPolicy::Fixed => {
-                // 读规格神经元自己的 content，永不变化（不写 last_selected）。
-                ctx.system_prompt = Some(spec_neuron.content.clone());
-                ctx.selected_neuron = Some(spec_neuron.clone());
-            }
-            SelectionPolicy::Neighborhood { .. } | SelectionPolicy::Global { .. } => {
-                let scope = Self::scope_for_selection(
-                    &behavior.selection,
-                    &spec_neuron_id,
-                    state.last_selected_neuron_id.as_deref(),
-                )
-                .expect("Neighborhood/Global always produce a scope");
-                let role = self.select_role(&ctx.messages, scope).await?;
-                state.last_selected_neuron_id = Some(role.id.clone());
-                ctx.selected_neuron = Some(role.clone());
-                ctx.system_prompt = Some(role.content.clone());
-            }
-        }
-
-        // 工具授权：按 behavior.tools 三策略（∩ 注册表）。
-        let tool_ids = match &behavior.tools {
-            ToolPolicy::None => Vec::new(),
-            ToolPolicy::FromNeuron => ctx
-                .selected_neuron
-                .as_ref()
-                .map(|n| n.tool_ids.clone())
-                .unwrap_or_default(),
-            ToolPolicy::Allowlist(list) => list.clone(),
+        // 工具授权：override 优先；否则按 behavior.tools 三策略（∩ 注册表）。
+        let tool_ids = match input.tool_override {
+            Some(ids) => ids,
+            None => match behavior.as_ref().map(|b| &b.tools) {
+                Some(ToolPolicy::None) | None => Vec::new(),
+                Some(ToolPolicy::FromNeuron) => selected_neuron
+                    .as_ref()
+                    .map(|n| n.tool_ids.clone())
+                    .unwrap_or_default(),
+                Some(ToolPolicy::Allowlist(list)) => list.clone(),
+            },
         };
-        let guard = self
-            .tool_registry
-            .read()
-            .expect("tool registry lock should not be poisoned");
-        ctx.authorized_tool_ids = filter_authorized_tool_ids(&guard, &tool_ids);
-        drop(guard);
-
-        write_session_state(&self.store, &ctx.session_id, &state)?;
-        Ok(())
-    }
-
-    /// selection → 候选池装配 scope（resolve_round 与统一入口 `call_system_prompt` 共用）。
-    /// `None` / `Fixed` 不涉及候选池，返回 `None`。
-    fn scope_for_selection(
-        selection: &SelectionPolicy,
-        spec_neuron_id: &str,
-        last_selected: Option<&str>,
-    ) -> Option<AssistantCandidateScope> {
-        match selection {
-            SelectionPolicy::None | SelectionPolicy::Fixed => None,
-            SelectionPolicy::Neighborhood { policy } => Some(match last_selected {
-                // 有历史：锚点 = last_selected。
-                Some(last) => AssistantCandidateScope::Neighborhood {
-                    self_id: last.to_string(),
-                    policy: *policy,
-                },
-                // 首轮：锚点 = 规格神经元自身（读它自己的邻域）。
-                None => AssistantCandidateScope::Neighborhood {
-                    self_id: spec_neuron_id.to_string(),
-                    policy: *policy,
-                },
-            }),
-            SelectionPolicy::Global { limit } => Some(match last_selected {
-                // 有历史：退化为邻域选（锚点 = last_selected）。
-                Some(last) => AssistantCandidateScope::Neighborhood {
-                    self_id: last.to_string(),
-                    policy: NeighborhoodPoolPolicy::default(),
-                },
-                // 无历史：全域池选 1。
-                None => AssistantCandidateScope::Global { limit: *limit },
-            }),
-        }
-    }
-
-    /// role 解析/选型：按 scope 装配候选池；n=1 硬规则短路（跳过选型模型）。
-    async fn select_role(
-        &self,
-        messages: &[ModelMessage],
-        scope: AssistantCandidateScope,
-    ) -> AppResult<Neuron> {
-        let candidates = self
-            .neuron_manager
-            .select_assistant_candidates(scope)
-            .await?;
-        if candidates.len() == 1 {
-            // n=1 硬规则：候选池仅 1 个 → 跳过选型模型，直接选中并记录使用信号。
-            let single = candidates[0].clone();
-            self.neuron_manager.mark_used_for_assistant(&single.id);
-            return Ok(single);
-        }
-        self.neuron_manager
-            .select_one_from_with_history(&candidates, messages)
-            .await
-    }
-
-    /// 统一系统提示词入口：懒创建（裁决类神经元）→ 读 behavior（无 behavior 回落默认）→
-    /// selection 取 role_system（`None` 空 / `Fixed` 自己 content / `Neighborhood`/`Global`
-    /// 按无历史锚点走选型，选中者 content 即 role_system）→ insert_id 有则拼契约段
-    /// （`Manual` 模板，`tools: None`）→ `call_model` → `require_json` 时 `extract_json_object`。
-    ///
-    /// 取代旧 `assistant_mode::call_system_prompt_json` 与 `insert_id_for_system_type`：
-    /// 管理面与裁决类系统神经元统一走此入口，语义与 `resolve_round` 同款。
-    pub async fn call_system_prompt(
-        &self,
-        system_type: &str,
-        user_payload: serde_json::Value,
-        model: &ChatModelSelection,
-        history: &[ModelMessage],
-        require_json: bool,
-    ) -> AppResult<serde_json::Value> {
-        let user_preview = preview_json_for_log(&user_payload, 240);
-        tracing::info!(
-            phase = "call_system_prompt",
-            system_type,
-            user_payload = %user_preview,
-            "call_system_prompt start"
-        );
-
-        let prompt_neuron = self
-            .neuron_manager
-            .ensure_system_neuron(system_type, EnsureSystemOpts { reset: false })
-            .await?;
-        // 无 behavior（旧库已存在）回落默认（裁决类 = Fixed + 各自 insert_id）。
-        let behavior = prompt_neuron
-            .behavior
-            .clone()
-            .or_else(|| default_behavior_for_system_type(system_type))
-            .ok_or_else(|| {
-                AppError::InvalidInput(format!(
-                    "system_type={system_type} has no behavior and no default behavior mapping"
-                ))
-            })?;
-
-        // selection → role_system（此入口无会话态：Neighborhood/Global 按无历史锚点选型）。
-        let role_system = match &behavior.selection {
-            SelectionPolicy::None => String::new(),
-            SelectionPolicy::Fixed => prompt_neuron.content.clone(),
-            SelectionPolicy::Neighborhood { .. } | SelectionPolicy::Global { .. } => {
-                let scope = Self::scope_for_selection(&behavior.selection, &prompt_neuron.id, None)
-                    .expect("Neighborhood/Global always produce a scope");
-                let role = self.select_role(history, scope).await?;
-                role.content.clone()
-            }
+        // 块作用域持有读锁：保证跨 await 前释放（RwLockReadGuard 非 Send）。
+        let (authorized_tool_ids, tools) = {
+            let guard = self
+                .tool_registry
+                .read()
+                .expect("tool registry lock should not be poisoned");
+            let authorized_tool_ids = filter_authorized_tool_ids(&guard, &tool_ids);
+            let tools = if authorized_tool_ids.is_empty() {
+                None
+            } else {
+                Some(guard.definitions_for(&authorized_tool_ids))
+            };
+            (authorized_tool_ids, tools)
         };
 
-        let (template, insert_or_empty) = match behavior.insert_id.as_ref() {
+        // 模板由 insert_id 有无推导：有 → 操作说明书契约段；无 → 神经元角色段。
+        let (template, insert_or_empty) = match behavior.as_ref().and_then(|b| b.insert_id.clone()) {
             Some(insert_id) => (
                 ModelAppendTemplate::Manual,
-                InsertCatalog::require(insert_id),
+                InsertCatalog::require(&insert_id),
             ),
             None => (ModelAppendTemplate::Neuron, ""),
         };
         let messages = ModelCallInput::assemble(
-            history,
+            &input.messages,
             &role_system,
             insert_or_empty,
-            &user_payload.to_string(),
+            model_input,
             template,
         );
-        let response = self
+
+        let model_response = self
             .model_caller
             .call_model(ModelCallRequest {
                 provider_id: model.provider_id.clone(),
                 model_id: model.model_id.clone(),
                 messages,
-                tools: None,
+                tools,
             })
             .await?;
 
-        if require_json {
-            extract_json_object(&response.output)
-        } else {
-            Ok(serde_json::Value::String(response.output))
-        }
-    }
-
-    /// Phase B：user_input/nudge 落库 + 拼接（insert_id 有无推导模板）+ 模型调用 +
-    /// 单次工具执行 + 消息落库。
-    pub async fn execute_round(
-        &self,
-        ctx: &mut AssistantRoundContext,
-        model: &ChatModelSelection,
-    ) -> AppResult<ChatResponse> {
-        let role_system = ctx.system_prompt.clone().unwrap_or_default();
-        let user_input = if let Some(user_input) = ctx.user_input.clone() {
-            let user_message = Message {
-                role: MessageRole::User,
-                body: MessageBody::Text {
-                    content: user_input.clone(),
-                },
-                timestamp: now_ms(),
-            };
-            self.store.add_message(&ctx.session_id, user_message)?;
-            user_input
-        } else if matches!(ctx.trigger, RoundTrigger::ManualStep | RoundTrigger::Poller) {
-            // 轮询 / 手动推进：注入课题简报，让模型明确目标、进度与待办，避免盲目推进。
-            let brief = ctx.topic_brief.clone().unwrap_or_else(|| {
-                "Continue advancing the bound topic using available tools if needed.".to_string()
-            });
-            // 轮询简报落库为 nudge（role=User, kind=nudge）：记录本轮发给模型的输入，
-            // 保证历史因果链完整；不参与后续模型输入组装（message_to_model 过滤）。
-            if matches!(ctx.trigger, RoundTrigger::Poller) {
-                let nudge = Message {
-                    role: MessageRole::User,
-                    body: MessageBody::Nudge {
-                        content: brief.clone(),
-                    },
-                    timestamp: now_ms(),
-                };
-                self.store.add_message(&ctx.session_id, nudge)?;
-            }
-            brief
-        } else {
-            String::new()
-        };
-
-        // 拼接规则由 insert_id 有无推导（不进配置）：有 → Manual 契约段；无 → Neuron 角色拼接。
-        let (template, insert_or_empty) =
-            match ctx.behavior.as_ref().and_then(|b| b.insert_id.clone()) {
-                Some(insert_id) => (
-                    ModelAppendTemplate::Manual,
-                    InsertCatalog::require(&insert_id),
-                ),
-                None => (ModelAppendTemplate::Neuron, ""),
-            };
-        let messages = ModelCallInput::assemble(
-            &ctx.messages,
-            &role_system,
-            insert_or_empty,
-            &user_input,
-            template,
-        );
-
-        let tools = if ctx.authorized_tool_ids.is_empty() {
-            None
-        } else {
-            Some(
-                self.tool_registry
-                    .read()
-                    .map(|reg| reg.definitions_for(&ctx.authorized_tool_ids))
-                    .unwrap_or_default(),
-            )
-        };
-
-        tracing::info!(
-            phase = "neuron_call_execute",
-            session_id = %ctx.session_id,
-            provider = %model.provider_id,
-            model = %model.model_id,
-            message_count = messages.len(),
-            tool_defs = tools.as_ref().map(|t| t.len()).unwrap_or(0),
-            "model call start"
-        );
-        let model_response = match self
-            .model_caller
-            .call_model(ModelCallRequest {
-                provider_id: model.provider_id.clone(),
-                model_id: model.model_id.clone(),
-                messages: messages.clone(),
-                tools,
-            })
-            .await
-        {
-            Ok(response) => response,
-            Err(error) => {
-                tracing::error!(
-                    phase = "neuron_call_execute",
-                    error_code = error.code(),
-                    error = %error,
-                    "model call failed"
-                );
-                return Err(error);
-            }
-        };
-        tracing::info!(
-            phase = "neuron_call_execute",
-            output_len = model_response.output.len(),
-            tool_calls = model_response
-                .tool_calls
-                .as_ref()
-                .map(|c| c.len())
-                .unwrap_or(0),
-            "model call ok"
-        );
-
         let mut output = model_response.output.clone();
         let mut tool_result = None;
-
-        if let Some(tool_calls) = model_response.tool_calls.clone() {
+        let tool_calls = model_response.tool_calls.clone();
+        if let Some(tool_calls) = tool_calls.as_ref() {
             if let Some(first) = tool_calls.first() {
-                if !ctx.authorized_tool_ids.iter().any(|id| id == &first.name) {
+                if !authorized_tool_ids.iter().any(|id| id == &first.name) {
                     return Err(AppError::InvalidInput(format!(
-                        "Tool '{}' is not authorized for selected neuron",
+                        "Tool '{}' is not authorized for this round",
                         first.name
                     )));
                 }
-                tracing::info!(
-                    phase = "neuron_call_execute",
-                    tool = %first.name,
-                    "tool execute start"
-                );
-                // 读锁内仅 clone 工具引用（释放锁后再 await execute，锁不跨 await）。
                 let tool = self
                     .tool_registry
                     .read()
-                    .ok()
-                    .and_then(|reg| reg.get_tool(&first.name));
-                let result = match tool {
-                    Some(tool) => tool.execute(first.arguments.clone()).await?,
-                    None => return Err(AppError::SkillNotFound(first.name.clone())),
-                };
-                tracing::info!(
-                    phase = "neuron_call_execute",
-                    tool = %first.name,
-                    result_len = result.len(),
-                    "tool execute ok"
-                );
+                    .expect("tool registry lock should not be poisoned")
+                    .get_tool(&first.name)
+                    .ok_or_else(|| AppError::SkillNotFound(first.name.clone()))?;
+                let result = tool.execute(first.arguments.clone()).await?;
                 tool_result = Some(result.clone());
-                let tool_msg = Message {
-                    role: MessageRole::Assistant,
-                    body: MessageBody::ToolCall {
-                        content: output.clone(),
-                        tool_calls: vec![first.clone()],
-                    },
-                    timestamp: now_ms(),
-                };
-                self.store.add_message(&ctx.session_id, tool_msg)?;
-                let result_msg = Message {
-                    role: MessageRole::Tool,
-                    body: MessageBody::ToolResult {
-                        tool_call_id: first.id.clone(),
-                        tool_name: first.name.clone(),
-                        content: result.clone(),
-                    },
-                    timestamp: now_ms(),
-                };
-                self.store.add_message(&ctx.session_id, result_msg)?;
                 output = if output.trim().is_empty() {
                     result
                 } else {
-                    format!("{output}\n\n[tool:{name}] {result}", name = first.name)
+                    format!("{output}\n\n[tool:{}] {result}", first.name)
                 };
             }
-        } else {
-            let assistant_msg = Message {
-                role: MessageRole::Assistant,
-                body: MessageBody::Text {
-                    content: output.clone(),
-                },
-                timestamp: now_ms(),
-            };
-            self.store.add_message(&ctx.session_id, assistant_msg)?;
         }
 
-        ctx.model_output = Some(output.clone());
-        ctx.tool_result = tool_result;
-
-        Ok(ChatResponse {
-            conversation_id: ctx.session_id.clone(),
+        Ok(RoundOutcome {
             response: output,
+            model_output: Some(model_response.output.clone()),
+            tool_calls,
+            tool_result,
+            selected_neuron_id: selected_neuron.map(|n| n.id),
+            state,
         })
     }
 
-    /// 纯会话层面的上下文构建（无 topic 信息；课题字段由 AssistantMode.build_context 补充）。
+    /// 种子分派：解析 role（role_system / selected_neuron / behavior）并推进 `state`。
     ///
-    /// pub：Gateway 层组装 Chat（execute_round 退化形态）与 Agent（多轮 execute_round）
-    /// 时复用同一套历史读取。
-    pub async fn build_context(
+    /// - `None`（直连）：不选型、role_system 空、Neuron 模板；清空历史锚点。
+    /// - `Global`：无历史全域池选 1 → 写 last_selected；有历史退化为邻域选（锚点 = last_selected）。
+    /// - `Neuron(普通)`：默认邻域行为（锚点 = 自身）+ FromNeuron 工具 + 无契约段。
+    /// - `Neuron(系统)`：用 behavior（`None` 不选型清锚点 / `Fixed` 读自己 content 不写锚点 /
+    ///   `Neighborhood` 锚点规则；`Global` 禁用于系统神经元 → 宽容回退 Neighborhood）。
+    async fn resolve_role(
         &self,
-        session_id: &str,
-        trigger: RoundTrigger,
-    ) -> AppResult<AssistantRoundContext> {
-        let conversation = self.store.require_conversation(session_id)?;
-        let state = read_session_state(&conversation);
-        let messages = ModelCallInput::sanitize_tool_pairs(
-            &conversation
-                .messages
-                .iter()
-                .filter_map(message_to_model)
-                .collect::<Vec<_>>(),
-        );
-        Ok(AssistantRoundContext {
-            session_id: session_id.to_string(),
-            topic_id: None,
-            topic_brief: None,
-            trigger,
-            user_input: None,
-            system_prompt: None,
-            selected_neuron: None,
-            authorized_tool_ids: Vec::new(),
-            messages,
-            model_output: None,
-            tool_result: None,
-            poll_count_for_topic: 0,
-            last_selected_neuron_id: state.last_selected_neuron_id.clone(),
-            spec_neuron_id: None,
-            behavior: None,
-        })
+        seed: Option<&SessionSeed>,
+        state: &mut SessionState,
+        messages: &[ModelMessage],
+    ) -> AppResult<(Option<Neuron>, String, Option<SessionBehavior>)> {
+        let Some(seed) = seed else {
+            state.last_selected_neuron_id = None;
+            return Ok((None, String::new(), None));
+        };
+        match seed {
+            SessionSeed::Global => {
+                let behavior = SessionBehavior {
+                    selection: SelectionPolicy::Global {
+                        limit: DEFAULT_ASSISTANT_GLOBAL_LIMIT,
+                    },
+                    tools: ToolPolicy::None,
+                    insert_id: None,
+                };
+                let scope = Self::scope_for_selection(
+                    &behavior.selection,
+                    "",
+                    state.last_selected_neuron_id.as_deref(),
+                )
+                .expect("Global always produce a scope");
+                let role = self.neuron_manager.select_role(messages, scope).await?;
+                state.last_selected_neuron_id = Some(role.id.clone());
+                Ok((Some(role.clone()), role.content.clone(), Some(behavior)))
+            }
+            SessionSeed::Neuron(id) => {
+                let neuron = self
+                    .neuron_manager
+                    .get(id)?
+                    .ok_or_else(|| AppError::NeuronNotFound(id.clone()))?;
+                if neuron.system_type.is_none() {
+                    // 普通神经元：推导默认领域行为（邻域锚点 = 自身）。
+                    let behavior = SessionBehavior {
+                        selection: SelectionPolicy::Neighborhood {
+                            policy: NeighborhoodPoolPolicy::default(),
+                        },
+                        tools: ToolPolicy::FromNeuron,
+                        insert_id: None,
+                    };
+                    let scope = Self::scope_for_selection(
+                        &behavior.selection,
+                        id,
+                        state.last_selected_neuron_id.as_deref(),
+                    )
+                    .expect("Neighborhood always produce a scope");
+                    let role = self.neuron_manager.select_role(messages, scope).await?;
+                    state.last_selected_neuron_id = Some(role.id.clone());
+                    return Ok((Some(role.clone()), role.content.clone(), Some(behavior)));
+                }
+                // 系统神经元：用 behavior（禁 Global，旧数据宽容回退 Neighborhood）。
+                let behavior = neuron.behavior.clone().ok_or_else(|| {
+                    AppError::InvalidInput(format!(
+                        "neuron {id} is a system neuron but has no behavior"
+                    ))
+                })?;
+                let selection = match &behavior.selection {
+                    SelectionPolicy::Global { .. } => SelectionPolicy::Neighborhood {
+                        policy: NeighborhoodPoolPolicy::default(),
+                    },
+                    other => other.clone(),
+                };
+                match &selection {
+                    SelectionPolicy::None => {
+                        state.last_selected_neuron_id = None;
+                        Ok((None, String::new(), Some(behavior)))
+                    }
+                    SelectionPolicy::Fixed => {
+                        // 读系统神经元自己的 content；不写 last_selected。
+                        Ok((Some(neuron.clone()), neuron.content.clone(), Some(behavior)))
+                    }
+                    SelectionPolicy::Neighborhood { .. } => {
+                        let scope = Self::scope_for_selection(
+                            &selection,
+                            id,
+                            state.last_selected_neuron_id.as_deref(),
+                        )
+                        .expect("Neighborhood always produce a scope");
+                        let role = self.neuron_manager.select_role(messages, scope).await?;
+                        state.last_selected_neuron_id = Some(role.id.clone());
+                        Ok((Some(role.clone()), role.content.clone(), Some(behavior)))
+                    }
+                    SelectionPolicy::Global { .. } => {
+                        unreachable!("converted to Neighborhood above")
+                    }
+                }
+            }
+        }
+    }
+
+    /// selection → 候选池装配 scope（委托 NeuronManager，`resolve_role` 共用语义）。
+    fn scope_for_selection(
+        selection: &SelectionPolicy,
+        spec_neuron_id: &str,
+        last_selected: Option<&str>,
+    ) -> Option<super::models::AssistantCandidateScope> {
+        NeuronManager::scope_for_selection(selection, spec_neuron_id, last_selected)
     }
 }
 
@@ -717,114 +482,83 @@ pub(crate) fn message_to_model(message: &Message) -> Option<ModelMessage> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::{
         fs,
         sync::{
             atomic::{AtomicUsize, Ordering},
-            Mutex as StdMutex,
+            Arc, Mutex, RwLock,
         },
     };
 
+    use async_trait::async_trait;
     use rusqlite::Connection as SqliteConnection;
+    use serde_json::json;
 
+    use super::*;
     use crate::core::{
-        models::{
-            EnsureSystemOpts, ModelMessage, ModelMessageRole, NeighborhoodPoolPolicy, NeuronCreate,
-            ToolSource,
+        error::AppResult,
+        models::{ChatModelSelection, ModelMessageRole, NeuronCreate, ToolSource},
+        neuron::{
+            config::NeuronConfigReader,
+            manager::ASSISTANT_SELECT_NEURON,
+            model::NeuronModelCaller,
+            store::NeuronStore,
         },
-        neuron_config::NeuronConfigReader,
-        neuron_model::NeuronModelCaller,
-        neuron_store::NeuronStore,
-        tool_registry::Tool,
+        tool_registry::ToolRegistry,
     };
 
-    struct EchoTool;
-    #[async_trait]
-    impl Tool for EchoTool {
-        fn name(&self) -> &str {
-            "echo"
-        }
-        fn description(&self) -> &str {
-            "echo tool"
-        }
-        fn parameters(&self) -> serde_json::Value {
-            json!({})
-        }
-        async fn execute(&self, args: serde_json::Value) -> AppResult<String> {
-            Ok(format!("echo:{args}"))
+    fn model() -> ChatModelSelection {
+        ChatModelSelection {
+            provider_id: "test".into(),
+            model_id: "test-model".into(),
         }
     }
 
-    struct CalculateTool;
-    #[async_trait]
-    impl Tool for CalculateTool {
-        fn name(&self) -> &str {
-            "calculate"
-        }
-        fn description(&self) -> &str {
-            "calculate tool"
-        }
-        fn parameters(&self) -> serde_json::Value {
-            json!({})
-        }
-        async fn execute(&self, _args: serde_json::Value) -> AppResult<String> {
-            Ok("42".into())
+    /// 空会话（`Conversation` 未实现 `Default`，测试手工构造）。
+    fn empty_conversation() -> Conversation {
+        Conversation {
+            id: String::new(),
+            mode: crate::core::models::ConversationMode::Chat,
+            messages: Vec::new(),
+            created_at: 0,
+            updated_at: 0,
+            extra: None,
         }
     }
 
-    /// 选型/生成模型替身：选型时返回候选第一个 id；创建时按 prompt 中 "exactly N" 返回 N 个草稿。
+    /// 选型/创建模型替身：消息含候选 JSON（`"id":"`）→ 选型调用，返回 `{"neuron_id": ...}`；
+    /// 否则为创建调用（fill_candidates_batch），解析 `exactly N` 返回 N 条 draft 数组。
     struct MockSelector {
         calls: Arc<AtomicUsize>,
-    }
-
-    /// 拼接 System|User 消息文本（assemble 在 history 为空时会把内容折叠成单条 System）。
-    fn mock_prompt_blob(messages: &[ModelMessage]) -> String {
-        messages
-            .iter()
-            .filter(|m| matches!(m.role, ModelMessageRole::System | ModelMessageRole::User))
-            .map(|m| m.content.as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
     }
 
     #[async_trait]
     impl NeuronModelCaller for MockSelector {
         async fn call_model(&self, messages: Vec<ModelMessage>) -> AppResult<String> {
             let call = self.calls.fetch_add(1, Ordering::Relaxed);
-            let blob = mock_prompt_blob(&messages);
-            // 选型路径：prompt 内嵌 candidates 数组 → 返回第一个候选。
-            if let Some(idx) = blob.find(r#""candidates"#) {
-                let rest = &blob[idx..];
-                if let Some(start) = rest.find(r#""id":""#) {
-                    let tail = &rest[start + 6..];
-                    if let Some(end) = tail.find('"') {
-                        return Ok(format!(r#"{{"neuron_id":"{}"}}"#, &tail[..end]));
-                    }
-                }
+            let blob = messages
+                .iter()
+                .map(|m| m.content.as_str())
+                .collect::<String>();
+            if let Some(idx) = blob.find("\"id\":\"") {
+                let start = idx + 6;
+                let end = blob[start..]
+                    .find('"')
+                    .map(|e| start + e)
+                    .unwrap_or(blob.len());
+                let id = &blob[start..end];
+                return Ok(format!(r#"{{"neuron_id":"{id}"}}"#));
             }
-            // 创建路径：按 "exactly N" 返回 N 个草稿（供 bootstrap fill / 池扩充）。
             let count = blob
                 .split("exactly ")
                 .nth(1)
-                .and_then(|rest| {
-                    rest.split_whitespace().next().and_then(|token| {
-                        token
-                            .trim_matches(|c: char| !c.is_ascii_digit())
-                            .parse()
-                            .ok()
-                    })
-                })
+                .and_then(|rest| rest.split_whitespace().next())
+                .and_then(|token| token.trim_matches(|c: char| !c.is_ascii_digit()).parse().ok())
                 .unwrap_or(1usize);
-            if count <= 1 {
-                return Ok(format!(
-                    r#"{{"desc":"generated-{call}","content":"content-{call}","weight":1.0,"tool_ids":[]}}"#
-                ));
-            }
             let items: Vec<String> = (0..count)
                 .map(|i| {
                     format!(
-                        r#"{{"desc":"generated-{call}-{i}","content":"content-{call}-{i}","weight":1.0,"tool_ids":[]}}"#
+                        r#"{{"desc":"auto-{call}-{i}","content":"auto-{call}-{i}","weight":1.0,"tool_ids":[]}}"#
                     )
                 })
                 .collect();
@@ -832,50 +566,69 @@ mod tests {
         }
     }
 
-    /// 最终模型调用替身：固定输出，无工具调用。
-    struct FakeModelCaller {
-        output: String,
+    /// 主模型替身：固定输出 `echo-{call}`；可配置附带一个工具调用。
+    struct EchoCaller {
+        calls: Arc<AtomicUsize>,
+        tool_call: Arc<Mutex<Option<ToolCall>>>,
+        last_messages: Arc<Mutex<Vec<ModelMessage>>>,
     }
 
     #[async_trait]
-    impl ModelCaller for FakeModelCaller {
-        async fn call_model(&self, _request: ModelCallRequest) -> AppResult<ModelCallResponse> {
+    impl ModelCaller for EchoCaller {
+        async fn call_model(&self, request: ModelCallRequest) -> AppResult<ModelCallResponse> {
+            let call = self.calls.fetch_add(1, Ordering::Relaxed);
+            *self.last_messages.lock().unwrap() = request.messages;
             Ok(ModelCallResponse {
-                provider_id: "fake".into(),
-                model_id: "fake".into(),
-                output: self.output.clone(),
-                tool_calls: None,
+                provider_id: "test".into(),
+                model_id: "test-model".into(),
+                output: format!("echo-{call}"),
+                tool_calls: self.tool_call.lock().unwrap().clone().map(|tc| vec![tc]),
                 finish_reason: "stop".into(),
             })
         }
     }
 
-    /// 统一入口替身：输出可提取的 JSON。
-    struct JsonModelCaller;
+    /// 测试工具：回显参数 text。
+    struct EchoTool;
 
     #[async_trait]
-    impl ModelCaller for JsonModelCaller {
-        async fn call_model(&self, _request: ModelCallRequest) -> AppResult<ModelCallResponse> {
-            Ok(ModelCallResponse {
-                provider_id: "fake".into(),
-                model_id: "fake".into(),
-                output: r#"{"action":"ok"}"#.into(),
-                tool_calls: None,
-                finish_reason: "stop".into(),
-            })
+    impl crate::core::tool_registry::Tool for EchoTool {
+        fn name(&self) -> &str {
+            "echo"
+        }
+        fn description(&self) -> &str {
+            "echo back text"
+        }
+        fn parameters(&self) -> serde_json::Value {
+            json!({"type":"object","properties":{"text":{"type":"string"}}})
+        }
+        async fn execute(&self, args: serde_json::Value) -> AppResult<String> {
+            let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            Ok(format!("echo:{text}"))
         }
     }
 
     struct Harness {
+        store: Arc<Mutex<NeuronStore>>,
         manager: Arc<NeuronManager>,
-        store: ConversationStore,
         service: Arc<NeuronCallService>,
         selector_calls: Arc<AtomicUsize>,
+        echo_calls: Arc<AtomicUsize>,
+        echo_tool_call: Arc<Mutex<Option<ToolCall>>>,
+        last_messages: Arc<Mutex<Vec<ModelMessage>>>,
+        tool_registry: Arc<RwLock<ToolRegistry>>,
+        root: std::path::PathBuf,
+    }
+
+    impl Drop for Harness {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
     }
 
     fn harness() -> Harness {
-        let conn = Arc::new(StdMutex::new(SqliteConnection::open_in_memory().unwrap()));
-        let store = Arc::new(StdMutex::new(NeuronStore::new(conn)));
+        let conn = Arc::new(Mutex::new(SqliteConnection::open_in_memory().unwrap()));
+        let store = Arc::new(Mutex::new(NeuronStore::new(conn)));
         store.lock().unwrap().init_table().unwrap();
         let root = std::env::temp_dir().join(format!(
             "pulsar-call-service-{}",
@@ -891,427 +644,476 @@ mod tests {
         )
         .unwrap();
         let selector_calls = Arc::new(AtomicUsize::new(0));
-        let manager = Arc::new(NeuronManager::new(
-            store,
-            Arc::new(MockSelector {
-                calls: Arc::clone(&selector_calls),
-            }),
-            NeuronConfigReader::new(root.clone()),
-            Arc::new(RwLock::new(ToolRegistry::new())),
-        ));
-        let conv_store = ConversationStore::new(root.clone()).unwrap();
-        let registry = {
-            let mut reg = ToolRegistry::new();
-            reg.register_source(EchoTool, ToolSource::Config);
-            reg.register_source(CalculateTool, ToolSource::Config);
-            Arc::new(RwLock::new(reg))
+        let echo_calls = Arc::new(AtomicUsize::new(0));
+        let echo_tool_call: Arc<Mutex<Option<ToolCall>>> = Arc::new(Mutex::new(None));
+        let last_messages: Arc<Mutex<Vec<ModelMessage>>> = Arc::new(Mutex::new(Vec::new()));
+        let selector = MockSelector {
+            calls: Arc::clone(&selector_calls),
         };
+        let echo: Arc<dyn ModelCaller> = Arc::new(EchoCaller {
+            calls: Arc::clone(&echo_calls),
+            tool_call: Arc::clone(&echo_tool_call),
+            last_messages: Arc::clone(&last_messages),
+        });
+        let tool_registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let manager = Arc::new(NeuronManager::new(
+            Arc::clone(&store),
+            Arc::new(selector),
+            NeuronConfigReader::new(root.clone()),
+            Arc::clone(&tool_registry),
+        ));
         let service = Arc::new(NeuronCallService::new(
-            Arc::new(FakeModelCaller {
-                output: "fake-output".into(),
-            }),
+            Arc::clone(&echo),
             Arc::clone(&manager),
-            conv_store.clone(),
-            Arc::clone(&registry),
+            Arc::clone(&tool_registry),
         ));
         Harness {
+            store,
             manager,
-            store: conv_store,
             service,
             selector_calls,
+            echo_calls,
+            echo_tool_call,
+            last_messages,
+            tool_registry,
+            root,
         }
     }
 
-    fn insert_plain(manager: &NeuronManager, desc: &str, tool_ids: Vec<String>) -> String {
-        manager
+    /// 确保选型系统神经元存在（否则 `select_one_from_with_history` 回退按权重选）。
+    fn ensure_selector(h: &Harness) {
+        let store = h.store.lock().unwrap();
+        if store
+            .get_neuron_by_system_type(ASSISTANT_SELECT_NEURON)
+            .unwrap()
+            .is_none()
+        {
+            store
+                .create_neuron(NeuronCreate {
+                    desc: "selector".into(),
+                    content: "pick one".into(),
+                    system_type: Some(ASSISTANT_SELECT_NEURON.to_string()),
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+    }
+
+    fn insert_plain(h: &Harness, desc: &str) -> Neuron {
+        h.store
+            .lock()
+            .unwrap()
+            .create_neuron(NeuronCreate {
+                desc: desc.into(),
+                content: format!("{desc} content"),
+                ..Default::default()
+            })
+            .unwrap()
+    }
+
+    fn insert_downstream(h: &Harness, parent_id: &str, desc: &str) -> Neuron {
+        h.manager
             .create_plain(
                 NeuronCreate {
                     desc: desc.into(),
                     content: format!("{desc} content"),
-                    tool_ids,
                     ..Default::default()
                 },
-                None,
+                Some(parent_id),
             )
             .unwrap()
-            .id
     }
 
-    async fn ensure_spec(
-        manager: &NeuronManager,
-        system_type: &str,
-        behavior: SessionBehavior,
-    ) -> String {
-        manager
-            .ensure_session_neuron(
-                system_type,
-                behavior,
-                None,
-                EnsureSystemOpts { reset: false },
+    fn insert_system(h: &Harness, system_type: &str, behavior: SessionBehavior, content: &str) -> Neuron {
+        let store = h.store.lock().unwrap();
+        let neuron = store
+            .create_neuron(NeuronCreate {
+                desc: system_type.into(),
+                content: content.into(),
+                system_type: Some(system_type.to_string()),
+                ..Default::default()
+            })
+            .unwrap();
+        store.set_behavior(&neuron.id, Some(&behavior)).unwrap()
+    }
+
+    #[tokio::test]
+    async fn converse_keeps_history_and_role_in_model_input() {
+        let h = harness();
+        let history = vec![ModelMessage {
+            role: ModelMessageRole::User,
+            content: "past".into(),
+            tool_calls: None,
+            tool_call_id: None,
+        }];
+        let _outcome = h
+            .service
+            .converse(
+                RoundInput {
+                    seed: None,
+                    state: SessionState::default(),
+                    messages: history,
+                    tool_override: None,
+                },
+                "current",
+                &model(),
             )
             .await
+            .unwrap();
+        // 直连：role_system 为空 → Neuron 模板系统段 + 历史 + 本轮输入。
+        let blob = h
+            .last_messages
+            .lock()
             .unwrap()
-            .id
-    }
-
-    async fn open_ctx(h: &Harness, spec_id: &str) -> (Conversation, AssistantRoundContext) {
-        let conversation = h
-            .service
-            .open_session(spec_id, ConversationMode::Chat)
-            .unwrap();
-        let ctx = h
-            .service
-            .build_context(&conversation.id, RoundTrigger::UserInput)
-            .await
-            .unwrap();
-        (conversation, ctx)
-    }
-
-    #[test]
-    fn behavior_json_roundtrip() {
-        let behavior = SessionBehavior {
-            selection: SelectionPolicy::Neighborhood {
-                policy: NeighborhoodPoolPolicy::default(),
-            },
-            tools: ToolPolicy::Allowlist(vec!["echo".into()]),
-            insert_id: Some("insert.ref".into()),
-        };
-        let json = serde_json::to_string(&behavior).unwrap();
-        let back: SessionBehavior = serde_json::from_str(&json).unwrap();
-        assert_eq!(behavior, back);
-        // 缺失字段回落默认（None selection + None tools + None insert_id）。
-        let minimal: SessionBehavior = serde_json::from_str(r#"{}"#).unwrap();
-        assert_eq!(minimal, SessionBehavior::default());
-        assert!(matches!(minimal.selection, SelectionPolicy::None));
-    }
-
-    #[test]
-    fn selection_policy_legacy_json_parses_tolerantly() {
-        // 旧 `Fixed{neuron_id}`：回落新 Fixed（读自己 content，忽略旧目标 id）。
-        let fixed: SelectionPolicy =
-            serde_json::from_str(r#"{"Fixed": {"neuron_id": "n_legacy"}}"#).unwrap();
-        assert_eq!(fixed, SelectionPolicy::Fixed);
-        // 旧 `Global{limit, switching}`：忽略 switching。
-        let global: SelectionPolicy =
-            serde_json::from_str(r#"{"Global": {"limit": 5, "switching": "Reelect"}}"#).unwrap();
-        assert_eq!(global, SelectionPolicy::Global { limit: 5 });
-        // 旧 `Neighborhood{policy, switching}`：忽略 switching。
-        let neighborhood: SelectionPolicy = serde_json::from_str(
-            r#"{"Neighborhood": {"policy": {"existing_downstream": 2, "new_downstream": 1, "fill_downstream_shortage": true, "siblings": 1, "upstream_depth": 1, "global_top_weight": 0}, "switching": "Conditional"}}"#,
-        )
-        .unwrap();
-        assert!(matches!(
-            neighborhood,
-            SelectionPolicy::Neighborhood { policy } if policy.existing_downstream == 2
-        ));
-        // 单元字符串形态仍可解析。
-        assert_eq!(
-            serde_json::from_str::<SelectionPolicy>(r#""Fixed""#).unwrap(),
-            SelectionPolicy::Fixed
-        );
-    }
-
-    #[test]
-    fn filter_drops_unknown_tool_ids() {
-        let registry = ToolRegistry::new();
-        let filtered = filter_authorized_tool_ids(
-            &registry,
-            &["echo".into(), "missing_tool".into(), "calculate".into()],
-        );
-        assert!(filtered.is_empty());
+            .iter()
+            .map(|m| format!("{:?}:{}", m.role, m.content))
+            .collect::<String>();
+        assert!(blob.contains("past"), "history should reach model: {blob}");
+        assert!(blob.contains("current"), "current input should reach model: {blob}");
+        assert!(blob.contains("【神经元】"), "neuron template system section expected: {blob}");
     }
 
     #[test]
     fn session_state_roundtrip_via_extra() {
-        let mut conversation = Conversation {
-            id: "cv_t".into(),
-            mode: ConversationMode::Chat,
-            messages: vec![],
-            created_at: 1,
-            updated_at: 1,
-            extra: Some(json!({"session": {"spec_neuron_id": "n_spec", "state": {}}})),
+        let state = SessionState {
+            last_selected_neuron_id: Some("n-1".into()),
+            last_intervention_at: Some(123),
+            intervention_neuron_ids: vec!["n-2".into()],
         };
-        let mut state = read_session_state(&conversation);
-        assert!(state.last_selected_neuron_id.is_none());
-        state.last_selected_neuron_id = Some("n_selected".into());
+        let mut conversation = empty_conversation();
         set_session_state(&mut conversation, &state);
-        let roundtrip = read_session_state(&conversation);
+        let read = read_session_state(&conversation);
+        assert_eq!(read.last_selected_neuron_id, Some("n-1".into()));
+        assert_eq!(read.last_intervention_at, Some(123));
+        assert_eq!(read.intervention_neuron_ids, vec!["n-2".to_string()]);
+    }
+
+    #[test]
+    fn session_seed_serde_roundtrip() {
+        for seed in [SessionSeed::Global, SessionSeed::Neuron("n-1".into())] {
+            let value = serde_json::to_value(&seed).unwrap();
+            let back: SessionSeed = serde_json::from_value(value).unwrap();
+            assert_eq!(back, seed);
+        }
+    }
+
+    #[test]
+    fn session_seed_reads_new_field_and_falls_back_to_spec() {
+        // 新字段优先。
+        let mut conversation = empty_conversation();
+        conversation.extra = Some(json!({
+            "session": {
+                "spec_neuron_id": "session.old",
+                "state": {},
+                "seed": {"kind": "global"}
+            }
+        }));
+        assert_eq!(session_seed(&conversation), Some(SessionSeed::Global));
+
+        // 旧数据回退：无 seed 字段 → Neuron(spec_neuron_id)。
+        let mut legacy = empty_conversation();
+        legacy.extra = Some(json!({
+            "session": {"spec_neuron_id": "session.old", "state": {}}
+        }));
         assert_eq!(
-            roundtrip.last_selected_neuron_id.as_deref(),
-            Some("n_selected")
+            session_seed(&legacy),
+            Some(SessionSeed::Neuron("session.old".into()))
         );
-        // 其它 extra 键保留
-        assert_eq!(
-            session_spec_neuron_id(&conversation).as_deref(),
-            Some("n_spec")
-        );
+        assert_eq!(session_spec_neuron_id(&legacy), Some("session.old".into()));
+
+        // 无会话元数据 → None（直连）。
+        let plain = empty_conversation();
+        assert_eq!(session_seed(&plain), None);
+    }
+
+    #[test]
+    fn filter_drops_unknown_tool_ids() {
+        let mut registry = ToolRegistry::new();
+        registry.register_source(EchoTool, ToolSource::Config);
+        let out = filter_authorized_tool_ids(&registry, &["echo".into(), "nope".into()]);
+        assert_eq!(out, vec!["echo".to_string()]);
     }
 
     #[tokio::test]
-    async fn resolve_round_n1_shortcircuits_selection() {
+    async fn converse_direct_seed_no_selection() {
         let h = harness();
-        // 不 bootstrap：候选池仅 1 个普通神经元 → 命中 n=1 硬规则（短路跳过选型模型）。
-        let behavior = SessionBehavior {
-            selection: SelectionPolicy::Global { limit: 1 },
-            tools: ToolPolicy::None,
-            insert_id: None,
-        };
-        let spec_id = ensure_spec(&h.manager, "session.n1", behavior).await;
-        let solo_id = insert_plain(&h.manager, "solo", vec![]);
-        let (conversation, mut ctx) = open_ctx(&h, &spec_id).await;
-        h.service.resolve_round(&mut ctx).await.unwrap();
-        let selected = ctx
-            .selected_neuron
-            .as_ref()
-            .expect("n=1 must select the solo neuron");
-        assert_eq!(selected.desc, "solo");
-        // 未调用选型模型。
-        assert_eq!(h.selector_calls.load(Ordering::Relaxed), 0);
-        // 会话态写回 last_selected。
-        let cv = h.store.require_conversation(&conversation.id).unwrap();
-        let state = read_session_state(&cv);
-        assert_eq!(
-            state.last_selected_neuron_id.as_deref(),
-            Some(selected.id.as_str())
-        );
-        assert_eq!(
-            state.last_selected_neuron_id.as_deref(),
-            Some(solo_id.as_str())
-        );
-    }
-
-    #[tokio::test]
-    async fn fixed_policy_reads_spec_neuron_own_content_and_never_selects() {
-        let h = harness();
-        let behavior = SessionBehavior {
-            selection: SelectionPolicy::Fixed,
-            tools: ToolPolicy::None,
-            insert_id: None,
-        };
-        let spec_id = h
-            .manager
-            .ensure_session_neuron(
-                "session.fixed",
-                behavior.clone(),
-                Some("固定提示词".into()),
-                EnsureSystemOpts { reset: false },
+        let outcome = h
+            .service
+            .converse(
+                RoundInput {
+                    seed: None,
+                    state: SessionState::default(),
+                    messages: vec![],
+                    tool_override: None,
+                },
+                "hello",
+                &model(),
             )
             .await
-            .unwrap()
-            .id;
-        let (conversation, mut ctx) = open_ctx(&h, &spec_id).await;
-        h.service.resolve_round(&mut ctx).await.unwrap();
-        // role_system = 规格神经元自己的 content；selected_neuron = 规格神经元自身。
-        assert_eq!(ctx.system_prompt.as_deref(), Some("固定提示词"));
-        assert_eq!(
-            ctx.selected_neuron.as_ref().map(|n| n.id.as_str()),
-            Some(spec_id.as_str())
-        );
-        // Fixed 不写 last_selected；不调用选型模型。
-        let cv = h.store.require_conversation(&conversation.id).unwrap();
-        let state = read_session_state(&cv);
-        assert!(state.last_selected_neuron_id.is_none());
+            .unwrap();
+        assert_eq!(outcome.selected_neuron_id, None);
+        assert_eq!(outcome.state.last_selected_neuron_id, None);
+        assert_eq!(outcome.response, "echo-0");
+        assert_eq!(h.echo_calls.load(Ordering::Relaxed), 1);
         assert_eq!(h.selector_calls.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]
-    async fn global_policy_first_round_global_then_neighborhood() {
+    async fn converse_global_first_round_selects_anchor() {
         let h = harness();
-        let behavior = SessionBehavior {
-            selection: SelectionPolicy::Global { limit: 5 },
-            tools: ToolPolicy::None,
-            insert_id: None,
-        };
-        let spec_id = ensure_spec(&h.manager, "session.global", behavior).await;
-        insert_plain(&h.manager, "alpha", vec![]);
-        insert_plain(&h.manager, "beta", vec![]);
-        let (conversation, mut ctx) = open_ctx(&h, &spec_id).await;
-        h.service.resolve_round(&mut ctx).await.unwrap();
-        // 无历史：全域池选 1 → 触发选型；last_selected 写回会话态 = 首轮选中者。
-        let round1 = h.selector_calls.load(Ordering::Relaxed);
-        assert!(round1 >= 1);
-        let cv = h.store.require_conversation(&conversation.id).unwrap();
-        let state = read_session_state(&cv);
-        assert_eq!(
-            state.last_selected_neuron_id.as_deref(),
-            ctx.selected_neuron.as_ref().map(|n| n.id.as_str())
-        );
-        // 次轮：有历史 → 退化为邻域选（锚点 = last_selected），再次触发选型（非 Fixed 复用）。
-        let mut ctx2 = h
+        ensure_selector(&h);
+        // 全域池填满 Global limit（7）个候选：避免候选不足触发 AI 创建，聚焦「全域选 1 + 写锚点」。
+        for i in 0..7 {
+            insert_plain(&h, &format!("cand-{i}"));
+        }
+        let outcome = h
             .service
-            .build_context(&conversation.id, RoundTrigger::UserInput)
+            .converse(
+                RoundInput {
+                    seed: Some(SessionSeed::Global),
+                    state: SessionState::default(),
+                    messages: vec![],
+                    tool_override: None,
+                },
+                "go",
+                &model(),
+            )
             .await
             .unwrap();
-        h.service.resolve_round(&mut ctx2).await.unwrap();
-        assert!(h.selector_calls.load(Ordering::Relaxed) > round1);
+        assert_eq!(h.selector_calls.load(Ordering::Relaxed), 1);
+        let selected = outcome.selected_neuron_id.expect("global round selects");
+        assert!(matches!(outcome.state.last_selected_neuron_id.as_deref(), Some(id) if id == selected));
+        assert_ne!(selected, "");
     }
 
     #[tokio::test]
-    async fn tool_policy_three_modes() {
+    async fn converse_global_with_history_uses_neighborhood() {
         let h = harness();
-        // 规格神经元自身挂工具白名单：echo（注册）+ missing（未注册）。
-        // Fixed 选型下 selected = 规格神经元自身 → 直接验证三策略授权。
-        let tool_ids = vec!["echo".into(), "missing".into()];
+        ensure_selector(&h);
+        let root = insert_plain(&h, "root");
+        let child_a = insert_downstream(&h, &root.id, "child-a");
+        let _child_b = insert_downstream(&h, &root.id, "child-b");
+        let outcome = h
+            .service
+            .converse(
+                RoundInput {
+                    seed: Some(SessionSeed::Global),
+                    state: SessionState {
+                        last_selected_neuron_id: Some(child_a.id.clone()),
+                        ..Default::default()
+                    },
+                    messages: vec![],
+                    tool_override: None,
+                },
+                "advance",
+                &model(),
+            )
+            .await
+            .unwrap();
+        // 有历史 → 邻域选（锚点 = last_selected）。邻域候选会按策略扩展创建 → 至少一次模型调用。
+        assert!(h.selector_calls.load(Ordering::Relaxed) >= 1);
+        let selected = outcome.selected_neuron_id.unwrap();
+        assert_eq!(
+            outcome.state.last_selected_neuron_id.as_deref(),
+            Some(selected.as_str())
+        );
+    }
 
-        // 1) None → 不授权。
-        let spec_id = ensure_spec(
-            &h.manager,
-            "session.tools_none",
+    #[tokio::test]
+    async fn converse_plain_neuron_defaults_to_neighborhood() {
+        let h = harness();
+        // 普通神经元 seed → 推导默认邻域行为（锚点 = 自身）；邻域候选按策略扩展创建后选型。
+        let iso = insert_plain(&h, "iso");
+        let outcome = h
+            .service
+            .converse(
+                RoundInput {
+                    seed: Some(SessionSeed::Neuron(iso.id.clone())),
+                    state: SessionState::default(),
+                    messages: vec![],
+                    tool_override: None,
+                },
+                "hi",
+                &model(),
+            )
+            .await
+            .unwrap();
+        assert!(h.selector_calls.load(Ordering::Relaxed) >= 1);
+        let selected = outcome.selected_neuron_id.expect("neighborhood selects");
+        assert_eq!(
+            outcome.state.last_selected_neuron_id.as_deref(),
+            Some(selected.as_str())
+        );
+        assert_eq!(outcome.response, "echo-0");
+    }
+
+    #[tokio::test]
+    async fn converse_system_fixed_uses_own_content() {
+        let h = harness();
+        let sys = insert_system(
+            &h,
+            "session.test_fixed",
             SessionBehavior {
                 selection: SelectionPolicy::Fixed,
                 tools: ToolPolicy::None,
                 insert_id: None,
             },
-        )
-        .await;
-        h.manager
-            .set_tool_ids_for_admin(&spec_id, tool_ids.clone())
+            "FIXED-CONTENT",
+        );
+        let outcome = h
+            .service
+            .converse(
+                RoundInput {
+                    seed: Some(SessionSeed::Neuron(sys.id.clone())),
+                    state: SessionState {
+                        last_selected_neuron_id: Some("pre".into()),
+                        ..Default::default()
+                    },
+                    messages: vec![],
+                    tool_override: None,
+                },
+                "go",
+                &model(),
+            )
+            .await
             .unwrap();
-        let (_, mut ctx) = open_ctx(&h, &spec_id).await;
-        h.service.resolve_round(&mut ctx).await.unwrap();
-        assert!(ctx.authorized_tool_ids.is_empty());
-
-        // 2) FromNeuron → spec.tool_ids ∩ 注册表。
-        let spec_id = ensure_spec(
-            &h.manager,
-            "session.tools_from_neuron",
-            SessionBehavior {
-                selection: SelectionPolicy::Fixed,
-                tools: ToolPolicy::FromNeuron,
-                insert_id: None,
-            },
-        )
-        .await;
-        h.manager
-            .set_tool_ids_for_admin(&spec_id, tool_ids.clone())
-            .unwrap();
-        let (_, mut ctx) = open_ctx(&h, &spec_id).await;
-        h.service.resolve_round(&mut ctx).await.unwrap();
-        assert_eq!(ctx.authorized_tool_ids, vec!["echo".to_string()]);
-
-        // 3) Allowlist → 白名单 ∩ 注册表。
-        let spec_id = ensure_spec(
-            &h.manager,
-            "session.tools_allowlist",
-            SessionBehavior {
-                selection: SelectionPolicy::Fixed,
-                tools: ToolPolicy::Allowlist(vec!["echo".into(), "calculate".into()]),
-                insert_id: None,
-            },
-        )
-        .await;
-        h.manager
-            .set_tool_ids_for_admin(&spec_id, tool_ids)
-            .unwrap();
-        let (_, mut ctx) = open_ctx(&h, &spec_id).await;
-        h.service.resolve_round(&mut ctx).await.unwrap();
+        // Fixed：选中规格神经元自身，且不改写历史锚点。
+        assert_eq!(outcome.selected_neuron_id.as_deref(), Some(sys.id.as_str()));
         assert_eq!(
-            ctx.authorized_tool_ids,
-            vec!["echo".to_string(), "calculate".to_string()]
+            outcome.state.last_selected_neuron_id.as_deref(),
+            Some("pre")
+        );
+        assert_eq!(h.echo_calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn converse_system_global_falls_back_to_neighborhood() {
+        let h = harness();
+        // 系统神经元配置 Global → 宽容回退 Neighborhood（锚点 = 自身）：邻域候选扩展创建后选型。
+        let sys = insert_system(
+            &h,
+            "session.test_global",
+            SessionBehavior {
+                selection: SelectionPolicy::Global { limit: 5 },
+                tools: ToolPolicy::None,
+                insert_id: None,
+            },
+            "GLOBAL-BUT-SYSTEM",
+        );
+        let outcome = h
+            .service
+            .converse(
+                RoundInput {
+                    seed: Some(SessionSeed::Neuron(sys.id.clone())),
+                    state: SessionState::default(),
+                    messages: vec![],
+                    tool_override: None,
+                },
+                "go",
+                &model(),
+            )
+            .await
+            .unwrap();
+        assert!(h.selector_calls.load(Ordering::Relaxed) >= 1);
+        let selected = outcome.selected_neuron_id.expect("neighborhood selects");
+        assert_eq!(
+            outcome.state.last_selected_neuron_id.as_deref(),
+            Some(selected.as_str())
         );
     }
 
     #[tokio::test]
-    async fn converse_roundtrip_persists_messages_and_state() {
+    async fn converse_system_none_clears_anchor() {
         let h = harness();
-        h.manager.bootstrap().await.unwrap();
-        let spec_id = ensure_spec(
-            &h.manager,
-            "session.e2e",
+        let sys = insert_system(
+            &h,
+            "session.test_none",
             SessionBehavior {
                 selection: SelectionPolicy::None,
                 tools: ToolPolicy::None,
                 insert_id: None,
             },
-        )
-        .await;
-        let (conversation, _) = open_ctx(&h, &spec_id).await;
-        let model = ChatModelSelection {
-            provider_id: "p".into(),
-            model_id: "m".into(),
-        };
-        let response = h
+            "no-selection",
+        );
+        let outcome = h
             .service
-            .converse(&conversation.id, "hello", &model)
+            .converse(
+                RoundInput {
+                    seed: Some(SessionSeed::Neuron(sys.id.clone())),
+                    state: SessionState {
+                        last_selected_neuron_id: Some("pre".into()),
+                        ..Default::default()
+                    },
+                    messages: vec![],
+                    tool_override: None,
+                },
+                "go",
+                &model(),
+            )
             .await
             .unwrap();
-        assert_eq!(response.response, "fake-output");
-        assert_eq!(response.conversation_id, conversation.id);
-        // 消息落库：user + assistant。
-        let cv = h.store.require_conversation(&conversation.id).unwrap();
-        assert_eq!(cv.messages.len(), 2);
-        // 会话态（extra.session.state）已初始化。
-        assert!(session_spec_neuron_id(&cv).is_some());
+        assert_eq!(outcome.selected_neuron_id, None);
+        assert_eq!(outcome.state.last_selected_neuron_id, None);
     }
 
     #[tokio::test]
-    async fn call_system_prompt_unified_entry() {
+    async fn converse_tool_override_grants_tools() {
         let h = harness();
-        let registry = {
-            let mut reg = ToolRegistry::new();
-            reg.register_source(EchoTool, ToolSource::Config);
-            Arc::new(RwLock::new(reg))
-        };
-        let service = Arc::new(NeuronCallService::new(
-            Arc::new(JsonModelCaller),
-            Arc::clone(&h.manager),
-            h.store.clone(),
-            Arc::clone(&registry),
-        ));
-        let model = ChatModelSelection {
-            provider_id: "p".into(),
-            model_id: "m".into(),
-        };
-        let value = service
-            .call_system_prompt(
-                "assistant_match_topic",
-                json!({ "user_input": "hi" }),
-                &model,
-                &[],
-                true,
-            )
-            .await
-            .unwrap();
-        assert_eq!(value, json!({ "action": "ok" }));
-        // 裁决类神经元被懒创建，且 behavior = Fixed + insert_id（创建即注册默认）。
-        let neuron = h
-            .manager
-            .get_by_system_type("assistant_match_topic")
+        h.tool_registry
+            .write()
             .unwrap()
-            .unwrap();
-        let behavior = neuron
-            .behavior
-            .as_ref()
-            .expect("default behavior registered on creation");
-        assert_eq!(behavior.selection, SelectionPolicy::Fixed);
-        assert_eq!(behavior.insert_id.as_deref(), Some("assistant.match_topic"));
-        // 无 behavior（旧库）回落默认映射，同样可调用。
-        h.manager.delete_for_admin(&neuron.id).unwrap();
-        let value2 = service
-            .call_system_prompt(
-                "assistant_match_topic",
-                json!({ "user_input": "hi2" }),
-                &model,
-                &[],
-                true,
+            .register_source(EchoTool, ToolSource::Config);
+        *h.echo_tool_call.lock().unwrap() = Some(ToolCall {
+            id: "call-1".into(),
+            name: "echo".into(),
+            arguments: json!({"text": "hi"}),
+        });
+        let outcome = h
+            .service
+            .converse(
+                RoundInput {
+                    seed: None,
+                    state: SessionState::default(),
+                    messages: vec![],
+                    tool_override: Some(vec!["echo".into()]),
+                },
+                "go",
+                &model(),
             )
             .await
             .unwrap();
-        assert_eq!(value2, json!({ "action": "ok" }));
-        // require_json = false 时原样返回字符串。
-        let value3 = service
-            .call_system_prompt(
-                "assistant_match_topic",
-                json!({ "user_input": "hi3" }),
-                &model,
-                &[],
-                false,
+        assert_eq!(outcome.tool_result.as_deref(), Some("echo:hi"));
+        assert!(outcome.response.contains("[tool:echo] echo:hi"));
+        assert!(outcome.tool_calls.is_some());
+        assert_eq!(outcome.model_output.as_deref(), Some("echo-0"));
+    }
+
+    #[tokio::test]
+    async fn converse_unauthorized_tool_rejected() {
+        let h = harness();
+        h.tool_registry
+            .write()
+            .unwrap()
+            .register_source(EchoTool, ToolSource::Config);
+        *h.echo_tool_call.lock().unwrap() = Some(ToolCall {
+            id: "call-1".into(),
+            name: "echo".into(),
+            arguments: json!({"text": "hi"}),
+        });
+        let err = h
+            .service
+            .converse(
+                RoundInput {
+                    seed: None,
+                    state: SessionState::default(),
+                    messages: vec![],
+                    tool_override: None,
+                },
+                "go",
+                &model(),
             )
             .await
-            .unwrap();
-        assert_eq!(
-            value3,
-            serde_json::Value::String(r#"{"action":"ok"}"#.into())
-        );
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidInput(_)));
     }
 }

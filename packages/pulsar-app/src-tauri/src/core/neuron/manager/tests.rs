@@ -87,11 +87,12 @@
             r#"{"neurons":{"bootstrap":{"create_neuron_prompt":"create a neuron"}}}"#,
         )
         .unwrap();
+        let caller = Arc::new(MockModelCaller {
+            calls: AtomicUsize::new(0),
+        });
         let manager = Arc::new(NeuronManager::new(
             store,
-            Arc::new(MockModelCaller {
-                calls: AtomicUsize::new(0),
-            }),
+            Arc::clone(&caller) as Arc<dyn NeuronModelCaller>,
             NeuronConfigReader::new(root.clone()),
             Arc::new(RwLock::new(ToolRegistry::new())),
         ));
