@@ -264,7 +264,14 @@ impl NeuronCallService {
 
         let mut output = model_response.output.clone();
         let mut tool_result = None;
-        let tool_calls = model_response.tool_calls.clone();
+        // 单次工具执行语义：模型可能一次声明多个 tool_calls（并行调用），引擎只执行首个。
+        // 产物仅携带被执行的这条，保证落库后 assistant(tool_calls=[该条]) 与 tool(结果) 配对一致；
+        // 否则未应答的 tool_calls 会在历史 sanitize 时被降级，导致 tool 结果失去前置
+        // tool_calls 声明，OpenAI 兼容接口报「tool 必须是前置 tool_calls 的响应」。
+        let tool_calls = model_response
+            .tool_calls
+            .as_ref()
+            .map(|calls| calls.iter().take(1).cloned().collect::<Vec<_>>());
         if let Some(tool_calls) = tool_calls.as_ref() {
             if let Some(first) = tool_calls.first() {
                 if !authorized_tool_ids.iter().any(|id| id == &first.name) {

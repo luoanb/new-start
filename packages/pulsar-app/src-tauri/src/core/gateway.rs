@@ -13,6 +13,7 @@ use super::{
     conversation_runner::ConversationRunner,
     compactor::Compactor,
     conversation_store::{now_ms, ConversationStore},
+    current_time::GetCurrentTimeTool,
     dynamic_tool::{CommandTool, HttpTool},
     error::{AppError, AppResult},
     mcp::{McpServerClient, McpServerStatus, McpServerStatusKind},
@@ -952,12 +953,14 @@ fn spawn_neuron_recycle_runtime(
 
 /// 本地通道装配（native + config，同步、无网络）：启动即可用。
 ///
-/// `execute_command` 是首个上架 native 工具（见 inserts/execute_command.md）。
+/// `execute_command` 是首个上架 native 工具（见 inserts/execute_command.md），
+/// `get_current_time` 为第二个（见 inserts/get_current_time.md）。
 /// 配置驱动通道：dynamic_tools.json（HttpTool / CommandTool）。声明即 schema，
 /// 豁免 insert 门禁；命令模板复用 cmd_exec 安全护栏。
 fn assemble_local_tools(storage_root: &std::path::Path) -> AppResult<ToolRegistry> {
     let mut registry = ToolRegistry::new();
     registry.register(ExecuteCommandTool::new());
+    registry.register(GetCurrentTimeTool::new());
     let tool_config = ToolConfigReader::new(storage_root.to_path_buf());
     let dynamic = tool_config.dynamic_tools()?;
     for cfg in dynamic.http {
@@ -1267,6 +1270,17 @@ mod tests {
         assert!(
             skills.iter().any(|s| s.name == "execute_command"),
             "expected execute_command in tool registry, got: {:?}",
+            skills
+        );
+    }
+
+    #[test]
+    fn list_skills_includes_get_current_time_tool() {
+        let gateway = test_gateway("list_skills_includes_get_current_time_tool");
+        let skills = gateway.list_skills();
+        assert!(
+            skills.iter().any(|s| s.name == "get_current_time"),
+            "expected get_current_time in tool registry, got: {:?}",
             skills
         );
     }

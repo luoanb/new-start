@@ -147,34 +147,6 @@ impl ToolRegistry {
 
 // ─── Built-in tools (unregistered until inserts exist) ─────────────
 
-/// Return the current Unix-millisecond timestamp.
-#[allow(dead_code)]
-struct GetCurrentTimeTool;
-
-#[async_trait]
-impl Tool for GetCurrentTimeTool {
-    fn name(&self) -> &str {
-        "get_current_time"
-    }
-    fn description(&self) -> &str {
-        "Get the current Unix timestamp in milliseconds"
-    }
-    fn parameters(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {}
-        })
-    }
-    async fn execute(&self, _args: serde_json::Value) -> AppResult<String> {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        Ok(now.to_string())
-    }
-}
-
 /// Echo back the input message.
 #[allow(dead_code)]
 struct EchoTool;

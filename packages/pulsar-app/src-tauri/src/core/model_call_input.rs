@@ -132,31 +132,55 @@ impl ModelCallInput {
 
     /// Normalize tool-call/tool-result pairing before sending to the model.
     ///
-    /// OpenAI-compatible providers (DeepSeek etc.) reject a message list where an
-    /// assistant message declares `tool_calls` but no later `tool` message answers
-    /// each `tool_call_id` ("insufficient tool messages following tool_calls").
-    /// Such orphan pairs can appear in legacy/imported history. This pass
-    /// self-heals the list:
+    /// OpenAI-compatible providers (DeepSeek etc.) reject a message list where
+    /// a `role=tool` message has no preceding assistant message declaring its
+    /// `tool_call_id` ("tool must be a response to preceding tool_calls"), or an
+    /// assistant message declares `tool_calls` that are never answered
+    /// ("insufficient tool messages following tool_calls"). Broken pairs can
+    /// appear in legacy/imported history or when only one of several parallel
+    /// tool calls is executed. This pass self-heals the list:
     ///
-    /// - Declared calls answered by a `role=tool` message are kept untouched.
+    /// - Assistant tool_calls answered *in full* by `role=tool` messages are kept.
     /// - An *unanswered* assistant tool_calls message keeps its text but drops the
     ///   `tool_calls` field (degrades to a plain assistant message); if it has no
     ///   text at all the message is dropped entirely.
+    /// - A `role=tool` message is dropped unless a *kept* assistant message
+    ///   declares its `tool_call_id` (a degraded/dropped assistant invalidates
+    ///   the tool messages answering it, otherwise the list ends with an orphan
+    ///   tool message that providers reject).
     pub fn sanitize_tool_pairs(history: &[ModelMessage]) -> Vec<ModelMessage> {
+        // 被 tool 消息应答的 tool_call_id：只有全部 call 都被应答的 assistant 才保留声明。
         let answered: HashSet<&str> = history
             .iter()
             .filter(|m| m.role == ModelMessageRole::Tool)
             .filter_map(|m| m.tool_call_id.as_deref())
             .collect();
+        // 保留「完整」assistant 声明的 tool_call_id：这些 id 对应的 tool 消息才是合法的。
+        let live: HashSet<&str> = history
+            .iter()
+            .filter(|m| {
+                m.role == ModelMessageRole::Assistant
+                    && m.tool_calls
+                        .as_ref()
+                        .map(|calls| calls.iter().all(|c| answered.contains(c.id.as_str())))
+                        .unwrap_or(false)
+            })
+            .flat_map(|m| {
+                m.tool_calls
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|calls| calls.iter().map(|c| c.id.as_str()))
+            })
+            .collect();
         let mut out = Vec::with_capacity(history.len());
         for message in history {
-            let orphan = message.role == ModelMessageRole::Assistant
+            let orphan_call = message.role == ModelMessageRole::Assistant
                 && message
                     .tool_calls
                     .as_ref()
                     .map(|calls| calls.iter().any(|c| !answered.contains(c.id.as_str())))
                     .unwrap_or(false);
-            if orphan {
+            if orphan_call {
                 if message.content.trim().is_empty() {
                     continue; // 纯 tool_calls、无文本 → 整条丢弃
                 }
@@ -164,9 +188,20 @@ impl ModelCallInput {
                     tool_calls: None,
                     ..message.clone()
                 });
-            } else {
-                out.push(message.clone());
+                continue;
             }
+            // 孤儿 tool 消息：无被保留的 assistant 声明其 id → 丢弃
+            // （降级/丢弃 assistant 会连带使其 tool 结果失去前置 tool_calls）。
+            if message.role == ModelMessageRole::Tool
+                && !message
+                    .tool_call_id
+                    .as_deref()
+                    .map(|id| live.contains(id))
+                    .unwrap_or(false)
+            {
+                continue;
+            }
+            out.push(message.clone());
         }
         out
     }
@@ -427,15 +462,40 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_downgrades_partially_answered_calls() {
+    fn sanitize_downgrades_partially_answered_calls_and_drops_orphan_tool() {
+        // 并行 tool_calls 只执行首个（call_1 有结果、call_2 未应答）：assistant 降级为纯文本，
+        // 其 tool 结果失去前置 tool_calls 声明 → 一并丢弃（否则 API 报 tool 无前置 tool_calls）。
         let history = vec![
             tool_call_msg("two calls", &["call_1", "call_2"]),
             tool_msg("only one answered", "call_1"),
         ];
         let out = ModelCallInput::sanitize_tool_pairs(&history);
-        assert_eq!(out.len(), 2);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].role, ModelMessageRole::Assistant);
         assert!(out[0].tool_calls.is_none());
-        assert_eq!(out[1], tool_msg("only one answered", "call_1"));
+        assert_eq!(out[0].content, "two calls");
+    }
+
+    #[test]
+    fn sanitize_drops_tool_without_declaring_assistant() {
+        // 孤儿 tool 消息：没有任何 assistant 声明其 id（历史导入损坏）→ 直接丢弃。
+        let history = vec![
+            msg(ModelMessageRole::User, "u1"),
+            tool_msg("ghost result", "call_ghost"),
+        ];
+        let out = ModelCallInput::sanitize_tool_pairs(&history);
+        assert_eq!(out, vec![msg(ModelMessageRole::User, "u1")]);
+    }
+
+    #[test]
+    fn sanitize_drops_all_when_parallel_calls_unanswered() {
+        // 纯 tool_calls 无文本且未应答 → assistant 丢弃；其 tool 结果也一并丢弃。
+        let history = vec![
+            tool_call_msg("", &["call_1", "call_2"]),
+            tool_msg("result for first", "call_1"),
+        ];
+        let out = ModelCallInput::sanitize_tool_pairs(&history);
+        assert!(out.is_empty());
     }
 
     #[test]

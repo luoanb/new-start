@@ -82,8 +82,8 @@ pulsar-app（Rust / Tauri）的模型调用采用**单一下游出口** + 多层
 
 - **Neuron 模板**：角色/能力载体（谁、怎么做）。
 - **Manual 模板**：操作说明书/输出契约（产出什么、什么格式）。
-- `sanitize_tool_pairs`：自愈孤儿 tool_calls（OpenAI 兼容接口强校验）。
-- insert 契约注入：`inserts/*.md`（match_topic、select_one、draft_from_model、variant_evolve、complete_scope、score_feedback、execute_command）。
+- `sanitize_tool_pairs`：自愈 tool_calls/tool 配对（OpenAI 兼容接口强校验）——未完全应答的 assistant 降级/丢弃，且其 tool 结果一并丢弃（避免孤儿 tool 消息）；另丢弃无前置声明的孤儿 tool 消息。
+- insert 契约注入：`inserts/*.md`（match_topic、select_one、draft_from_model、variant_evolve、complete_scope、score_feedback、execute_command、get_current_time）。
 
 ---
 

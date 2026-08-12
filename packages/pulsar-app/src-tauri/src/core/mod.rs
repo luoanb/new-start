@@ -6,6 +6,7 @@ pub mod chat_session;
 pub mod cmd_exec;
 pub mod compactor;
 pub mod config;
+pub mod current_time;
 pub mod conversation_runner;
 pub mod conversation_store;
 pub mod dynamic_tool;
