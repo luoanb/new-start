@@ -21,16 +21,16 @@ use super::{
 /// 直连（非规格会话）系统类型标记：仅用于日志/审计，不落库。
 pub const SYSTEM_TYPE_DIRECT: &str = "direct";
 
-/// 会话级运行态（`conversation.extra.session.state`）：选型/干预信号自 `topic.extra.assistant`
+/// 会话级运行态（`conversation.extra.session.state`）：选型锚点自 `topic.extra.assistant`
 /// 迁出，旧 topic 数据读取时回退兼容。
+///
+/// 已废弃（由消息盖章推导替代）：`last_intervention_at` / `intervention_neuron_ids`
+/// 曾在会话态滚动累积"干预窗口"；现改为每条 assistant 产物落库盖章选中神经元
+/// （`Message.neuron_id`），评分区间由 `interval_neuron_ids` 按消息介入边界推导。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionState {
     #[serde(default)]
     pub last_selected_neuron_id: Option<String>,
-    #[serde(default)]
-    pub last_intervention_at: Option<u128>,
-    #[serde(default)]
-    pub intervention_neuron_ids: Vec<String>,
 }
 
 /// 会话元数据（`conversation.extra.session`）：规格绑定 + 种子 + 运行态。
@@ -816,15 +816,11 @@ mod tests {
     fn session_state_roundtrip_via_extra() {
         let state = SessionState {
             last_selected_neuron_id: Some("n-1".into()),
-            last_intervention_at: Some(123),
-            intervention_neuron_ids: vec!["n-2".into()],
         };
         let mut conversation = empty_conversation();
         set_session_state(&mut conversation, &state);
         let read = read_session_state(&conversation);
         assert_eq!(read.last_selected_neuron_id, Some("n-1".into()));
-        assert_eq!(read.last_intervention_at, Some(123));
-        assert_eq!(read.intervention_neuron_ids, vec!["n-2".to_string()]);
     }
 
     #[test]

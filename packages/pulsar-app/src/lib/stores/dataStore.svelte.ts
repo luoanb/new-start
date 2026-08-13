@@ -262,9 +262,13 @@ async function clearConversation(): Promise<void> {
   await refreshConversations();
 }
 
-// 人工评价：对当前会话绑定 topic 的干预窗口应用评分 delta（后端 emit Neurons 触发刷新）。
-async function scoreFeedback(conversationId: string, score: number): Promise<void> {
-  await invoke("score_feedback", { conversationId, score });
+// 人工评价：按被评消息所在介入区间应用评分 delta（后端 emit Neurons 触发刷新）。
+async function scoreFeedback(
+  conversationId: string,
+  messageIndex: number,
+  score: number
+): Promise<void> {
+  await invoke("score_feedback", { conversationId, messageIndex, score });
 }
 
 // ── 神经元统一管理（列表 ←→ 画布共享状态）actions ──

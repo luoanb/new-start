@@ -37,9 +37,10 @@
     }
   });
 
-  // 仅当当前会话已绑定 topic（assistant 模式）时，assistant 回复才显示评价按钮。
-  const canRate = $derived(
-    ctx.stores.data.state.topics.some(
+  // 评价按钮：会话绑定 topic 时所有 assistant 消息均可评（评分定位所在介入区间，
+  // 允许随时评分、重复评分；后端按 message_index 推导区间盖章神经元）。
+  const rateable = $derived(
+    !!ctx.stores.data.state.topics.some(
       (topic) => topic.session_id === ctx.stores.data.state.activeConversationId
     )
   );
@@ -48,11 +49,11 @@
     await navigator.clipboard.writeText(msg.body.content);
   }
 
-  async function handleRate(score: number): Promise<void> {
+  async function handleRate(messageIndex: number, score: number): Promise<void> {
     const conversationId = ctx.stores.data.state.activeConversationId;
     if (!conversationId) return;
     try {
-      await ctx.stores.data.scoreFeedback(conversationId, score);
+      await ctx.stores.data.scoreFeedback(conversationId, messageIndex, score);
     } catch (e) {
       ratingError = `评价失败: ${errorMessage(e)}`;
       setTimeout(() => (ratingError = ""), 3000);
@@ -73,8 +74,13 @@
         </div>
       </div>
     {:else}
-      {#each messages as msg}
-        <ChatMessage message={msg} {canRate} onCopy={handleCopy} onRate={handleRate} />
+      {#each messages as msg, i}
+        <ChatMessage
+          message={msg}
+          canRate={rateable}
+          onCopy={handleCopy}
+          onRate={(score) => handleRate(i, score)}
+        />
       {/each}
     {/if}
 

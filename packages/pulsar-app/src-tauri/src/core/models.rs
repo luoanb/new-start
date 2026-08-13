@@ -44,6 +44,9 @@ pub struct Message {
     pub role: MessageRole,
     pub body: MessageBody,
     pub timestamp: u128,
+    /// 所属神经元（assistant 模式每轮选中，落库盖章；旧消息 / 非 assistant 模式为 None）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub neuron_id: Option<String>,
 }
 
 impl Message {

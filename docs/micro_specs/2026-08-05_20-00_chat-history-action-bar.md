@@ -1,5 +1,11 @@
 # Spec: 对话历史操作栏（复制 + 评价）
 
+> **已更新（2026-08-14）**：本 spec 的"干预窗口（`intervention_neuron_ids` 滚动累积 / 评分即消费 / 按钮锚定未消费区间）"语义已被废弃，
+> 由 **[2026-08-13_message-stamped-rating.md](./2026-08-13_message-stamped-rating.md)** 取代：改为**消息盖章 + 区间推导**
+> （每条 assistant 产物落库盖章 `Message.neuron_id`；被评分区间按消息介入边界推导，去重）。
+> 人工评价命令签名由 `score_feedback(conversation_id, score)` 改为 `score_feedback(conversation_id, message_index, score)`；
+> 评价按钮不再锚定"当前未消费区间最后一条 assistant 消息"，改为会话绑定 topic 后**所有 assistant 消息均可随时、重复评分**。
+
 ## Goal
 
 - 要解决什么问题：对话历史（ChatArea 消息列表）没有复制与人工评价入口。用户希望每条消息提供操作栏：**复制**该消息原文；assistant 回复额外提供**评价**（-5..5 权重打分），打分的副作用与模型自主打分一致——调整上游节点和边的权重。
@@ -11,8 +17,8 @@
   1. 后端抽取共享评分方法 `AssistantMode::apply_score_feedback(topic_id, delta)`，`ScoreFeedbackBeforeHook` 与人工命令共用。
   2. 新增 Tauri 命令 `score_feedback(conversation_id, score)`：解析 topic → 校验 score（整数，-5..=5 且非 0）→ 窗口非空 → 应用 delta → emit `StateChange::Neurons`。
   3. `core/events.rs` 新增 `Neurons` 事件；前端 `dataStore` 增加 `neurons` kind 刷新（`neuronsVersion`），`NeuronManager` 监听后重拉。
-  4. `ChatMessage.svelte` 增加 hover 操作栏：user=复制、assistant=复制+评价、tool_call/tool_result/system=无。
-  5. 评价交互：hover 评价按钮弹出 -5..5 小面板，点击即打分（0 置灰不可点，与模型约束一致），打分后关闭面板并累加 delta。
+  4. `ChatMessage.svelte` 增加 hover 操作栏：user=复制、assistant=复制+评价、tool_call/tool_result/system=无。评价按钮**只锚定在当前未消费区间对应的最后一条 assistant 消息**上（评分即消费，评的是区间而非单条消息）。
+  5. 评价交互：hover 评价按钮弹出 -5..5 小面板，点击即打分（0 置灰不可点，与模型约束一致），打分后关闭面板并累加 delta；成功后窗口被消费清空，按钮随之消失。
   6. 复制使用 `navigator.clipboard.writeText(message.content)`，复制该消息原始 markdown 文本。
   7. i18n 中/英标签就位（复制 / 评价 / 已复制）。
 - 由什么证明：`cargo build` + `read_lints` 0 错误；手动在 App 内：hover 出现操作栏、复制成功、评价后神经元面板权重变化。
@@ -25,8 +31,8 @@
 
 ## Facts / Constraints
 
-- **模型打分逻辑（已确认）**：`ScoreFeedbackBeforeHook`（`assistant_mode.rs:1084-1195`）读 topic 状态 `intervention_neuron_ids` → 对每个介入神经元 `adjust_weight(delta)` + 关联边 `adjust_connection_weight(delta)` + lineage 归因 `accumulate_variant_delta(父变体, delta)` + `maybe_evolve_creator_variants()`（失败仅 warn）。
-- **窗口语义（已确认，用户批准接受）**：`intervention_neuron_ids` 只保留**最新一轮**的介入窗口，不是按消息存储。人工评价复用该窗口：评最新一条回复准确，评历史旧消息会错位到最新窗口——接受此限制，不做按消息盖章。
+- **模型打分逻辑（已确认）**：`ScoreFeedbackBeforeHook`（`assistant_session.rs:521-`）读会话态 `intervention_neuron_ids` → 对每个介入神经元 `adjust_weight(delta)` + 关联边 `adjust_connection_weight(delta)` + lineage 归因 `accumulate_variant_delta(父变体, delta)` + `maybe_evolve_creator_variants()`（失败仅 warn）。人工评分命令与模型打分共用 `apply_score_feedback`（`assistant_session.rs:336-407`）。
+- **窗口语义（2026-08-13 修订：滚动累积，原"只保留最新一轮"废弃）**：`intervention_neuron_ids` 不是按消息存储，也不是只装单轮。窗口 = 自上次用户介入以来所有**实际选中过的神经元**，去重累积：推进轮（Manual/Poller）每轮把本轮选中神经元去重累加进窗口；用户介入轮 beforehook 用旧窗口评分，after_round 清空并记本轮选中神经元为新区间起点。**人工评价同样视为用户介入（2026-08-13）**：调权成功后清空窗口（不记最近选中为新起点——它属于已评旧区间，新区间留待下一次真正的新选中起算），旧区间关闭不重复评分；失败不消费窗口。
 - **会话 ↔ 课题**：assistant 模式下 `conversation_id == session_id`；topic 通过 `topic_store.find_by_session_id` 解析（`topic_store.rs:118`）。
 - **score 约束与模型一致**：整数，闭区间 -5..=5，且**非 0**。
 - **前端现状**：`ChatMessage.svelte` 纯展示、无操作栏；`dataStore` 只管理 topics/conversations/poller/sessions，无 neurons；`NeuronManager` 在 onMount 本地加载 `list_neurons`，无事件刷新。
@@ -173,6 +179,7 @@ $effect(() => {
 
 ## Change Log
 
+- 2026-08-14（取代注记）：本 spec 的干预窗口语义与 `score_feedback` 签名已过时，见文首注记与 `2026-08-13_message-stamped-rating.md`。代码侧：`SessionState.intervention_neuron_ids` / `last_intervention_at`、`mark_user_intervention` / `accumulate_interval_neuron` / `accumulate_interval_ids` / `intervention_window` 已删除；`score_feedback` 命令改 `message_index` 定位区间；前端 `ChatMessage` 恢复绑定 topic 即全部 assistant 消息可评。
 - 2026-08-05: 初始 micro-spec。决策：评价复用模型打分窗口语义（不做按消息盖章）；操作栏按消息类型区分（user=复制、assistant=复制+评价、tool/system=无）；重复打分直接累加。
 - 2026-08-05（UI 反馈修订）：① 评价面板改为 `top: 100%` 无间隙 + 面板内部 padding 承担视觉间距，鼠标从按钮滑到面板不再消失；② 操作栏改为图标按钮（内联 SVG：复制/已复制勾/星级评价，沿用项目 24 viewBox + stroke=currentColor 惯例），补 title/aria-label；③ 面板默认左对齐 `left: 0`，user 消息侧 `right: 0`，避免超出可见区域。
 - 2026-08-05（UI 反馈修订 2）：① 面板按视口底部空间动态向上/向下弹出（`openRating` 测量按钮位置，空间不足时 `bottom: 100%`），避免被输入框遮住，z-index 提升至 100；② 评分按钮去掉 0，`-5..-1,1..5` 一行 10 个。

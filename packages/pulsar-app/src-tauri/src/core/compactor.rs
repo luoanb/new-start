@@ -141,6 +141,7 @@ impl Compactor {
                 content: summary,
             },
             timestamp: crate::core::conversation_store::now_ms(),
+            neuron_id: None,
         };
 
         // Insert the compaction summary at position 0 (original messages kept intact)
@@ -181,6 +182,7 @@ impl Compactor {
                 content: summary,
             },
             timestamp: crate::core::conversation_store::now_ms(),
+            neuron_id: None,
         };
 
         // Insert the compaction summary at position 0 (original messages kept intact)
@@ -230,6 +232,7 @@ mod tests {
                 content: content.to_string(),
             },
             timestamp: now_ms(),
+            neuron_id: None,
         }
     }
 

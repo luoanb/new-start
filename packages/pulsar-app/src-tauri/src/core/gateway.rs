@@ -301,6 +301,7 @@ impl Gateway {
                 content: input.to_string(),
             },
             timestamp: now_ms(),
+            neuron_id: None,
         };
 
         self.store.add_message(&conversation_id, user_message)?;
@@ -337,6 +338,7 @@ impl Gateway {
             role: MessageRole::Assistant,
             body: MessageBody::Text { content: response },
             timestamp: now_ms(),
+            neuron_id: None,
         })
     }
 

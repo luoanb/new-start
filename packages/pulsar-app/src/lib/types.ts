@@ -14,6 +14,14 @@ export type Conversation = {
   messages: Message[];
   created_at: number;
   updated_at: number;
+  /** 会话级扩展（后端 skip_serializing_if=None）：assistant 模式承载会话运行态。 */
+  extra?: {
+    session?: {
+      state?: {
+        last_selected_neuron_id?: string | null;
+      };
+    };
+  } | null;
 };
 
 export type ToolCall = {
@@ -35,6 +43,8 @@ export type Message = {
   role: MessageRole;
   body: MessageBody;
   timestamp: number;
+  /** 所属神经元（assistant 模式每轮选中，落库盖章；旧消息 / 非 assistant 模式缺失）。 */
+  neuron_id?: string | null;
 };
 
 export type RuntimeStatus = {

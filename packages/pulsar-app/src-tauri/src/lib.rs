@@ -545,23 +545,25 @@ async fn adjust_edge_weight(
         .map_err(|error| error.payload())
 }
 
-/// 人工评价：对当前会话绑定 topic 的干预窗口应用评分 delta，
+/// 人工评价：定位被评消息所在介入区间的盖章神经元并应用评分 delta，
 /// 与模型打分 hook 共享 `apply_score_feedback`，仅分数来源不同（用户点击）。
 #[tauri::command]
 async fn score_feedback(
     assistant: State<'_, Arc<AssistantSession>>,
     state_emit: State<'_, StateEmitter>,
     conversation_id: String,
+    message_index: usize,
     score: i64,
 ) -> TauriResult<()> {
     assistant
         .inner()
-        .score_feedback(&conversation_id, score)
+        .score_feedback(&conversation_id, message_index, score)
         .await
         .map_err(|error| {
             tracing::warn!(
                 phase = "score_feedback_command",
                 conversation_id,
+                message_index,
                 score,
                 error = %error,
                 "manual rating failed"
@@ -569,6 +571,9 @@ async fn score_feedback(
             error.payload()
         })?;
     state_emit.inner()(StateChange::Neurons);
+    state_emit.inner()(StateChange::Conversations {
+        affected: vec![conversation_id],
+    });
     Ok(())
 }
 

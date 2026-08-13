@@ -200,6 +200,11 @@ impl ConversationRunner {
 
     /// 落库：输入消息（按触发形态）→ 产物（tool_call/tool_result 或 assistant text）→ 会话态。
     fn persist(&self, ctx: &RoundContext) -> AppResult<()> {
+        // 本轮选中神经元：落库产物消息统一盖章（用户输入消息不盖章）。
+        let stamped = ctx
+            .outcome
+            .as_ref()
+            .and_then(|outcome| outcome.selected_neuron_id.clone());
         match ctx.trigger {
             RoundTriggerKind::User => {
                 self.store.add_message(
@@ -210,6 +215,7 @@ impl ConversationRunner {
                             content: ctx.model_input.clone(),
                         },
                         timestamp: now_ms(),
+                        neuron_id: None,
                     },
                 )?;
             }
@@ -222,6 +228,7 @@ impl ConversationRunner {
                             content: ctx.model_input.clone(),
                         },
                         timestamp: now_ms(),
+                        neuron_id: stamped.clone(),
                     },
                 )?;
             }
@@ -241,6 +248,7 @@ impl ConversationRunner {
                             tool_calls: tool_calls.clone(),
                         },
                         timestamp: now_ms(),
+                        neuron_id: stamped.clone(),
                     },
                 )?;
                 self.store.add_message(
@@ -253,6 +261,7 @@ impl ConversationRunner {
                             content: outcome.tool_result.clone().unwrap_or_default(),
                         },
                         timestamp: now_ms(),
+                        neuron_id: stamped.clone(),
                     },
                 )?;
             }
@@ -265,6 +274,7 @@ impl ConversationRunner {
                         content: outcome.response.clone(),
                     },
                     timestamp: now_ms(),
+                    neuron_id: stamped.clone(),
                 },
             )?;
         }

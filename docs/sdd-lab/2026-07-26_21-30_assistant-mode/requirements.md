@@ -22,7 +22,7 @@ Assistant 内部每轮流程统一为：**beforehook → Assistant 对话/步进
 - **课题与会话绑定**：Assistant 会话必须绑定课题，一个课题一个绑定会话。
 - **AI 和用户均可全权管理课题**（已验证：Agent 工具 + TUI `/topic` 已覆盖）。
 - **课题匹配**：用户输入时的 beforehook 与神经元 7 选 1 采用同一处理方式，仅 `system_type` 不同；匹配则切换到对应会话转发输入，无匹配则创建新课题关联当前会话。
-- **用户满意度打分**：用户再次介入时，根据输入猜测满意度分数（-5..=5，不可为 0），并对“上一轮用户介入到本次用户介入”区间内的上游神经元及其关联单向边增减权重。
+- **用户满意度打分**：用户再次介入时，根据输入猜测满意度分数（-5..=5，不可为 0），并对介入区间内的神经元及其关联单向边增减权重。区间语义（2026-08-14 更新）：每条 assistant 产物（nudge/tool_call/tool_result/text）落库时**盖章**本轮选中神经元（`Message.neuron_id`），用户输入不盖章；介入边界 = `role=user` 且 `body=text` 的消息；被评分区间 = 上次介入（不含）之后、下次介入（不含）之前所有消息的盖章神经元（去重，保留出现顺序）；"上游"权重影响由 lineage 归因覆盖。**人工评价（用户手动打分）与模型打分共用同一区间推导**：会话绑定课题后，用户可对任意 assistant 消息随时评分、重复评分，评分目标 = 该消息所在介入区间的盖章神经元。
 - **轮后更新**：afterhook 用固定 `system_type` 取系统提示词，调用大模型确认本轮实际完成了什么，再据此完成对应 `scope_in` 条目；进度与课题状态由既有条目管理能力重算，全部完成则自动标记 Done。
 - **课题关联会话**：Topic 增加 `session_id` 字段，轮询时判断是否已有活跃会话。
 
@@ -62,7 +62,7 @@ Assistant 内部每轮流程统一为：**beforehook → Assistant 对话/步进
   4. 选中神经元的 `content` 作为本轮 Assistant 对话 system prompt。
 - 神经元候选准备和自动补齐由前置神经元能力提供；Assistant 不自行复制神经元自举逻辑。
 - 课题匹配 beforehook：与神经元 7 选 1 同一处理方式，仅 `system_type` 不同；匹配到已有未完成课题则切换到绑定会话，无匹配则创建新课题并关联当前会话。
-- 用户介入 beforehook：根据用户输入猜测满意度分数，范围 `-5..=5` 且不可为 `0`；分数作用在“上一轮用户介入到本次用户介入”区间内的上游神经元及其关联单向边，执行权重增减。不做对话回滚。
+- 用户介入 beforehook：根据用户输入猜测满意度分数，范围 `-5..=5` 且不可为 `0`；分数作用在当前介入区间（上次用户介入之后到现在的所有盖章神经元，去重）上，执行权重增减。不做对话回滚。
 - 轮后 afterhook：用固定 `system_type` 取系统提示词，调用大模型确认本轮实际做了什么，再调用既有 `scope_in` 单条完成能力更新条目；进度与课题状态由条目管理能力重算，全部完成则自动标记 Done。
 - 对话神经元候选池（2026-08-02 明确）：
   - **主对话轮（用户输入新会话 / 非 secondary）**：对话神经元候选取自**全局候选池**。`SelectNeuronBeforeHook` 在 `secondary=false` 时传 `source_id=None`，由 `select_candidates` 走 `list_global_candidates`（全库 `FROM neurons` 按权重降序 + 随机取 7），**不限定在 `assistant_select_neuron` 下游**。
@@ -213,3 +213,5 @@ Poller 的边界：
   - 决策：次生轮次保留；“邻居”仅指以上一轮选中神经元为 source 的直接子节点，不做双向或递归遍历。
 - 2026-07-29 23:58:
   - 决策：系统提示词获取改由 `NeuronManager::ensure_system_neuron` / `bootstrap_ready` 完成；缺失时补齐而非硬失败。详见 `docs/sdd-lab/2026-07-29_22-50_neuron-system-prompt-ready/`。
+- 2026-08-14:
+  - 决策：废弃会话态"干预窗口"（`intervention_neuron_ids` / `last_intervention_at` 滚动累积），改为**消息盖章 + 区间推导**。每条 assistant 产物落库盖章本轮选中神经元（`Message.neuron_id`）；被评分区间由消息介入边界（`role=user` 且 `body=text`）推导，去重。人工评价可对任意 assistant 消息随时、重复评分，与模型打分共用同一推导。详见 `docs/micro_specs/2026-08-13_message-stamped-rating.md`。

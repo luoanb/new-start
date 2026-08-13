@@ -18,17 +18,16 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use super::{
     call_service::{
-        read_session_state, write_session_state, NeuronCallService, RoundInput, SessionSeed,
-        SessionState,
+        NeuronCallService, RoundInput, SessionSeed, SessionState,
     },
     conversation_runner::{
         ConversationRunner, InputRecord, RoundContext, RoundHooks, RoundTriggerKind,
     },
-    conversation_store::{now_ms, ConversationStore},
+    conversation_store::ConversationStore,
     error::{AppError, AppResult},
     models::{
-        ChatModelSelection, ChatResponse, EnsureSystemOpts, ModelMessage, ScopeInItem, Topic,
-        TopicStatus, TopicUpdate,
+        ChatModelSelection, ChatResponse, EnsureSystemOpts, Message, MessageBody, MessageRole,
+        ModelMessage, ScopeInItem, Topic, TopicStatus, TopicUpdate,
     },
     neuron::model::extract_json_object,
     neuron_manager::NeuronManager,
@@ -318,23 +317,14 @@ impl AssistantSession {
             .ok_or(AppError::ModelNotSelected)
     }
 
-    /// 读取 topic 的干预窗口（经会话态）；窗口为空返回空 Vec（由调用方决定跳过或报错）。
-    pub fn intervention_window(&self, topic_id: &str) -> AppResult<Vec<String>> {
-        let topic = self
-            .topics()?
-            .get(topic_id)?
-            .ok_or_else(|| AppError::ConversationNotFound(topic_id.to_string()))?;
-        let Some(session_id) = topic.session_id.clone() else {
-            return Ok(Vec::new());
-        };
-        let conversation = self.store.require_conversation(&session_id)?;
-        Ok(read_session_state(&conversation).intervention_neuron_ids)
-    }
-
-    /// 对窗口内每个介入神经元应用 delta：节点权重 + 关联边 + lineage 归因 + 变体演进。
-    /// 模型打分 hook 与人工评价共用；窗口为空时静默通过。
-    pub async fn apply_score_feedback(&self, topic_id: &str, delta: f64) -> AppResult<()> {
-        let neuron_ids = self.intervention_window(topic_id)?;
+    /// 对显式神经元集合应用 delta：节点权重 + 关联边 + lineage 归因 + 变体演进。
+    /// 模型打分 hook 与人工评价共用；集合为空时静默通过。
+    pub async fn apply_score_feedback(
+        &self,
+        topic_id: &str,
+        neuron_ids: Vec<String>,
+        delta: f64,
+    ) -> AppResult<()> {
         if neuron_ids.is_empty() {
             return Ok(());
         }
@@ -375,9 +365,15 @@ impl AssistantSession {
         Ok(())
     }
 
-    /// 人工评价入口：按会话解析绑定 topic，校验分数并应用评分 delta。
-    /// 与模型打分 hook 共享 `apply_score_feedback`，只是分数来源不同（用户点击 vs 模型 JSON）。
-    pub async fn score_feedback(&self, session_id: &str, score: i64) -> AppResult<()> {
+    /// 人工评价入口：按会话解析绑定 topic，定位被评消息所在介入区间并应用评分 delta。
+    /// 区间 = 上次用户介入（不含）之后、下次介入（不含）之前的所有盖章神经元（去重），
+    /// 与模型打分共用 `apply_score_feedback`，仅分数来源不同（用户点击 vs 模型 JSON）。
+    pub async fn score_feedback(
+        &self,
+        session_id: &str,
+        message_index: usize,
+        score: i64,
+    ) -> AppResult<()> {
         if score == 0 || !(-5..=5).contains(&score) {
             return Err(AppError::InvalidInput(format!(
                 "score must be in -5..=5 and non-zero, got {score}"
@@ -390,21 +386,29 @@ impl AssistantSession {
                 AppError::ConversationNotFound(format!("no topic bound to session {session_id}"))
             })?
             .id;
-        let neuron_ids = self.intervention_window(&topic_id)?;
+        let conversation = self.store.require_conversation(session_id)?;
+        if message_index >= conversation.messages.len() {
+            return Err(AppError::InvalidInput(format!(
+                "message_index {message_index} out of range (len {})",
+                conversation.messages.len()
+            )));
+        }
+        let neuron_ids = interval_neuron_ids(&conversation.messages, message_index);
         if neuron_ids.is_empty() {
             return Err(AppError::InvalidInput(
-                "no intervention window to score".into(),
+                "当前消息所在介入区间内没有可评分的神经元（该区间未选中任何神经元）".into(),
             ));
         }
         tracing::info!(
             phase = "manual_score_feedback",
             session_id,
             topic_id = %topic_id,
+            message_index,
             score,
             neuron_count = neuron_ids.len(),
             "manual rating applied"
         );
-        self.apply_score_feedback(&topic_id, score as f64).await
+        self.apply_score_feedback(&topic_id, neuron_ids, score as f64).await
     }
 }
 
@@ -475,7 +479,6 @@ impl RoundHooks for AssistantHooks<'_> {
         match ctx.trigger {
             RoundTriggerKind::User => {
                 completed?;
-                self.mark_user_intervention(ctx)?;
                 self.tick_round_counters(ctx, true)?;
             }
             RoundTriggerKind::ManualStep => {
@@ -515,7 +518,8 @@ impl AssistantHooks<'_> {
         Ok(())
     }
 
-    /// 干预打分：会话态存在干预窗口时调用模型打分（解析失败仅 warn + skip，不阻断主对话）。
+    /// 干预打分：对会话最后一个介入区间（上次用户介入之后到现在）调用模型打分
+    /// （解析失败仅 warn + skip，不阻断主对话）。
     async fn score_feedback(&self, ctx: &mut RoundContext) -> AppResult<()> {
         let Some(topic_id) = ctx.topic_id.clone() else {
             tracing::info!(phase = "score_feedback_hook", "skip: no topic bound yet");
@@ -539,20 +543,22 @@ impl AssistantHooks<'_> {
                 return Ok(());
             }
         };
-        let state = read_session_state(&conversation);
-        if state.last_intervention_at.is_none() || state.intervention_neuron_ids.is_empty() {
+        // 用户输入在 before hook 之后才落库，本次介入尚未进入消息列表；
+        // 以列表末尾为锚点推导「上次介入（不含）之后」的盖章神经元。
+        let neuron_ids = interval_neuron_ids(&conversation.messages, conversation.messages.len());
+        if neuron_ids.is_empty() {
             tracing::info!(
                 phase = "score_feedback_hook",
                 topic_id = %topic_id,
-                "skip: no prior intervention window"
+                "skip: last interval has no stamped neuron"
             );
             return Ok(());
         }
         tracing::info!(
             phase = "score_feedback_hook",
             topic_id = %topic_id,
-            neuron_count = state.intervention_neuron_ids.len(),
-            "scoring intervention window"
+            neuron_count = neuron_ids.len(),
+            "scoring last intervention interval"
         );
         let model = self.assistant.default_model_or_error()?;
         let decision = match self
@@ -562,7 +568,7 @@ impl AssistantHooks<'_> {
                 json!({
                     "user_input": ctx.model_input,
                     "topic_id": topic_id,
-                    "neuron_ids": state.intervention_neuron_ids,
+                    "neuron_ids": neuron_ids,
                 }),
                 &model,
                 &ctx.messages,
@@ -593,7 +599,7 @@ impl AssistantHooks<'_> {
         }
         tracing::info!(phase = "score_feedback_hook", score, "applying weight delta");
         self.assistant
-            .apply_score_feedback(&topic_id, score as f64)
+            .apply_score_feedback(&topic_id, neuron_ids, score as f64)
             .await
     }
 
@@ -778,22 +784,6 @@ impl AssistantHooks<'_> {
                 .complete_scope_item(&topic_id, item_id);
         }
         Ok(())
-    }
-
-    /// 用户干预标记：写会话态（conversation.extra.session.state），topic 不再承载。
-    fn mark_user_intervention(&self, ctx: &RoundContext) -> AppResult<()> {
-        let mut state = read_session_state(&self.assistant.store.require_conversation(&ctx.session_id)?);
-        state.last_intervention_at = Some(now_ms());
-        state.intervention_neuron_ids.clear();
-        if let Some(neuron_id) = ctx
-            .outcome
-            .as_ref()
-            .and_then(|outcome| outcome.selected_neuron_id.clone())
-        {
-            state.intervention_neuron_ids.push(neuron_id.clone());
-            state.last_selected_neuron_id = Some(neuron_id);
-        }
-        write_session_state(&self.assistant.store, &ctx.session_id, &state)
     }
 
     /// 轮次计数递增：`total_rounds` 每成功轮 +1；User 轮 `user_rounds` +1 且 `poll_count`
@@ -1033,12 +1023,153 @@ fn apply_round_counter(state: &mut AssistantTopicState, user_round: bool) {
     }
 }
 
+/// 推导 `anchor_index` 所在介入区间的盖章神经元（去重，保留出现顺序）。
+///
+/// 介入边界 = `role=User` 且 `body=Text` 的消息；区间为开区间
+/// `(上次介入, 下次介入)`，即上次介入（不含）之后、下次介入（不含）之前的所有消息。
+/// 起点无上次介入时取 0；终点无下次介入时取 `messages.len()`。
+/// 区间内消息的 `neuron_id`（`None` 跳过）去重即为可评分目标。
+fn interval_neuron_ids(messages: &[Message], anchor_index: usize) -> Vec<String> {
+    let is_boundary =
+        |m: &Message| m.role == MessageRole::User && matches!(m.body, MessageBody::Text { .. });
+    let start = (0..anchor_index)
+        .rev()
+        .find(|&i| is_boundary(&messages[i]))
+        .map_or(0, |i| i + 1);
+    let end = (anchor_index + 1..messages.len())
+        .find(|&i| is_boundary(&messages[i]))
+        .unwrap_or(messages.len());
+    let mut seen = Vec::new();
+    let mut ids = Vec::new();
+    for m in &messages[start..end] {
+        if let Some(id) = &m.neuron_id {
+            if !seen.iter().any(|v| v == id) {
+                seen.push(id.clone());
+                ids.push(id.clone());
+            }
+        }
+    }
+    ids
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn state() -> AssistantTopicState {
         AssistantTopicState::default()
+    }
+
+    fn msg(role: MessageRole, body: MessageBody, neuron_id: Option<&str>) -> Message {
+        Message {
+            role,
+            body,
+            timestamp: 0,
+            neuron_id: neuron_id.map(String::from),
+        }
+    }
+
+    fn user(text: &str) -> Message {
+        msg(MessageRole::User, MessageBody::Text { content: text.into() }, None)
+    }
+
+    fn asst(text: &str, neuron: &str) -> Message {
+        msg(
+            MessageRole::Assistant,
+            MessageBody::Text { content: text.into() },
+            Some(neuron),
+        )
+    }
+
+    #[test]
+    fn interval_anchor_first_segment() {
+        // 首段：anchor 之前无介入边界，起点取 0；终点为下一个介入边界。
+        // m0 介入 / m1(n1) / m2(n1) / m3(n2) / m4 介入 / m5(n3)
+        let messages = vec![
+            user("q0"),
+            asst("a1", "n1"),
+            msg(MessageRole::Tool, MessageBody::ToolResult { tool_call_id: "t".into(), tool_name: "f".into(), content: "r".into() }, Some("n1")),
+            asst("a2", "n2"),
+            user("q1"),
+            asst("a3", "n3"),
+        ];
+        // anchor=m1：区间 = m1..m4 → n1,n1,n2 → [n1, n2]
+        assert_eq!(interval_neuron_ids(&messages, 1), vec!["n1".to_string(), "n2".to_string()]);
+    }
+
+    #[test]
+    fn interval_anchor_middle_segment() {
+        // 中段：anchor 前后均有介入边界。
+        let messages = vec![
+            user("q0"),
+            asst("a1", "n1"),
+            user("q1"),
+            asst("a2", "n2"),
+            asst("a3", "n2"),
+            user("q2"),
+            asst("a4", "n3"),
+        ];
+        // anchor=a2(3)：区间 = m4..m6 → n2,n2 → [n2]
+        assert_eq!(interval_neuron_ids(&messages, 3), vec!["n2".to_string()]);
+    }
+
+    #[test]
+    fn interval_anchor_last_segment() {
+        // 末段：anchor 之后无介入边界，终点取 len。
+        let messages = vec![
+            user("q0"),
+            asst("a1", "n1"),
+            user("q1"),
+            asst("a2", "n2"),
+            msg(MessageRole::Assistant, MessageBody::Text { content: "a3".into() }, None),
+            asst("a4", "n3"),
+        ];
+        // anchor=a4(5)：区间 = m3..6 → n2,None,n3 → [n2, n3]
+        assert_eq!(interval_neuron_ids(&messages, 5), vec!["n2".to_string(), "n3".to_string()]);
+    }
+
+    #[test]
+    fn interval_no_intervention_uses_whole_list() {
+        // 无介入边界：整个消息列表即区间。
+        let messages = vec![
+            asst("a1", "n1"),
+            asst("a2", "n2"),
+            asst("a3", "n1"),
+        ];
+        assert_eq!(
+            interval_neuron_ids(&messages, 1),
+            vec!["n1".to_string(), "n2".to_string()]
+        );
+    }
+
+    #[test]
+    fn interval_dedup_keeps_first_seen_order() {
+        // 去重：同神经元在区间内多次盖章只保留一次（保留首次出现顺序）。
+        let messages = vec![
+            asst("a1", "n2"),
+            asst("a2", "n1"),
+            asst("a3", "n2"),
+            asst("a4", "n3"),
+        ];
+        assert_eq!(
+            interval_neuron_ids(&messages, 0),
+            vec!["n2".to_string(), "n1".to_string(), "n3".to_string()]
+        );
+    }
+
+    #[test]
+    fn interval_anchor_on_boundary_itself() {
+        // anchor 为介入边界（user 消息）：上次介入严格在其前、下次介入严格在其后，区间不含自身。
+        let messages = vec![
+            user("q0"),
+            asst("a1", "n1"),
+            user("q1"),
+            asst("a2", "n2"),
+            user("q2"),
+            asst("a3", "n3"),
+        ];
+        // anchor=q1(2)：区间 = m1..m4 → n1,n2 → [n1, n2]
+        assert_eq!(interval_neuron_ids(&messages, 2), vec!["n1".to_string(), "n2".to_string()]);
     }
 
     #[test]
