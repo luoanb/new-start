@@ -6,7 +6,7 @@ export type SplitOrientation = "horizontal" | "vertical";
 export type ViewContainerId = "sidebar" | "info" | "panel";
 
 /** main 区可插入的面板类型。同一类型全局唯一（多个会话共享同一个 chat 面板）。 */
-export type MainPanelType = "chat" | "neurons" | "tool-editor";
+export type MainPanelType = "chat" | "neurons" | "tool-editor" | "provider-manager";
 
 /** main 区面板实例（insertPanel 返回其 id，供外部关闭）。 */
 export type MainPanel = {
@@ -56,8 +56,8 @@ export const DEFAULT_LAYOUT: LayoutState = {
   containers: {
     // v5/v6: topics 曾默认在 panel/topics 位置演变；v7: topics 与 tools 默认归位左侧 sidebar
     sidebar: { views: ["sessions", "topics", "tools"], activeView: "sessions" },
-    // v9: 新增 neurons-list（神经元统一管理列表）
-    info: { views: ["providers", "models", "neurons-list"], activeView: "providers" },
+    // v10: providers+models 聚合为单个视图 providers-models（服务商分组 + 模型子项）
+    info: { views: ["providers-models", "neurons-list"], activeView: "providers-models" },
     panel: { views: ["poller", "logs"], activeView: "poller" },
   },
   hiddenViews: [],

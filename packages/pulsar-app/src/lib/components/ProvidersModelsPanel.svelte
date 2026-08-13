@@ -1,0 +1,376 @@
+<script lang="ts">
+  import { t, tMap } from "$lib/i18n";
+  import { useViewContext } from "$lib/layout/viewContext";
+  import type { ModelInfo, ProviderInfo } from "$lib/types";
+
+  const ctx = useViewContext();
+  const data = ctx.stores.data;
+
+  let providers = $derived(ctx.stores.data.state.providers);
+  let models = $derived(ctx.stores.data.state.models);
+
+  // 折叠的服务商 id（默认全展开）
+  let collapsed = $state<Set<string>>(new Set());
+  // 删除二次确认中的服务商 id
+  let deleteConfirmId = $state<string | null>(null);
+
+  function toggleCollapse(id: string) {
+    const next = new Set(collapsed);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    collapsed = next;
+  }
+
+  function modelsOf(provider: ProviderInfo): ModelInfo[] {
+    return models.filter((m) => m.provider_id === provider.id);
+  }
+
+  function modelCaps(m: ModelInfo): string[] {
+    const caps: string[] = [];
+    for (const key of Object.keys(m.capabilities)) {
+      const label = tMap("sidePanel.caps", key);
+      if (
+        label !== `sidePanel.caps.${key}` &&
+        (m.capabilities as unknown as Record<string, boolean | undefined>)[key]
+      ) {
+        caps.push(label);
+      }
+    }
+    return caps;
+  }
+</script>
+
+<div class="providers-models-panel">
+  <div class="toolbar">
+    <span class="toolbar-title">{t("views.providersModels")}</span>
+    <button
+      class="btn btn-sm btn-primary"
+      onclick={() => data.requestCreateProvider()}
+    >
+      ＋ {t("providersModelsPanel.create")}
+    </button>
+  </div>
+
+  {#if providers.length === 0}
+    <p class="empty">{t("sidePanel.noProviders")}</p>
+  {:else}
+    <div class="list">
+      {#each providers as p}
+        <div class="provider-group">
+          <div class="provider-row">
+            <button
+              class="provider-toggle"
+              type="button"
+              aria-label={collapsed.has(p.id) ? t("providersModelsPanel.expand") : t("providersModelsPanel.collapse")}
+              onclick={() => toggleCollapse(p.id)}
+            >
+              <svg
+                class="chevron"
+                class:open={!collapsed.has(p.id)}
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                width="12"
+                height="12"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </button>
+            <span class="provider-name" title={p.display_name}>{p.display_name}</span>
+            <span class="mono">{p.id}</span>
+            <span class="model-count">{modelsOf(p).length}</span>
+            <span class="row-actions">
+              <span
+                class="row-btn"
+                role="button"
+                tabindex="0"
+                onclick={(e) => {
+                  e.stopPropagation();
+                  data.requestEditProvider(p.id);
+                }}
+              >
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                </svg>
+                {t("neuronListPanel.edit")}
+              </span>
+              {#if deleteConfirmId === p.id}
+                <span class="delete-confirm" title={t("providersModelsPanel.deleteConfirm")}>
+                  <button
+                    class="btn btn-sm btn-danger"
+                    onclick={() => {
+                      deleteConfirmId = null;
+                      data.requestEditProvider(p.id);
+                    }}
+                  >
+                    {t("providersModelsPanel.deleteGo")}
+                  </button>
+                  <button class="btn btn-sm" onclick={() => (deleteConfirmId = null)}>
+                    {t("providersModelsPanel.cancel")}
+                  </button>
+                </span>
+              {:else}
+                <span
+                  class="row-btn danger"
+                  role="button"
+                  tabindex="0"
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    deleteConfirmId = p.id;
+                  }}
+                >
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="3 6 5 6 21 6" />
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                  </svg>
+                  {t("providersModelsPanel.delete")}
+                </span>
+              {/if}
+            </span>
+          </div>
+
+          {#if !collapsed.has(p.id)}
+            <div class="models">
+              {#if modelsOf(p).length === 0}
+                <p class="no-models">{t("sidePanel.noModels")}</p>
+              {:else}
+                {#each modelsOf(p) as m}
+                  <div class="model-row">
+                    <span class="model-dot" aria-hidden="true"></span>
+                    <span class="model-name" title={m.display_name}>{m.display_name}</span>
+                    <span class="mono">{m.id}</span>
+                    <span class="caps">
+                      {#each modelCaps(m) as cap}
+                        <span class="cap-tag">{cap}</span>
+                      {/each}
+                    </span>
+                  </div>
+                {/each}
+              {/if}
+            </div>
+          {/if}
+        </div>
+      {/each}
+    </div>
+  {/if}
+</div>
+
+<style>
+  .providers-models-panel {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    border-bottom: var(--border-width) solid var(--color-border);
+    flex-shrink: 0;
+  }
+  .toolbar-title {
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    color: var(--color-text);
+    flex: 1;
+    min-width: 0;
+  }
+
+  .btn {
+    font-size: var(--fs-xs);
+    padding: 4px var(--space-2);
+    border: var(--border-width) solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text);
+    cursor: pointer;
+    transition: background var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
+  }
+  .btn:hover {
+    background: var(--color-hover);
+  }
+  .btn-primary {
+    background: var(--color-primary);
+    border-color: var(--color-primary);
+    color: var(--color-on-primary);
+  }
+  .btn-primary:hover {
+    background: var(--color-primary-dim);
+    border-color: var(--color-primary-dim);
+  }
+  .btn-danger {
+    background: var(--color-error);
+    border-color: var(--color-error);
+    color: var(--color-on-primary, #fff);
+  }
+  .btn-danger:hover {
+    opacity: 0.9;
+  }
+
+  .empty {
+    text-align: center;
+    color: var(--color-text-muted);
+    font-size: var(--fs-sm);
+    padding: var(--space-6) var(--space-2);
+  }
+
+  .list {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-2);
+  }
+
+  .provider-group {
+    border: var(--border-width) solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg);
+    overflow: hidden;
+  }
+  .provider-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-1) var(--space-2);
+    cursor: pointer;
+  }
+  .provider-row:hover {
+    background: var(--color-hover);
+  }
+  .provider-toggle {
+    border: none;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    padding: 0;
+    width: 16px;
+    height: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .chevron {
+    transition: transform var(--duration-fast) var(--ease-out);
+  }
+  .chevron.open {
+    transform: rotate(180deg);
+  }
+  .provider-name {
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    color: var(--color-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mono {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--color-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 90px;
+  }
+  .model-count {
+    flex-shrink: 0;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 0 6px;
+    border-radius: var(--radius-sm);
+    background: var(--color-border);
+    color: var(--color-text-muted);
+  }
+  .row-actions {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-left: auto;
+  }
+  .row-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: var(--fs-xs);
+    color: var(--color-primary);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  .row-btn:hover {
+    text-decoration: underline;
+  }
+  .row-btn.danger {
+    color: var(--color-error);
+  }
+  .delete-confirm {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .models {
+    display: flex;
+    flex-direction: column;
+    border-top: var(--border-width) solid var(--color-border);
+  }
+  .model-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-1) var(--space-3);
+    font-size: var(--fs-xs);
+  }
+  .model-row:hover {
+    background: var(--color-hover);
+  }
+  .model-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--color-text-muted);
+    opacity: 0.5;
+    flex-shrink: 0;
+  }
+  .model-name {
+    color: var(--color-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .caps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    margin-left: auto;
+    justify-content: flex-end;
+  }
+  .cap-tag {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+    background: var(--color-primary);
+    color: var(--color-on-primary);
+    opacity: 0.85;
+  }
+  .no-models {
+    text-align: center;
+    color: var(--color-text-muted);
+    font-size: var(--fs-xs);
+    padding: var(--space-2);
+    margin: 0;
+  }
+</style>

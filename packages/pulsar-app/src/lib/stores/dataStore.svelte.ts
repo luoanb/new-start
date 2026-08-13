@@ -30,7 +30,7 @@ import { formatInvokeError } from "$lib/utils/formatInvokeError";
 /** 与后端 core/events.rs STATE_CHANGED_EVENT 保持一致 */
 export const STATE_CHANGED_EVENT = "app://state-changed";
 
-export type StateEventKind = "topics" | "conversations" | "poller" | "sessions" | "neurons";
+export type StateEventKind = "topics" | "conversations" | "poller" | "sessions" | "neurons" | "providers";
 
 export type StateChangePayload =
   | { kind: "topics" }
@@ -38,6 +38,7 @@ export type StateChangePayload =
   | { kind: "poller"; status: PollerStatus }
   | { kind: "sessions" }
   | { kind: "neurons" }
+  | { kind: "providers" }
   | { kind: "tools" };
 
 const state = $state({
@@ -66,6 +67,11 @@ const state = $state({
   neuronCreateRequest: 0,
   /** 列表「发起」→ 打开规格会话（消费后置 null）。 */
   neuronLaunchRequestId: null as string | null,
+  // ── 服务商/模型管理：聚合面板 → main 区编辑器共享状态 ──
+  /** 面板「编辑」→ 编辑器打开该服务商（消费后置 null）。 */
+  providerEditRequestId: null as string | null,
+  /** 面板「新增」→ 编辑器进入新建态（计数触发，消费后自增）。 */
+  providerCreateRequest: 0,
 });
 
 let unlisten: UnlistenFn | null = null;
@@ -108,6 +114,16 @@ async function refreshPoller(): Promise<void> {
   state.poller = await invoke<PollerStatus>("poll_status");
 }
 
+/** 服务商/模型配置变化（保存后广播）：重新拉取 providers 与 models。 */
+async function refreshProvidersModels(): Promise<void> {
+  const [providersRes, modelsRes] = await Promise.all([
+    invoke<ProviderInfo[]>("list_providers"),
+    invoke<ModelInfo[]>("list_models"),
+  ]);
+  state.providers = providersRes;
+  state.models = modelsRes;
+}
+
 // ── 事件订阅 ──
 
 async function handleStateChanged(payload: StateChangePayload): Promise<void> {
@@ -132,6 +148,8 @@ async function handleStateChanged(payload: StateChangePayload): Promise<void> {
     } else if (payload.kind === "neurons") {
       // 写入（创建/编辑/绑定行为）广播 Neurons：列表与画布各自订阅刷新。
       state.neuronsVersion++;
+    } else if (payload.kind === "providers") {
+      await refreshProvidersModels();
     } else if (payload.kind === "tools") {
       state.toolsVersion++;
     }
@@ -315,6 +333,20 @@ async function openSession(
   return conv;
 }
 
+// ── 服务商/模型管理 actions（聚合面板 → main 区编辑器）──
+
+/** 面板「编辑」→ 编辑器打开该服务商（先确保 provider-manager 面板存在）。 */
+function requestEditProvider(id: string): void {
+  state.providerEditRequestId = id;
+  layoutStore.insertPanel("provider-manager");
+}
+
+/** 面板「新增」→ 编辑器进入新建态（先确保 provider-manager 面板存在）。 */
+function requestCreateProvider(): void {
+  state.providerCreateRequest++;
+  layoutStore.insertPanel("provider-manager");
+}
+
 /** 规格会话一轮直调（resolve_round → execute_round）。 */
 async function converseSession(
   sessionId: string,
@@ -411,6 +443,7 @@ export const dataStore = {
   refreshConversations,
   refreshPoller,
   refreshRunningSessions,
+  refreshProvidersModels,
   // actions
   selectConversation,
   createConversation,
@@ -426,6 +459,9 @@ export const dataStore = {
   requestLaunchNeuron,
   openSession,
   converseSession,
+  // 服务商/模型管理（聚合面板 → main 区编辑器）
+  requestEditProvider,
+  requestCreateProvider,
   createTopic,
   pauseTopic,
   resumeTopic,

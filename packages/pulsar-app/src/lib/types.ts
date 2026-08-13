@@ -149,6 +149,47 @@ export type ModelCallResponse = {
   output: string;
 };
 
+// ── Provider / Model 管理视图（get_provider_config / save_provider_config 载荷）──
+
+export type ProviderKind = "open_ai" | "open_ai_compatible";
+
+export type ProviderDefaults = {
+  provider: string;
+  model: string;
+};
+
+export type ModelEditInfo = {
+  id: string;
+  display_name?: string | null;
+  capabilities: ModelCapabilities;
+  context_window?: number | null;
+  max_output_tokens?: number | null;
+  pricing_input?: number | null;
+  pricing_output?: number | null;
+  pricing_cache_input?: number | null;
+  knowledge_cutoff?: string | null;
+};
+
+export type ProviderEditInfo = {
+  id: string;
+  display_name?: string | null;
+  kind: ProviderKind;
+  api_base?: string | null;
+  /** 掩码回显；提交时与掩码相同视为未修改（保留原值）。 */
+  api_key?: string | null;
+  /** 是否已配置 API Key（env 或 config），仅回显用。 */
+  api_key_set: boolean;
+  auth_env?: string | null;
+  enabled: boolean;
+  builtin: boolean;
+  models: ModelEditInfo[];
+};
+
+export type ProviderConfigView = {
+  defaults?: ProviderDefaults | null;
+  providers: ProviderEditInfo[];
+};
+
 // ── Topic / Poller ──
 
 export type TopicStatus = "todo" | "in_progress" | "paused" | "done" | "cancelled";

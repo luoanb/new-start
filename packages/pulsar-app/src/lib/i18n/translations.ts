@@ -330,6 +330,55 @@ export type Translations = {
     neurons: string;
     toolEditor: string;
     neuronsList: string;
+    providersModels: string;
+    providerManager: string;
+  };
+  providersModelsPanel: {
+    create: string;
+    expand: string;
+    collapse: string;
+    delete: string;
+    deleteConfirm: string;
+    deleteGo: string;
+    cancel: string;
+  };
+  providerManager: {
+    modalTitle: string;
+    loading: string;
+    providers: string;
+    addProvider: string;
+    untitled: string;
+    disabled: string;
+    builtin: string;
+    noProviders: string;
+    providerFields: string;
+    id: string;
+    displayName: string;
+    kind: string;
+    apiBase: string;
+    authEnv: string;
+    apiKey: string;
+    apiKeyMasked: string;
+    apiKeyPlaceholder: string;
+    enabled: string;
+    models: string;
+    addModel: string;
+    noModels: string;
+    contextWindow: string;
+    maxOutput: string;
+    priceIn: string;
+    priceOut: string;
+    deleteModel: string;
+    deleteProvider: string;
+    builtinDeleteHint: string;
+    disableProvider: string;
+    customDeleteHint: string;
+    selectProvider: string;
+    defaultsHint: string;
+    noDefaults: string;
+    cancel: string;
+    save: string;
+    saving: string;
   };
 };
 
@@ -682,6 +731,55 @@ export const en: Translations = {
     neurons: "Neurons",
     toolEditor: "Tool config",
     neuronsList: "Neurons",
+    providersModels: "Providers & Models",
+    providerManager: "Provider Manager",
+  },
+  providersModelsPanel: {
+    create: "New provider",
+    expand: "Expand",
+    collapse: "Collapse",
+    delete: "Delete",
+    deleteConfirm: "Delete this provider? Disabled built-ins are hidden from the list.",
+    deleteGo: "Delete",
+    cancel: "Cancel",
+  },
+  providerManager: {
+    modalTitle: "Provider & Model Manager",
+    loading: "Loading config…",
+    providers: "Providers",
+    addProvider: "Add provider",
+    untitled: "Untitled",
+    disabled: "Disabled",
+    builtin: "Built-in",
+    noProviders: "No providers",
+    providerFields: "Provider",
+    id: "ID",
+    displayName: "Display name",
+    kind: "Kind",
+    apiBase: "API base",
+    authEnv: "Auth env",
+    apiKey: "API key",
+    apiKeyMasked: "Configured (masked); type a new value to replace it",
+    apiKeyPlaceholder: "sk-... (leave empty to skip)",
+    enabled: "Enabled",
+    models: "Models",
+    addModel: "Add model",
+    noModels: "No models configured",
+    contextWindow: "Context (tokens)",
+    maxOutput: "Max output",
+    priceIn: "Price in ($/M)",
+    priceOut: "Price out ($/M)",
+    deleteModel: "Delete model",
+    deleteProvider: "Danger zone",
+    builtinDeleteHint: "Built-in providers cannot be physically removed. Disabling hides it from the list; re-enable it anytime in this editor.",
+    disableProvider: "Disable provider",
+    customDeleteHint: "Deleting a custom provider removes it from config.json entirely.",
+    selectProvider: "Select a provider on the left to edit.",
+    defaultsHint: "Default model: {provider} / {model}",
+    noDefaults: "No default model configured.",
+    cancel: "Cancel",
+    save: "Save",
+    saving: "Saving…",
   },
 };
 
@@ -1034,5 +1132,54 @@ export const zh: Translations = {
     neurons: "神经元",
     toolEditor: "工具配置",
     neuronsList: "神经元",
+    providersModels: "服务商与模型",
+    providerManager: "服务商管理",
+  },
+  providersModelsPanel: {
+    create: "新增服务商",
+    expand: "展开",
+    collapse: "收起",
+    delete: "删除",
+    deleteConfirm: "删除该服务商？内置服务商禁用后将从列表隐藏。",
+    deleteGo: "删除",
+    cancel: "取消",
+  },
+  providerManager: {
+    modalTitle: "服务商与模型管理",
+    loading: "加载配置中…",
+    providers: "服务商",
+    addProvider: "新增服务商",
+    untitled: "未命名",
+    disabled: "已禁用",
+    builtin: "内置",
+    noProviders: "暂无服务商",
+    providerFields: "服务商信息",
+    id: "ID",
+    displayName: "显示名称",
+    kind: "类型",
+    apiBase: "API 地址",
+    authEnv: "认证环境变量",
+    apiKey: "API Key",
+    apiKeyMasked: "已配置（掩码显示）；输入新值将替换",
+    apiKeyPlaceholder: "sk-... （留空则不设置）",
+    enabled: "启用",
+    models: "模型",
+    addModel: "添加模型",
+    noModels: "未配置模型",
+    contextWindow: "上下文（tokens）",
+    maxOutput: "最大输出",
+    priceIn: "输入价格（$/M）",
+    priceOut: "输出价格（$/M）",
+    deleteModel: "删除模型",
+    deleteProvider: "删除服务商",
+    builtinDeleteHint: "内置服务商无法物理删除。禁用后将从列表隐藏，可随时在此重新启用。",
+    disableProvider: "禁用该服务商",
+    customDeleteHint: "删除自定义服务商将彻底从 config.json 移除。",
+    selectProvider: "在左侧选择一个服务商进行编辑。",
+    defaultsHint: "默认模型：{provider} / {model}",
+    noDefaults: "未配置默认模型。",
+    cancel: "取消",
+    save: "保存",
+    saving: "保存中…",
   },
 };

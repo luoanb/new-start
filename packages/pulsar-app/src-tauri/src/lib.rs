@@ -9,7 +9,7 @@ use crate::core::{
     insert_catalog::{InsertCatalog, InsertInfo},
     neuron_manager::NeuronManager,
     poller::Poller,
-    providers::ProviderRegistry,
+    providers::{ProviderConfigView, ProviderRegistry},
     session_tracker::{RunningSession, SessionTracker},
     storage,
     tool_config::ToolConfigView,
@@ -18,7 +18,7 @@ use crate::core::{
     Gateway, McpServerStatus, Message, ModelCallRequest, ModelCallResponse, ModelInfo, Neuron,
     NeuronCreate, NeuronKindFilter, NeuronPage, NeuronSubgraph, NeuronUpdate, PollerStatus,
     ProviderInfo, RuntimeStatus, SessionBehavior, SessionSeed, SkillInfo, StateChange,
-    StateEmitter, ToolInfo, Topic, TopicStatus, TopicUpdate, STATE_CHANGED_EVENT,
+     StateEmitter, ToolInfo, Topic, TopicStatus, TopicUpdate, STATE_CHANGED_EVENT,
 };
 use std::{
     path::PathBuf,
@@ -191,6 +191,33 @@ async fn call_model(
         .call_model(request)
         .await
         .map_err(|error| error.payload())
+}
+
+/// 读取服务商/模型的完整可编辑配置（供 main 区编辑器初始化；api_key 掩码回显）。
+#[tauri::command]
+async fn get_provider_config(
+    providers: State<'_, ProviderRegistry>,
+) -> TauriResult<ProviderConfigView> {
+    providers
+        .inner()
+        .get_config_view()
+        .map_err(|error| error.payload())
+}
+
+/// 保存服务商/模型配置：校验 → 原子写回 config.json → 热重载（保存即生效）。
+/// 校验失败拒绝保存并返回可读错误；保存成功后广播 Providers 事件。
+#[tauri::command]
+async fn save_provider_config(
+    providers: State<'_, ProviderRegistry>,
+    state_emit: State<'_, StateEmitter>,
+    view: ProviderConfigView,
+) -> TauriResult<ProviderConfigView> {
+    let saved = providers
+        .inner()
+        .save_config(view)
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Providers);
+    Ok(saved)
 }
 
 #[tauri::command]
@@ -806,6 +833,8 @@ pub fn run() {
             list_providers,
             list_models,
             call_model,
+            get_provider_config,
+            save_provider_config,
             list_conversations,
             history,
             clear_conversation,

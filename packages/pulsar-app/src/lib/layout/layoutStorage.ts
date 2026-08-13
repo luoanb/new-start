@@ -17,7 +17,8 @@ export class LocalStorageLayoutStorage implements LayoutStorage {
       const raw = localStorage.getItem(this.key);
       if (!raw) return null;
       const parsed = JSON.parse(raw) as Partial<LayoutState>;
-      return normalize(parsed);
+      // 旧布局中的 providers/models 两个独立视图 → 聚合为 providers-models（任意版本兼容）
+      return mergeProvidersModels(normalize(parsed));
     } catch {
       return null;
     }
@@ -259,6 +260,37 @@ function placeToolsInSidebar(state: LayoutState): LayoutState {
   containers.sidebar = { views: sidebarViews, activeView: containers.sidebar.activeView };
 
   return { ...state, containers: containers as LayoutState["containers"] };
+}
+
+/** providers+models 聚合迁移：容器中出现的旧视图 id（providers/models）合并为
+ * 单个 providers-models（去重、取首个出现位置），并清理隐藏列表中的旧 id。
+ * 一次性迁移；已存 providers-models 的布局不受影响。 */
+function mergeProvidersModels(state: LayoutState): LayoutState {
+  const containers = { ...state.containers } as Record<
+    string,
+    { views: string[]; activeView: string }
+  >;
+  let changed = false;
+  for (const cid of Object.keys(containers)) {
+    const c = containers[cid];
+    if (!c.views.some((v) => v === "providers" || v === "models")) continue;
+    const views = c.views
+      .map((v) => (v === "providers" || v === "models" ? "providers-models" : v))
+      .filter((v, i, arr) => arr.indexOf(v) === i);
+    let activeView = c.activeView;
+    if (activeView === "providers" || activeView === "models") activeView = "providers-models";
+    if (!views.includes(activeView)) activeView = views[0] ?? "";
+    containers[cid] = { views, activeView };
+    changed = true;
+  }
+  if (!changed && !state.hiddenViews.some((v) => v === "providers" || v === "models")) {
+    return state;
+  }
+  return {
+    ...state,
+    containers: containers as LayoutState["containers"],
+    hiddenViews: state.hiddenViews.filter((v) => v !== "providers" && v !== "models"),
+  };
 }
 
 /** 兜底清理旧版组合视图 "info" 的残留 id（已被 providers/models/topics 取代），并修正 main 一致性。 */

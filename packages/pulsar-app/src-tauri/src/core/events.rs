@@ -32,6 +32,8 @@ pub enum StateChange {
     /// 工具装配进度/结果变化（启动后台装配、刷新、保存配置），
     /// 前端应重新拉取 tools 与 MCP server 状态。
     Tools,
+    /// 服务商/模型配置变化（保存服务商配置后广播），前端应重新拉取 providers 与 models。
+    Providers,
 }
 
 /// 状态事件发射器：由 `lib.rs` setup 构造（捕获 AppHandle），

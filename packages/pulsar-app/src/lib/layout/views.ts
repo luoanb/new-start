@@ -8,8 +8,8 @@
 import type { Component } from "svelte";
 import type { ViewContainerId } from "./layoutTypes";
 import SessionList from "$lib/components/SessionList.svelte";
-import ProvidersPanel from "$lib/components/ProvidersPanel.svelte";
-import ModelsPanel from "$lib/components/ModelsPanel.svelte";
+import ProvidersModelsPanel from "$lib/components/ProvidersModelsPanel.svelte";
+import ProviderManager from "$lib/components/ProviderManager.svelte";
 import TopicPanel from "$lib/components/TopicPanel.svelte";
 import PollerPanel from "$lib/components/PollerPanel.svelte";
 import ToolPanel from "$lib/components/ToolPanel.svelte";
@@ -46,18 +46,12 @@ export const viewRegistry: Record<string, ViewRegistration> = {
     component: SessionList,
     movableTo: "*",
   },
-  providers: {
-    id: "providers",
-    title: "views.providers",
+  // v10: 服务商+模型聚合为单视图（服务商分组，模型为子项；支持管理入口）
+  "providers-models": {
+    id: "providers-models",
+    title: "views.providersModels",
     icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><line x1="6" y1="6.5" x2="6.01" y2="6.5"/><line x1="6" y1="17.5" x2="6.01" y2="17.5"/></svg>',
-    component: ProvidersPanel,
-    movableTo: "*",
-  },
-  models: {
-    id: "models",
-    title: "views.models",
-    icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5"/><line x1="9" y1="2" x2="9" y2="6"/><line x1="15" y1="2" x2="15" y2="6"/><line x1="9" y1="18" x2="9" y2="22"/><line x1="15" y1="18" x2="15" y2="22"/><line x1="2" y1="9" x2="6" y2="9"/><line x1="2" y1="15" x2="6" y2="15"/><line x1="18" y1="9" x2="22" y2="9"/><line x1="18" y1="15" x2="22" y2="15"/></svg>',
-    component: ModelsPanel,
+    component: ProvidersModelsPanel,
     movableTo: "*",
   },
   // v9: 神经元统一管理列表（info 容器，《模型》之后）
@@ -103,6 +97,7 @@ export const mainViews: ViewRegistration[] = [
   { id: "chat", title: "views.chat", component: ChatArea },
   { id: "neurons", title: "views.neurons", component: NeuronManager },
   { id: "tool-editor", title: "views.toolEditor", component: ToolEditor },
+  { id: "provider-manager", title: "views.providerManager", component: ProviderManager },
 ];
 
 /** Activity Bar 入口（icon 轨）。chat 用于向 main 区插入会话面板。 */
@@ -135,6 +130,10 @@ export const mainPanelMeta: Record<MainPanelType, { label: string; icon: string 
   "tool-editor": {
     label: "views.toolEditor",
     icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.83 2.83 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>',
+  },
+  "provider-manager": {
+    label: "views.providerManager",
+    icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><line x1="6" y1="6.5" x2="6.01" y2="6.5"/><line x1="6" y1="17.5" x2="6.01" y2="17.5"/></svg>',
   },
 };
 

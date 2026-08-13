@@ -25,6 +25,8 @@ export type ViewCommands = {
   openToolEditor: () => void;
   /** 关闭工具配置编辑面板，回到打开前的 main 区视图。 */
   closeToolEditor: () => void;
+  /** 关闭服务商/模型管理编辑面板，回到打开前的 main 区视图。 */
+  closeProviderManager: () => void;
 };
 
 /** 会话级 UI 状态（组合根持有，$state 保证响应式传播）。

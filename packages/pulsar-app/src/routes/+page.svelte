@@ -3,8 +3,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import StatusBar from "$lib/components/StatusBar.svelte";
   import SessionList from "$lib/components/SessionList.svelte";
-  import ProvidersPanel from "$lib/components/ProvidersPanel.svelte";
-  import ModelsPanel from "$lib/components/ModelsPanel.svelte";
+  import ProvidersModelsPanel from "$lib/components/ProvidersModelsPanel.svelte";
   import TopicPanel from "$lib/components/TopicPanel.svelte";
   import SessionCreateModal from "$lib/components/SessionCreateModal.svelte";
   import ErrorBanner from "$lib/components/ErrorBanner.svelte";
@@ -57,11 +56,10 @@
   let showCreateModal = $state(false);
   let drawerSidebar = $state(false);
   let drawerInfo = $state(false);
-  // 移动端 drawer-info：原 Info 组合面板拆分为三个独立视图，drawer 内以本地 tab 切换承载
-  let drawerInfoTab = $state("providers");
+  // 移动端 drawer-info：原 Info 组合面板拆分后的聚合视图，drawer 内以本地 tab 切换承载
+  let drawerInfoTab = $state("providers-models");
   let infoDrawerTabs = $derived([
-    { id: "providers", label: t("sidePanel.providers") },
-    { id: "models", label: t("sidePanel.models") },
+    { id: "providers-models", label: t("views.providersModels") },
     { id: "topics", label: t("topicPanel.topics") },
   ]);
 
@@ -195,6 +193,10 @@
     const panel = mainPanes.flatMap((p) => p.panels).find((x) => x.type === "tool-editor");
     if (panel) layoutStore.closePanel(panel.id);
   }
+  function closeProviderManager() {
+    const panel = mainPanes.flatMap((p) => p.panels).find((x) => x.type === "provider-manager");
+    if (panel) layoutStore.closePanel(panel.id);
+  }
 
   const viewCtx: ViewContext = {
     stores: { data: dataStore, layout: layoutStore },
@@ -214,6 +216,7 @@
       dismissError: () => (error = ""),
       openToolEditor,
       closeToolEditor,
+      closeProviderManager,
     },
   };
   setViewContext(viewCtx);
@@ -491,10 +494,8 @@
       {/each}
     </div>
     <div class="drawer-body">
-      {#if drawerInfoTab === "providers"}
-        <ProvidersPanel />
-      {:else if drawerInfoTab === "models"}
-        <ModelsPanel />
+      {#if drawerInfoTab === "providers-models"}
+        <ProvidersModelsPanel />
       {:else}
         <TopicPanel />
       {/if}
