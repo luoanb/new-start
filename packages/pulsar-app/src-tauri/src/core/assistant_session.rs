@@ -123,6 +123,7 @@ impl AssistantSession {
                     state: SessionState::default(),
                     messages: history.to_vec(),
                     tool_override: Some(Vec::new()),
+                    reselect: true,
                 },
                 &user_payload.to_string(),
                 model,
@@ -432,7 +433,35 @@ impl RoundHooks for AssistantHooks<'_> {
                 let topic = self.assistant.topics()?.get(topic_id)?.ok_or_else(|| {
                     AppError::ConversationNotFound(topic_id.clone())
                 })?;
-                ctx.model_input = build_topic_brief(&topic);
+                let state = read_assistant_state(&topic);
+                let fresh = build_topic_brief(&topic);
+                // 上轮若以工具调用结束，历史自带工具返回，简报非必选（可复用缓存）。
+                let last_is_tool = self
+                    .assistant
+                    .runner
+                    .last_message_is_tool_result(&ctx.session_id)?;
+                // 三条件任一命中即刷新简报：①距上次生成 ≥ BRIEF_EVERY_N_ROUNDS 轮（频率兜底）
+                // ②课题有变化（fresh 与缓存不同，自动覆盖进度/scope/切换/新增）
+                // ③上轮非工具调用结束（模型需课题状态锚定，屏除轮次限制）。
+                let need_fresh = should_refresh_brief(
+                    &fresh,
+                    state.brief_cache.as_deref(),
+                    state.poll_count,
+                    state.last_brief_round,
+                    last_is_tool,
+                );
+                if need_fresh {
+                    let mut next = state.clone();
+                    next.brief_cache = Some(fresh.clone());
+                    next.last_brief_round = state.poll_count;
+                    write_assistant_state(&self.assistant.topic_store, topic_id, next)?;
+                    ctx.model_input = fresh;
+                } else {
+                    ctx.model_input = state.brief_cache.clone().unwrap_or(fresh);
+                }
+                // 选型频率（业务层算好）：每 SELECTION_EVERY_N_ROUNDS 个推进轮做一次选型，
+                // 中间轮沿用 last_selected 锚点；User 轮不设（默认 true，每轮选型）。
+                ctx.reselect = state.poll_count % SELECTION_EVERY_N_ROUNDS == 0;
             }
             RoundTriggerKind::AgentLoop => {
                 unreachable!("assistant hooks never run agent-loop rounds")
@@ -447,10 +476,11 @@ impl RoundHooks for AssistantHooks<'_> {
             RoundTriggerKind::User => {
                 completed?;
                 self.mark_user_intervention(ctx)?;
+                self.tick_round_counters(ctx, true)?;
             }
             RoundTriggerKind::ManualStep => {
                 completed?;
-                self.bump_poll_count(ctx)?;
+                self.tick_round_counters(ctx, false)?;
             }
             RoundTriggerKind::Poller => {
                 // 轮询推进不得被课题副作用打断（失败仅记录）。
@@ -461,7 +491,7 @@ impl RoundHooks for AssistantHooks<'_> {
                         "complete_scope afterhook failed; ignored"
                     );
                 }
-                let _ = self.bump_poll_count(ctx);
+                let _ = self.tick_round_counters(ctx, false);
             }
             RoundTriggerKind::AgentLoop => {
                 unreachable!("assistant hooks never run agent-loop rounds")
@@ -766,8 +796,10 @@ impl AssistantHooks<'_> {
         write_session_state(&self.assistant.store, &ctx.session_id, &state)
     }
 
-    /// 轮询推进计数：poll_count 仍留 topic.extra.assistant（会话运行态已迁至 conversation）。
-    fn bump_poll_count(&self, ctx: &RoundContext) -> AppResult<()> {
+    /// 轮次计数递增：`total_rounds` 每成功轮 +1；User 轮 `user_rounds` +1 且 `poll_count`
+    /// 归零（"距上次用户接入的推进轮次"），Manual/Poller 推进 `poll_count` +1。
+    /// 仍留 topic.extra.assistant（会话运行态已迁至 conversation）。
+    fn tick_round_counters(&self, ctx: &RoundContext, user_round: bool) -> AppResult<()> {
         let Some(topic_id) = ctx.topic_id.as_ref() else {
             return Ok(());
         };
@@ -777,7 +809,7 @@ impl AssistantHooks<'_> {
             .get(topic_id)?
             .ok_or_else(|| AppError::ConversationNotFound(topic_id.clone()))?;
         let mut state = read_assistant_state(&topic);
-        state.poll_count = state.poll_count.saturating_add(1);
+        apply_round_counter(&mut state, user_round);
         write_assistant_state(&self.assistant.topic_store, topic_id, state)
     }
 
@@ -908,11 +940,31 @@ fn build_topic_brief(topic: &Topic) -> String {
     out
 }
 
-/// topic 侧残留的助手状态：仅轮询计数（会话运行态已迁至 conversation.extra.session.state）。
+/// 课题简报刷新频率：每 N 个推进轮至少刷新一次（另有课题变更 / 上轮非工具结束即时刷新）。
+const BRIEF_EVERY_N_ROUNDS: u64 = 3;
+
+/// 主对话选型频率：每 N 个推进轮做一次 LLM 选型，中间轮沿用 `last_selected` 锚点
+/// （业务层算好 `poll_count % N == 0` 后传 `reselect`，引擎不持有频率概念）。
+const SELECTION_EVERY_N_ROUNDS: u64 = 5;
+
+/// topic 侧助手状态：轮次计数 + 简报缓存（会话运行态已迁至 conversation.extra.session.state）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct AssistantTopicState {
+    /// 距上次用户接入的推进轮次（User 轮归零）；简报 3 轮 / 选型 5 轮频率的基准。
     #[serde(default)]
     poll_count: u64,
+    /// 总轮次（User + ManualStep + Poller，成功跑完即计）。
+    #[serde(default)]
+    total_rounds: u64,
+    /// 用户接入轮次。
+    #[serde(default)]
+    user_rounds: u64,
+    /// 上份课题简报缓存（推进轮复用，避免每轮重喂长简报）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    brief_cache: Option<String>,
+    /// 上次生成简报时的 poll_count（距上次 ≥ `BRIEF_EVERY_N_ROUNDS` 轮才因频率刷新）。
+    #[serde(default)]
+    last_brief_round: u64,
 }
 
 fn read_assistant_state(topic: &Topic) -> AssistantTopicState {
@@ -951,4 +1003,105 @@ fn write_assistant_state(
         },
     )?;
     Ok(())
+}
+
+/// 简报是否需刷新：三条件任一命中即刷新（供 before_round 推进分支使用，纯函数便于单测）。
+/// ①课题有变化（fresh 与缓存不同）②上轮非工具调用结束 ③距上次生成 ≥ BRIEF_EVERY_N_ROUNDS 轮。
+fn should_refresh_brief(
+    fresh: &str,
+    cache: Option<&str>,
+    poll_count: u64,
+    last_brief_round: u64,
+    last_is_tool: bool,
+) -> bool {
+    fresh != cache.unwrap_or("")
+        || !last_is_tool
+        || poll_count.saturating_sub(last_brief_round) >= BRIEF_EVERY_N_ROUNDS
+}
+
+/// 轮次计数语义（纯函数便于单测）：`total_rounds` 每成功轮 +1；User 轮 `user_rounds` +1 且
+/// `poll_count`/`last_brief_round` 归零（"距上次用户接入的推进轮次"重新起算），
+/// Manual/Poller 推进 `poll_count` +1。
+fn apply_round_counter(state: &mut AssistantTopicState, user_round: bool) {
+    state.total_rounds = state.total_rounds.saturating_add(1);
+    if user_round {
+        state.user_rounds = state.user_rounds.saturating_add(1);
+        state.poll_count = 0;
+        state.last_brief_round = 0;
+    } else {
+        state.poll_count = state.poll_count.saturating_add(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state() -> AssistantTopicState {
+        AssistantTopicState::default()
+    }
+
+    #[test]
+    fn brief_refresh_round_gap_condition() {
+        // ③ 频率兜底：poll_count - last_brief_round ≥ 3 且其余条件不命中时也刷新。
+        assert!(!should_refresh_brief("brief", Some("brief"), 1, 0, true));
+        assert!(!should_refresh_brief("brief", Some("brief"), 2, 0, true));
+        assert!(should_refresh_brief("brief", Some("brief"), 3, 0, true));
+        assert!(should_refresh_brief("brief", Some("brief"), 5, 2, true));
+    }
+
+    #[test]
+    fn brief_refresh_topic_changed_condition() {
+        // ① 课题变化（进度/scope/切换/新增）：fresh ≠ cache 立即刷新，不受频率与工具结束限制。
+        assert!(should_refresh_brief("brief-v2", Some("brief-v1"), 0, 0, true));
+        assert!(should_refresh_brief("brief", None, 0, 0, true)); // 无缓存视为变化
+    }
+
+    #[test]
+    fn brief_refresh_non_tool_end_condition() {
+        // ② 上轮非工具调用结束：屏除轮次限制，直接给简报。
+        assert!(should_refresh_brief("brief", Some("brief"), 1, 0, false));
+        // 上轮工具结束 + 无变化 + 未达频率 → 复用缓存。
+        assert!(!should_refresh_brief("brief", Some("brief"), 1, 0, true));
+    }
+
+    #[test]
+    fn counters_user_round_resets_poll_and_increments_all() {
+        // 成功跑完即计：total 每轮 +1；User 轮 user +1 且 poll_count/last_brief_round 归零。
+        let mut s = state();
+        s.poll_count = 2;
+        s.last_brief_round = 2;
+        apply_round_counter(&mut s, true);
+        assert_eq!(s.total_rounds, 1);
+        assert_eq!(s.user_rounds, 1);
+        assert_eq!(s.poll_count, 0);
+        assert_eq!(s.last_brief_round, 0);
+    }
+
+    #[test]
+    fn counters_poll_round_increments_poll_only() {
+        // Manual/Poller 推进：total +1，poll_count +1，user 不变。
+        let mut s = state();
+        s.user_rounds = 1;
+        apply_round_counter(&mut s, false);
+        apply_round_counter(&mut s, false);
+        assert_eq!(s.total_rounds, 2);
+        assert_eq!(s.user_rounds, 1);
+        assert_eq!(s.poll_count, 2);
+    }
+
+    #[test]
+    fn assistant_state_serde_roundtrip_with_defaults() {
+        // 旧数据兼容：缺失字段回落默认；序列化时 None 缓存不输出。
+        let value = serde_json::json!({"poll_count": 3});
+        let s: AssistantTopicState = serde_json::from_value(value).unwrap();
+        assert_eq!(s.poll_count, 3);
+        assert_eq!(s.total_rounds, 0);
+        assert_eq!(s.user_rounds, 0);
+        assert_eq!(s.brief_cache, None);
+
+        let roundtrip: AssistantTopicState =
+            serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
+        assert_eq!(roundtrip.poll_count, 3);
+    }
 }

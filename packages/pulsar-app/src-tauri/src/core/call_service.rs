@@ -137,6 +137,11 @@ pub struct RoundInput {
     pub messages: Vec<ModelMessage>,
     /// 工具授权覆盖（`None` → 按 seed/behavior 推导；Agent 传全部工具）。
     pub tool_override: Option<Vec<String>>,
+    /// 本轮是否进行选型：`true` 按 seed/behavior 原规则走 LLM 选型；`false` 不选型，
+    /// 优先沿用 `last_selected_neuron_id` 锚点（锚点缺失仍回退选型）。
+    /// 仅影响真正调 LLM 的分支（Global / 邻选），Fixed / None 分支不感知。
+    /// 频率策略由调用方算好传入（业务层按推进轮次取模），引擎不持有任何轮次/频率概念。
+    pub reselect: bool,
 }
 
 /// 单轮对话产物：仅模型侧结果；落库由上层（ConversationRunner）负责。
@@ -206,7 +211,12 @@ impl NeuronCallService {
     ) -> AppResult<RoundOutcome> {
         let mut state = input.state;
         let (selected_neuron, role_system, behavior) = self
-            .resolve_role(input.seed.as_ref(), &mut state, &input.messages)
+            .resolve_role(
+                input.seed.as_ref(),
+                &mut state,
+                &input.messages,
+                input.reselect,
+            )
             .await?;
 
         // 工具授权：override 优先；否则按 behavior.tools 三策略（∩ 注册表）。
@@ -318,6 +328,7 @@ impl NeuronCallService {
         seed: Option<&SessionSeed>,
         state: &mut SessionState,
         messages: &[ModelMessage],
+        reselect: bool,
     ) -> AppResult<(Option<Neuron>, String, Option<SessionBehavior>)> {
         let Some(seed) = seed else {
             state.last_selected_neuron_id = None;
@@ -338,6 +349,9 @@ impl NeuronCallService {
                     state.last_selected_neuron_id.as_deref(),
                 )
                 .expect("Global always produce a scope");
+                if let Some(role) = self.reuse_selected_neuron(state, reselect) {
+                    return Ok((Some(role.clone()), role.content.clone(), Some(behavior)));
+                }
                 let role = self.neuron_manager.select_role(messages, scope).await?;
                 state.last_selected_neuron_id = Some(role.id.clone());
                 Ok((Some(role.clone()), role.content.clone(), Some(behavior)))
@@ -362,6 +376,9 @@ impl NeuronCallService {
                         state.last_selected_neuron_id.as_deref(),
                     )
                     .expect("Neighborhood always produce a scope");
+                    if let Some(role) = self.reuse_selected_neuron(state, reselect) {
+                        return Ok((Some(role.clone()), role.content.clone(), Some(behavior)));
+                    }
                     let role = self.neuron_manager.select_role(messages, scope).await?;
                     state.last_selected_neuron_id = Some(role.id.clone());
                     return Ok((Some(role.clone()), role.content.clone(), Some(behavior)));
@@ -394,6 +411,9 @@ impl NeuronCallService {
                             state.last_selected_neuron_id.as_deref(),
                         )
                         .expect("Neighborhood always produce a scope");
+                        if let Some(role) = self.reuse_selected_neuron(state, reselect) {
+                            return Ok((Some(role.clone()), role.content.clone(), Some(behavior)));
+                        }
                         let role = self.neuron_manager.select_role(messages, scope).await?;
                         state.last_selected_neuron_id = Some(role.id.clone());
                         Ok((Some(role.clone()), role.content.clone(), Some(behavior)))
@@ -404,6 +424,17 @@ impl NeuronCallService {
                 }
             }
         }
+    }
+
+    /// 选型降频（复用轮）：`reselect == false` 且有历史锚点时，直接沿用
+    /// `last_selected_neuron_id` 作为本轮角色（跳过 LLM 选型）。
+    /// `true`（选型轮）/ 锚点缺失返回 `None`，走正常选型。
+    fn reuse_selected_neuron(&self, state: &SessionState, reselect: bool) -> Option<Neuron> {
+        if reselect {
+            return None;
+        }
+        let id = state.last_selected_neuron_id.as_ref()?;
+        self.neuron_manager.get(id).ok().flatten()
     }
 
     /// selection → 候选池装配 scope（委托 NeuronManager，`resolve_role` 共用语义）。
@@ -761,6 +792,7 @@ mod tests {
                     state: SessionState::default(),
                     messages: history,
                     tool_override: None,
+                    reselect: true,
                 },
                 "current",
                 &model(),
@@ -852,6 +884,7 @@ mod tests {
                     state: SessionState::default(),
                     messages: vec![],
                     tool_override: None,
+                    reselect: true,
                 },
                 "hello",
                 &model(),
@@ -881,6 +914,7 @@ mod tests {
                     state: SessionState::default(),
                     messages: vec![],
                     tool_override: None,
+                    reselect: true,
                 },
                 "go",
                 &model(),
@@ -911,6 +945,7 @@ mod tests {
                     },
                     messages: vec![],
                     tool_override: None,
+                    reselect: true,
                 },
                 "advance",
                 &model(),
@@ -939,6 +974,7 @@ mod tests {
                     state: SessionState::default(),
                     messages: vec![],
                     tool_override: None,
+                    reselect: true,
                 },
                 "hi",
                 &model(),
@@ -978,6 +1014,7 @@ mod tests {
                     },
                     messages: vec![],
                     tool_override: None,
+                    reselect: true,
                 },
                 "go",
                 &model(),
@@ -1015,6 +1052,7 @@ mod tests {
                     state: SessionState::default(),
                     messages: vec![],
                     tool_override: None,
+                    reselect: true,
                 },
                 "go",
                 &model(),
@@ -1053,6 +1091,7 @@ mod tests {
                     },
                     messages: vec![],
                     tool_override: None,
+                    reselect: true,
                 },
                 "go",
                 &model(),
@@ -1083,6 +1122,7 @@ mod tests {
                     state: SessionState::default(),
                     messages: vec![],
                     tool_override: Some(vec!["echo".into()]),
+                    reselect: true,
                 },
                 "go",
                 &model(),
@@ -1115,6 +1155,7 @@ mod tests {
                     state: SessionState::default(),
                     messages: vec![],
                     tool_override: None,
+                    reselect: true,
                 },
                 "go",
                 &model(),
@@ -1122,5 +1163,155 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, AppError::InvalidInput(_)));
+    }
+
+    /// 选型降频（复用轮）：`reselect: false` 且有历史锚点时，直接沿用
+    /// last_selected_neuron_id，跳过 LLM 选型。
+    #[tokio::test]
+    async fn converse_selection_false_reuses_anchor_skips_selector() {
+        let h = harness();
+        ensure_selector(&h);
+        for i in 0..7 {
+            insert_plain(&h, &format!("cand-{i}"));
+        }
+        let anchor = insert_plain(&h, "anchor");
+        let outcome = h
+            .service
+            .converse(
+                RoundInput {
+                    seed: Some(SessionSeed::Global),
+                    state: SessionState {
+                        last_selected_neuron_id: Some(anchor.id.clone()),
+                        ..Default::default()
+                    },
+                    messages: vec![],
+                    tool_override: None,
+                    reselect: false,
+                },
+                "advance",
+                &model(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(h.selector_calls.load(Ordering::Relaxed), 0, "复用轮不得调 selector");
+        assert_eq!(outcome.selected_neuron_id.as_deref(), Some(anchor.id.as_str()));
+        assert_eq!(
+            outcome.state.last_selected_neuron_id.as_deref(),
+            Some(anchor.id.as_str())
+        );
+        assert_eq!(outcome.response, "echo-0");
+    }
+
+    /// 选型轮：`reselect: true` 时即使有历史锚点也重新选型（频率计算在业务层，引擎只认意图）。
+    #[tokio::test]
+    async fn converse_selection_true_reselects_despite_anchor() {
+        let h = harness();
+        ensure_selector(&h);
+        for i in 0..7 {
+            insert_plain(&h, &format!("cand-{i}"));
+        }
+        let anchor = insert_plain(&h, "anchor");
+        for _ in 0..2 {
+            let before = h.selector_calls.load(Ordering::Relaxed);
+            let outcome = h
+                .service
+                .converse(
+                    RoundInput {
+                        seed: Some(SessionSeed::Global),
+                        state: SessionState {
+                            last_selected_neuron_id: Some(anchor.id.clone()),
+                            ..Default::default()
+                        },
+                        messages: vec![],
+                        tool_override: None,
+                        reselect: true,
+                    },
+                    "advance",
+                    &model(),
+                )
+                .await
+                .unwrap();
+            assert!(
+                outcome.selected_neuron_id.is_some(),
+                "选型轮必须产出选型"
+            );
+            assert!(
+                h.selector_calls.load(Ordering::Relaxed) > before,
+                "选型轮必须触发 selector"
+            );
+        }
+    }
+
+    /// 复用轮但无历史锚点：降频不适用，回退走正常选型。
+    #[tokio::test]
+    async fn converse_selection_false_no_anchor_falls_back_to_select() {
+        let h = harness();
+        ensure_selector(&h);
+        for i in 0..7 {
+            insert_plain(&h, &format!("cand-{i}"));
+        }
+        let outcome = h
+            .service
+            .converse(
+                RoundInput {
+                    seed: Some(SessionSeed::Global),
+                    state: SessionState::default(),
+                    messages: vec![],
+                    tool_override: None,
+                    reselect: false,
+                },
+                "advance",
+                &model(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(h.selector_calls.load(Ordering::Relaxed), 1);
+        let selected = outcome.selected_neuron_id.expect("无锚点时复用轮也回退选型");
+        assert_eq!(
+            outcome.state.last_selected_neuron_id.as_deref(),
+            Some(selected.as_str())
+        );
+    }
+
+    /// `reselect` 只影响真正调 LLM 的分支：Fixed / None 策略不感知（按原规则执行）。
+    #[tokio::test]
+    async fn converse_selection_fixed_ignores_reselect() {
+        let h = harness();
+        let sys = insert_system(
+            &h,
+            "session.test_fixed_reuse",
+            SessionBehavior {
+                selection: SelectionPolicy::Fixed,
+                tools: ToolPolicy::None,
+                insert_id: None,
+            },
+            "FIXED-CONTENT",
+        );
+        let outcome = h
+            .service
+            .converse(
+                RoundInput {
+                    seed: Some(SessionSeed::Neuron(sys.id.clone())),
+                    state: SessionState {
+                        last_selected_neuron_id: Some("pre".into()),
+                        ..Default::default()
+                    },
+                    messages: vec![],
+                    tool_override: None,
+                    reselect: false,
+                },
+                "go",
+                &model(),
+            )
+            .await
+            .unwrap();
+        // Fixed：复用轮也读自己 content，不写锚点、不调 selector。
+        assert_eq!(outcome.selected_neuron_id.as_deref(), Some(sys.id.as_str()));
+        assert_eq!(
+            outcome.state.last_selected_neuron_id.as_deref(),
+            Some("pre")
+        );
+        assert_eq!(h.selector_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(outcome.response, "echo-0");
     }
 }

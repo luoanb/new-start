@@ -51,6 +51,8 @@ pub struct RoundContext {
     pub trigger: RoundTriggerKind,
     /// 课题绑定（assistant 业务 hooks 共享；runner 透传，不感知语义）。
     pub topic_id: Option<String>,
+    /// 本轮是否进行选型（业务 hooks 按频率算好；runner 透传）。默认 true = 每轮选型。
+    pub reselect: bool,
     pub outcome: Option<RoundOutcome>,
 }
 
@@ -103,6 +105,7 @@ impl ConversationRunner {
                     state: ctx.state.clone(),
                     messages: ctx.messages.clone(),
                     tool_override: ctx.tool_override.clone(),
+                    reselect: ctx.reselect,
                 },
                 &ctx.model_input,
                 model,
@@ -177,6 +180,7 @@ impl ConversationRunner {
             tool_override,
             trigger,
             topic_id: None,
+            reselect: true,
             outcome: None,
         })
     }
