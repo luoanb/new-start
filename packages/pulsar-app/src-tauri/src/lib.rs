@@ -67,7 +67,9 @@ async fn send_chat_message(
         )
         .await
         .map_err(|error| error.payload())?;
-    state_emit.inner()(StateChange::Conversations);
+    state_emit.inner()(StateChange::Conversations {
+        affected: vec![response.conversation_id.clone()],
+    });
     Ok(response)
 }
 
@@ -86,7 +88,9 @@ async fn create_conversation(
         .inner()
         .create_new_conversation(conv_mode)
         .map_err(|error| error.payload())?;
-    state_emit.inner()(StateChange::Conversations);
+    state_emit.inner()(StateChange::Conversations {
+        affected: vec![conversation_id.clone()],
+    });
     Ok(conversation_id)
 }
 
@@ -218,7 +222,9 @@ async fn clear_conversation(
         .inner()
         .clear_conversation(conversation_id)
         .map_err(|error| error.payload())?;
-    state_emit.inner()(StateChange::Conversations);
+    state_emit.inner()(StateChange::Conversations {
+        affected: vec![conversation_id.clone()],
+    });
     Ok(conversation_id)
 }
 
@@ -592,7 +598,9 @@ async fn open_session(
         .inner()
         .start_session(seed, conv_mode)
         .map_err(|error| error.payload())?;
-    state_emit.inner()(StateChange::Conversations);
+    state_emit.inner()(StateChange::Conversations {
+        affected: vec![conversation.id.clone()],
+    });
     Ok(conversation)
 }
 

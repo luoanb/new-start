@@ -62,12 +62,17 @@ pub const STATE_CHANGED_EVENT: &str = "app://state-changed";
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum StateChange {
     Topics,                 // topics 变化（列表 / 详情 / 状态）
-    Conversations,          // conversations 变化（列表 / 消息 / 清空）
+    Conversations { affected: Vec<String> }, // conversations 变化；affected 为实际写入的会话 id
     Poller { status: PollerStatus }, // poller 状态变化（直接带最新状态，省一次 invoke）
 }
 ```
 
 约定：**"变更后广播、前端重新拉取"** 为主；仅 `Poller` 因数据小且高频，负载直接带 `PollerStatus`。
+
+`Conversations` 携带 `affected`（实际发生写入的会话 id 列表）：
+
+- 前端只重拉**受影响会话**的消息；未受影响会话（如用户正看着 A，后台在推进 B）不重拉、不触发滚动。
+- 后台轮询空转（无未完成课题 / 全部跳过）时**不发** `Conversations`/`Topics`，避免无效刷新。
 
 #### 2. emit 注入方式（低侵入）
 
@@ -87,15 +92,15 @@ let state_emit = Arc::new(move |change: StateChange| {
 
 | 触发点 | 文件 | emit 内容 |
 |---|---|---|
-| `send_chat_message`（写消息后） | `lib.rs` | `Conversations` |
-| `create_conversation` | `lib.rs` | `Conversations` |
-| `clear_conversation` | `lib.rs` | `Conversations` |
+| `send_chat_message`（写消息后） | `lib.rs` | `Conversations { affected: [该会话] }` |
+| `create_conversation` | `lib.rs` | `Conversations { affected: [新会话] }` |
+| `clear_conversation` | `lib.rs` | `Conversations { affected: [被清空会话] }` |
 | `create_topic` / `update_topic` / `delete_topic` | `lib.rs` | `Topics` |
 | `add_topic_scope_item` / `delete_topic_scope_item` / `complete_topic_scope_item` | `lib.rs` | `Topics` |
 | `pause_topic` / `resume_topic` | `lib.rs` | `Topics` |
 | `poll_pause` / `poll_resume` / `poll_trigger` | `lib.rs` | `Poller { status }` |
 | `spawn_poller_runtime`：每次 `guard.tick()` 后 | `gateway.rs` | `Poller { status }` |
-| `spawn_poller_runtime`：assistant step 推进写入消息后 | `gateway.rs` | `Conversations`（+ `Topics` 若课题被推进） |
+| `spawn_poller_runtime`：assistant step 实际推进后 | `gateway.rs` | `Conversations { affected: 推进的会话 }`（+ `Topics`）；空转不 emit |
 
 > 说明：为最小化侵入，**不在 Store 层注入回调**。command 层 + 后台 runtime 两个 emit 入口已覆盖全部写路径（前端所有写操作都经 command；后台推进都经 `spawn_poller_runtime`）。
 

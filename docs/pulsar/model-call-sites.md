@@ -66,6 +66,8 @@ pulsar-app（Rust / Tauri）的模型调用采用**单一下游出口** + 多层
 
 - `AssistantMode::process_step_request` → `step_poller`：每课题独立会话，Semaphore 限并发。
 - Poller tick 通过 `default_model_selection()` 取模型。
+- 推进前跳过已在运行的会话（`session_tracker.get` 命中则跳过，避免重复推进）。
+- 空转（无未完成课题 / 全部跳过）不广播 `Conversations`/`Topics`；推进后 `Conversations` 携带 `affected`（实际推进的会话），前端仅重拉受影响会话。
 
 ### 3.6 CLI / TUI
 

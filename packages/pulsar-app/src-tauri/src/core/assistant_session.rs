@@ -216,11 +216,13 @@ impl AssistantSession {
     }
 
     /// 轮询调度壳：PollAll → 跨课题受限并发推进（互不干扰、信号量限流）。
+    /// 返回实际推进（register 成功）的会话 id 列表；空转（无未完成课题 / 全部
+    /// 被跳过）返回空 Vec，调用方据此决定是否广播刷新事件，避免无效通知。
     pub async fn process_step_request(
         self: Arc<Self>,
         request: AssistantStepRequest,
         model: &ChatModelSelection,
-    ) {
+    ) -> Vec<String> {
         match request {
             AssistantStepRequest::PollAll => {
                 tracing::info!(
@@ -231,7 +233,7 @@ impl AssistantSession {
                     Ok(topics) => topics,
                     Err(error) => {
                         eprintln!("assistant poll list failed: {error}");
-                        return;
+                        return Vec::new();
                     }
                 };
                 tracing::info!(
@@ -242,6 +244,7 @@ impl AssistantSession {
 
                 let parallelism = self.poll_parallelism.load(Ordering::Relaxed).max(1);
                 let semaphore = Arc::new(tokio::sync::Semaphore::new(parallelism));
+                let touched = Arc::new(Mutex::new(Vec::<String>::new()));
                 let mut tasks = tokio::task::JoinSet::new();
                 for topic in topics {
                     let Some(session_id) = topic.session_id else {
@@ -251,9 +254,21 @@ impl AssistantSession {
                         continue;
                     }
                     let topic_id = topic.id;
+                    // 跳过已在运行的会话（用户手动 converse 推进中 / 上一批尚未收尾），
+                    // 避免对同一会话重复发起推进。
+                    if let Ok(Some(_)) = self.session_tracker.get(&session_id) {
+                        tracing::info!(
+                            phase = "assistant_poll_handler",
+                            topic_id,
+                            session_id,
+                            "skip topic: session already running"
+                        );
+                        continue;
+                    }
                     let model = model.clone();
                     let assistant = Arc::clone(&self);
                     let semaphore = Arc::clone(&semaphore);
+                    let touched = Arc::clone(&touched);
                     tasks.spawn(async move {
                         let _permit = semaphore.acquire().await.expect("semaphore not closed");
                         if let Err(error) = assistant.session_tracker.register(&session_id, None) {
@@ -267,9 +282,19 @@ impl AssistantSession {
                             eprintln!("assistant poll step failed for {topic_id}: {error}");
                         }
                         assistant.session_tracker.unregister(&session_id);
+                        if let Ok(mut list) = touched.lock() {
+                            list.push(session_id);
+                        }
                     });
                 }
                 while tasks.join_next().await.is_some() {}
+                let touched = touched.lock().map(|list| list.clone()).unwrap_or_default();
+                tracing::info!(
+                    phase = "assistant_poll_handler",
+                    touched_sessions = touched.len(),
+                    "PollAll finished"
+                );
+                touched
             }
         }
     }

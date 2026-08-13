@@ -19,8 +19,9 @@ pub const STATE_CHANGED_EVENT: &str = "app://state-changed";
 pub enum StateChange {
     /// 课题列表/详情变化，前端应重新拉取 topics。
     Topics,
-    /// 会话/对话列表变化，前端应重新拉取 conversations。
-    Conversations,
+    /// 会话/对话列表变化。`affected` 为实际发生写入的会话 id；
+    /// 前端仅重拉受影响会话的消息，未受影响会话不重拉、不触发滚动。
+    Conversations { affected: Vec<String> },
     /// 轮询状态变化，直接携带最新 PollerStatus。
     Poller { status: PollerStatus },
     /// 运行中会话集合变化（register/unregister/update_step/close），
@@ -36,3 +37,23 @@ pub enum StateChange {
 /// 状态事件发射器：由 `lib.rs` setup 构造（捕获 AppHandle），
 /// 注入到 Tauri managed state 与后台 poller runtime。
 pub type StateEmitter = Arc<dyn Fn(StateChange) + Send + Sync>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conversations_serializes_with_affected() {
+        let json = serde_json::to_string(&StateChange::Conversations {
+            affected: vec!["s1".into(), "s2".into()],
+        })
+        .unwrap();
+        assert_eq!(json, r#"{"kind":"conversations","affected":["s1","s2"]}"#);
+    }
+
+    #[test]
+    fn empty_affected_serializes_as_empty_array() {
+        let json = serde_json::to_string(&StateChange::Conversations { affected: vec![] }).unwrap();
+        assert_eq!(json, r#"{"kind":"conversations","affected":[]}"#);
+    }
+}

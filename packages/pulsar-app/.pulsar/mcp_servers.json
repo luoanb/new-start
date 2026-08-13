@@ -4,11 +4,14 @@
       "name": "open-websearch",
       "transport": "stdio",
       "command": "pnpm",
-      "args": ["dlx", "open-websearch@latest"],
+      "args": [
+        "dlx",
+        "open-websearch@latest"
+      ],
       "env": {
         "MODE": "stdio"
       },
-      "disabled": false
+      "disabled": true
     }
   ]
 }

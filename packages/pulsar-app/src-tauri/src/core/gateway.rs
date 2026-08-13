@@ -897,11 +897,14 @@ fn spawn_poller_runtime(
                             tracing::info!(phase = "poller_runtime", "step request skipped: another step is in flight");
                             return;
                         };
-                        assistant.process_step_request(request, &model).await;
-                        // 后台推进会写入会话/课题，通知前端重新拉取。
-                        if let Some(emit) = emit.as_ref() {
-                            emit(StateChange::Conversations);
-                            emit(StateChange::Topics);
+                        let touched = assistant.process_step_request(request, &model).await;
+                        // 仅在实际推进了会话（写入消息/课题）时才通知前端重新拉取；
+                        // 空转轮询（无未完成课题 / 全部跳过）不发事件，避免无效刷新与滚动。
+                        if !touched.is_empty() {
+                            if let Some(emit) = emit.as_ref() {
+                                emit(StateChange::Conversations { affected: touched });
+                                emit(StateChange::Topics);
+                            }
                         }
                     });
                 }

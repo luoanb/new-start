@@ -34,7 +34,7 @@ export type StateEventKind = "topics" | "conversations" | "poller" | "sessions" 
 
 export type StateChangePayload =
   | { kind: "topics" }
-  | { kind: "conversations" }
+  | { kind: "conversations"; affected?: string[] }
   | { kind: "poller"; status: PollerStatus }
   | { kind: "sessions" }
   | { kind: "neurons" }
@@ -115,7 +115,16 @@ async function handleStateChanged(payload: StateChangePayload): Promise<void> {
     if (payload.kind === "topics") {
       await refreshTopics();
     } else if (payload.kind === "conversations") {
-      await refreshConversations();
+      // affected 为实际发生写入的会话；空转轮询后端不 emit，这里仅防御。
+      const affected = payload.affected ?? [];
+      if (affected.length === 0) return;
+      // 会话列表摘要始终重拉（标题/最后消息/时间可能变）。
+      state.conversations = await invoke<Conversation[]>("list_conversations");
+      // 仅当受影响会话含当前激活会话时才重拉消息，
+      // 避免后台推进其他会话时误触发当前会话重拉与滚动。
+      if (state.activeConversationId && affected.includes(state.activeConversationId)) {
+        await refreshMessages();
+      }
     } else if (payload.kind === "poller") {
       state.poller = payload.status;
     } else if (payload.kind === "sessions") {
