@@ -33,6 +33,17 @@ function removeViewFromContainer(containerId: ViewContainerId, viewId: string): 
   }
 }
 
+/**
+ * 分栏数变化后收敛：唯一分栏的 grow 权重无意义。
+ * 历史拖拽可能残留非 1 的 grow（如 0.95/0.2），关闭一个分栏后剩余分栏若保留 0.95，
+ * WebKitGTK 下 flex-grow < 1 会导致唯一分栏宽度不满，故归一化为 1。
+ */
+function normalizeSinglePaneGrow(): void {
+  if (state.main.panes.length === 1) {
+    state.main.panes[0].grow = 1;
+  }
+}
+
 /** 从所有视图容器移除 viewId（移动/隐藏共用的前置步骤）。 */
 function detachView(viewId: string): void {
   for (const cid of Object.keys(state.containers) as ViewContainerId[]) {
@@ -164,6 +175,7 @@ export const layoutStore = {
       // 分栏已空 → 移除分栏并激活相邻分栏
       const paneId = pane.id;
       state.main.panes.splice(idx, 1);
+      normalizeSinglePaneGrow();
       if (state.main.activePaneId === paneId) {
         const fallback =
           state.main.panes[Math.min(idx, state.main.panes.length - 1)] ??
@@ -218,6 +230,7 @@ export const layoutStore = {
       if (srcPane.panels.length === 0) {
         // 源分栏已空 → 移除收缩
         state.main.panes.splice(state.main.panes.indexOf(srcPane), 1);
+        normalizeSinglePaneGrow();
       } else if (srcPane.activePanelId === panelId) {
         // 被移动的正是源分栏激活面板 → 激活相邻面板
         srcPane.activePanelId =
@@ -254,6 +267,7 @@ export const layoutStore = {
     state.main.activePaneId = pane.id;
     if (srcPane.panels.length === 0) {
       state.main.panes.splice(state.main.panes.indexOf(srcPane), 1);
+      normalizeSinglePaneGrow();
     } else if (srcPane.activePanelId === panelId) {
       srcPane.activePanelId =
         srcPane.panels[Math.min(srcIdx, srcPane.panels.length - 1)]?.id ?? null;

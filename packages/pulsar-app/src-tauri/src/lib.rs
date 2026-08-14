@@ -816,6 +816,23 @@ pub fn run() {
                     }
                 }
             });
+
+            // 手动创建主窗口（tauri.conf.json 中 `"create": false`）并给所有资源响应加
+            // `Cache-Control: no-store`：Tauri 的 tauri:// 协议默认不设缓存头，WebKitGTK
+            // 会把旧版 index.html/CSS/JS 写入跨重启持久化的磁盘缓存（~/.local/share/<id>/WebKitCache），
+            // 重启后按 URL 复用旧资源导致样式错乱。no-store 使 webview 每次都取当前 bundle。
+            let window_config = app.config().app.windows[0].clone();
+            tauri::WebviewWindowBuilder::from_config(app.handle(), &window_config)
+                .map_err(|error| error.to_string())?
+                .on_web_resource_request(|_request, response| {
+                    response.headers_mut().insert(
+                        http::header::CACHE_CONTROL,
+                        http::header::HeaderValue::from_static("no-store"),
+                    );
+                })
+                .build()
+                .map_err(|error| error.to_string())?;
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

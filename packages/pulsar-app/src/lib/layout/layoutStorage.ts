@@ -167,9 +167,10 @@ function migrateV8ToV9(state: LayoutState): LayoutState {
   };
 }
 
-/** 分栏面板归一化：旧 v8 单 `panel` 形态 → `panels[]` 形态；校验 activePanelId 悬空回退。 */
+/** 分栏面板归一化：旧 v8 单 `panel` 形态 → `panels[]` 形态；校验 activePanelId 悬空回退。
+ * 唯一分栏的 grow 强制为 1：历史拖拽残留的非 1 值（如 0.95）在单分栏时无意义且会导致宽度不满。 */
 function normalizePanes(panes: MainPane[]): MainPane[] {
-  return panes.map((p) => {
+  const normalized = panes.map((p) => {
     const legacy = p as MainPane & { panel?: MainPanel };
     const panels = Array.isArray(legacy.panels)
       ? legacy.panels
@@ -186,6 +187,8 @@ function normalizePanes(panes: MainPane[]): MainPane[] {
       activePanelId,
     };
   });
+  if (normalized.length === 1) normalized[0].grow = 1;
+  return normalized;
 }
 
 /** 按默认布局浅合并用户持久化数据；resetInfo 时 info 容器强制使用默认（旧组合视图场景）。 */

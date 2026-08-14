@@ -624,21 +624,22 @@
   .main-pane.active {
     border-right-color: var(--color-border);
   }
-  /* 分栏内容区：tab 栏下方占据剩余高度。
-     用单行 grid（1fr 轨道）而非 flex 撑高：grid 轨道尺寸是确定值，
-     panel 根节点可用 height:100% 取全高（flex 撑高在 WebKitGTK 下百分比解析不可靠）。 */
+  /* 唯一分栏强制撑满：历史持久化可能残留非 1 的 grow（如 0.95），
+     内联 style 的 flex-grow 优先级高于样式表，需 !important 兜底 */
+  .main-panes > .main-pane:only-child {
+    flex-grow: 1 !important;
+  }
+  /* 分栏内容区：tab 栏下方占据剩余高度 */
   .pane-content {
     flex: 1;
     min-width: 0;
     min-height: 0;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: 1fr;
+    display: flex;
+    flex-direction: column;
   }
-  /* 分栏内面板：仅激活面板可见，其余保持挂载（隐藏）以保留状态。
-     所有面板共用第 1 行轨道（隐藏项 display:none 不生成轨道，不参与布局）。 */
+  /* 分栏内面板：仅激活面板可见，其余保持挂载（隐藏）以保留状态 */
   .pane-view {
-    grid-row: 1;
+    flex: 1;
     min-width: 0;
     min-height: 0;
     display: none;

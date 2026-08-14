@@ -27,11 +27,6 @@
     onTogglePanel?: () => void;
   } = $props();
 
-  function shortId(id: string): string {
-    if (id.length <= 16) return id;
-    return `${id.slice(0, 8)}..${id.slice(-4)}`;
-  }
-
   const modeLabel: Record<string, string> = {
     chat: "Chat",
     agent: "Agent",
@@ -101,9 +96,6 @@
 
   <div class="bar-center">
     {#if sessionId}
-      <span class="session-info desktop-only">
-        {t("common.session")}: <strong>{shortId(sessionId)}</strong>
-      </span>
       <span class="mode-tag">{modeLabel[mode] ?? mode}</span>
     {/if}
   </div>
@@ -225,7 +217,6 @@
   .bar-center { flex: 1; justify-content: center; }
 
   .app-name { font-weight: 600; font-size: var(--fs-base); }
-  .session-info { color: var(--color-text-muted); }
 
   .mode-tag {
     font-size: var(--fs-xs);
