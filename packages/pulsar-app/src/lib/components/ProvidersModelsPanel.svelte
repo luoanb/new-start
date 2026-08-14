@@ -42,7 +42,7 @@
 
 <div class="providers-models-panel">
   <div class="toolbar">
-    <span class="toolbar-title">{t("views.providersModels")}</span>
+    <span class="toolbar-title">模型</span>
     <button
       class="btn btn-sm btn-primary"
       onclick={() => data.requestCreateProvider()}
@@ -57,29 +57,22 @@
     <div class="list">
       {#each providers as p}
         <div class="provider-group">
-          <div class="provider-row">
-            <button
-              class="provider-toggle"
-              type="button"
-              aria-label={collapsed.has(p.id) ? t("providersModelsPanel.expand") : t("providersModelsPanel.collapse")}
-              onclick={() => toggleCollapse(p.id)}
+          <div class="provider-row" role="button" tabindex="0" onclick={() => toggleCollapse(p.id)} onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleCollapse(p.id); } }}>
+            <svg
+              class="chevron"
+              class:open={!collapsed.has(p.id)}
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              width="12"
+              height="12"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
             >
-              <svg
-                class="chevron"
-                class:open={!collapsed.has(p.id)}
-                aria-hidden="true"
-                viewBox="0 0 24 24"
-                width="12"
-                height="12"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <polyline points="6 9 12 15 18 9" />
-              </svg>
-            </button>
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
             <span class="provider-name" title={p.display_name}>{p.display_name}</span>
             <span class="mono">{p.id}</span>
             <span class="model-count">{modelsOf(p).length}</span>
@@ -92,24 +85,21 @@
                   e.stopPropagation();
                   data.requestEditProvider(p.id);
                 }}
+                onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); data.requestEditProvider(p.id); } }}
               >
                 <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
                 </svg>
-                {t("neuronListPanel.edit")}
               </span>
               {#if deleteConfirmId === p.id}
                 <span class="delete-confirm" title={t("providersModelsPanel.deleteConfirm")}>
                   <button
                     class="btn btn-sm btn-danger"
-                    onclick={() => {
-                      deleteConfirmId = null;
-                      data.requestEditProvider(p.id);
-                    }}
+                    onclick={(e) => { e.stopPropagation(); deleteConfirmId = null; data.requestEditProvider(p.id); }}
                   >
                     {t("providersModelsPanel.deleteGo")}
                   </button>
-                  <button class="btn btn-sm" onclick={() => (deleteConfirmId = null)}>
+                  <button class="btn btn-sm" onclick={(e) => { e.stopPropagation(); deleteConfirmId = null; }}>
                     {t("providersModelsPanel.cancel")}
                   </button>
                 </span>
@@ -122,12 +112,12 @@
                     e.stopPropagation();
                     deleteConfirmId = p.id;
                   }}
+                  onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); deleteConfirmId = p.id; } }}
                 >
                   <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                     <polyline points="3 6 5 6 21 6" />
                     <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
                   </svg>
-                  {t("providersModelsPanel.delete")}
                 </span>
               {/if}
             </span>
@@ -142,7 +132,6 @@
                   <div class="model-row">
                     <span class="model-dot" aria-hidden="true"></span>
                     <span class="model-name" title={m.display_name}>{m.display_name}</span>
-                    <span class="mono">{m.id}</span>
                     <span class="caps">
                       {#each modelCaps(m) as cap}
                         <span class="cap-tag">{cap}</span>
@@ -247,21 +236,10 @@
   .provider-row:hover {
     background: var(--color-hover);
   }
-  .provider-toggle {
-    border: none;
-    background: transparent;
-    color: var(--color-text-muted);
-    cursor: pointer;
-    padding: 0;
-    width: 16px;
-    height: 16px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-  }
   .chevron {
+    flex-shrink: 0;
     transition: transform var(--duration-fast) var(--ease-out);
+    color: var(--color-text-muted);
   }
   .chevron.open {
     transform: rotate(180deg);
@@ -298,6 +276,11 @@
     align-items: center;
     gap: var(--space-2);
     margin-left: auto;
+    opacity: 0;
+    transition: opacity var(--duration-fast) var(--ease-out);
+  }
+  .provider-row:hover .row-actions {
+    opacity: 1;
   }
   .row-btn {
     display: inline-flex;
@@ -349,13 +332,18 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    flex: 1;
+    min-width: 0;
   }
   .caps {
-    display: flex;
+    display: none;
     flex-wrap: wrap;
     gap: 3px;
     margin-left: auto;
     justify-content: flex-end;
+  }
+  .model-row:hover .caps {
+    display: flex;
   }
   .cap-tag {
     font-size: 10px;
