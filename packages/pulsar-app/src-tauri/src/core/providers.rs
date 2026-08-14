@@ -376,6 +376,14 @@ impl ProviderRegistry {
         // Extract text output (may be None when tool_calls is present)
         let output = choice.message.content.clone().unwrap_or_default();
 
+        // 空响应防御：模型返回 HTTP 200 但无文本且无 tool_calls 时视为异常，
+        // 避免空消息落库后污染历史（providers 校验会拒绝空 assistant 消息锁死会话）。
+        if output.trim().is_empty() && tool_calls.is_none() {
+            return Err(AppError::LlmRequestFailed(
+                "Provider returned empty response without tool_calls".into(),
+            ));
+        }
+
         Ok(ModelCallResponse {
             provider_id: request.provider_id,
             model_id: request.model_id,

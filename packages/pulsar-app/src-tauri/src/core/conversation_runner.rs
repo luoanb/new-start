@@ -12,7 +12,7 @@ use super::{
     model_call_input::ModelCallInput,
     models::{
         ChatModelSelection, ChatResponse, ConversationMode, Message, MessageBody, MessageRole,
-        ModelMessage,
+        ModelMessage, ModelMessageRole,
     },
 };
 
@@ -47,6 +47,8 @@ pub struct RoundContext {
     pub state: SessionState,
     pub messages: Vec<ModelMessage>,
     pub model_input: String,
+    /// 本轮模型（用户所选）：主对话与 hook 裁决共用，保证同源。
+    pub model: ChatModelSelection,
     pub tool_override: Option<Vec<String>>,
     pub trigger: RoundTriggerKind,
     /// 课题绑定（assistant 业务 hooks 共享；runner 透传，不感知语义）。
@@ -89,7 +91,7 @@ impl ConversationRunner {
         model: &ChatModelSelection,
         hooks: Option<&dyn RoundHooks>,
     ) -> AppResult<ChatResponse> {
-        let mut ctx = self.load_context(session_id, input, tool_override)?;
+        let mut ctx = self.load_context(session_id, input, tool_override, model)?;
         if let Some(hooks) = hooks {
             hooks.before_round(&mut ctx).await?;
             // before hook 可能切换会话（assistant match_topic switch）→ 重读上下文。
@@ -145,6 +147,13 @@ impl ConversationRunner {
             &messages
                 .iter()
                 .filter_map(message_to_model)
+                // 防御：过滤历史脏数据——模型偶发空响应的残留（非 tool_call 且 content 空的
+                // assistant 消息），否则会被 providers 本地校验拒绝，锁死会话后续调用。
+                .filter(|m| {
+                    !(m.role == ModelMessageRole::Assistant
+                        && m.tool_calls.as_ref().map_or(true, |c| c.is_empty())
+                        && m.content.trim().is_empty())
+                })
                 .collect::<Vec<_>>(),
         )
     }
@@ -154,6 +163,7 @@ impl ConversationRunner {
         session_id: &str,
         input: InputRecord,
         tool_override: Option<Vec<String>>,
+        model: &ChatModelSelection,
     ) -> AppResult<RoundContext> {
         let conversation = self.store.require_conversation(session_id)?;
         let trigger = match &input {
@@ -177,6 +187,7 @@ impl ConversationRunner {
             state,
             messages,
             model_input,
+            model: model.clone(),
             tool_override,
             trigger,
             topic_id: None,

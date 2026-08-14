@@ -222,7 +222,6 @@ impl Gateway {
         let agent = AgentSession::new(runner.clone(), Arc::clone(&tool_registry));
         let assistant = Arc::new(AssistantSession::new(
             store.clone(),
-            providers.clone(),
             Arc::clone(&neuron_manager),
             Arc::clone(&topic_store),
             Arc::clone(&neuron_store),

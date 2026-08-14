@@ -34,7 +34,6 @@ use super::{
     neuron_store::NeuronStore,
     poller::{Poller, SharedPollParallelism},
     poller_step::{AssistantPollHandler, AssistantStepRequest, ASSISTANT_POLL_TASK},
-    providers::ProviderRegistry,
     session_tracker::SessionTracker,
     topic_store::TopicStore,
 };
@@ -50,7 +49,6 @@ pub use super::poller::DEFAULT_ASSISTANT_POLL_TICKS;
 /// Assistant 业务门面：对话 / 手动推进 / 轮询推进 + 轮询调度壳。
 pub struct AssistantSession {
     store: ConversationStore,
-    providers: ProviderRegistry,
     neuron_manager: Arc<NeuronManager>,
     topic_store: Arc<Mutex<TopicStore>>,
     neuron_store: Arc<Mutex<NeuronStore>>,
@@ -74,7 +72,6 @@ impl AssistantSession {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         store: ConversationStore,
-        providers: ProviderRegistry,
         neuron_manager: Arc<NeuronManager>,
         topic_store: Arc<Mutex<TopicStore>>,
         neuron_store: Arc<Mutex<NeuronStore>>,
@@ -86,7 +83,6 @@ impl AssistantSession {
     ) -> Self {
         Self {
             store,
-            providers,
             neuron_manager,
             topic_store,
             neuron_store,
@@ -309,12 +305,6 @@ impl AssistantSession {
         self.neuron_store
             .lock()
             .map_err(|e| AppError::StorageError(format!("NeuronStore lock failed: {e}")))
-    }
-
-    fn default_model_or_error(&self) -> AppResult<ChatModelSelection> {
-        self.providers
-            .default_model_selection()?
-            .ok_or(AppError::ModelNotSelected)
     }
 
     /// 对显式神经元集合应用 delta：节点权重 + 关联边 + lineage 归因 + 变体演进。
@@ -560,7 +550,8 @@ impl AssistantHooks<'_> {
             neuron_count = neuron_ids.len(),
             "scoring last intervention interval"
         );
-        let model = self.assistant.default_model_or_error()?;
+        // 同源：用本轮主对话同一模型（用户所选），不读配置默认。
+        let model = &ctx.model;
         let decision = match self
             .assistant
             .call_judgement(
@@ -605,7 +596,8 @@ impl AssistantHooks<'_> {
 
     /// 课题匹配/创建/切换：模型裁决 action（switch → 已有课题；create → 新建课题）。
     async fn match_topic(&self, ctx: &mut RoundContext) -> AppResult<()> {
-        let model = self.assistant.default_model_or_error()?;
+        // 同源：用本轮主对话同一模型（用户所选），不读配置默认。
+        let model = &ctx.model;
         let unfinished = self.assistant.topics()?.list_unfinished()?;
         tracing::info!(
             phase = "match_topic_hook",
@@ -748,7 +740,8 @@ impl AssistantHooks<'_> {
             scope_items = topic.scope_in.len(),
             "calling complete-scope model"
         );
-        let model = self.assistant.default_model_or_error()?;
+        // 同源：用本轮主对话同一模型（用户所选），不读配置默认。
+        let model = &ctx.model;
         let decision = self
             .assistant
             .call_judgement(
