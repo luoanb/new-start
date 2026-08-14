@@ -624,17 +624,21 @@
   .main-pane.active {
     border-right-color: var(--color-border);
   }
-  /* 分栏内容区：tab 栏下方占据剩余高度 */
+  /* 分栏内容区：tab 栏下方占据剩余高度。
+     用单行 grid（1fr 轨道）而非 flex 撑高：grid 轨道尺寸是确定值，
+     panel 根节点可用 height:100% 取全高（flex 撑高在 WebKitGTK 下百分比解析不可靠）。 */
   .pane-content {
     flex: 1;
     min-width: 0;
     min-height: 0;
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 1fr;
   }
-  /* 分栏内面板：仅激活面板可见，其余保持挂载（隐藏）以保留状态 */
+  /* 分栏内面板：仅激活面板可见，其余保持挂载（隐藏）以保留状态。
+     所有面板共用第 1 行轨道（隐藏项 display:none 不生成轨道，不参与布局）。 */
   .pane-view {
-    flex: 1;
+    grid-row: 1;
     min-width: 0;
     min-height: 0;
     display: none;
