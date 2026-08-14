@@ -1,9 +1,11 @@
 pub mod core;
+pub mod net;
 pub mod tui;
 
 use crate::core::{
     app_log::{self, LogEntry},
     assistant_session::AssistantSession,
+    config::ConfigStore,
     conversation_store::ConversationStore,
     error::AppErrorPayload,
     insert_catalog::{InsertCatalog, InsertInfo},
@@ -20,11 +22,13 @@ use crate::core::{
     ProviderInfo, RuntimeStatus, SessionBehavior, SessionSeed, SkillInfo, StateChange,
      StateEmitter, ToolInfo, Topic, TopicStatus, TopicUpdate, STATE_CHANGED_EVENT,
 };
+use crate::net::{NetState, ServerConfig};
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex as StdMutex},
 };
 use tauri::{Emitter, Manager, State};
+use tokio::sync::broadcast;
 
 type TauriResult<T> = Result<T, AppErrorPayload>;
 
@@ -764,10 +768,30 @@ pub fn run() {
                 "pulsar logging initialized"
             );
 
+            // 远程模式：内嵌 server 配置（config.json `server` 节）。缺省 / enabled=false 不启动，
+            // 等价现状（本机 Tauri IPC 路径零改动）。
+            let server_cfg = ConfigStore::new(storage_root.clone())
+                .read()
+                .ok()
+                .and_then(|config| config.server)
+                .filter(|section| section.enabled.unwrap_or(false))
+                .map(|section| ServerConfig {
+                    host: section.host.unwrap_or_else(|| "127.0.0.1".into()),
+                    port: section.port.unwrap_or(8787),
+                    tokens: section.tokens.unwrap_or_default(),
+                });
+            let server_enabled = server_cfg.is_some();
+
             // 统一状态事件发射器：command 层写操作与后台推进完成后广播，
             // 前端 dataStore 监听 STATE_CHANGED_EVENT 并按 kind 重新拉取。
+            // 远程模式启用时同时注入 broadcast 通道，供 SSE 转发。
             let state_emit_handle = handle.clone();
+            let (events_tx, _events_rx) = broadcast::channel::<StateChange>(256);
+            let events_tx_for_emit = events_tx.clone();
             let state_emit: StateEmitter = Arc::new(move |change: StateChange| {
+                if server_enabled {
+                    let _ = events_tx_for_emit.send(change.clone());
+                }
                 let _ = state_emit_handle.emit(STATE_CHANGED_EVENT, change);
             });
 
@@ -791,8 +815,28 @@ pub fn run() {
             app.manage(sessions);
             app.manage(providers);
             app.manage(conversation_store);
+            let gateway_for_server = gateway.clone();
             app.manage(gateway);
+            let state_emit_for_server = state_emit.clone();
             app.manage(state_emit);
+
+            // 远程模式：条件启动内嵌 server（持有 Gateway / StateEmitter 克隆与 SSE 广播通道）。
+            if let Some(cfg) = server_cfg {
+                let net_state = NetState {
+                    gateway: gateway_for_server,
+                    state_emit: state_emit_for_server,
+                    events_tx: events_tx.clone(),
+                    tokens: cfg.tokens.clone(),
+                };
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = net::run_server(cfg, net_state).await {
+                        tracing::error!(
+                            error = %error,
+                            "network server exited; remote mode unavailable"
+                        );
+                    }
+                });
+            }
 
             // Bootstrap without holding any Gateway lock across model calls.
             tauri::async_runtime::spawn(async move {

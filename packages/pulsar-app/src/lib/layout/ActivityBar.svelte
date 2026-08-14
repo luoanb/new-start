@@ -1,14 +1,17 @@
 <script lang="ts">
   import { t } from "$lib/i18n";
+  import type { Snippet } from "svelte";
 
   let {
     items,
     activeId,
     onSelect,
+    footer,
   }: {
     items: { id: string; icon?: string; label: string }[];
     activeId: string | null;
     onSelect: (id: string) => void;
+    footer?: Snippet;
   } = $props();
 </script>
 
@@ -26,6 +29,10 @@
       </span>
     </button>
   {/each}
+
+  {#if footer}
+    <div class="activity-footer">{@render footer()}</div>
+  {/if}
 </nav>
 
 <style>
@@ -72,5 +79,10 @@
     width: 2px;
     border-radius: 0 2px 2px 0;
     background: var(--color-primary);
+  }
+
+  .activity-footer {
+    margin-top: auto;
+    padding-bottom: var(--space-2);
   }
 </style>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
+  import { api } from "$lib/api";
   import type { NeuronSubgraph } from "$lib/types";
   import { t } from "$lib/i18n";
   import { errorMessage } from "$lib/errorMessage";
@@ -31,7 +31,7 @@
     loading = true;
     errorMsg = "";
     try {
-      subgraph = await invoke<NeuronSubgraph>("get_network", {
+      subgraph = await api.invoke<NeuronSubgraph>("get_network", {
         id: rootId,
         max_depth: maxDepth,
       });

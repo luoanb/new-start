@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
+  import { api } from "$lib/api";
   import { t } from "$lib/i18n";
   import Select from "./Select.svelte";
   import Toggle from "./Toggle.svelte";
@@ -30,7 +30,7 @@
     error = "";
     loading = true;
     try {
-      const view = await invoke<ToolConfigView>("get_tool_config");
+      const view = await api.invoke<ToolConfigView>("get_tool_config");
       draft = {
         mcp_servers: view.mcp_servers.map((s) => ({ ...s })),
         http_tools: view.http_tools.map((h) => ({ ...h })),
@@ -52,7 +52,7 @@
     saving = true;
     error = "";
     try {
-      const view = await invoke<ToolConfigView>("save_tool_config", {
+      const view = await api.invoke<ToolConfigView>("save_tool_config", {
         view: {
           mcp_servers: draft.mcp_servers,
           http_tools: draft.http_tools,

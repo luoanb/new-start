@@ -4,6 +4,7 @@
   import ThemeSwitcher from "./ThemeSwitcher.svelte";
   import LocaleSwitcher from "./LocaleSwitcher.svelte";
   import { t } from "$lib/i18n";
+  import { isTauriEnv } from "$lib/api";
 
   let {
     appName,
@@ -34,10 +35,12 @@
   };
 
   // ── 自绘标题栏：窗口控制（decorations: false，标题栏由本组件承载）──
-  const appWindow = getCurrentWindow();
+  // 仅 Tauri 环境可用；浏览器等环境不构造窗口句柄，窗口控制按钮整体隐藏。
+  const appWindow = isTauriEnv ? getCurrentWindow() : null;
   let isMaximized = $state(false);
 
   onMount(() => {
+    if (!appWindow) return;
     void appWindow.isMaximized().then((v) => (isMaximized = v));
     const unlisten = appWindow.onResized(() => {
       void appWindow.isMaximized().then((v) => (isMaximized = v));
@@ -48,18 +51,22 @@
   });
 
   function minimize() {
+    if (!appWindow) return;
     void appWindow.minimize();
   }
   function toggleMaximize() {
+    if (!appWindow) return;
     void appWindow.toggleMaximize();
   }
   function closeWindow() {
+    if (!appWindow) return;
     void appWindow.close();
   }
 
   // 窗口拖拽：弃用 data-tauri-drag-region（WebKitGTK 下与自定义 mousedown 处理冲突，易失效），
   // 改为在标题栏空白区 mousedown 时显式调用 startDragging（配合 allow-start-dragging 权限）。
   function onBarMouseDown(e: MouseEvent) {
+    if (!appWindow) return;
     const target = e.target as HTMLElement;
     // 交互元素不参与窗口拖拽
     if (target.closest("button, a, input, select, [role='button']")) return;
@@ -70,6 +77,7 @@
 
   // 双击标题栏空白区域最大化/还原（Linux 上 Tauri 不自动处理 drag-region 双击）
   function onBarDblClick(e: MouseEvent) {
+    if (!appWindow) return;
     const target = e.target as HTMLElement;
     if (target.closest("button, a, input, select, [role='button']")) return;
     void appWindow.toggleMaximize();
@@ -153,36 +161,38 @@
     <ThemeSwitcher />
 
     <span class="window-sep"></span>
-    <div class="window-controls">
-      <button class="win-btn" onclick={minimize} title="Minimize" aria-label="Minimize">
-        <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
-          <line x1="1" y1="6" x2="11" y2="6" />
-        </svg>
-      </button>
-      <button
-        class="win-btn"
-        onclick={toggleMaximize}
-        title={isMaximized ? "Restore" : "Maximize"}
-        aria-label={isMaximized ? "Restore" : "Maximize"}
-      >
-        {#if isMaximized}
+    {#if appWindow}
+      <div class="window-controls">
+        <button class="win-btn" onclick={minimize} title="Minimize" aria-label="Minimize">
           <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
-            <path d="M4.5 4.5 V3 A1.5 1.5 0 0 1 6 1.5 H9 A1.5 1.5 0 0 1 10.5 3 V6 A1.5 1.5 0 0 1 9 7.5 H7.5" />
-            <rect x="1.5" y="4.5" width="6" height="6" rx="1.5" />
+            <line x1="1" y1="6" x2="11" y2="6" />
           </svg>
-        {:else}
+        </button>
+        <button
+          class="win-btn"
+          onclick={toggleMaximize}
+          title={isMaximized ? "Restore" : "Maximize"}
+          aria-label={isMaximized ? "Restore" : "Maximize"}
+        >
+          {#if isMaximized}
+            <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+              <path d="M4.5 4.5 V3 A1.5 1.5 0 0 1 6 1.5 H9 A1.5 1.5 0 0 1 10.5 3 V6 A1.5 1.5 0 0 1 9 7.5 H7.5" />
+              <rect x="1.5" y="4.5" width="6" height="6" rx="1.5" />
+            </svg>
+          {:else}
+            <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+              <rect x="1.5" y="1.5" width="9" height="9" rx="1.5" />
+            </svg>
+          {/if}
+        </button>
+        <button class="win-btn win-btn-close" onclick={closeWindow} title="Close" aria-label="Close">
           <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
-            <rect x="1.5" y="1.5" width="9" height="9" rx="1.5" />
+            <line x1="1.5" y1="1.5" x2="10.5" y2="10.5" />
+            <line x1="10.5" y1="1.5" x2="1.5" y2="10.5" />
           </svg>
-        {/if}
-      </button>
-      <button class="win-btn win-btn-close" onclick={closeWindow} title="Close" aria-label="Close">
-        <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
-          <line x1="1.5" y1="1.5" x2="10.5" y2="10.5" />
-          <line x1="10.5" y1="1.5" x2="1.5" y2="10.5" />
-        </svg>
-      </button>
-    </div>
+        </button>
+      </div>
+    {/if}
   </div>
 </header>
 

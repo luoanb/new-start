@@ -10,8 +10,7 @@
       ],
       "env": {
         "MODE": "stdio"
-      },
-      "disabled": true
+      }
     }
   ]
 }

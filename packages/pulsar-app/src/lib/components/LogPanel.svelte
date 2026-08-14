@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
+  import { api, isTauriEnv } from "$lib/api";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import type { LogEntry, LogLevel } from "$lib/types";
   import Select from "./Select.svelte";
@@ -49,17 +49,20 @@
   onMount(async () => {
     try {
       const [snapshot, level, dir] = await Promise.all([
-        invoke<LogEntry[]>("logs_snapshot"),
-        invoke<string>("logs_get_level"),
-        invoke<string | null>("logs_dir"),
+        api.invoke<LogEntry[]>("logs_snapshot"),
+        api.invoke<string>("logs_get_level"),
+        api.invoke<string | null>("logs_dir"),
       ]);
       entries = snapshot;
       verbosity = (LEVELS.includes(level as LogLevel) ? level : "info") as LogLevel;
       filterLevel = verbosity;
       logDir = dir;
-      unlisten = await listen<LogEntry>("app://logs", (event) => {
-        entries = [...entries, event.payload].slice(-2000);
-      });
+      // app://logs 为 Tauri 专属实时日志流；非 Tauri 环境（远程模式）无该事件源，跳过订阅。
+      if (isTauriEnv) {
+        unlisten = await listen<LogEntry>("app://logs", (event) => {
+          entries = [...entries, event.payload].slice(-2000);
+        });
+      }
     } catch (e) {
       errorMsg = `Logs init failed: ${e}`;
     }
@@ -75,7 +78,7 @@
   async function setVerbosity(level: LogLevel) {
     errorMsg = "";
     try {
-      const next = await invoke<string>("logs_set_level", { level });
+      const next = await api.invoke<string>("logs_set_level", { level });
       verbosity = (LEVELS.includes(next as LogLevel) ? next : level) as LogLevel;
     } catch (e) {
       errorMsg = `Set level failed: ${e}`;
@@ -85,7 +88,7 @@
   async function clearBuffer() {
     errorMsg = "";
     try {
-      await invoke("logs_clear_buffer");
+      await api.invoke("logs_clear_buffer");
       entries = [];
     } catch (e) {
       errorMsg = `Clear failed: ${e}`;

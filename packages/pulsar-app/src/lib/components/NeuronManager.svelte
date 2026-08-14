@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
+  import { api } from "$lib/api";
   import type { Connection, Neuron, NeuronSubgraph } from "$lib/types";
   import { t } from "$lib/i18n";
   import NeuronNetworkGraph from "./NeuronNetworkGraph.svelte";
@@ -122,7 +122,7 @@
     loading = true;
     error = null;
     try {
-      const list = (await invoke("list_neurons")) as Neuron[];
+      const list = (await api.invoke("list_neurons")) as Neuron[];
       neurons = list.sort((a, b) => b.weight - a.weight);
 
       // 拉取全部连接（用于图）
@@ -130,7 +130,7 @@
       await Promise.all(
         neurons.map(async (n) => {
           try {
-            const cs = (await invoke("get_connections", { id: n.id })) as Connection[];
+            const cs = (await api.invoke("get_connections", { id: n.id })) as Connection[];
             conns.push(...cs);
           } catch {
             // 忽略单节点拉取失败
@@ -167,10 +167,10 @@
     if (!drawerNeuron) return;
     const id = drawerNeuron.id;
     try {
-      const n = (await invoke("get_neuron", { id })) as Neuron;
+      const n = (await api.invoke("get_neuron", { id })) as Neuron;
       drawerNeuron = n;
       neurons = neurons.map((x) => (x.id === id ? n : x));
-      const cs = (await invoke("get_connections", { id })) as Connection[];
+      const cs = (await api.invoke("get_connections", { id })) as Connection[];
       drawerConns = cs;
       // 更新全局连接快照中该节点相关的边
       allConnections = [
@@ -208,7 +208,7 @@
 
   async function loadAvailableTools() {
     try {
-      availableTools = (await invoke("list_skills")) as {
+      availableTools = (await api.invoke("list_skills")) as {
         name: string;
         description: string;
       }[];
@@ -258,7 +258,7 @@
     creating = true;
     createError = null;
     try {
-      const created = (await invoke("create_neuron_plain", {
+      const created = (await api.invoke("create_neuron_plain", {
         desc,
         content: createContent,
         linkTo: createMode === "downstream" ? createSource : null,

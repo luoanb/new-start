@@ -6,6 +6,7 @@
   import ProvidersModelsPanel from "$lib/components/ProvidersModelsPanel.svelte";
   import TopicPanel from "$lib/components/TopicPanel.svelte";
   import SessionCreateModal from "$lib/components/SessionCreateModal.svelte";
+  import ConnectDialog from "$lib/components/ConnectDialog.svelte";
   import ErrorBanner from "$lib/components/ErrorBanner.svelte";
   import ActivityBar from "$lib/layout/ActivityBar.svelte";
   import Splitter from "$lib/layout/Splitter.svelte";
@@ -54,6 +55,7 @@
   // ── UI state ──
   let error = $state("");
   let showCreateModal = $state(false);
+  let showConnectDialog = $state(false);
   let drawerSidebar = $state(false);
   let drawerInfo = $state(false);
   // 移动端 drawer-info：原 Info 组合面板拆分后的聚合视图，drawer 内以本地 tab 切换承载
@@ -342,7 +344,20 @@
       items={activityItems}
       activeId={activityBarActive}
       onSelect={handleActivitySelect}
-    />
+    >
+      {#snippet footer()}
+        <button
+          class="activity-item"
+          title={t("connectDialog.title")}
+          aria-label={t("connectDialog.title")}
+          onclick={() => (showConnectDialog = true)}
+        >
+          <span class="activity-icon">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </span>
+        </button>
+      {/snippet}
+    </ActivityBar>
   </nav>
 
   <header class="status-area">
@@ -507,6 +522,11 @@
   open={showCreateModal}
   onCreate={handleCreateSession}
   onClose={() => (showCreateModal = false)}
+/>
+
+<ConnectDialog
+  open={showConnectDialog}
+  onClose={() => (showConnectDialog = false)}
 />
 
 {#if !ready}

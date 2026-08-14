@@ -38,10 +38,16 @@ rust-embed = "8"
 rmcp = { version = "3", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 http = "1"
+# 内嵌网络服务（远程模式）：统一 RPC 端点 + SSE 状态推送。
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures-util = "0.3"
 
 [dev-dependencies]
 # 仅测试用：本地 mock MCP server（stdio 走 in-memory duplex；http 走 axum 暴露的 streamable-http server）。
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 rmcp = { version = "3", features = ["server", "transport-streamable-http-server"] }
 tokio = { version = "1.53.1", features = ["io-util"] }
+# 仅测试用：net 模块冒烟（tower::ServiceExt::oneshot 直呼 router）。
+tower = { version = "0.5", features = ["util"] }
 

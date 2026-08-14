@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
+  import { api } from "$lib/api";
   import type {
     NeighborhoodPoolPolicy,
     SelectionPolicy,
@@ -120,7 +120,7 @@
   let insertCatalog = $state<InsertInfo[]>([]);
   onMount(async () => {
     try {
-      insertCatalog = (await invoke<InsertInfo[]>("list_insert_catalog")) ?? [];
+      insertCatalog = (await api.invoke<InsertInfo[]>("list_insert_catalog")) ?? [];
     } catch (e) {
       console.error("[behavior-fields] failed to load insert catalog", e);
     }

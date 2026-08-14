@@ -3,15 +3,16 @@
  *
  * 职责：
  * - bootstrap()：一次性拉取全部领域数据（providers/models/skills/conversations/status/topics/poller）。
- * - subscribe()：监听后端 `app://state-changed`，按 StateChange.kind 增量刷新对应领域。
- * - 组件只读 dataStore.state，写操作一律走 dataStore actions（内部 invoke + refresh），
+ * - subscribe()：通过 `api` 客户端订阅状态变更事件，按 StateChange.kind 增量刷新对应领域。
+ * - 组件只读 dataStore.state，写操作一律走 dataStore actions（内部 api.invoke + refresh），
  *   保证后端与 store 一致，消除各面板本地数组。
  *
+ * 通信方式：统一走 `$lib/api`（本机 Tauri IPC / 远程 HTTP+SSE），业务层无感知。
  * 后端推送策略：写操作完成后广播 StateChange；Conversations/Topics 走「重拉」，
  * Poller 负载直带最新 PollerStatus（数据小，避免一次额外 invoke）。
  */
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { api } from "$lib/api";
+import type { StateChangePayload } from "$lib/api/types";
 import { layoutStore } from "$lib/layout/LayoutStore.svelte";
 import type {
   ProviderInfo,
@@ -27,19 +28,7 @@ import type {
 } from "$lib/types";
 import { formatInvokeError } from "$lib/utils/formatInvokeError";
 
-/** 与后端 core/events.rs STATE_CHANGED_EVENT 保持一致 */
-export const STATE_CHANGED_EVENT = "app://state-changed";
-
-export type StateEventKind = "topics" | "conversations" | "poller" | "sessions" | "neurons" | "providers";
-
-export type StateChangePayload =
-  | { kind: "topics" }
-  | { kind: "conversations"; affected?: string[] }
-  | { kind: "poller"; status: PollerStatus }
-  | { kind: "sessions" }
-  | { kind: "neurons" }
-  | { kind: "providers" }
-  | { kind: "tools" };
+export type { StateChangePayload } from "$lib/api/types";
 
 const state = $state({
   ready: false,
@@ -74,18 +63,18 @@ const state = $state({
   providerCreateRequest: 0,
 });
 
-let unlisten: UnlistenFn | null = null;
+let unlisten: (() => void) | null = null;
 
 // ── 内部刷新 ──
 
 // runningSessions 刷新版本守卫：register/update/unregister 每次变化都会触发一次
-// 全量 invoke，响应可能乱序；只允许"最后一次发起的刷新"写入，丢弃过期旧快照，
+// 全量 api.invoke，响应可能乱序；只允许"最后一次发起的刷新"写入，丢弃过期旧快照，
 // 防止已结束的会话残留（表现为永久"思考中"）。
 let runningSessionsSeq = 0;
 
 async function refreshRunningSessions(): Promise<void> {
   const seq = ++runningSessionsSeq;
-  const list = await invoke<RunningSession[]>("list_running_sessions");
+  const list = await api.invoke<RunningSession[]>("list_running_sessions");
   if (seq !== runningSessionsSeq) return;
   state.runningSessions = list;
 }
@@ -95,30 +84,30 @@ async function refreshMessages(): Promise<void> {
     state.messages = [];
     return;
   }
-  state.messages = await invoke<Message[]>("history", {
+  state.messages = await api.invoke<Message[]>("history", {
     conversationId: state.activeConversationId,
   });
 }
 
 async function refreshConversations(): Promise<void> {
-  state.conversations = await invoke<Conversation[]>("list_conversations");
+  state.conversations = await api.invoke<Conversation[]>("list_conversations");
   // 会话变化往往伴随消息变化（发送/清空/后台推进），同步刷新当前会话消息。
   await refreshMessages();
 }
 
 async function refreshTopics(): Promise<void> {
-  state.topics = await invoke<Topic[]>("list_topics");
+  state.topics = await api.invoke<Topic[]>("list_topics");
 }
 
 async function refreshPoller(): Promise<void> {
-  state.poller = await invoke<PollerStatus>("poll_status");
+  state.poller = await api.invoke<PollerStatus>("poll_status");
 }
 
 /** 服务商/模型配置变化（保存后广播）：重新拉取 providers 与 models。 */
 async function refreshProvidersModels(): Promise<void> {
   const [providersRes, modelsRes] = await Promise.all([
-    invoke<ProviderInfo[]>("list_providers"),
-    invoke<ModelInfo[]>("list_models"),
+    api.invoke<ProviderInfo[]>("list_providers"),
+    api.invoke<ModelInfo[]>("list_models"),
   ]);
   state.providers = providersRes;
   state.models = modelsRes;
@@ -135,7 +124,7 @@ async function handleStateChanged(payload: StateChangePayload): Promise<void> {
       const affected = payload.affected ?? [];
       if (affected.length === 0) return;
       // 会话列表摘要始终重拉（标题/最后消息/时间可能变）。
-      state.conversations = await invoke<Conversation[]>("list_conversations");
+      state.conversations = await api.invoke<Conversation[]>("list_conversations");
       // 仅当受影响会话含当前激活会话时才重拉消息，
       // 避免后台推进其他会话时误触发当前会话重拉与滚动。
       if (state.activeConversationId && affected.includes(state.activeConversationId)) {
@@ -158,11 +147,11 @@ async function handleStateChanged(payload: StateChangePayload): Promise<void> {
   }
 }
 
-/** 监听后端状态变更事件；幂等（重复调用不会重复 listen）。 */
+/** 订阅后端状态变更事件；幂等（重复调用不会重复订阅）。 */
 async function subscribe(): Promise<void> {
   if (unlisten) return;
-  unlisten = await listen<StateChangePayload>(STATE_CHANGED_EVENT, (event) => {
-    void handleStateChanged(event.payload);
+  unlisten = api.subscribe((payload) => {
+    void handleStateChanged(payload);
   });
 }
 
@@ -185,14 +174,14 @@ async function bootstrap(): Promise<void> {
       pollerRes,
       runningSessionsRes,
     ] = await Promise.all([
-      invoke<ProviderInfo[]>("list_providers"),
-      invoke<ModelInfo[]>("list_models"),
-      invoke<SkillInfo[]>("list_skills"),
-      invoke<Conversation[]>("list_conversations"),
-      invoke<RuntimeStatus>("status"),
-      invoke<Topic[]>("list_topics"),
-      invoke<PollerStatus>("poll_status"),
-      invoke<RunningSession[]>("list_running_sessions"),
+      api.invoke<ProviderInfo[]>("list_providers"),
+      api.invoke<ModelInfo[]>("list_models"),
+      api.invoke<SkillInfo[]>("list_skills"),
+      api.invoke<Conversation[]>("list_conversations"),
+      api.invoke<RuntimeStatus>("status"),
+      api.invoke<Topic[]>("list_topics"),
+      api.invoke<PollerStatus>("poll_status"),
+      api.invoke<RunningSession[]>("list_running_sessions"),
     ]);
 
     state.providers = providersRes;
@@ -217,7 +206,7 @@ async function bootstrap(): Promise<void> {
   }
 }
 
-// ── Actions（写操作：内部 invoke，成功后依赖事件刷新 + 兜底 refresh）──
+// ── Actions（写操作：内部 api.invoke，成功后依赖事件刷新 + 兜底 refresh）──
 
 async function selectConversation(id: string): Promise<void> {
   state.activeConversationId = id;
@@ -225,14 +214,14 @@ async function selectConversation(id: string): Promise<void> {
 }
 
 async function createConversation(mode: string): Promise<string> {
-  const id = await invoke<string>("create_conversation", { mode });
+  const id = await api.invoke<string>("create_conversation", { mode });
   state.activeConversationId = id;
   await refreshConversations();
   return id;
 }
 
 async function closeSession(sessionId: string): Promise<void> {
-  await invoke<string>("close_session", { sessionId });
+  await api.invoke<string>("close_session", { sessionId });
   // 若关闭的是当前会话，先清空本地选中，让列表刷新后由回退逻辑接管。
   if (state.activeConversationId === sessionId) {
     state.activeConversationId = null;
@@ -255,7 +244,7 @@ async function sendMessage(
     timestamp: Date.now(),
   };
   state.messages = [...state.messages, userMsg];
-  const res = await invoke<ChatResponse>("send_chat_message", {
+  const res = await api.invoke<ChatResponse>("send_chat_message", {
     message: text,
     providerId,
     modelId,
@@ -274,7 +263,7 @@ async function sendMessage(
 }
 
 async function clearConversation(): Promise<void> {
-  await invoke<string>("clear_conversation", {
+  await api.invoke<string>("clear_conversation", {
     conversationId: state.activeConversationId,
   });
   await refreshConversations();
@@ -286,7 +275,7 @@ async function scoreFeedback(
   messageIndex: number,
   score: number
 ): Promise<void> {
-  await invoke("score_feedback", { conversationId, messageIndex, score });
+  await api.invoke("score_feedback", { conversationId, messageIndex, score });
 }
 
 // ── 神经元统一管理（列表 ←→ 画布共享状态）actions ──
@@ -327,7 +316,7 @@ async function openSession(
   specNeuronId: string,
   mode: string = "assistant",
 ): Promise<Conversation> {
-  const conv = await invoke<Conversation>("open_session", { specNeuronId, mode });
+  const conv = await api.invoke<Conversation>("open_session", { specNeuronId, mode });
   state.activeConversationId = conv.id;
   await refreshConversations();
   return conv;
@@ -354,7 +343,7 @@ async function converseSession(
   providerId: string,
   modelId: string,
 ): Promise<ChatResponse> {
-  return invoke<ChatResponse>("converse_session", {
+  return api.invoke<ChatResponse>("converse_session", {
     sessionId,
     input,
     providerId,
@@ -364,25 +353,25 @@ async function converseSession(
 
 // Topic actions
 async function createTopic(name: string, description: string): Promise<Topic> {
-  const topic = await invoke<Topic>("create_topic", { name, description });
+  const topic = await api.invoke<Topic>("create_topic", { name, description });
   await refreshTopics();
   return topic;
 }
 
 async function pauseTopic(id: string): Promise<Topic> {
-  const topic = await invoke<Topic>("pause_topic", { id });
+  const topic = await api.invoke<Topic>("pause_topic", { id });
   await refreshTopics();
   return topic;
 }
 
 async function resumeTopic(id: string): Promise<Topic> {
-  const topic = await invoke<Topic>("resume_topic", { id });
+  const topic = await api.invoke<Topic>("resume_topic", { id });
   await refreshTopics();
   return topic;
 }
 
 async function deleteTopic(id: string): Promise<boolean> {
-  const deleted = await invoke<boolean>("delete_topic", { id });
+  const deleted = await api.invoke<boolean>("delete_topic", { id });
   await refreshTopics();
   return deleted;
 }
@@ -392,7 +381,7 @@ async function addScopeItem(
   goal: string,
   doneContract: string,
 ): Promise<Topic> {
-  const topic = await invoke<Topic>("add_topic_scope_item", {
+  const topic = await api.invoke<Topic>("add_topic_scope_item", {
     topicId,
     goal,
     doneContract,
@@ -402,35 +391,35 @@ async function addScopeItem(
 }
 
 async function completeScopeItem(topicId: string, itemId: string): Promise<Topic> {
-  const topic = await invoke<Topic>("complete_topic_scope_item", { topicId, itemId });
+  const topic = await api.invoke<Topic>("complete_topic_scope_item", { topicId, itemId });
   await refreshTopics();
   return topic;
 }
 
 async function deleteScopeItem(topicId: string, itemId: string): Promise<Topic> {
-  const topic = await invoke<Topic>("delete_topic_scope_item", { topicId, itemId });
+  const topic = await api.invoke<Topic>("delete_topic_scope_item", { topicId, itemId });
   await refreshTopics();
   return topic;
 }
 
 // Poller actions
 async function pausePoller(): Promise<void> {
-  await invoke<void>("poll_pause");
+  await api.invoke<void>("poll_pause");
   await refreshPoller();
 }
 
 async function resumePoller(): Promise<void> {
-  await invoke<void>("poll_resume");
+  await api.invoke<void>("poll_resume");
   await refreshPoller();
 }
 
 async function triggerPoller(): Promise<void> {
-  await invoke<void>("poll_trigger");
+  await api.invoke<void>("poll_trigger");
   await refreshPoller();
 }
 
 async function setPollParallelism(n: number): Promise<void> {
-  await invoke<number>("poll_set_parallelism", { n });
+  await api.invoke<number>("poll_set_parallelism", { n });
   await refreshPoller();
 }
 

@@ -1,8 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
-  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { STATE_CHANGED_EVENT } from "$lib/stores/dataStore.svelte";
+  import { api } from "$lib/api";
+  import { STATE_CHANGED_EVENT } from "$lib/api/types";
   import { t, tMap } from "$lib/i18n";
   import Select from "./Select.svelte";
   import Toggle from "./Toggle.svelte";
@@ -11,7 +10,7 @@
     McpServerStatus,
     ToolInfo,
   } from "$lib/types";
-  import type { StateChangePayload } from "$lib/stores/dataStore.svelte";
+  import type { StateChangePayload } from "$lib/api/types";
   import { useViewContext } from "$lib/layout/viewContext";
 
   const ctx = useViewContext();
@@ -21,13 +20,13 @@
   let loading = $state(true);
   let refreshing = $state(false);
   let errorMsg = $state("");
-  let unlisten: UnlistenFn | null = null;
+  let unlisten: (() => void) | null = null;
 
   onMount(async () => {
     await refresh();
     // 启动后台装配 / 刷新 / 保存配置都会广播 Tools 事件，面板自动跟随。
-    unlisten = await listen<StateChangePayload>(STATE_CHANGED_EVENT, (event) => {
-      if (event.payload.kind === "tools") {
+    unlisten = api.subscribe((payload) => {
+      if (payload.kind === "tools") {
         void refresh(true);
       }
     });
@@ -42,8 +41,8 @@
     errorMsg = "";
     try {
       const [toolList, serverList] = await Promise.all([
-        invoke<ToolInfo[]>("list_tools"),
-        invoke<McpServerStatus[]>("list_mcp_servers"),
+        api.invoke<ToolInfo[]>("list_tools"),
+        api.invoke<McpServerStatus[]>("list_mcp_servers"),
       ]);
       tools = toolList;
       mcpServers = serverList;
@@ -60,7 +59,7 @@
     refreshing = true;
     errorMsg = "";
     try {
-      await invoke("reassemble_tools");
+      await api.invoke("reassemble_tools");
       await refresh(true);
     } catch (e) {
       errorMsg = t("toolPanel.reassembleFailed", { error: `${e}` });

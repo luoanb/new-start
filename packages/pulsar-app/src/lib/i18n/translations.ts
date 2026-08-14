@@ -76,6 +76,27 @@ export type Translations = {
     assistantLabel: string;
     assistantDesc: string;
   };
+  connectDialog: {
+    title: string;
+    mode: string;
+    modeLocal: string;
+    modeLocalHint: string;
+    modeRemote: string;
+    modeRemoteHint: string;
+    address: string;
+    addressPlaceholder: string;
+    token: string;
+    tokenHint: string;
+    test: string;
+    testing: string;
+    reachable: string;
+    unreachable: string;
+    needUrl: string;
+    save: string;
+    saving: string;
+    cancel: string;
+    switchFailed: string;
+  };
   neuronListPanel: {
     title: string;
     search: string;
@@ -465,6 +486,27 @@ export const en: Translations = {
     agentDesc: "Can call tools for tasks.",
     assistantLabel: "Assistant",
     assistantDesc: "Autonomous progression.",
+  },
+  connectDialog: {
+    title: "Connection",
+    mode: "Mode",
+    modeLocal: "Local",
+    modeLocalHint: "Access the app via Tauri IPC",
+    modeRemote: "Remote",
+    modeRemoteHint: "Access the embedded service over the network",
+    address: "Server address",
+    addressPlaceholder: "http://127.0.0.1:8787",
+    token: "Access token (optional)",
+    tokenHint: "Not required when the backend whitelist is empty",
+    test: "Test",
+    testing: "Testing...",
+    reachable: "Server reachable",
+    unreachable: "Cannot connect",
+    needUrl: "URL is required in remote mode",
+    save: "Save & switch",
+    saving: "Switching...",
+    cancel: "Cancel",
+    switchFailed: "Switch failed: {error}",
   },
   neuronListPanel: {
     title: "Neurons",
@@ -866,6 +908,27 @@ export const zh: Translations = {
     agentDesc: "可调用工具完成任务。",
     assistantLabel: "助手",
     assistantDesc: "自主推进模式。",
+  },
+  connectDialog: {
+    title: "连接设置",
+    mode: "模式",
+    modeLocal: "本机",
+    modeLocalHint: "通过 Tauri IPC 访问本机应用",
+    modeRemote: "远程",
+    modeRemoteHint: "通过网络访问内嵌服务",
+    address: "服务地址",
+    addressPlaceholder: "http://127.0.0.1:8787",
+    token: "访问令牌（可选）",
+    tokenHint: "后端白名单为空时无需填写",
+    test: "测试连接",
+    testing: "测试中...",
+    reachable: "服务可达",
+    unreachable: "无法连接",
+    needUrl: "远程模式需要填写地址",
+    save: "保存并切换",
+    saving: "切换中...",
+    cancel: "取消",
+    switchFailed: "切换失败：{error}",
   },
   neuronListPanel: {
     title: "神经元",

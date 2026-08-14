@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
+  import { api } from "$lib/api";
   import type { Connection, Neuron, SessionBehavior } from "$lib/types";
   import { t } from "$lib/i18n";
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
@@ -108,7 +108,7 @@
     try {
       const { kind, type } = confirmAction;
       if (kind === "bind") {
-        const updated = (await invoke("set_neuron_system_type", {
+        const updated = (await api.invoke("set_neuron_system_type", {
           id: neuron.id,
           systemType: type,
         })) as Neuron;
@@ -116,7 +116,7 @@
         bindMode = false;
         bindTypeInput = "";
       } else {
-        const updated = (await invoke("set_neuron_system_type", {
+        const updated = (await api.invoke("set_neuron_system_type", {
           id: neuron.id,
           systemType: null,
         })) as Neuron;
@@ -137,7 +137,7 @@
     behaviorSaving = true;
     saveError = null;
     try {
-      const updated = (await invoke("update_neuron_behavior", {
+      const updated = (await api.invoke("update_neuron_behavior", {
         id: neuron.id,
         behavior: behaviorDraft,
       })) as Neuron;
@@ -152,7 +152,7 @@
   }
 
   onMount(() => {
-    invoke("list_skills")
+    api.invoke("list_skills")
       .then((skills) => {
         availableTools = skills as { name: string; description: string }[];
       })
@@ -166,7 +166,7 @@
     saving = true;
     saveError = null;
     try {
-      await invoke("update_neuron", {
+      await api.invoke("update_neuron", {
         id: neuron.id,
         desc,
         content,
@@ -201,7 +201,7 @@
     toolIds = next;
     saveError = null;
     try {
-      const updated = (await invoke("update_neuron", {
+      const updated = (await api.invoke("update_neuron", {
         id: neuron.id,
         toolIds: next,
       })) as Neuron;
@@ -219,7 +219,7 @@
     if (!neuron || weightBusy) return;
     weightBusy = true;
     try {
-      const updated = (await invoke("adjust_neuron_weight", {
+      const updated = (await api.invoke("adjust_neuron_weight", {
         id: neuron.id,
         delta,
       })) as Neuron;
@@ -236,7 +236,7 @@
     if (weightBusy) return;
     weightBusy = true;
     try {
-      const updated = (await invoke("adjust_edge_weight", {
+      const updated = (await api.invoke("adjust_edge_weight", {
         source: c.source,
         target: c.target,
         delta,
