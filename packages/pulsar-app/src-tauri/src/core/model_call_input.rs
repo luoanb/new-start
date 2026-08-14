@@ -118,16 +118,47 @@ impl ModelCallInput {
         user_input: &str,
         template: ModelAppendTemplate,
     ) -> Vec<ModelMessage> {
+        Self::assemble_with_context(history, role_system, content, None, user_input, template)
+    }
+
+    /// Assemble with an optional context message (B2: stable system prompt + selected neuron).
+    ///
+    /// - `context == None`: same as `assemble`.
+    /// - `context == Some(ctx)`: insert a User(`[当前角色]\n{ctx}`) message between history and user input.
+    ///   First round (empty history): `ctx` is folded into the System message.
+    pub fn assemble_with_context(
+        history: &[ModelMessage],
+        role_system: &str,
+        content: &str,
+        context: Option<&str>,
+        user_input: &str,
+        template: ModelAppendTemplate,
+    ) -> Vec<ModelMessage> {
         let body = Self::with_user_input_for_append(content, user_input, template);
         if history.is_empty() {
-            let system = join_nonempty(role_system, &body);
+            let mut system = role_system.to_string();
+            if let Some(ctx) = context {
+                if !system.is_empty() {
+                    system.push_str("\n\n");
+                }
+                system.push_str(ctx);
+            }
+            let system = join_nonempty(&system, &body);
             return Self::replace_system(&[], &system);
         }
-        let with_system = Self::replace_system(history, role_system);
-        if body.is_empty() {
-            return with_system;
+        let mut messages = Self::replace_system(history, role_system);
+        if let Some(ctx) = context {
+            messages.push(ModelMessage {
+                role: ModelMessageRole::User,
+                content: format!("[当前角色]\n{ctx}"),
+                tool_calls: None,
+                tool_call_id: None,
+            });
         }
-        Self::append(&with_system, Self::message(ModelMessageRole::User, &body))
+        if !body.is_empty() {
+            messages.push(Self::message(ModelMessageRole::User, &body));
+        }
+        messages
     }
 
     /// Normalize tool-call/tool-result pairing before sending to the model.

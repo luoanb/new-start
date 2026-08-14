@@ -31,6 +31,13 @@ pub const SYSTEM_TYPE_DIRECT: &str = "direct";
 pub struct SessionState {
     #[serde(default)]
     pub last_selected_neuron_id: Option<String>,
+    /// 首轮选中 neuron.content 冻结后的稳定系统提示词（B2 方案）。
+    /// 有值后 `resolve_role` 返回此值而非新选中 neuron.content。
+    #[serde(default)]
+    pub stable_system_prompt: Option<String>,
+    /// 标记是否已完成首轮冻结（`stable_system_prompt` 已写入）。
+    #[serde(default)]
+    pub stable_system_frozen: bool,
 }
 
 /// 会话元数据（`conversation.extra.session`）：规格绑定 + 种子 + 运行态。
@@ -254,10 +261,17 @@ impl NeuronCallService {
             ),
             None => (ModelAppendTemplate::Neuron, ""),
         };
-        let messages = ModelCallInput::assemble(
+        // B2 方案：已冻结时，选中 neuron.content 作为独立 Context 消息插入（历史之后、用户输入之前）。
+        let context = if state.stable_system_frozen {
+            selected_neuron.as_ref().map(|n| n.content.as_str())
+        } else {
+            None
+        };
+        let messages = ModelCallInput::assemble_with_context(
             &input.messages,
             &role_system,
             insert_or_empty,
+            context,
             model_input,
             template,
         );
@@ -332,9 +346,11 @@ impl NeuronCallService {
     ) -> AppResult<(Option<Neuron>, String, Option<SessionBehavior>)> {
         let Some(seed) = seed else {
             state.last_selected_neuron_id = None;
+            state.stable_system_prompt = None;
+            state.stable_system_frozen = false;
             return Ok((None, String::new(), None));
         };
-        match seed {
+        let (neuron, mut role_system, behavior) = match seed {
             SessionSeed::Global => {
                 let behavior = SessionBehavior {
                     selection: SelectionPolicy::Global {
@@ -350,11 +366,14 @@ impl NeuronCallService {
                 )
                 .expect("Global always produce a scope");
                 if let Some(role) = self.reuse_selected_neuron(state, reselect) {
-                    return Ok((Some(role.clone()), role.content.clone(), Some(behavior)));
+                    let rs = role.content.clone();
+                    (Some(role), rs, Some(behavior))
+                } else {
+                    let role = self.neuron_manager.select_role(messages, scope).await?;
+                    state.last_selected_neuron_id = Some(role.id.clone());
+                    let rs = role.content.clone();
+                    (Some(role), rs, Some(behavior))
                 }
-                let role = self.neuron_manager.select_role(messages, scope).await?;
-                state.last_selected_neuron_id = Some(role.id.clone());
-                Ok((Some(role.clone()), role.content.clone(), Some(behavior)))
             }
             SessionSeed::Neuron(id) => {
                 let neuron = self
@@ -377,52 +396,77 @@ impl NeuronCallService {
                     )
                     .expect("Neighborhood always produce a scope");
                     if let Some(role) = self.reuse_selected_neuron(state, reselect) {
-                        return Ok((Some(role.clone()), role.content.clone(), Some(behavior)));
-                    }
-                    let role = self.neuron_manager.select_role(messages, scope).await?;
-                    state.last_selected_neuron_id = Some(role.id.clone());
-                    return Ok((Some(role.clone()), role.content.clone(), Some(behavior)));
-                }
-                // 系统神经元：用 behavior（禁 Global，旧数据宽容回退 Neighborhood）。
-                let behavior = neuron.behavior.clone().ok_or_else(|| {
-                    AppError::InvalidInput(format!(
-                        "neuron {id} is a system neuron but has no behavior"
-                    ))
-                })?;
-                let selection = match &behavior.selection {
-                    SelectionPolicy::Global { .. } => SelectionPolicy::Neighborhood {
-                        policy: NeighborhoodPoolPolicy::default(),
-                    },
-                    other => other.clone(),
-                };
-                match &selection {
-                    SelectionPolicy::None => {
-                        state.last_selected_neuron_id = None;
-                        Ok((None, String::new(), Some(behavior)))
-                    }
-                    SelectionPolicy::Fixed => {
-                        // 读系统神经元自己的 content；不写 last_selected。
-                        Ok((Some(neuron.clone()), neuron.content.clone(), Some(behavior)))
-                    }
-                    SelectionPolicy::Neighborhood { .. } => {
-                        let scope = Self::scope_for_selection(
-                            &selection,
-                            id,
-                            state.last_selected_neuron_id.as_deref(),
-                        )
-                        .expect("Neighborhood always produce a scope");
-                        if let Some(role) = self.reuse_selected_neuron(state, reselect) {
-                            return Ok((Some(role.clone()), role.content.clone(), Some(behavior)));
-                        }
+                        let rs = role.content.clone();
+                        (Some(role), rs, Some(behavior))
+                    } else {
                         let role = self.neuron_manager.select_role(messages, scope).await?;
                         state.last_selected_neuron_id = Some(role.id.clone());
-                        Ok((Some(role.clone()), role.content.clone(), Some(behavior)))
+                        let rs = role.content.clone();
+                        (Some(role), rs, Some(behavior))
                     }
-                    SelectionPolicy::Global { .. } => {
-                        unreachable!("converted to Neighborhood above")
+                } else {
+                    // 系统神经元：用 behavior（禁 Global，旧数据宽容回退 Neighborhood）。
+                    let behavior = neuron.behavior.clone().ok_or_else(|| {
+                        AppError::InvalidInput(format!(
+                            "neuron {id} is a system neuron but has no behavior"
+                        ))
+                    })?;
+                    let selection = match &behavior.selection {
+                        SelectionPolicy::Global { .. } => SelectionPolicy::Neighborhood {
+                            policy: NeighborhoodPoolPolicy::default(),
+                        },
+                        other => other.clone(),
+                    };
+                    match &selection {
+                        SelectionPolicy::None => {
+                            state.last_selected_neuron_id = None;
+                            (None, String::new(), Some(behavior))
+                        }
+                        SelectionPolicy::Fixed => {
+                            // 读系统神经元自己的 content；不写 last_selected。
+                            let rs = neuron.content.clone();
+                            (Some(neuron), rs, Some(behavior))
+                        }
+                        SelectionPolicy::Neighborhood { .. } => {
+                            let scope = Self::scope_for_selection(
+                                &selection,
+                                id,
+                                state.last_selected_neuron_id.as_deref(),
+                            )
+                            .expect("Neighborhood always produce a scope");
+                            if let Some(role) = self.reuse_selected_neuron(state, reselect) {
+                                let rs = role.content.clone();
+                                (Some(role), rs, Some(behavior))
+                            } else {
+                                let role = self.neuron_manager.select_role(messages, scope).await?;
+                                state.last_selected_neuron_id = Some(role.id.clone());
+                                let rs = role.content.clone();
+                                (Some(role), rs, Some(behavior))
+                            }
+                        }
+                        SelectionPolicy::Global { .. } => {
+                            unreachable!("converted to Neighborhood above")
+                        }
                     }
                 }
             }
+        };
+        Self::freeze_or_replace(state, &mut role_system);
+        Ok((neuron, role_system, behavior))
+    }
+
+    /// 首轮冻结 / 后续轮替换为稳定系统提示词。
+    /// 首轮（`stable_system_frozen == false`）将 `role_system` 冻结为 `stable_system_prompt`；
+    /// 后续轮用 `stable_system_prompt` 替换 `role_system`，保持 System 消息不变。
+    fn freeze_or_replace(state: &mut SessionState, role_system: &mut String) {
+        if role_system.is_empty() {
+            return;
+        }
+        if !state.stable_system_frozen {
+            state.stable_system_prompt = Some(role_system.clone());
+            state.stable_system_frozen = true;
+        } else if let Some(stable) = &state.stable_system_prompt {
+            *role_system = stable.clone();
         }
     }
 
@@ -816,6 +860,7 @@ mod tests {
     fn session_state_roundtrip_via_extra() {
         let state = SessionState {
             last_selected_neuron_id: Some("n-1".into()),
+            ..Default::default()
         };
         let mut conversation = empty_conversation();
         set_session_state(&mut conversation, &state);
