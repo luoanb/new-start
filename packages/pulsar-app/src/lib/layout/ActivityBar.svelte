@@ -30,8 +30,10 @@
     </button>
   {/each}
 
+  <div class="spacer"></div>
+
   {#if footer}
-    <div class="activity-footer">{@render footer()}</div>
+    {@render footer()}
   {/if}
 </nav>
 
@@ -48,7 +50,7 @@
     border-right: var(--border-width) solid var(--color-border);
   }
 
-  .activity-item {
+  :global(.activity-item) {
     position: relative;
     width: 48px;
     height: 44px;
@@ -57,20 +59,23 @@
     justify-content: center;
     background: none;
     border: none;
+    outline: none;
     cursor: pointer;
     color: var(--color-text-muted);
     transition: color var(--duration-fast) var(--ease-out);
   }
 
-  .activity-icon { font-size: 18px; line-height: 1; }
+  :global(.activity-icon) { font-size: 18px; line-height: 1; }
 
-  .activity-item:hover { color: var(--color-text); }
+  :global(.activity-item:hover) { color: var(--color-text); }
 
-  .activity-item.active {
+  :global(.activity-item:focus-visible) { outline: none; }
+
+  :global(.activity-item.active) {
     color: var(--color-primary);
   }
 
-  .activity-item.active::before {
+  :global(.activity-item.active::before) {
     content: "";
     position: absolute;
     left: 0;
@@ -81,8 +86,7 @@
     background: var(--color-primary);
   }
 
-  .activity-footer {
-    margin-top: auto;
-    padding-bottom: var(--space-2);
+  .spacer {
+    flex: 1;
   }
 </style>
