@@ -5,6 +5,7 @@
   import ToolResultBlock from "./ToolResultBlock.svelte";
   import NudgeBlock from "./NudgeBlock.svelte";
   import { t } from "$lib/i18n";
+  import { clickOutside } from "$lib/actions/clickOutside";
 
   let {
     message,
@@ -45,7 +46,11 @@
   let panelUp = $state(false);
   let copied = $state(false);
 
-  function openRating() {
+  function toggleRating() {
+    if (ratingOpen) {
+      ratingOpen = false;
+      return;
+    }
     if (ratingBtnEl) {
       const rect = ratingBtnEl.getBoundingClientRect();
       // 以最近的滚动容器（.messages）为基准：它带 overflow 裁剪，面板超出其
@@ -175,14 +180,14 @@
             class="rating"
             role="group"
             aria-label={t("chatMessage.rate")}
-            onmouseenter={openRating}
-            onmouseleave={() => (ratingOpen = false)}
+            use:clickOutside={ratingOpen ? () => (ratingOpen = false) : null}
           >
             <button
               class="action-btn"
               bind:this={ratingBtnEl}
               title={t("chatMessage.rate")}
               aria-label={t("chatMessage.rate")}
+              onclick={toggleRating}
             >
               <svg
                 viewBox="0 0 24 24"
@@ -204,7 +209,7 @@
                 {#each scoreList as score}
                   <button
                     class="rating-btn"
-                    onclick={() => handleRate(score)}
+                    onclick={(e) => { e.stopPropagation(); handleRate(score); }}
                   >
                     {score}
                   </button>
@@ -249,8 +254,8 @@
   .action-btn:hover { color: var(--color-text); border-color: var(--color-primary); }
   .action-btn.copied { color: var(--color-primary); border-color: var(--color-primary); }
   .rating { position: relative; display: inline-flex; }
-  .rating-panel { position: absolute; top: 100%; left: 0; display: grid; grid-template-columns: repeat(10, 26px); gap: 2px; padding: var(--space-1); background: var(--color-surface); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-sm); z-index: 100; }
-  .rating-panel.up { top: auto; bottom: 100%; }
+  .rating-panel { position: absolute; top: 100%; left: 0; margin-top: 4px; display: grid; grid-template-columns: repeat(10, 26px); gap: 2px; padding: var(--space-1); background: var(--color-surface); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-sm); z-index: 100; }
+  .rating-panel.up { top: auto; bottom: 100%; margin-top: 0; margin-bottom: 4px; }
   .message.user .rating-panel { left: auto; right: 0; }
   .rating-btn { font-size: var(--fs-xs); height: 22px; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--color-text-muted); cursor: pointer; }
   .rating-btn:hover { background: var(--color-primary); color: var(--color-on-primary); }
