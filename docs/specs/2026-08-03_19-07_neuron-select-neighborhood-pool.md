@@ -109,6 +109,7 @@ pub async fn select_one_from_with_history(
 - 2026-08-03：完成接口纠偏：新增 `AssistantCandidateScope` / `NeighborhoodPoolPolicy`，Hook 显式先构造候选池、再基于历史选 1。
 - 2026-08-03：新增自定义配额、全局零配额和新建批次上限测试，并反写实现态快照。
 - 2026-08-09：邻域候选池补充全局权重 top5——`NeighborhoodPoolPolicy` 新增 `global_top_weight`（默认 5）；`list_global_candidates` 口径收紧为排除系统提示词与 observing 变体；装配末尾并入全库 weight 最高的 N 个（按 id 去重）。详见 [`docs/micro_specs/2026-08-09_12-00_neuron-pool-top-weight-5.md`](../micro_specs/2026-08-09_12-00_neuron-pool-top-weight-5.md)。
+- 2026-08-15：模选后回挂边——模选命中后，若 target 不是候选池锚点（source）的直接下游，自动新建 `source → target` 边（权重恒 0，幂等）；source = Neighborhood 的 `self_id`（非首轮 = last\_selected / 首轮 = 发起神经元）；Global 无锚点跳过。`select_one_from_with_history` 新增 `link_source: Option<&str>`，覆盖所有模选入口；`select_role` 从 scope 提取锚点。详见 [`docs/micro_specs/2026-08-15_neuron-select-link-back.md`](../micro_specs/2026-08-15_neuron-select-link-back.md)。
 
 ## Validation
 

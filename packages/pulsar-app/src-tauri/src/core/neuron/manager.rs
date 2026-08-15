@@ -283,9 +283,10 @@ impl NeuronManager {
         &self,
         candidates: &[Neuron],
         history: &[ModelMessage],
+        link_source: Option<&str>,
     ) -> AppResult<Neuron> {
         self.selection
-            .select_one_from_with_history(candidates, history)
+            .select_one_from_with_history(candidates, history, link_source)
             .await
     }
 
@@ -421,13 +422,19 @@ impl NeuronManager {
         messages: &[ModelMessage],
         scope: AssistantCandidateScope,
     ) -> AppResult<Neuron> {
+        // 回挂边锚点 = 候选池锚点：Neighborhood 的 self_id（非首轮 = last_selected / 首轮 = 发起神经元）；Global 无锚点 → None。
+        let link_source = match &scope {
+            AssistantCandidateScope::Neighborhood { self_id, .. } => Some(self_id.clone()),
+            AssistantCandidateScope::Global { .. } => None,
+        };
         let candidates = self.select_assistant_candidates(scope).await?;
         if candidates.len() == 1 {
             let single = candidates[0].clone();
             self.mark_used_for_assistant(&single.id);
             return Ok(single);
         }
-        self.select_one_from_with_history(&candidates, messages).await
+        self.select_one_from_with_history(&candidates, messages, link_source.as_deref())
+            .await
     }
 }
 

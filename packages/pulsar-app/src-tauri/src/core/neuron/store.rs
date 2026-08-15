@@ -626,6 +626,22 @@ impl NeuronStore {
         })
     }
 
+    /// 直接下游存在性检查：`source → target` 边是否存在（回挂规则前置判断）。
+    pub fn connection_exists(&self, source: &str, target: &str) -> AppResult<bool> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM connections WHERE source = ?1 AND target = ?2",
+                params![source, target],
+                |row| row.get(0),
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to check connection: {}", e)))?;
+        Ok(count > 0)
+    }
+
     pub fn unlink(&self, source: &str, target: &str) -> AppResult<bool> {
         let conn = self
             .conn

@@ -70,7 +70,28 @@
         }
     }
 
+    /// 固定返回指定 `neuron_id` 的选型 mock：驱动 LLM 命中指定候选（供回挂边用例使用）。
+    struct PickIdModelCaller {
+        target_id: Mutex<String>,
+    }
+
+    #[async_trait]
+    impl NeuronModelCaller for PickIdModelCaller {
+        async fn call_model(&self, _messages: Vec<ModelMessage>) -> AppResult<String> {
+            let id = self.target_id.lock().unwrap().clone();
+            Ok(format!(r#"{{"neuron_id":"{id}"}}"#))
+        }
+    }
+
     fn test_manager() -> (Arc<NeuronManager>, std::path::PathBuf) {
+        test_manager_with(Arc::new(MockModelCaller {
+            calls: AtomicUsize::new(0),
+        }))
+    }
+
+    fn test_manager_with(
+        caller: Arc<dyn NeuronModelCaller>,
+    ) -> (Arc<NeuronManager>, std::path::PathBuf) {
         let conn = Arc::new(Mutex::new(SqliteConnection::open_in_memory().unwrap()));
         let store = Arc::new(Mutex::new(NeuronStore::new(conn)));
         store.lock().unwrap().init_table().unwrap();
@@ -87,12 +108,9 @@
             r#"{"neurons":{"bootstrap":{"create_neuron_prompt":"create a neuron"}}}"#,
         )
         .unwrap();
-        let caller = Arc::new(MockModelCaller {
-            calls: AtomicUsize::new(0),
-        });
         let manager = Arc::new(NeuronManager::new(
             store,
-            Arc::clone(&caller) as Arc<dyn NeuronModelCaller>,
+            caller,
             NeuronConfigReader::new(root.clone()),
             Arc::new(RwLock::new(ToolRegistry::new())),
         ));
@@ -121,6 +139,23 @@
                 },
                 Some(parent_id),
             )
+            .unwrap()
+    }
+
+    /// 直接落库选型系统神经元（无下游填充）：驱动 `try_llm_select` 走 LLM 成功分支。
+    fn insert_selector(manager: &NeuronManager) -> Neuron {
+        manager
+            .store()
+            .unwrap()
+            .create_neuron(NeuronCreate {
+                desc: "selector".into(),
+                content: "select one".into(),
+                weight: 0.0,
+                system_type: Some(ASSISTANT_SELECT_NEURON.into()),
+                tool_ids: vec![],
+                lineage_parent_id: None,
+                variant_state: None,
+            })
             .unwrap()
     }
 
@@ -937,6 +972,153 @@
         let stored = manager.get(&n.id).unwrap().unwrap();
         assert_eq!(stored.use_count, 1);
         assert!(stored.last_used_at.is_some());
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    // ── 模选回挂边（link back source → target）─────────────────
+
+    #[tokio::test]
+    async fn link_back_creates_edge_when_target_not_direct_downstream() {
+        let caller = Arc::new(PickIdModelCaller {
+            target_id: Mutex::new(String::new()),
+        });
+        let (manager, root) = test_manager_with(caller.clone() as Arc<dyn NeuronModelCaller>);
+        insert_selector(&manager);
+        let anchor = insert_plain(&manager, "anchor", "anchor content");
+        let target = insert_plain(&manager, "target", "target content");
+        *caller.target_id.lock().unwrap() = target.id.clone();
+
+        let selected = manager
+            .select_one_from_with_history(&[target.clone()], &[], Some(anchor.id.as_str()))
+            .await
+            .unwrap();
+        assert_eq!(selected.id, target.id);
+        assert!(
+            manager
+                .store()
+                .unwrap()
+                .connection_exists(&anchor.id, &target.id)
+                .unwrap(),
+            "模选命中非直接下游应新建 anchor -> target 边"
+        );
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn link_back_skips_existing_direct_edge() {
+        let caller = Arc::new(PickIdModelCaller {
+            target_id: Mutex::new(String::new()),
+        });
+        let (manager, root) = test_manager_with(caller.clone() as Arc<dyn NeuronModelCaller>);
+        insert_selector(&manager);
+        let anchor = insert_plain(&manager, "anchor", "anchor content");
+        let target = insert_downstream(&manager, &anchor.id, "child");
+        // 给既有边加权重，验证回挂不会重写为 0。
+        manager
+            .store()
+            .unwrap()
+            .adjust_connection_weight(&anchor.id, &target.id, 5.0)
+            .unwrap();
+        *caller.target_id.lock().unwrap() = target.id.clone();
+
+        let selected = manager
+            .select_one_from_with_history(&[target.clone()], &[], Some(anchor.id.as_str()))
+            .await
+            .unwrap();
+        assert_eq!(selected.id, target.id);
+        let edges = manager.store().unwrap().get_connections(&anchor.id).unwrap();
+        let edge = edges
+            .iter()
+            .find(|e| e.source == anchor.id && e.target == target.id)
+            .expect("anchor -> target 边应存在");
+        assert_eq!(edge.weight, 5.0, "已存在直接边不应被回挂重写权重");
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn link_back_skips_self_loop() {
+        let caller = Arc::new(PickIdModelCaller {
+            target_id: Mutex::new(String::new()),
+        });
+        let (manager, root) = test_manager_with(caller.clone() as Arc<dyn NeuronModelCaller>);
+        insert_selector(&manager);
+        let anchor = insert_plain(&manager, "anchor", "anchor content");
+        *caller.target_id.lock().unwrap() = anchor.id.clone();
+
+        let selected = manager
+            .select_one_from_with_history(&[anchor.clone()], &[], Some(anchor.id.as_str()))
+            .await
+            .unwrap();
+        assert_eq!(selected.id, anchor.id);
+        assert!(
+            !manager
+                .store()
+                .unwrap()
+                .connection_exists(&anchor.id, &anchor.id)
+                .unwrap(),
+            "target == source 时不应自环"
+        );
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn link_back_skipped_without_anchor() {
+        let caller = Arc::new(PickIdModelCaller {
+            target_id: Mutex::new(String::new()),
+        });
+        let (manager, root) = test_manager_with(caller.clone() as Arc<dyn NeuronModelCaller>);
+        insert_selector(&manager);
+        let anchor = insert_plain(&manager, "anchor", "anchor content");
+        let target = insert_plain(&manager, "target", "target content");
+        *caller.target_id.lock().unwrap() = target.id.clone();
+
+        let selected = manager
+            .select_one_from_with_history(&[target.clone()], &[], None)
+            .await
+            .unwrap();
+        assert_eq!(selected.id, target.id);
+        assert!(
+            !manager
+                .store()
+                .unwrap()
+                .connection_exists(&anchor.id, &target.id)
+                .unwrap(),
+            "无锚点（select_one_from / Global 首轮）不应建边"
+        );
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn link_back_skipped_on_global_first_round() {
+        let caller = Arc::new(PickIdModelCaller {
+            target_id: Mutex::new(String::new()),
+        });
+        let (manager, root) = test_manager_with(caller.clone() as Arc<dyn NeuronModelCaller>);
+        insert_selector(&manager);
+        // 预置恰好 3 条普通节点（Global 候选池只含 system_type IS NULL），避免触发补池模型调用。
+        let anchor = insert_plain(&manager, "anchor", "anchor content");
+        let target = insert_plain(&manager, "target", "target content");
+        insert_plain(&manager, "extra", "extra content");
+        *caller.target_id.lock().unwrap() = target.id.clone();
+
+        let selected = manager
+            .select_role(&[], AssistantCandidateScope::Global { limit: 3 })
+            .await
+            .unwrap();
+        assert_eq!(selected.id, target.id);
+        assert!(
+            !manager
+                .store()
+                .unwrap()
+                .connection_exists(&anchor.id, &target.id)
+                .unwrap(),
+            "Global 首轮无锚点，不应建边"
+        );
         drop(manager);
         fs::remove_dir_all(root).unwrap();
     }

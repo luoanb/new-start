@@ -255,8 +255,10 @@ impl NeuronSelection {
         if query.n == 0 {
             query.n = DEFAULT_SELECT_N;
         }
+        // 回挂边锚点：候选池锚点 = query.source_id（有源时命中即为其直接下游，通常空操作；幂等安全）。
+        let link_source = query.source_id.clone();
         let candidates = self.select_candidates(query).await?;
-        self.select_one_from_with_history(&candidates, history)
+        self.select_one_from_with_history(&candidates, history, link_source.as_deref())
             .await
     }
 
@@ -396,13 +398,15 @@ impl NeuronSelection {
     }
 
     pub(crate) async fn select_one_from(&self, candidates: &[Neuron]) -> AppResult<Neuron> {
-        self.select_one_from_with_history(candidates, &[]).await
+        // 调用方无锚点信息，不建回挂边。
+        self.select_one_from_with_history(candidates, &[], None).await
     }
 
     pub(crate) async fn select_one_from_with_history(
         &self,
         candidates: &[Neuron],
         history: &[ModelMessage],
+        link_source: Option<&str>,
     ) -> AppResult<Neuron> {
         if candidates.is_empty() {
             return Err(AppError::InvalidInput(
@@ -411,6 +415,14 @@ impl NeuronSelection {
         }
         match self.try_llm_select(candidates, history).await {
             Ok(neuron) => {
+                // 模选命中后回挂边：source → target（权重 0，幂等）。失败不阻塞选型（与 mark_used 同策略）。
+                if let Err(error) = self.maybe_link_to_source(link_source, &neuron) {
+                    tracing::warn!(
+                        phase = "select_one.link_back",
+                        error = %error,
+                        "link back skipped due to error"
+                    );
+                }
                 // 活跃信号：select_one 命中即记录使用（忽略失败，不阻塞选择流程）。
                 let _ = self.store()?.mark_used(&neuron.id);
                 tracing::info!(
@@ -433,6 +445,31 @@ impl NeuronSelection {
                 Ok(picked)
             }
         }
+    }
+
+    /// 模选回挂边规则：source 有值且 target 不是 source 直接下游时新建 `source → target` 边。
+    /// - source 为 None → 跳过（无锚点，不建边）；
+    /// - `source == target.id` → 跳过（不自环）；
+    /// - `connection_exists` 为真 → 跳过（幂等）；
+    /// - 否则 `link(source, target.id, 0.0)`（新边恒权重 0）。
+    fn maybe_link_to_source(&self, source: Option<&str>, target: &Neuron) -> AppResult<()> {
+        let Some(source) = source else {
+            return Ok(());
+        };
+        if source == target.id {
+            return Ok(());
+        }
+        if self.store()?.connection_exists(source, &target.id)? {
+            return Ok(());
+        }
+        self.store()?.link(source, &target.id, 0.0)?;
+        tracing::info!(
+            phase = "select_one.link_back",
+            source,
+            target_id = %target.id,
+            "linked back source -> target after model selection"
+        );
+        Ok(())
     }
 
     fn resolve_source_id(&self, source_id: Option<&str>) -> AppResult<Option<String>> {
