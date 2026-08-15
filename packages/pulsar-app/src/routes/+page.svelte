@@ -20,6 +20,7 @@
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
   import { hotkeyService } from "$lib/hotkey/hotkeyService";
   import { dataStore } from "$lib/stores/dataStore.svelte";
+  import { isTauriEnv } from "$lib/api";
 
   // ── 统一数据（dataStore 驱动：bootstrap + 事件订阅刷新）──
   let conversations = $derived(dataStore.state.conversations);
@@ -56,6 +57,8 @@
   let error = $state("");
   let showCreateModal = $state(false);
   let showConnectDialog = $state(false);
+  // 非 Tauri 环境为纯远程访问：连接失败时自动弹出连接弹窗，并锁定不可关闭（直到连接成功）。
+  let remoteConnLocked = $state(false);
   let drawerSidebar = $state(false);
   let drawerInfo = $state(false);
   // 移动端 drawer-info：原 Info 组合面板拆分后的聚合视图，drawer 内以本地 tab 切换承载
@@ -100,6 +103,15 @@
   );
   let activeMode = $derived(activeConversation?.mode ?? "chat");
   let hasModel = $derived(!!ui.activeProviderId && !!ui.activeModelId);
+
+  // 非 Tauri 环境（纯远程访问）：一旦出现连接错误即自动弹出连接弹窗并锁定，
+  // 直到用户在弹窗内成功保存并切换到可用连接（save 成功后触发 onClose 解锁）。
+  $effect(() => {
+    if (!isTauriEnv && dataStore.state.error && !remoteConnLocked) {
+      remoteConnLocked = true;
+      showConnectDialog = true;
+    }
+  });
 
   // ── Bootstrap：统一拉取 + 订阅后端状态事件 ──
   onMount(async () => {
@@ -526,7 +538,11 @@
 
 <ConnectDialog
   open={showConnectDialog}
-  onClose={() => (showConnectDialog = false)}
+  locked={remoteConnLocked}
+  onClose={() => {
+    showConnectDialog = false;
+    remoteConnLocked = false;
+  }}
 />
 
 {#if !ready}

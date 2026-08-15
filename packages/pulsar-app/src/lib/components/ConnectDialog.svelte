@@ -4,7 +4,7 @@
   import type { ConnConfig } from "$lib/api/types";
   import { dataStore } from "$lib/stores/dataStore.svelte";
 
-  let { open, onClose }: { open: boolean; onClose: () => void } = $props();
+  let { open, onClose, locked = false }: { open: boolean; onClose: () => void; locked?: boolean } = $props();
 
   let mode = $state<"local" | "remote">("local");
   let url = $state("");
@@ -80,14 +80,19 @@
 
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <div class="overlay" onclick={onClose}>
+  <div class="overlay" onclick={() => { if (!locked) onClose(); }}>
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="modal" onclick={(e) => e.stopPropagation()}>
       <div class="modal-header">
         <h2>{t("connectDialog.title")}</h2>
-        <button class="close-btn" onclick={onClose}>×</button>
+        {#if !locked}
+          <button class="close-btn" onclick={onClose}>×</button>
+        {/if}
       </div>
       <div class="modal-body">
+        {#if locked}
+          <p class="locked-hint">{t("connectDialog.lockedHint")}</p>
+        {/if}
         <div class="field">
           <span class="field-label">{t("connectDialog.mode")}</span>
           <div class="mode-options">
@@ -150,7 +155,9 @@
         {/if}
       </div>
       <div class="modal-footer">
-        <button class="btn ghost" onclick={onClose} disabled={saving}>{t("connectDialog.cancel")}</button>
+        {#if !locked}
+          <button class="btn ghost" onclick={onClose} disabled={saving}>{t("connectDialog.cancel")}</button>
+        {/if}
         <button class="btn primary" onclick={save} disabled={saving}>
           {saving ? t("connectDialog.saving") : t("connectDialog.save")}
         </button>
@@ -201,6 +208,7 @@
   .test-result.ok { color: var(--color-success, #2e7d32); }
   .test-result.fail { color: var(--color-danger, #c62828); }
   .error { margin: 0; font-size: 13px; color: var(--color-danger, #c62828); }
+  .locked-hint { margin: 0; font-size: 13px; color: var(--color-warning, #f59e0b); }
   .modal-footer {
     display: flex; justify-content: flex-end; gap: 10px;
     padding: 14px 20px; border-top: 1px solid var(--color-border);

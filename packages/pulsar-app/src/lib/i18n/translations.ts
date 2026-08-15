@@ -96,6 +96,7 @@ export type Translations = {
     saving: string;
     cancel: string;
     switchFailed: string;
+    lockedHint: string;
   };
   neuronListPanel: {
     title: string;
@@ -507,6 +508,7 @@ export const en: Translations = {
     saving: "Switching...",
     cancel: "Cancel",
     switchFailed: "Switch failed: {error}",
+    lockedHint: "Connection failed. Enter a valid server address to continue.",
   },
   neuronListPanel: {
     title: "Neurons",
@@ -929,6 +931,7 @@ export const zh: Translations = {
     saving: "切换中...",
     cancel: "取消",
     switchFailed: "切换失败：{error}",
+    lockedHint: "连接失败，请填写正确的服务地址后保存以继续。",
   },
   neuronListPanel: {
     title: "神经元",
