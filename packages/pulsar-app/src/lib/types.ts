@@ -226,7 +226,7 @@ export type Neuron = {
   use_count?: number;
   last_used_at?: number | null;
   deleted_at?: number | null;
-  /** 会话规格（仅 `system_type` 非空的神经元可挂载；后端缺失回落 null）。 */
+  /** 系统神经元行为（仅 `system_type` 非空的神经元可挂载；后端缺失回落 null）。 */
   behavior?: SessionBehavior | null;
 };
 
@@ -285,7 +285,7 @@ export type RunningSession = {
   current_step: string | null;
 };
 
-// ── 会话规格（系统神经元 behavior 管理，字段与后端 models.rs serde 一致）──
+// ── 系统神经元行为（system neuron behavior 管理，字段与后端 models.rs serde 一致）──
 
 /** 邻域池策略（对齐 NeighborhoodPoolPolicy）。 */
 export type NeighborhoodPoolPolicy = {
@@ -298,7 +298,7 @@ export type NeighborhoodPoolPolicy = {
 };
 
 /** 选型策略：Rust externally-tagged enum 的 JSON 形态（宽容解析兼容旧字段）。
- * - "None" 不取提示词；"Fixed" 读规格自己 content；
+ * - "None" 不取提示词；"Fixed" 读系统神经元自己 content；
  * - Neighborhood 邻域选 1；Global 无历史全域选 1、有历史退化为邻域。 */
 export type SelectionPolicy =
   | "None"
@@ -312,7 +312,7 @@ export type ToolPolicy =
   | "FromNeuron"
   | { Allowlist: string[] };
 
-/** 会话规格行为（承载于 session.% 系统神经元的 behavior 列）。 */
+/** 系统神经元行为（承载于 session.% 系统神经元的 behavior 列）。 */
 export type SessionBehavior = {
   selection: SelectionPolicy;
   tools: ToolPolicy;

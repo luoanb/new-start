@@ -366,6 +366,7 @@ pub async fn list_session_specs(app: AppHandle) -> AppResult<Vec<SystemPromptSta
 - 2026-08-09（修订 2）：规格管理抽离为 `SessionSpecManager` 子组件（新建 `core/spec_manager.rs`）：作为 `NeuronManager` 内部持有的组合字段（Rust 组合，类比子类），仅共享 `store`、不反向依赖 NeuronManager；`ensure_session_neuron` 由 NeuronManager 编排（`ensure_system_neuron` 本体创建 + specs 写 behavior）；`get_session_behavior` / `update_behavior_for_admin` / `list_session_specs` 为 NeuronManager 薄转发；`NeuronCallService` 不再单独持有 spec 依赖，经 `NeuronManager` 读规格（对外单门面）；behavior 写路径统一收敛到 `SessionSpecManager`（`update_content_for_admin` 不触碰 behavior）。
 - 2026-08-09（实现反写）：Phase 1 落地。实际实现偏差：①`NeuronCallService` 以 `Arc<dyn ModelCaller>` trait 抽象持有模型调用（`ProviderRegistry` 实现，测试注入替身），替代 spec 初稿的 `providers: ProviderRegistry`；②`update_behavior_for_admin` 按「只写 behavior、不触碰 content」落地；③`RoundTrigger` / `AssistantRoundContext` 定义随收敛迁移至 `call_service.rs`（`spec_neuron_id` / `behavior` 字段由 resolve_round 填充）；④`Conversation.extra` 追加连带 `compactor.rs` 测试构造补字段；⑤测试覆盖：call_service 新增 8 项（behavior 序列化、工具过滤、会话态往返、n=1 短路、Fixed/Reelect、工具三策略、converse 端到端），全量 158 项通过。
 - 2026-08-09（Phase 2 对齐反写）：Phase 2 方案确认「系统神经元一元化」语义重构，本文档相关定义（`SelectionPolicy` 语义、`Switching` / `Conditional` / `switched_session`、`session.assistant_dialogue` 默认行为、规格管理命令形态）以头部警示块与 [Phase 2 spec](2026-08-09_16-40_neuron-call-service-phase2.md) 为准。
+- 2026-08-15（反写标注）：内建会话规格 `session.assistant_dialogue` 已移除，术语统一为「系统神经元 / 发起神经元」，详见 `docs/micro_specs/2026-08-15_remove-assistant-dialogue-and-terminology.md`。
 
 ## Validation
 

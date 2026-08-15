@@ -38,7 +38,7 @@ pulsar-app（Rust / Tauri）的模型调用采用**单一下游出口** + 多层
 [`Gateway::send_model_message`](../../packages/pulsar-app/src-tauri/src/core/gateway.rs#L496-L579) 按会话模式路由：
 
 - **Assistant** → `AssistantMode::converse`（课题 hooks 编排，最重路径）
-- **Chat** → `call_service.execute_round`（退化形态，无规格/无工具）
+- **Chat** → `call_service.execute_round`（退化形态，无系统神经元/无工具）
 - **Agent** → `gateway.agent_loop`（多轮工具循环，护栏 `AGENT_MAX_ITERATIONS = 20`）
 
 ### 3.3 业务服务层

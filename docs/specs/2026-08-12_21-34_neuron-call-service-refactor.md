@@ -260,9 +260,9 @@ pub async fn step_poller(&self, session_id: &str, model: &ChatModelSelection)
 
 * **Runner 编排**：读会话构上下文 → before hooks（可改 model\_input）→ converse → after hooks（读 outcome）→ InputRecord 落库顺序（user → 产物 → state）；Chat 传 None hooks 直连。
 
-* **行为回归**：topic\_brief 从 system 侧改为 model\_input（用户侧）后，Assistant 轮询推进质量与既有规格会话行为需回归验证；Agent 循环终止与护栏、Poller 调度不变。
+* **行为回归**：topic\_brief 从 system 侧改为 model\_input（用户侧）后，Assistant 轮询推进质量与既有系统神经元会话行为需回归验证；Agent 循环终止与护栏、Poller 调度不变。
 
-* **迁移回归**：既有规格会话（assistant\_dialogue 等）行为不变；前端发起会话/对话流程回归。
+* **迁移回归**：既有系统神经元会话（assistant\_dialogue 等）行为不变；前端发起会话/对话流程回归。
 
 ## 7. 范围外 / 待确认
 
@@ -292,7 +292,7 @@ pub async fn step_poller(&self, session_id: &str, model: &ChatModelSelection)
 
 * [x] **验证状态**：`cargo check --all-targets` 零 error / 零 warning；`cargo test` 169 全绿（含单轮语义 / 无状态 / Runner 编排 / 工具授权 / Agent 护栏 / 迁移回归）。
 
-* [ ] **待人工回归**：既有规格会话（assistant\_dialogue 等）行为、前端发起会话/对话流程、Poller 轮询推进在真实运行时验证。
+* [ ] **待人工回归**：既有发起神经元会话行为、前端发起会话/对话流程、Poller 轮询推进在真实运行时验证。
 
 
 ## 9. Change Log
@@ -301,6 +301,7 @@ pub async fn step_poller(&self, session_id: &str, model: &ChatModelSelection)
 | ---------- | ------------------------------------------------------------------------------------------------------------------------ |
 | 2026-08-12 | 初稿：收敛为无状态单轮对话引擎，接口与迁移矩阵定稿                                                                                                |
 | 2026-08-12 | 定稿方案 2：ConversationRunner + 业务独立文件（4.1-4.3）；落库/简报/assistant\_mode 三决策落地；seed None 映射约定 SystemType `session_direct`（接口定稿） |
+| 2026-08-15 | 移除内建会话规格 `session.assistant_dialogue`（僵尸占位，Global 由 `resolve_role` 内联构造 behavior，从未消费）；术语统一——`session.%` 系统神经元称「系统神经元」、`spec_neuron_id` 锚点称「发起神经元」；代码注释/前端注释/活跃文档清除「规格」描述词（代码标识符不重命名）。详见 `docs/micro_specs/2026-08-15_remove-assistant-dialogue-and-terminology.md` |
 
 ## 10. Validation / Resume
 

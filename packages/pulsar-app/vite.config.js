@@ -22,7 +22,7 @@ function noStoreDev() {
 // https://vite.dev/config/
 export default defineConfig(async ({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  const port = Number(env.DEV_PORT || 1430);
+  const port = Number(env.DEV_PORT || 1432);
   const hmrPort = Number(env.DEV_HMR_PORT || port + 1);
 
   return {

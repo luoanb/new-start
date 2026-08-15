@@ -18,7 +18,7 @@ use super::{
     tool_registry::ToolRegistry,
 };
 
-/// 直连（非规格会话）系统类型标记：仅用于日志/审计，不落库。
+/// 直连（无发起神经元）系统类型标记：仅用于日志/审计，不落库。
 pub const SYSTEM_TYPE_DIRECT: &str = "direct";
 
 /// 会话级运行态（`conversation.extra.session.state`）：选型锚点自 `topic.extra.assistant`
@@ -40,7 +40,7 @@ pub struct SessionState {
     pub stable_system_frozen: bool,
 }
 
-/// 会话元数据（`conversation.extra.session`）：规格绑定 + 种子 + 运行态。
+/// 会话元数据（`conversation.extra.session`）：发起神经元绑定 + 种子 + 运行态。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMeta {
     pub spec_neuron_id: String,
@@ -79,7 +79,7 @@ pub fn read_session_state(conversation: &Conversation) -> SessionState {
         .unwrap_or_default()
 }
 
-/// 读取会话绑定的规格神经元 id（非规格会话为 None）。
+/// 读取会话绑定的发起神经元 id（未绑定发起神经元时返回 None）。
 pub fn session_spec_neuron_id(conversation: &Conversation) -> Option<String> {
     conversation
         .extra
@@ -102,7 +102,7 @@ pub fn session_seed(conversation: &Conversation) -> Option<SessionSeed> {
         .or_else(|| session_spec_neuron_id(conversation).map(SessionSeed::Neuron))
 }
 
-/// 将运行态写回 `extra.session.state`（保留其它 extra 键与规格绑定）。
+/// 将运行态写回 `extra.session.state`（保留其它 extra 键与发起神经元绑定）。
 fn set_session_state(conversation: &mut Conversation, state: &SessionState) {
     let mut extra = conversation.extra.take().unwrap_or_else(|| serde_json::json!({}));
     if !extra.is_object() {
@@ -1062,7 +1062,7 @@ mod tests {
             )
             .await
             .unwrap();
-        // Fixed：选中规格神经元自身，且不改写历史锚点。
+        // Fixed：选中系统神经元自身，且不改写历史锚点。
         assert_eq!(outcome.selected_neuron_id.as_deref(), Some(sys.id.as_str()));
         assert_eq!(
             outcome.state.last_selected_neuron_id.as_deref(),

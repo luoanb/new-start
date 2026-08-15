@@ -1,4 +1,4 @@
-//! 创建与启动编排领域服务：统一创建流程、系统神经元、会话规格、bootstrap。
+//! 创建与启动编排领域服务：统一创建流程、系统神经元、bootstrap。
 //!
 //! 依赖方向：`Creation → {Query, Selection, specs}`。生成原语（草稿、持久化、
 //! creator 种子）统一复用 `NeuronSelection`，避免与选型域双向耦合。
@@ -11,7 +11,6 @@ use crate::core::{
         NeuronCreate, SessionBehavior, SystemPromptStatus,
     },
     neuron::{
-        config::NeuronConfigReader,
         query::NeuronQuery,
         selection::NeuronSelection,
         spec::SessionSpecManager,
@@ -23,15 +22,13 @@ use super::{
     lock_error,
     manager::{
         ASSISTANT_SELECT_NEURON, DEFAULT_SELECT_N, MAX_CREATE_NEURON_COUNT, REBOOTSTRAP_SYSTEM_TYPES,
-        SESSION_ASSISTANT_DIALOGUE, default_assistant_dialogue_behavior,
         default_behavior_for_system_type,
     },
 };
 
 pub(crate) struct NeuronCreation {
     store: Arc<Mutex<NeuronStore>>,
-    config: NeuronConfigReader,
-    /// 会话规格管理子组件（behavior 只读/写路径统一收敛于此）。
+    /// 系统神经元 behavior 管理子组件（behavior 只读/写路径统一收敛于此）。
     specs: SessionSpecManager,
     query: Arc<NeuronQuery>,
     selection: Arc<NeuronSelection>,
@@ -40,14 +37,12 @@ pub(crate) struct NeuronCreation {
 impl NeuronCreation {
     pub(crate) fn new(
         store: Arc<Mutex<NeuronStore>>,
-        config: NeuronConfigReader,
         query: Arc<NeuronQuery>,
         selection: Arc<NeuronSelection>,
     ) -> Self {
         Self {
             specs: SessionSpecManager::new(Arc::clone(&store)),
             store,
-            config,
             query,
             selection,
         }
@@ -235,7 +230,7 @@ impl NeuronCreation {
         Ok(created)
     }
 
-    /// 懒创建规格神经元（复用 ensure_system_neuron 骨架：存在复用 / reset 重建）。
+    /// 懒创建系统神经元（复用 ensure_system_neuron 骨架：存在复用 / reset 重建）。
     /// 新建时经 `specs` 写 behavior 与 content；已存在不覆盖。
     pub(crate) async fn ensure_session_neuron(
         &self,
@@ -267,7 +262,7 @@ impl NeuronCreation {
             .ensure_session_neuron(system_type, &behavior, content)
     }
 
-    /// 只读：取会话规格的 behavior（校验 system_type + behavior 非空）。
+    /// 只读：取系统神经元的 behavior（校验 system_type + behavior 非空）。
     pub(crate) fn get_session_behavior(&self, neuron_id: &str) -> AppResult<SessionBehavior> {
         self.specs.get_session_behavior(neuron_id)
     }
@@ -281,7 +276,7 @@ impl NeuronCreation {
         self.specs.update_behavior_for_admin(id, behavior)
     }
 
-    /// 列出所有 `session.%` 规格神经元（含 behavior 摘要）。
+    /// 列出所有 `session.%` 系统神经元（含 behavior 摘要）。
     pub(crate) fn list_session_specs(&self) -> AppResult<Vec<SystemPromptStatus>> {
         self.specs.list_specs()
     }
@@ -307,35 +302,6 @@ impl NeuronCreation {
                 return Err(error);
             }
         };
-        // 内建会话规格懒注册（失败不阻断启动；可通过管理面手动补建）。
-        let session_defaults = self.config.session_defaults()?;
-        match self
-            .ensure_session_neuron(
-                SESSION_ASSISTANT_DIALOGUE,
-                default_assistant_dialogue_behavior(Some(&session_defaults)),
-                None,
-                EnsureSystemOpts { reset: false },
-            )
-            .await
-        {
-            Ok(neuron) => {
-                tracing::info!(
-                    phase = "bootstrap",
-                    session_spec = SESSION_ASSISTANT_DIALOGUE,
-                    neuron_id = %neuron.id,
-                    "session spec ensured"
-                );
-            }
-            Err(error) => {
-                tracing::warn!(
-                    phase = "bootstrap",
-                    session_spec = SESSION_ASSISTANT_DIALOGUE,
-                    error_code = error.code(),
-                    error = %error,
-                    "failed to ensure session spec; continuing bootstrap"
-                );
-            }
-        }
         tracing::info!(
             phase = "bootstrap",
             create_neuron_id = %creator.id,

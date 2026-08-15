@@ -6,7 +6,6 @@
 use std::sync::{Arc, Mutex, RwLock};
 
 use crate::core::{
-    config::SessionDefaultsSection,
     error::AppResult,
     models::{
         AssistantCandidateScope, BootstrapReport, CandidateQuery, Connection, CreateNeuronInput,
@@ -46,9 +45,6 @@ pub const REBOOTSTRAP_SYSTEM_TYPES: &[&str] = &[
 pub(crate) const DEFAULT_SELECT_N: usize = DEFAULT_ASSISTANT_GLOBAL_LIMIT;
 pub(crate) const MAX_CREATE_NEURON_COUNT: usize = 10;
 
-/// 内建会话规格：助手主对话（默认行为）。
-pub const SESSION_ASSISTANT_DIALOGUE: &str = "session.assistant_dialogue";
-
 /// 裁决类系统神经元 → 默认 behavior：`Fixed` + 各自契约段（统一入口兜底，行为与现状一致：
 /// 用自己 content + 契约段）。非裁决类返回 `None`。
 pub fn default_behavior_for_system_type(system_type: &str) -> Option<SessionBehavior> {
@@ -65,16 +61,6 @@ pub fn default_behavior_for_system_type(system_type: &str) -> Option<SessionBeha
     })
 }
 
-/// 助手主对话的默认行为：有 config（`neuron.session_defaults.assistant_dialogue`）覆盖则用，
-/// 无则回落现状硬编码默认（邻域选型 + FromNeuron 工具 + 无契约段）。
-pub fn default_assistant_dialogue_behavior(
-    session_defaults: Option<&SessionDefaultsSection>,
-) -> SessionBehavior {
-    session_defaults
-        .and_then(|defaults| defaults.assistant_dialogue.clone())
-        .unwrap_or_else(SessionDefaultsSection::fallback_assistant_dialogue)
-}
-
 /// 门面：聚合 4 个领域服务，公开 API 与旧 `core::neuron_manager` 一致。
 pub struct NeuronManager {
     /// 领域服务共享同一 store；Facade 本身仅测试/治理路径直接访问。
@@ -84,7 +70,7 @@ pub struct NeuronManager {
     selection: Arc<NeuronSelection>,
     creation: Arc<NeuronCreation>,
     evolution: Arc<NeuronEvolution>,
-    /// 会话规格管理子组件（behavior 只读/写路径统一收敛于此；与创建域共享同一 store，
+    /// 系统神经元 behavior 管理子组件（behavior 只读/写路径统一收敛于此；与创建域共享同一 store，
     /// 保留公开字段以兼容旧 API）。
     pub specs: SessionSpecManager,
 }
@@ -111,7 +97,6 @@ impl NeuronManager {
         ));
         let creation = Arc::new(NeuronCreation::new(
             Arc::clone(&store),
-            config.clone(),
             Arc::clone(&query),
             Arc::clone(&selection),
         ));
@@ -298,9 +283,10 @@ impl NeuronManager {
         &self,
         candidates: &[Neuron],
         history: &[ModelMessage],
+        link_source: Option<&str>,
     ) -> AppResult<Neuron> {
         self.selection
-            .select_one_from_with_history(candidates, history)
+            .select_one_from_with_history(candidates, history, link_source)
             .await
     }
 
@@ -331,7 +317,7 @@ impl NeuronManager {
         self.creation.ensure_system_neuron(system_type, opts).await
     }
 
-    /// 懒创建规格神经元（复用 ensure_system_neuron 骨架：存在复用 / reset 重建）。
+    /// 懒创建系统神经元（复用 ensure_system_neuron 骨架：存在复用 / reset 重建）。
     pub async fn ensure_session_neuron(
         &self,
         system_type: &str,
@@ -344,7 +330,7 @@ impl NeuronManager {
             .await
     }
 
-    /// 只读：取会话规格的 behavior（校验 system_type + behavior 非空）。
+    /// 只读：取系统神经元的 behavior（校验 system_type + behavior 非空）。
     pub fn get_session_behavior(&self, neuron_id: &str) -> AppResult<SessionBehavior> {
         self.creation.get_session_behavior(neuron_id)
     }
@@ -358,7 +344,7 @@ impl NeuronManager {
         self.creation.update_behavior_for_admin(id, behavior)
     }
 
-    /// 列出所有 `session.%` 规格神经元（含 behavior 摘要）。
+    /// 列出所有 `session.%` 系统神经元（含 behavior 摘要）。
     pub fn list_session_specs(&self) -> AppResult<Vec<SystemPromptStatus>> {
         self.creation.list_session_specs()
     }
@@ -401,7 +387,7 @@ impl NeuronManager {
     /// selection → 候选池装配 scope（`resolve_role` 委托）。
     /// `None` / `Fixed` 不涉及候选池，返回 `None`。
     ///
-    /// - `Neighborhood`：有历史锚点 = last_selected；首轮锚点 = 规格神经元自身；
+    /// - `Neighborhood`：有历史锚点 = last_selected；首轮锚点 = 发起神经元自身；
     /// - `Global`：无历史全域池选 1；有历史退化为邻域选（锚点 = last_selected）。
     pub(crate) fn scope_for_selection(
         selection: &SelectionPolicy,
@@ -436,13 +422,19 @@ impl NeuronManager {
         messages: &[ModelMessage],
         scope: AssistantCandidateScope,
     ) -> AppResult<Neuron> {
+        // 回挂边锚点 = 候选池锚点：Neighborhood 的 self_id（非首轮 = last_selected / 首轮 = 发起神经元）；Global 无锚点 → None。
+        let link_source = match &scope {
+            AssistantCandidateScope::Neighborhood { self_id, .. } => Some(self_id.clone()),
+            AssistantCandidateScope::Global { .. } => None,
+        };
         let candidates = self.select_assistant_candidates(scope).await?;
         if candidates.len() == 1 {
             let single = candidates[0].clone();
             self.mark_used_for_assistant(&single.id);
             return Ok(single);
         }
-        self.select_one_from_with_history(&candidates, messages).await
+        self.select_one_from_with_history(&candidates, messages, link_source.as_deref())
+            .await
     }
 }
 

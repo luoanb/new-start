@@ -626,6 +626,22 @@ impl NeuronStore {
         })
     }
 
+    /// 直接下游存在性检查：`source → target` 边是否存在（回挂规则前置判断）。
+    pub fn connection_exists(&self, source: &str, target: &str) -> AppResult<bool> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM connections WHERE source = ?1 AND target = ?2",
+                params![source, target],
+                |row| row.get(0),
+            )
+            .map_err(|e| AppError::StorageError(format!("Failed to check connection: {}", e)))?;
+        Ok(count > 0)
+    }
+
     pub fn unlink(&self, source: &str, target: &str) -> AppResult<bool> {
         let conn = self
             .conn
@@ -1144,7 +1160,7 @@ impl NeuronStore {
             .ok_or_else(|| AppError::NeuronNotFound(id.to_string()))
     }
 
-    /// 写会话规格的 behavior（写路径统一收敛到 SessionSpecManager，不触碰 content）。
+    /// 写系统神经元的 behavior（写路径统一收敛到 SessionSpecManager，不触碰 content）。
     pub fn set_behavior(&self, id: &str, behavior: Option<&SessionBehavior>) -> AppResult<Neuron> {
         let encoded = match behavior {
             Some(b) => Some(serde_json::to_string(b).map_err(|e| {
