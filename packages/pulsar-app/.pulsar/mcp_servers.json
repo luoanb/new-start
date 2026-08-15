@@ -10,7 +10,8 @@
       ],
       "env": {
         "MODE": "stdio"
-      }
+      },
+      "tag": "core"
     }
   ]
 }

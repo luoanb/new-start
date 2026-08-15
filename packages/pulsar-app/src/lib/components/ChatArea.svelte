@@ -210,11 +210,20 @@
               onRate={(score) => handleRate(round.startIndex + mi, score)}
             />
           {/each}
+          {#if isRunning && i === rounds.length - 1}
+            <div class="loading-indicator">
+              <span class="dot-pulse"></span>
+              <span>{t("common.thinking")}</span>
+              {#if runningSession?.current_step}
+                <span class="running-step">{runningSession.current_step}</span>
+              {/if}
+            </div>
+          {/if}
         </div>
       {/each}
     {/if}
 
-    {#if isRunning}
+    {#if isRunning && rounds.length === 0}
       <div class="loading-indicator">
         <span class="dot-pulse"></span>
         <span>{t("common.thinking")}</span>

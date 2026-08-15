@@ -44,6 +44,16 @@ function normalizeSinglePaneGrow(): void {
   }
 }
 
+/** 生成面板/分栏唯一 ID。
+ * crypto.randomUUID 仅在安全上下文（HTTPS/localhost）可用；
+ * pad/远程浏览器经 HTTP（非安全上下文）访问时缺失，回退时间戳+随机数保证本地唯一。 */
+function uuid(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 /** 从所有视图容器移除 viewId（移动/隐藏共用的前置步骤）。 */
 function detachView(viewId: string): void {
   for (const cid of Object.keys(state.containers) as ViewContainerId[]) {
@@ -136,12 +146,12 @@ export const layoutStore = {
       return existing.panel.id;
     }
     const idx = normalizePaneTarget(target, state.main.panes.length);
-    const panel: MainPanel = { id: crypto.randomUUID(), type };
+    const panel: MainPanel = { id: uuid(), type };
     let paneId: string;
     if (idx >= state.main.panes.length) {
       // 新增一栏（首个面板）
       const pane: MainPane = {
-        id: crypto.randomUUID(),
+        id: uuid(),
         grow: 1,
         panels: [panel],
         activePanelId: panel.id,
@@ -258,7 +268,7 @@ export const layoutStore = {
     const srcIdx = srcPane.panels.findIndex((x) => x.id === panelId);
     const [panel] = srcPane.panels.splice(srcIdx, 1);
     const pane: MainPane = {
-      id: crypto.randomUUID(),
+      id: uuid(),
       grow: 1,
       panels: [panel],
       activePanelId: panel.id,
