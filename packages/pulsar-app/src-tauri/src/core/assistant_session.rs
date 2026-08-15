@@ -470,60 +470,7 @@ impl RoundHooks for AssistantHooks<'_> {
                 self.match_topic(ctx).await?;
             }
             RoundTriggerKind::ManualStep | RoundTriggerKind::Poller => {
-                // 推进型触发需课题已绑定，简报作为本轮指令。
-                let topic_id = ctx.topic_id.as_ref().ok_or_else(|| {
-                    AppError::InvalidInput(
-                        "Assistant step requires a topic bound to the session".into(),
-                    )
-                })?;
-                let topic = self.assistant.topics()?.get(topic_id)?.ok_or_else(|| {
-                    AppError::ConversationNotFound(topic_id.clone())
-                })?;
-                let state = read_assistant_state(&topic);
-                let fresh = build_topic_brief(&topic);
-                // 上轮若以工具调用结束，历史自带工具返回，简报非必选（可复用缓存）。
-                let last_is_tool = self
-                    .assistant
-                    .runner
-                    .last_message_is_tool_result(&ctx.session_id)?;
-                // 三条件任一命中即刷新简报：①距上次生成 ≥ BRIEF_EVERY_N_ROUNDS 轮（频率兜底）
-                // ②课题有变化（fresh 与缓存不同，自动覆盖进度/scope/切换/新增）
-                // ③上轮非工具调用结束（模型需课题状态锚定，屏除轮次限制）。
-                let need_fresh = should_refresh_brief(
-                    &fresh,
-                    state.brief_cache.as_deref(),
-                    state.poll_count,
-                    state.last_brief_round,
-                    last_is_tool,
-                );
-                tracing::info!(
-                    phase = "assistant_hook",
-                    trigger = ?ctx.trigger,
-                    session_id = %ctx.session_id,
-                    topic_id = %topic_id,
-                    need_fresh,
-                    last_is_tool,
-                    poll_count = state.poll_count,
-                    reselect = state.poll_count % SELECTION_EVERY_N_ROUNDS == 0,
-                    "advance brief refresh decision"
-                );
-                if need_fresh {
-                    let mut next = state.clone();
-                    next.brief_cache = Some(fresh.clone());
-                    next.last_brief_round = state.poll_count;
-                    write_assistant_state(&self.assistant.topic_store, topic_id, next)?;
-                    ctx.model_input = fresh;
-                    // 「生成一次，落库一次」：仅简报刷新（生成）的这一轮落 nudge 输入消息，
-                    // 复用缓存简报的推进轮不落重复 nudge。
-                    if ctx.trigger == RoundTriggerKind::Poller {
-                        ctx.nudge_persist = true;
-                    }
-                } else {
-                    ctx.model_input = state.brief_cache.clone().unwrap_or(fresh);
-                }
-                // 选型频率（业务层算好）：每 SELECTION_EVERY_N_ROUNDS 个推进轮做一次选型，
-                // 中间轮沿用 last_selected 锚点；User 轮不设（默认 true，每轮选型）。
-                ctx.reselect = state.poll_count % SELECTION_EVERY_N_ROUNDS == 0;
+                self.advance_brief(ctx)?;
             }
             RoundTriggerKind::AgentLoop => {
                 unreachable!("assistant hooks never run agent-loop rounds")
@@ -573,6 +520,68 @@ impl AssistantHooks<'_> {
             .topics()?
             .find_by_session_id(&ctx.session_id)?
             .map(|topic| topic.id);
+        Ok(())
+    }
+
+    /// 推进轮（ManualStep/Poller）：课题简报刷新决策 + 选型频率。
+    ///
+    /// 三条件任一命中即重新生成简报（写 brief_cache + last_brief_round）；
+    /// 「生成一次，落库一次」——仅刷新（生成）的这一轮由 Poller 落 nudge 输入消息，
+    /// 复用缓存简报的推进轮不落重复 nudge。未命中时复用缓存简报，不重喂模型。
+    fn advance_brief(&self, ctx: &mut RoundContext) -> AppResult<()> {
+        let topic_id = ctx.topic_id.as_ref().ok_or_else(|| {
+            AppError::InvalidInput(
+                "Assistant step requires a topic bound to the session".into(),
+            )
+        })?;
+        let topic = self.assistant.topics()?.get(topic_id)?.ok_or_else(|| {
+            AppError::ConversationNotFound(topic_id.clone())
+        })?;
+        let state = read_assistant_state(&topic);
+        let fresh = build_topic_brief(&topic);
+        // 上轮若以工具调用结束，历史自带工具返回，简报非必选（可复用缓存）。
+        let last_is_tool = self
+            .assistant
+            .runner
+            .last_message_is_tool_result(&ctx.session_id)?;
+        // 三条件任一命中即刷新简报：①距上次生成 ≥ BRIEF_EVERY_N_ROUNDS 轮（频率兜底）
+        // ②课题有变化（fresh 与缓存不同，自动覆盖进度/scope/切换/新增）
+        // ③上轮非工具调用结束（模型需课题状态锚定，屏除轮次限制）。
+        let need_fresh = should_refresh_brief(
+            &fresh,
+            state.brief_cache.as_deref(),
+            state.poll_count,
+            state.last_brief_round,
+            last_is_tool,
+        );
+        tracing::info!(
+            phase = "assistant_hook",
+            trigger = ?ctx.trigger,
+            session_id = %ctx.session_id,
+            topic_id = %topic_id,
+            need_fresh,
+            last_is_tool,
+            poll_count = state.poll_count,
+            reselect = state.poll_count % SELECTION_EVERY_N_ROUNDS == 0,
+            "advance brief refresh decision"
+        );
+        if need_fresh {
+            let mut next = state.clone();
+            next.brief_cache = Some(fresh.clone());
+            next.last_brief_round = state.poll_count;
+            write_assistant_state(&self.assistant.topic_store, topic_id, next)?;
+            ctx.model_input = fresh;
+            // 「生成一次，落库一次」：仅简报刷新（生成）的这一轮落 nudge 输入消息，
+            // 复用缓存简报的推进轮不落重复 nudge。
+            if ctx.trigger == RoundTriggerKind::Poller {
+                ctx.nudge_persist = true;
+            }
+        } else {
+            ctx.model_input = state.brief_cache.clone().unwrap_or(fresh);
+        }
+        // 选型频率（业务层算好）：每 SELECTION_EVERY_N_ROUNDS 个推进轮做一次选型，
+        // 中间轮沿用 last_selected 锚点；User 轮不设（默认 true，每轮选型）。
+        ctx.reselect = state.poll_count % SELECTION_EVERY_N_ROUNDS == 0;
         Ok(())
     }
 
