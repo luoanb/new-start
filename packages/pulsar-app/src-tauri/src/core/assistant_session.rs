@@ -801,7 +801,7 @@ impl AssistantHooks<'_> {
             .as_ref()
             .ok_or_else(|| AppError::InvalidInput("complete_scope requires a finished round".into()))?;
         let model_output = outcome.model_output.clone();
-        let tool_result = outcome.tool_result.clone();
+        let tool_results = outcome.tool_results.clone();
         tracing::info!(
             phase = "complete_scope_hook",
             topic_id = %topic_id,
@@ -818,7 +818,7 @@ impl AssistantHooks<'_> {
                     "topic_id": topic_id,
                     "scope_in": topic.scope_in,
                     "model_output": model_output,
-                    "tool_result": tool_result,
+                    "tool_results": tool_results,
                     "user_input": ctx.model_input,
                 }),
                 &model,

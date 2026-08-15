@@ -162,12 +162,20 @@ pub struct RoundOutcome {
     pub response: String,
     /// 模型原始输出（tool_call 消息落库用）。
     pub model_output: Option<String>,
-    /// 模型本轮声明的工具调用（含参数，上层落 tool_call 消息用）。
+    /// 模型本轮声明的工具调用（全部声明，落库 tool_call 消息用）。
     pub tool_calls: Option<Vec<ToolCall>>,
-    /// 首个工具执行结果。
-    pub tool_result: Option<String>,
+    /// 本轮全部工具执行结果（一轮内多个 tool_calls 全部执行）。
+    pub tool_results: Vec<ToolResultItem>,
     pub selected_neuron_id: Option<String>,
     pub state: SessionState,
+}
+
+/// 单条工具执行结果：与 `ToolCall.id` 配对，落库为一条 Tool 消息。
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolResultItem {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub content: String,
 }
 
 /// 模型调用抽象：生产用 [`ProviderRegistry`]，测试可注入替身。
@@ -333,47 +341,47 @@ impl NeuronCallService {
         );
 
         let mut output = model_response.output.clone();
-        let mut tool_result = None;
-        // 单次工具执行语义：模型可能一次声明多个 tool_calls（并行调用），引擎只执行首个。
-        // 产物仅携带被执行的这条，保证落库后 assistant(tool_calls=[该条]) 与 tool(结果) 配对一致；
-        // 否则未应答的 tool_calls 会在历史 sanitize 时被降级，导致 tool 结果失去前置
-        // tool_calls 声明，OpenAI 兼容接口报「tool 必须是前置 tool_calls 的响应」。
-        let tool_calls = model_response
-            .tool_calls
-            .as_ref()
-            .map(|calls| calls.iter().take(1).cloned().collect::<Vec<_>>());
-        if let Some(tool_calls) = tool_calls.as_ref() {
-            if let Some(first) = tool_calls.first() {
-                if !authorized_tool_ids.iter().any(|id| id == &first.name) {
+        let mut tool_results: Vec<ToolResultItem> = Vec::new();
+        // 单轮单次工具阶段：模型可能一次声明多个 tool_calls（并行调用），引擎全部执行。
+        // 产物携带全部声明与全部结果；落库后 assistant 声明与 tool 结果一一配对
+        // （sanitize 要求每个声明都有对应结果，否则未应答声明会被降级、tool 消息成孤儿）。
+        let tool_calls = model_response.tool_calls.clone();
+        if let Some(calls) = tool_calls.as_ref() {
+            for call in calls {
+                if !authorized_tool_ids.iter().any(|id| id == &call.name) {
                     return Err(AppError::InvalidInput(format!(
                         "Tool '{}' is not authorized for this round",
-                        first.name
+                        call.name
                     )));
                 }
                 let tool = self
                     .tool_registry
                     .read()
                     .expect("tool registry lock should not be poisoned")
-                    .get_tool(&first.name)
-                    .ok_or_else(|| AppError::SkillNotFound(first.name.clone()))?;
+                    .get_tool(&call.name)
+                    .ok_or_else(|| AppError::SkillNotFound(call.name.clone()))?;
                 tracing::info!(
                     phase = "service_converse",
-                    tool = %first.name,
-                    args_len = first.arguments.to_string().len(),
+                    tool = %call.name,
+                    args_len = call.arguments.to_string().len(),
                     "executing tool"
                 );
-                let result = tool.execute(first.arguments.clone()).await?;
+                let result = tool.execute(call.arguments.clone()).await?;
                 tracing::info!(
                     phase = "service_converse",
-                    tool = %first.name,
+                    tool = %call.name,
                     result_len = result.len(),
                     "tool executed"
                 );
-                tool_result = Some(result.clone());
+                tool_results.push(ToolResultItem {
+                    tool_call_id: call.id.clone(),
+                    tool_name: call.name.clone(),
+                    content: result.clone(),
+                });
                 output = if output.trim().is_empty() {
                     result
                 } else {
-                    format!("{output}\n\n[tool:{}] {result}", first.name)
+                    format!("{output}\n\n[tool:{}] {result}", call.name)
                 };
             }
         }
@@ -382,7 +390,7 @@ impl NeuronCallService {
             response: output,
             model_output: Some(model_response.output.clone()),
             tool_calls,
-            tool_result,
+            tool_results,
             selected_neuron_id: selected_neuron.map(|n| n.id),
             state,
         })
@@ -770,7 +778,7 @@ mod tests {
     /// 主模型替身：固定输出 `echo-{call}`；可配置附带一个工具调用。
     struct EchoCaller {
         calls: Arc<AtomicUsize>,
-        tool_call: Arc<Mutex<Option<ToolCall>>>,
+        tool_call: Arc<Mutex<Option<Vec<ToolCall>>>>,
         last_messages: Arc<Mutex<Vec<ModelMessage>>>,
         last_tools: Arc<Mutex<Vec<ToolDefinition>>>,
     }
@@ -785,7 +793,7 @@ mod tests {
                 provider_id: "test".into(),
                 model_id: "test-model".into(),
                 output: format!("echo-{call}"),
-                tool_calls: self.tool_call.lock().unwrap().clone().map(|tc| vec![tc]),
+                tool_calls: self.tool_call.lock().unwrap().clone(),
                 finish_reason: "stop".into(),
             })
         }
@@ -825,7 +833,7 @@ mod tests {
         service: Arc<NeuronCallService>,
         selector_calls: Arc<AtomicUsize>,
         echo_calls: Arc<AtomicUsize>,
-        echo_tool_call: Arc<Mutex<Option<ToolCall>>>,
+        echo_tool_call: Arc<Mutex<Option<Vec<ToolCall>>>>,
         last_messages: Arc<Mutex<Vec<ModelMessage>>>,
         last_tools: Arc<Mutex<Vec<ToolDefinition>>>,
         tool_registry: Arc<RwLock<ToolRegistry>>,
@@ -857,7 +865,7 @@ mod tests {
         .unwrap();
         let selector_calls = Arc::new(AtomicUsize::new(0));
         let echo_calls = Arc::new(AtomicUsize::new(0));
-        let echo_tool_call: Arc<Mutex<Option<ToolCall>>> = Arc::new(Mutex::new(None));
+        let echo_tool_call: Arc<Mutex<Option<Vec<ToolCall>>>> = Arc::new(Mutex::new(None));
         let last_messages: Arc<Mutex<Vec<ModelMessage>>> = Arc::new(Mutex::new(Vec::new()));
         let last_tools: Arc<Mutex<Vec<ToolDefinition>>> = Arc::new(Mutex::new(Vec::new()));
         let selector = MockSelector {
@@ -1291,11 +1299,11 @@ mod tests {
             .write()
             .unwrap()
             .register_source(EchoTool::new("echo"), ToolSource::Config);
-        *h.echo_tool_call.lock().unwrap() = Some(ToolCall {
+        *h.echo_tool_call.lock().unwrap() = Some(vec![ToolCall {
             id: "call-1".into(),
             name: "echo".into(),
             arguments: json!({"text": "hi"}),
-        });
+        }]);
         let outcome = h
             .service
             .converse(
@@ -1312,10 +1320,67 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(outcome.tool_result.as_deref(), Some("echo:hi"));
+        assert_eq!(outcome.tool_results.len(), 1);
+        assert_eq!(outcome.tool_results[0].tool_name, "echo");
+        assert_eq!(outcome.tool_results[0].content, "echo:hi");
+        assert_eq!(outcome.tool_results[0].tool_call_id, "call-1");
         assert!(outcome.response.contains("[tool:echo] echo:hi"));
         assert!(outcome.tool_calls.is_some());
         assert_eq!(outcome.model_output.as_deref(), Some("echo-0"));
+    }
+
+    /// 一轮内模型声明多个 tool_calls：全部执行、全部落产物（不截断首个）。
+    #[tokio::test]
+    async fn converse_executes_all_declared_tools() {
+        let h = harness();
+        h.tool_registry
+            .write()
+            .unwrap()
+            .register_source(EchoTool::new("echo"), ToolSource::Config);
+        h.tool_registry
+            .write()
+            .unwrap()
+            .register_source(EchoTool::new("echo2"), ToolSource::Config);
+        *h.echo_tool_call.lock().unwrap() = Some(vec![
+            ToolCall {
+                id: "call-1".into(),
+                name: "echo".into(),
+                arguments: json!({"text": "hi"}),
+            },
+            ToolCall {
+                id: "call-2".into(),
+                name: "echo2".into(),
+                arguments: json!({"text": "there"}),
+            },
+        ]);
+        let outcome = h
+            .service
+            .converse(
+                RoundInput {
+                    seed: None,
+                    state: SessionState::default(),
+                    messages: vec![],
+                    tool_override: Some(vec!["echo".into(), "echo2".into()]),
+                    reselect: true,
+                    tool_tags: Vec::new(),
+                },
+                "go",
+                &model(),
+            )
+            .await
+            .unwrap();
+        // 两条声明全部执行，结果一一配对。
+        assert_eq!(outcome.tool_calls.as_ref().map(|c| c.len()), Some(2));
+        assert_eq!(outcome.tool_results.len(), 2);
+        assert_eq!(outcome.tool_results[0].tool_call_id, "call-1");
+        assert_eq!(outcome.tool_results[0].tool_name, "echo");
+        assert_eq!(outcome.tool_results[0].content, "echo:hi");
+        assert_eq!(outcome.tool_results[1].tool_call_id, "call-2");
+        assert_eq!(outcome.tool_results[1].tool_name, "echo2");
+        assert_eq!(outcome.tool_results[1].content, "echo:there");
+        // 拼接产物包含两条工具结果。
+        assert!(outcome.response.contains("[tool:echo] echo:hi"));
+        assert!(outcome.response.contains("[tool:echo2] echo:there"));
     }
 
     #[tokio::test]
@@ -1325,11 +1390,11 @@ mod tests {
             .write()
             .unwrap()
             .register_source(EchoTool::new("echo"), ToolSource::Config);
-        *h.echo_tool_call.lock().unwrap() = Some(ToolCall {
+        *h.echo_tool_call.lock().unwrap() = Some(vec![ToolCall {
             id: "call-1".into(),
             name: "echo".into(),
             arguments: json!({"text": "hi"}),
-        });
+        }]);
         let err = h
             .service
             .converse(
@@ -1337,6 +1402,7 @@ mod tests {
                     seed: None,
                     state: SessionState::default(),
                     messages: vec![],
+                    // echo 未授权：override 空 + 无标签工具 → 声明 echo 必须被拒绝。
                     tool_override: None,
                     reselect: true,
                     tool_tags: Vec::new(),

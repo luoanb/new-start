@@ -303,7 +303,7 @@ impl ConversationRunner {
             "persisting messages"
         );
         if let Some(tool_calls) = outcome.tool_calls.as_ref() {
-            if let Some(first) = tool_calls.first() {
+            if let Some(_first) = tool_calls.first() {
                 self.store.add_message(
                     &ctx.session_id,
                     Message {
@@ -316,19 +316,23 @@ impl ConversationRunner {
                         neuron_id: stamped.clone(),
                     },
                 )?;
-                self.store.add_message(
-                    &ctx.session_id,
-                    Message {
-                        role: MessageRole::Tool,
-                        body: MessageBody::ToolResult {
-                            tool_call_id: first.id.clone(),
-                            tool_name: first.name.clone(),
-                            content: outcome.tool_result.clone().unwrap_or_default(),
+                // 每个声明的 tool_call 都执行过：逐条落 Tool 结果，与声明一一配对
+                // （sanitize 要求每个声明都有对应结果，否则声明被降级、tool 消息成孤儿）。
+                for item in &outcome.tool_results {
+                    self.store.add_message(
+                        &ctx.session_id,
+                        Message {
+                            role: MessageRole::Tool,
+                            body: MessageBody::ToolResult {
+                                tool_call_id: item.tool_call_id.clone(),
+                                tool_name: item.tool_name.clone(),
+                                content: item.content.clone(),
+                            },
+                            timestamp: now_ms(),
+                            neuron_id: stamped.clone(),
                         },
-                        timestamp: now_ms(),
-                        neuron_id: stamped.clone(),
-                    },
-                )?;
+                    )?;
+                }
             }
         } else {
             self.store.add_message(

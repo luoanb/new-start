@@ -276,7 +276,7 @@ flowchart TB
     end
 
     subgraph core["主对话（mode = Some(Assistant/System)）"]
-      RR["resolve_role<br/>种子分派 / 选型 select_one<br/>工具授权（+ Core 标签）"] --> MC["call_model → LLM"] --> TC["至多一次授权工具执行"]
+      RR["resolve_role<br/>种子分派 / 选型 select_one<br/>工具授权（+ Core 标签）"] --> MC["call_model → LLM"] --> TC["单轮工具阶段<br/>多个 tool_calls 全部执行"]
     end
 
     subgraph after["after hooks（User 触发）"]
