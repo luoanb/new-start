@@ -401,7 +401,7 @@ impl Gateway {
         Ok(conversation)
     }
 
-    /// 列出所有 `session.%` 规格神经元（含 behavior 摘要，供前端「管理好后发起会话」）。
+    /// 列出所有 `session.%` 系统神经元（含 behavior 摘要，供前端「管理好后发起会话」）。
     pub fn list_session_specs(&self) -> AppResult<Vec<SystemPromptStatus>> {
         self.neuron_manager.list_session_specs()
     }

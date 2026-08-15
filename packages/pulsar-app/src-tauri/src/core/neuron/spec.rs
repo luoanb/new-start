@@ -6,8 +6,8 @@ use crate::core::{
     neuron::store::NeuronStore,
 };
 
-/// Session spec management (管理面): 会话规格 = `system_type = 'session.<id>'` 的系统神经元 +
-/// 挂载在 `behavior` 列的 [`SessionBehavior`]。
+/// Session behavior management (管理面): 系统神经元 behavior = `system_type = 'session.<id>'`
+/// 的系统神经元 + 挂载在 `behavior` 列的 [`SessionBehavior`]。
 ///
 /// 只读与写路径统一收敛于此：
 /// - 只读：`get_session_behavior` / `list_specs`
@@ -49,7 +49,7 @@ impl SessionSpecManager {
         Ok(())
     }
 
-    /// 懒创建规格神经元：content 取传入（`None` 时为空占位），新建时写 behavior；已存在则原样返回（不覆盖）。
+    /// 懒创建系统神经元：content 取传入（`None` 时为空占位），新建时写 behavior；已存在则原样返回（不覆盖）。
     pub fn ensure_session_neuron(
         &self,
         system_type: &str,
@@ -73,7 +73,7 @@ impl SessionSpecManager {
         self.store()?.set_behavior(&created.id, Some(behavior))
     }
 
-    /// 校验神经元是有效会话规格并取回 behavior。
+    /// 校验神经元是有效系统神经元并取回 behavior。
     pub fn get_session_behavior(&self, neuron_id: &str) -> AppResult<SessionBehavior> {
         let neuron = self
             .store()?
@@ -83,13 +83,13 @@ impl SessionSpecManager {
             Some(system_type) => Self::validate_system_type(system_type)?,
             None => {
                 return Err(AppError::InvalidInput(format!(
-                    "neuron {neuron_id} is not a session spec (no system_type)"
+                    "neuron {neuron_id} is not a system neuron (no system_type)"
                 )))
             }
         }
         neuron.behavior.ok_or_else(|| {
             AppError::InvalidInput(format!(
-                "neuron {neuron_id} is a session spec but has no behavior"
+                "neuron {neuron_id} is a system neuron but has no behavior"
             ))
         })
     }
@@ -113,7 +113,7 @@ impl SessionSpecManager {
         self.store()?.set_behavior(id, Some(&behavior))
     }
 
-    /// 列出所有 `system_type LIKE 'session.%'` 的规格神经元（含 behavior 摘要，供前端「管理好后发起会话」）。
+    /// 列出所有 `system_type LIKE 'session.%'` 的系统神经元（含 behavior 摘要，供前端「管理好后发起会话」）。
     pub fn list_specs(&self) -> AppResult<Vec<SystemPromptStatus>> {
         let neurons = self.store()?.list_neurons()?;
         let mut specs = Vec::new();

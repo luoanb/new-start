@@ -3,7 +3,7 @@ use std::{fs, path::PathBuf};
 use serde::Deserialize;
 
 use crate::core::{
-    config::{NeuronSection, SessionDefaultsSection},
+    config::NeuronSection,
     error::AppResult,
 };
 
@@ -98,14 +98,6 @@ impl NeuronConfigReader {
             .read_neuron_section()?
             .recycle_interval_ms
             .unwrap_or(DEFAULT_NEURON_RECYCLE_INTERVAL_MS))
-    }
-
-    /// 会话规格默认值（顶层 `neuron.session_defaults`）；缺省空（调用方回落硬编码默认）。
-    pub fn session_defaults(&self) -> AppResult<SessionDefaultsSection> {
-        Ok(self
-            .read_neuron_section()?
-            .session_defaults
-            .unwrap_or_default())
     }
 
     fn read_neuron_section(&self) -> AppResult<NeuronSection> {

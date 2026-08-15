@@ -133,7 +133,7 @@ function migrateMain(parsed: Partial<LayoutState>): LayoutState["main"] | null {
 }
 
 /** v8 → v9：info 容器补 `neurons-list`（models 之后，默认位置；用户自定义 info 也仅追加）、
- * 清理 main 区残留 `session-specs` 面板（旧会话规格面板已被统一管理取代）。 */
+ * 清理 main 区残留 `session-specs` 面板（旧系统神经元管理面板已被统一管理取代）。 */
 function migrateV8ToV9(state: LayoutState): LayoutState {
   const containers = { ...state.containers } as Record<
     string,

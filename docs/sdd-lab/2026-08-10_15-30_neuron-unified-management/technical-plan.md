@@ -26,7 +26,7 @@
 
 * <br />
 
-  1. 移除 `session-specs` 面板及其入口（`SessionCreateModal` 的「按规格发起」卡片、`mainViews` / `mainPanelMeta` / `MainPanelType` 登记、i18n 文案、dataStore 相关 action）。
+  1. 移除 `session-specs` 面板及其入口（`SessionCreateModal` 的「按系统神经元发起」卡片、`mainViews` / `mainPanelMeta` / `MainPanelType` 登记、i18n 文案、dataStore 相关 action）。
 
 * <br />
 
@@ -60,7 +60,7 @@
 
   * `NeuronDetailDrawer` 现状：system\_type 只读、desc/content/tool\_ids 编辑、权重/连接调整（[NeuronDetailDrawer.svelte](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src/lib/components/NeuronDetailDrawer.svelte)）。
 
-  * `dataStore` 现状：`sessionSpecs` 状态 + 5 个规格 action（[dataStore.svelte.ts#L98-L320](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src/lib/stores/dataStore.svelte.ts#L98-L320)）。
+  * `dataStore` 现状：`sessionSpecs` 状态 + 5 个系统神经元 action（[dataStore.svelte.ts#L98-L320](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src/lib/stores/dataStore.svelte.ts#L98-L320)）。
 
   * 布局持久化 v8 在 [layoutStorage.ts](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src/lib/layout/layoutStorage.ts) 的 `normalize` 分支迁移。
 
@@ -107,11 +107,11 @@ pub fn update_behavior_for_admin(&self, id: &str, behavior: SessionBehavior) -> 
 
 #### 1.3 `SessionSpecManager::update_behavior_for_admin` 放宽校验
 
-* 现状：`get_session_behavior(id)?` 强校验 `session.` 前缀（仅规格可写）。
+* 现状：`get_session_behavior(id)?` 强校验 `session.` 前缀（仅系统神经元可写）。
 
 * 改为：校验「`system_type` 非空即可」（所有系统神经元行为可编辑，裁决类开放），保持 `set_behavior` 写入。
 
-* 执行面 `get_session_behavior`（`resolve_round` 用）**保持不变**（仍要求 `session.` 前缀，规格会话语义不受影响）。
+* 执行面 `get_session_behavior`（`resolve_round` 用）**保持不变**（仍要求 `session.` 前缀，系统神经元会话语义不受影响）。
 
 ```rust
 pub fn update_behavior_for_admin(&self, id: &str, behavior: SessionBehavior) -> AppResult<Neuron> {
@@ -170,7 +170,7 @@ pub fn update_behavior_for_admin(&self, id: &str, behavior: SessionBehavior) -> 
 
   * `info.views` 若不含 `"neurons-list"` 则插入 `"models"` 之后（默认位置；用户自定义过 info 也仅追加，不重置）；
 
-  * `main.panes[].panels` 过滤掉 `type === "session-specs"` 的面板（清理旧会话规格面板）。
+  * `main.panes[].panels` 过滤掉 `type === "session-specs"` 的面板（清理旧系统神经元面板）。
 
 * `parsed.version === DEFAULT_LAYOUT.version`（9）走原 merge 路径（合并含默认的 neurons-list）。
 
@@ -178,7 +178,7 @@ pub fn update_behavior_for_admin(&self, id: &str, behavior: SessionBehavior) -> 
 
 * 删除 `SessionSpecsPanel.svelte`。
 
-* `SessionCreateModal.svelte`：移除「按规格发起」卡片与 `onOpenSpecs` 属性（规格发起收敛到列表项「发起」）。
+* `SessionCreateModal.svelte`：移除「按系统神经元发起」卡片与 `onOpenSpecs` 属性（系统神经元发起收敛到列表项「发起」）。
 
 * `+page.svelte`：移除 `openSessionSpecs` 处理与 `onOpenSpecs` 传参。
 
@@ -194,7 +194,7 @@ neuronSelection: string[] = [];        // 画布核心（单选=1，多选=数�
 neuronSelectionMode: "single" | "multi" = "single";
 neuronEditRequestId: string | null = null;   // 列表「编辑」→ 画布打开抽屉
 neuronCreateRequest: number = 0;             // 列表「创建」→ 画布打开创建弹窗（计数触发）
-neuronLaunchRequestId: string | null = null; // 列表「发起」→ 打开规格会话
+neuronLaunchRequestId: string | null = null; // 列表「发起」→ 打开系统神经元会话
 
 function setNeuronSelection(ids: string[]): void
 function toggleNeuronSelection(id: string): void
@@ -300,7 +300,7 @@ function requestLaunchNeuron(id: string): void  // 调 openSession(id, "chat") +
   1. info 栏出现「★ 神经元」tab；搜索/筛选/加载更多正常。
   2. 单选点击 → 主区画布以该项为核心展开；多选开关 → 勾选多项。
   3. 列表「编辑」→ 抽屉打开；绑定 system\_type → 出现行为控件并保存生效；换绑/取消二次确认。
-  4. 列表「＋ 创建」→ 创建弹窗（孤立）；「发起」→ 打开规格会话。
+  4. 列表「＋ 创建」→ 创建弹窗（孤立）；「发起」→ 打开系统神经元会话。
   5. 旧布局迁移：升级后 info 自动含神经元列表、session-specs 面板消失。
 
 ## Migration Plan / 迁移计划
@@ -311,5 +311,5 @@ function requestLaunchNeuron(id: string): void  // 调 openSession(id, "chat") +
 
 ## Open Questions / 开放问题
 
-* [x] 列表「发起」默认模式：**已确认**（2026-08-10）：默认以 `chat` 模式发起规格会话——`requestLaunchNeuron(id)` 调 `open_session(id, "chat")`（后续如需 chat/agent/assistant 选择，作为增强另立迭代）。
+* [x] 列表「发起」默认模式：**已确认**（2026-08-10）：默认以 `chat` 模式发起系统神经元会话——`requestLaunchNeuron(id)` 调 `open_session(id, "chat")`（后续如需 chat/agent/assistant 选择，作为增强另立迭代）。
 

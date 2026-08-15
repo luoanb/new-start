@@ -33,7 +33,7 @@
 - 已确认事实：
   - 当前 `resolve_role` 返回 `role_system = selected_neuron.content`，每轮不同
   - 当前 `assemble` 在非空历史时用 `replace_system` 替换首条 System 消息
-  - `session.assistant_dialogue` 的 content 为空字符串，仅作 behavior 载体
+  - `session.assistant_dialogue`（2026-08-15 已移除）的 content 为空字符串，仅作 behavior 载体
   - `SessionState` 通过 `conversation.extra.session.state` 持久化
 - 技术/业务约束：
   - Context 消息直接使用 `ModelMessageRole::User` + `[当前角色]` 前缀，不新增角色变体
@@ -54,7 +54,7 @@
 - 我理解当前任务是：改造核心提示词拼接机制，将首轮选中 neuron 冻结为稳定系统提示词，后续轮选中 neuron 拆为独立 Context 消息。
 - 当前核心目标是：完成 B2 方案的代码实现，通过测试验证。
 - 当前边界是：只改主对话路径（`converse`），不改裁决类路径；不改前端和管理面。
-- 暂不处理：`session.assistant_dialogue` 的 content 默认值填充、UI 展示 Context 消息、config 配置化。
+- 暂不处理：`session.assistant_dialogue` 的 content 默认值填充（2026-08-15 该内建神经元已移除，此项作废）、UI 展示 Context 消息、config 配置化。
 
 ## 接口契约设计
 

@@ -76,7 +76,7 @@ src-tauri/src/core/neuron/
 | Creation | `create_neuron/ensure_system_neuron/ensure_session_neuron/get_session_behavior/update_behavior_for_admin/list_session_specs/bootstrap/rebootstrap/create_plain` |
 | Evolution | `record_variant_usage/accumulate_variant_delta/maybe_evolve_creator_variants` |
 
-> `get_session_behavior/update_behavior_for_admin/list_session_specs` 实际委托 `SessionSpecManager`（`specs` 字段），归 Creation（会话规格与系统神经元创建同域）。
+> `get_session_behavior/update_behavior_for_admin/list_session_specs` 实际委托 `SessionSpecManager`（`specs` 字段），归 Creation（系统神经元创建同域）。
 
 ## 改动点
 

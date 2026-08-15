@@ -54,7 +54,7 @@ const state = $state({
   neuronEditRequestId: null as string | null,
   /** 列表「创建」→ 画布创建弹窗（计数触发，消费后自增）。 */
   neuronCreateRequest: 0,
-  /** 列表「发起」→ 打开规格会话（消费后置 null）。 */
+  /** 列表「发起」→ 打开发起神经元会话（消费后置 null）。 */
   neuronLaunchRequestId: null as string | null,
   // ── 服务商/模型管理：聚合面板 → main 区编辑器共享状态 ──
   /** 面板「编辑」→ 编辑器打开该服务商（消费后置 null）。 */
@@ -304,14 +304,14 @@ function requestCreateNeuron(): void {
   layoutStore.insertPanel("neurons");
 }
 
-/** 列表「发起」→ 以 chat 模式打开规格会话并插入会话面板（消费后置 null）。 */
+/** 列表「发起」→ 以 chat 模式打开发起神经元会话并插入会话面板（消费后置 null）。 */
 async function requestLaunchNeuron(id: string): Promise<void> {
   state.neuronLaunchRequestId = null;
   await openSession(id, "chat");
   layoutStore.insertPanel("chat");
 }
 
-/** 按规格发起会话（assistant 模式），选中新会话并跳转会话视图。 */
+/** 按发起神经元发起会话（assistant 模式），选中新会话并跳转会话视图。 */
 async function openSession(
   specNeuronId: string,
   mode: string = "assistant",
@@ -336,7 +336,7 @@ function requestCreateProvider(): void {
   layoutStore.insertPanel("provider-manager");
 }
 
-/** 规格会话一轮直调（resolve_round → execute_round）。 */
+/** 会话一轮直调（resolve_round → execute_round）。 */
 async function converseSession(
   sessionId: string,
   input: string,

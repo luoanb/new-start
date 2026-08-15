@@ -108,15 +108,15 @@ pub struct Conversation {
     pub messages: Vec<Message>,
     pub created_at: u128,
     pub updated_at: u128,
-    /// 会话级扩展（JSON 文件向后兼容旧字段）：规格会话写 `session` 键
+    /// 会话级扩展（JSON 文件向后兼容旧字段）：发起神经元会话写 `session` 键
     /// （`spec_neuron_id` + `state`），承载会话级运行态。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra: Option<serde_json::Value>,
 }
 
-// ── Session specs (system neuron with behavior) ────────────────
+// ── Session behavior (system neuron with behavior) ─────────────
 
-/// 系统神经元的提示词取用策略（通用：`session.assistant_dialogue` 与裁决类系统神经元一视同仁，
+/// 系统神经元的提示词取用策略（通用：`session.%` 系统神经元与裁决类系统神经元一视同仁，
 /// 怎么取提示词都由 behavior.selection 决定；content = 业务语义，behavior = 程序可识别的业务入口）。
 #[derive(Debug, Clone, Serialize, Default, PartialEq)]
 pub enum SelectionPolicy {
@@ -180,7 +180,7 @@ impl<'de> Deserialize<'de> for SelectionPolicy {
     }
 }
 
-/// 会话规格的工具授权策略。
+/// 系统神经元的工具授权策略。
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub enum ToolPolicy {
     /// 不授权任何工具。
@@ -192,7 +192,7 @@ pub enum ToolPolicy {
     Allowlist(Vec<String>),
 }
 
-/// 会话规格（承载于 `system_type = 'session.<id>'` 的系统神经元的 behavior 列）。
+/// 系统神经元行为（承载于 `system_type = 'session.<id>'` 的系统神经元的 behavior 列）。
 /// 无 template / 短路开关字段：拼接规则由 `insert_id` 有无推导；
 /// 单候选短路（候选池仅 1 个 → 跳过选型模型）为不可配置硬规则。
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -471,7 +471,7 @@ pub struct Neuron {
     /// 逻辑删除时间戳；非空表示已被回收，业务全流程不可见。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deleted_at: Option<u128>,
-    /// 会话规格（仅 `system_type IS NOT NULL` 的神经元可挂载）；旧行/旧 JSON 缺失回落 `None`。
+    /// 系统神经元行为（仅 `system_type IS NOT NULL` 的神经元可挂载）；旧行/旧 JSON 缺失回落 `None`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behavior: Option<SessionBehavior>,
 }
@@ -655,7 +655,7 @@ pub struct SystemPromptStatus {
     pub system_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub neuron_id: Option<String>,
-    /// 会话规格的 behavior 摘要（非 `session.%` 系统神经元为 None）。
+    /// 系统神经元的 behavior 摘要（非 `session.%` 系统神经元为 None）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behavior: Option<SessionBehavior>,
 }

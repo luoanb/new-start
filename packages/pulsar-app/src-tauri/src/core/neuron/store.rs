@@ -1144,7 +1144,7 @@ impl NeuronStore {
             .ok_or_else(|| AppError::NeuronNotFound(id.to_string()))
     }
 
-    /// 写会话规格的 behavior（写路径统一收敛到 SessionSpecManager，不触碰 content）。
+    /// 写系统神经元的 behavior（写路径统一收敛到 SessionSpecManager，不触碰 content）。
     pub fn set_behavior(&self, id: &str, behavior: Option<&SessionBehavior>) -> AppResult<Neuron> {
         let encoded = match behavior {
             Some(b) => Some(serde_json::to_string(b).map_err(|e| {
