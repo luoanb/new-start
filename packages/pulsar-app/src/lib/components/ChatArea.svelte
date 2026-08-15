@@ -194,14 +194,18 @@
         </div>
       </div>
     {:else}
-      {#each rounds as round}
-        <div class="message-round" style="min-height: {viewportH}px">
-          {#each round.messages as msg, i}
+      {#each rounds as round, i}
+        <div
+          class="message-round"
+          class:last={i === rounds.length - 1}
+          style={i === rounds.length - 1 ? `min-height: ${viewportH}px` : undefined}
+        >
+          {#each round.messages as msg, mi}
             <ChatMessage
               message={msg}
               canRate={rateable}
               onCopy={handleCopy}
-              onRate={(score) => handleRate(round.startIndex + i, score)}
+              onRate={(score) => handleRate(round.startIndex + mi, score)}
             />
           {/each}
         </div>
@@ -234,9 +238,9 @@
   .chat-area { display: flex; flex-direction: column; height: 100%; overflow: hidden; min-height: 0; background: var(--color-bg); }
   .rating-error { margin: var(--space-1) var(--space-4); padding: var(--space-1) var(--space-2); font-size: var(--fs-xs); color: var(--color-error); background: var(--color-error-bg); border-radius: var(--radius-sm); }
   .messages { flex: 1; overflow-y: auto; min-height: 0; padding: var(--space-3) 0; scroll-behavior: smooth; }
-  /* 一轮对话的小容器：最小高度 = 对话容器可视高度（由 viewportH 内联注入，
-     避免滚动容器内百分比高度无法解析的问题），使每轮至少占满一屏，
-     最新一轮天然吸顶在视口内（问题在上、回答在下），历史轮被推向上方。 */
+  /* 一轮对话的小容器：仅最后一轮（最新）注入 min-height = 对话容器可视高度
+     （由 viewportH 内联注入，避免滚动容器内百分比高度无法解析），使最新一轮
+     至少占满一屏、天然吸顶（问题在上、回答在下）；历史轮按内容自然高度展示。 */
   .message-round { min-height: 0; }
   .message-round + .message-round { margin-top: var(--space-4); }
   .empty { display: flex; align-items: center; justify-content: center; height: 100%; }
