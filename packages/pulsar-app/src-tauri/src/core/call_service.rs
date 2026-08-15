@@ -9,7 +9,7 @@ use super::{
     insert_catalog::InsertCatalog,
     model_call_input::{ModelAppendTemplate, ModelCallInput},
     models::{
-        ChatModelSelection, Conversation, ConversationMode, ModelCallRequest, ModelCallResponse,
+        ChatModelSelection, Conversation, ModelCallRequest, ModelCallResponse,
         ModelMessage, Message, MessageBody, MessageRole, NeighborhoodPoolPolicy, Neuron,
         SelectionPolicy, SessionBehavior, ToolCall, ToolPolicy, ToolTag,
         DEFAULT_ASSISTANT_GLOBAL_LIMIT,
@@ -150,10 +150,9 @@ pub struct RoundInput {
     /// 仅影响真正调 LLM 的分支（Global / 邻选），Fixed / None 分支不感知。
     /// 频率策略由调用方算好传入（业务层按推进轮次取模），引擎不持有任何轮次/频率概念。
     pub reselect: bool,
-    /// 会话模式（标签消费依据）：`Some(mode)` = 对话调用 → Core 工具无条件并入，
-    /// 且 `mode == System` 时并入 System 标签工具；`None` = 非对话调用（如禁工具的
-    /// 内部裁决），不注入任何标签工具，完全沿用 tool_override / behavior。
-    pub mode: Option<ConversationMode>,
+    /// 本调用自动并入的标签工具（如 `ConversationMode::tool_tags()` 算好的 Core / System）。
+    /// 空 = 不注入任何标签工具（Chat 对话、内部裁决等），完全沿用 tool_override / behavior。
+    pub tool_tags: Vec<ToolTag>,
 }
 
 /// 单轮对话产物：仅模型侧结果；落库由上层（ConversationRunner）负责。
@@ -222,6 +221,15 @@ impl NeuronCallService {
         model: &ChatModelSelection,
     ) -> AppResult<RoundOutcome> {
         let mut state = input.state;
+        tracing::info!(
+            phase = "service_converse",
+            seed = ?input.seed,
+            tool_tags = ?input.tool_tags,
+            reselect = input.reselect,
+            history = input.messages.len(),
+            input_len = model_input.len(),
+            "converse start"
+        );
         let (selected_neuron, role_system, behavior) = self
             .resolve_role(
                 input.seed.as_ref(),
@@ -230,6 +238,13 @@ impl NeuronCallService {
                 input.reselect,
             )
             .await?;
+        tracing::info!(
+            phase = "service_converse",
+            selected_neuron_id = ?selected_neuron.as_ref().map(|n| n.id.as_str()),
+            role_len = role_system.len(),
+            stable_frozen = state.stable_system_frozen,
+            "resolve_role done"
+        );
 
         // 工具授权：override 优先；否则按 behavior.tools 三策略（∩ 注册表）。
         let tool_ids = match input.tool_override {
@@ -244,19 +259,16 @@ impl NeuronCallService {
             },
         };
         // 块作用域持有读锁：保证跨 await 前释放（RwLockReadGuard 非 Send）。
-        // 标签消费：Core 无条件并入所有对话；System 仅系统模式会话并入；
-        // 非对话调用（mode=None，如禁工具的内部裁决）不注入，完全沿用 override/behavior。
+        // 标签并入：数据驱动——调用方按模式算好（ConversationMode::tool_tags），service 不感知模式；
+        // 空 tool_tags = 不注入（Chat 对话、内部裁决），完全沿用 override/behavior。
         let (authorized_tool_ids, tools) = {
             let guard = self
                 .tool_registry
                 .read()
                 .expect("tool registry lock should not be poisoned");
             let mut final_ids = Vec::new();
-            if let Some(mode) = input.mode.as_ref() {
-                final_ids.extend(guard.tools_with_tag(ToolTag::Core));
-                if *mode == ConversationMode::System {
-                    final_ids.extend(guard.tools_with_tag(ToolTag::System));
-                }
+            for tag in &input.tool_tags {
+                final_ids.extend(guard.tools_with_tag(*tag));
             }
             let authorized_tool_ids = filter_authorized_tool_ids(&guard, &tool_ids);
             // 去重保序（工具数少，O(n²) 可接受）：Core/System 在前，策略工具随后。
@@ -272,6 +284,12 @@ impl NeuronCallService {
             };
             (final_ids, tools)
         };
+        tracing::info!(
+            phase = "service_converse",
+            authorized_tool_count = authorized_tool_ids.len(),
+            wire_tool_ids = ?tools.as_ref().map(|t| t.iter().map(|d| d.name.clone()).collect::<Vec<_>>()),
+            "tools authorized"
+        );
 
         // 模板由 insert_id 有无推导：有 → 操作说明书契约段；无 → 神经元角色段。
         let (template, insert_or_empty) = match behavior.as_ref().and_then(|b| b.insert_id.clone()) {
@@ -305,6 +323,14 @@ impl NeuronCallService {
                 tools,
             })
             .await?;
+        tracing::info!(
+            phase = "service_converse",
+            provider = %model.provider_id,
+            model = %model.model_id,
+            output_len = model_response.output.len(),
+            tool_calls = model_response.tool_calls.as_ref().map_or(0, |c| c.len()),
+            "model call done"
+        );
 
         let mut output = model_response.output.clone();
         let mut tool_result = None;
@@ -330,7 +356,19 @@ impl NeuronCallService {
                     .expect("tool registry lock should not be poisoned")
                     .get_tool(&first.name)
                     .ok_or_else(|| AppError::SkillNotFound(first.name.clone()))?;
+                tracing::info!(
+                    phase = "service_converse",
+                    tool = %first.name,
+                    args_len = first.arguments.to_string().len(),
+                    "executing tool"
+                );
                 let result = tool.execute(first.arguments.clone()).await?;
+                tracing::info!(
+                    phase = "service_converse",
+                    tool = %first.name,
+                    result_len = result.len(),
+                    "tool executed"
+                );
                 tool_result = Some(result.clone());
                 output = if output.trim().is_empty() {
                     result
@@ -386,11 +424,25 @@ impl NeuronCallService {
                 )
                 .expect("Global always produce a scope");
                 if let Some(role) = self.reuse_selected_neuron(state, reselect) {
+                    tracing::info!(
+                        phase = "resolve_role",
+                        seed = ?SessionSeed::Global,
+                        reused_anchor = true,
+                        neuron_id = %role.id,
+                        "reusing last-selected neuron (no LLM selection)"
+                    );
                     let rs = role.content.clone();
                     (Some(role), rs, Some(behavior))
                 } else {
                     let role = self.neuron_manager.select_role(messages, scope).await?;
                     state.last_selected_neuron_id = Some(role.id.clone());
+                    tracing::info!(
+                        phase = "resolve_role",
+                        seed = ?SessionSeed::Global,
+                        reused_anchor = false,
+                        neuron_id = %role.id,
+                        "LLM-selected neuron (global pool)"
+                    );
                     let rs = role.content.clone();
                     (Some(role), rs, Some(behavior))
                 }
@@ -416,11 +468,25 @@ impl NeuronCallService {
                     )
                     .expect("Neighborhood always produce a scope");
                     if let Some(role) = self.reuse_selected_neuron(state, reselect) {
+                        tracing::info!(
+                            phase = "resolve_role",
+                            seed = ?SessionSeed::Neuron(id.clone()),
+                            reused_anchor = true,
+                            neuron_id = %role.id,
+                            "reusing last-selected neuron (no LLM selection)"
+                        );
                         let rs = role.content.clone();
                         (Some(role), rs, Some(behavior))
                     } else {
                         let role = self.neuron_manager.select_role(messages, scope).await?;
                         state.last_selected_neuron_id = Some(role.id.clone());
+                        tracing::info!(
+                            phase = "resolve_role",
+                            seed = ?SessionSeed::Neuron(id.clone()),
+                            reused_anchor = false,
+                            neuron_id = %role.id,
+                            "LLM-selected neuron (neighborhood)"
+                        );
                         let rs = role.content.clone();
                         (Some(role), rs, Some(behavior))
                     }
@@ -439,11 +505,24 @@ impl NeuronCallService {
                     };
                     match &selection {
                         SelectionPolicy::None => {
+                            tracing::info!(
+                                phase = "resolve_role",
+                                seed = ?SessionSeed::Neuron(id.clone()),
+                                selection = "none",
+                                "system neuron: no selection, clearing anchor"
+                            );
                             state.last_selected_neuron_id = None;
                             (None, String::new(), Some(behavior))
                         }
                         SelectionPolicy::Fixed => {
                             // 读系统神经元自己的 content；不写 last_selected。
+                            tracing::info!(
+                                phase = "resolve_role",
+                                seed = ?SessionSeed::Neuron(id.clone()),
+                                selection = "fixed",
+                                neuron_id = %neuron.id,
+                                "system neuron: fixed role, no LLM selection"
+                            );
                             let rs = neuron.content.clone();
                             (Some(neuron), rs, Some(behavior))
                         }
@@ -455,11 +534,27 @@ impl NeuronCallService {
                             )
                             .expect("Neighborhood always produce a scope");
                             if let Some(role) = self.reuse_selected_neuron(state, reselect) {
+                                tracing::info!(
+                                    phase = "resolve_role",
+                                    seed = ?SessionSeed::Neuron(id.clone()),
+                                    selection = "neighborhood",
+                                    reused_anchor = true,
+                                    neuron_id = %role.id,
+                                    "reusing last-selected neuron (no LLM selection)"
+                                );
                                 let rs = role.content.clone();
                                 (Some(role), rs, Some(behavior))
                             } else {
                                 let role = self.neuron_manager.select_role(messages, scope).await?;
                                 state.last_selected_neuron_id = Some(role.id.clone());
+                                tracing::info!(
+                                    phase = "resolve_role",
+                                    seed = ?SessionSeed::Neuron(id.clone()),
+                                    selection = "neighborhood",
+                                    reused_anchor = false,
+                                    neuron_id = %role.id,
+                                    "LLM-selected neuron (neighborhood)"
+                                );
                                 let rs = role.content.clone();
                                 (Some(role), rs, Some(behavior))
                             }
@@ -523,7 +618,11 @@ pub fn filter_authorized_tool_ids(registry: &ToolRegistry, tool_ids: &[String]) 
         if known.contains(id) {
             out.push(id.clone());
         } else {
-            eprintln!("assistant ignoring unknown tool id: {id}");
+            tracing::warn!(
+                phase = "tool_authorization",
+                tool_id = %id,
+                "ignoring unknown tool id"
+            );
         }
     }
     out
@@ -871,7 +970,7 @@ mod tests {
                     messages: history,
                     tool_override: None,
                     reselect: true,
-                    mode: None,
+                    tool_tags: Vec::new(),
                 },
                 "current",
                 &model(),
@@ -961,7 +1060,7 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: true,
-                    mode: None,
+                    tool_tags: Vec::new(),
                 },
                 "hello",
                 &model(),
@@ -992,7 +1091,7 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: true,
-                    mode: None,
+                    tool_tags: Vec::new(),
                 },
                 "go",
                 &model(),
@@ -1024,7 +1123,7 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: true,
-                    mode: None,
+                    tool_tags: Vec::new(),
                 },
                 "advance",
                 &model(),
@@ -1054,7 +1153,7 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: true,
-                    mode: None,
+                    tool_tags: Vec::new(),
                 },
                 "hi",
                 &model(),
@@ -1095,7 +1194,7 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: true,
-                    mode: None,
+                    tool_tags: Vec::new(),
                 },
                 "go",
                 &model(),
@@ -1134,7 +1233,7 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: true,
-                    mode: None,
+                    tool_tags: Vec::new(),
                 },
                 "go",
                 &model(),
@@ -1174,7 +1273,7 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: true,
-                    mode: None,
+                    tool_tags: Vec::new(),
                 },
                 "go",
                 &model(),
@@ -1206,7 +1305,7 @@ mod tests {
                     messages: vec![],
                     tool_override: Some(vec!["echo".into()]),
                     reselect: true,
-                    mode: None,
+                    tool_tags: Vec::new(),
                 },
                 "go",
                 &model(),
@@ -1240,7 +1339,7 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: true,
-                    mode: None,
+                    tool_tags: Vec::new(),
                 },
                 "go",
                 &model(),
@@ -1272,7 +1371,7 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: false,
-                    mode: None,
+                    tool_tags: Vec::new(),
                 },
                 "advance",
                 &model(),
@@ -1311,7 +1410,7 @@ mod tests {
                         messages: vec![],
                         tool_override: None,
                         reselect: true,
-                        mode: None,
+                        tool_tags: Vec::new(),
                     },
                     "advance",
                     &model(),
@@ -1346,7 +1445,7 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: false,
-                    mode: None,
+                    tool_tags: Vec::new(),
                 },
                 "advance",
                 &model(),
@@ -1387,7 +1486,7 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: false,
-                    mode: None,
+                    tool_tags: Vec::new(),
                 },
                 "go",
                 &model(),
@@ -1423,7 +1522,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
-        // 1) Chat 对话（无 override、无神经元）：仅 Core 进 wire。
+        // 1) Chat 对话（无 override、无神经元）：禁用工具，不注入 Core。
         h.service
             .converse(
                 RoundInput {
@@ -1432,14 +1531,14 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: true,
-                    mode: Some(ConversationMode::Chat),
+                    tool_tags: Vec::new(),
                 },
                 "hello",
                 &model(),
             )
             .await
             .unwrap();
-        assert_eq!(wire_names(), vec!["core_echo"], "Chat 对话应只注入 Core");
+        assert!(wire_names().is_empty(), "Chat 对话应禁用工具（不注入 Core）");
 
         // 2) 系统模式对话：Core + System 进 wire，Normal（神经元管理）不进。
         h.service
@@ -1450,7 +1549,7 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: true,
-                    mode: Some(ConversationMode::System),
+                    tool_tags: vec![ToolTag::Core, ToolTag::System],
                 },
                 "hello",
                 &model(),
@@ -1472,7 +1571,7 @@ mod tests {
                     messages: vec![],
                     tool_override: Some(Vec::new()),
                     reselect: true,
-                    mode: None,
+                    tool_tags: Vec::new(),
                 },
                 "go",
                 &model(),

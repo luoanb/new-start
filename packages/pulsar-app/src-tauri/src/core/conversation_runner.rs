@@ -30,7 +30,8 @@ pub enum RoundTriggerKind {
 pub enum InputRecord {
     /// 用户输入：落 user 消息；model_input = 文本。
     User(String),
-    /// 轮询推进：落 nudge 消息；model_input 由 before hook 拼（简报）。
+    /// 轮询推进：model_input 由 before hook 拼（简报）；nudge 落库由 hook 决定
+    /// （nudge_persist，简报刷新时才落，「生成一次，落库一次」）。
     Nudge,
     /// 无输入落库，但携带推进文本（Agent 后续轮）。
     Continue(String),
@@ -55,6 +56,9 @@ pub struct RoundContext {
     pub topic_id: Option<String>,
     /// 本轮是否进行选型（业务 hooks 按频率算好；runner 透传）。默认 true = 每轮选型。
     pub reselect: bool,
+    /// 本轮是否落 nudge 输入消息。Poller 轮由 before hook 在简报刷新（生成）时置位：
+    /// 「生成一次，落库一次」，复用缓存简报的推进轮不落重复 nudge。
+    pub nudge_persist: bool,
     pub outcome: Option<RoundOutcome>,
 }
 
@@ -92,10 +96,26 @@ impl ConversationRunner {
         hooks: Option<&dyn RoundHooks>,
     ) -> AppResult<ChatResponse> {
         let mut ctx = self.load_context(session_id, input, tool_override, model)?;
+        tracing::info!(
+            phase = "run_round",
+            session_id = %ctx.session_id,
+            trigger = ?ctx.trigger,
+            mode = ?ctx.mode,
+            seed = ?ctx.seed,
+            history = ctx.messages.len(),
+            input_len = ctx.model_input.len(),
+            "round start"
+        );
         if let Some(hooks) = hooks {
             hooks.before_round(&mut ctx).await?;
             // before hook 可能切换会话（assistant match_topic switch）→ 重读上下文。
             if ctx.session_id != session_id {
+                tracing::info!(
+                    phase = "run_round",
+                    from_session = %session_id,
+                    to_session = %ctx.session_id,
+                    "session switched by before hook; reloading context"
+                );
                 self.reload(&mut ctx)?;
             }
         }
@@ -108,19 +128,30 @@ impl ConversationRunner {
                     messages: ctx.messages.clone(),
                     tool_override: ctx.tool_override.clone(),
                     reselect: ctx.reselect,
-                    mode: Some(ctx.mode.clone()),
+                    // 标签工具按会话模式映射（领域规则在 ConversationMode::tool_tags），runner 仅透传。
+                    tool_tags: ctx.mode.tool_tags(),
                 },
                 &ctx.model_input,
                 model,
             )
             .await?;
+        tracing::info!(
+            phase = "run_round",
+            session_id = %ctx.session_id,
+            response_len = outcome.response.len(),
+            tool_calls = outcome.tool_calls.as_ref().map_or(0, |c| c.len()),
+            selected_neuron_id = ?outcome.selected_neuron_id,
+            "converse done"
+        );
         ctx.outcome = Some(outcome.clone());
         // 先落库（消息 + 会话态），再跑 after hooks：课题副作用（如 complete_scope 模型调用）
         // 失败只影响副作用本身，不丢失本轮模型产物（与旧 AssistantMode 行为一致）。
         self.persist(&ctx)?;
+        tracing::info!(phase = "run_round", session_id = %ctx.session_id, "persist done");
         if let Some(hooks) = hooks {
             hooks.after_round(&mut ctx).await?;
         }
+        tracing::info!(phase = "run_round", session_id = %ctx.session_id, "round ok");
         Ok(ChatResponse {
             conversation_id: ctx.session_id.clone(),
             response: outcome.response,
@@ -193,6 +224,7 @@ impl ConversationRunner {
             trigger,
             topic_id: None,
             reselect: true,
+            nudge_persist: false,
             outcome: None,
         })
     }
@@ -232,23 +264,44 @@ impl ConversationRunner {
                 )?;
             }
             RoundTriggerKind::Poller => {
-                self.store.add_message(
-                    &ctx.session_id,
-                    Message {
-                        role: MessageRole::User,
-                        body: MessageBody::Nudge {
-                            content: ctx.model_input.clone(),
+                // 「生成一次，落库一次」：仅简报刷新（nudge_persist 由 before hook 置位）
+                // 的这一轮落 nudge 输入消息，复用缓存简报的推进轮不落。
+                if ctx.nudge_persist {
+                    self.store.add_message(
+                        &ctx.session_id,
+                        Message {
+                            role: MessageRole::User,
+                            body: MessageBody::Nudge {
+                                content: ctx.model_input.clone(),
+                            },
+                            timestamp: now_ms(),
+                            neuron_id: stamped.clone(),
                         },
-                        timestamp: now_ms(),
-                        neuron_id: stamped.clone(),
-                    },
-                )?;
+                    )?;
+                }
             }
             RoundTriggerKind::ManualStep | RoundTriggerKind::AgentLoop => {}
         }
         let Some(outcome) = &ctx.outcome else {
             return Ok(());
         };
+        let stored_as = if let Some(tool_calls) = outcome.tool_calls.as_ref() {
+            if tool_calls.first().is_some() {
+                "tool_call + tool_result"
+            } else {
+                "assistant text"
+            }
+        } else {
+            "assistant text"
+        };
+        tracing::info!(
+            phase = "run_round",
+            session_id = %ctx.session_id,
+            trigger = ?ctx.trigger,
+            stamped = ?stamped,
+            stored_as,
+            "persisting messages"
+        );
         if let Some(tool_calls) = outcome.tool_calls.as_ref() {
             if let Some(first) = tool_calls.first() {
                 self.store.add_message(

@@ -106,6 +106,15 @@ impl AssistantSession {
         model: &ChatModelSelection,
         history: &[ModelMessage],
     ) -> AppResult<serde_json::Value> {
+        tracing::info!(
+            phase = "call_judgement",
+            system_type,
+            provider = %model.provider_id,
+            model = %model.model_id,
+            history = history.len(),
+            payload_len = user_payload.to_string().len(),
+            "judgement call start"
+        );
         let spec = self
             .neuron_manager
             .ensure_system_neuron(system_type, EnsureSystemOpts { reset: false })
@@ -120,13 +129,20 @@ impl AssistantSession {
                     tool_override: Some(Vec::new()),
                     reselect: true,
                     // 裁决调用非对话：不注入任何标签工具（禁工具语义保持不变）。
-                    mode: None,
+                    tool_tags: Vec::new(),
                 },
                 &user_payload.to_string(),
                 model,
             )
             .await?;
-        extract_json_object(&outcome.response)
+        let decision = extract_json_object(&outcome.response)?;
+        tracing::info!(
+            phase = "call_judgement",
+            system_type,
+            decision = %decision,
+            "judgement call done"
+        );
+        Ok(decision)
     }
 
     /// 更新轮询并发推进数量（运行时生效），返回实际生效值。
@@ -230,7 +246,11 @@ impl AssistantSession {
                 let topics = match self.topics().and_then(|store| store.list_unfinished()) {
                     Ok(topics) => topics,
                     Err(error) => {
-                        eprintln!("assistant poll list failed: {error}");
+                        tracing::error!(
+                            phase = "assistant_poll_handler",
+                            error = %error,
+                            "PollAll topic list failed"
+                        );
                         return Vec::new();
                     }
                 };
@@ -244,11 +264,14 @@ impl AssistantSession {
                 let semaphore = Arc::new(tokio::sync::Semaphore::new(parallelism));
                 let touched = Arc::new(Mutex::new(Vec::<String>::new()));
                 let mut tasks = tokio::task::JoinSet::new();
+                let mut skipped = 0usize;
                 for topic in topics {
                     let Some(session_id) = topic.session_id else {
+                        skipped += 1;
                         continue;
                     };
                     if matches!(topic.status, TopicStatus::Paused | TopicStatus::Cancelled) {
+                        skipped += 1;
                         continue;
                     }
                     let topic_id = topic.id;
@@ -261,6 +284,7 @@ impl AssistantSession {
                             session_id,
                             "skip topic: session already running"
                         );
+                        skipped += 1;
                         continue;
                     }
                     let model = model.clone();
@@ -270,14 +294,33 @@ impl AssistantSession {
                     tasks.spawn(async move {
                         let _permit = semaphore.acquire().await.expect("semaphore not closed");
                         if let Err(error) = assistant.session_tracker.register(&session_id, None) {
-                            eprintln!("assistant poll register failed for {topic_id}: {error}");
+                            tracing::error!(
+                                phase = "assistant_poll_handler",
+                                topic_id,
+                                session_id,
+                                error = %error,
+                                "poll register failed"
+                            );
                             return;
                         }
                         let _ = assistant
                             .session_tracker
                             .update_step(&session_id, "polling");
-                        if let Err(error) = assistant.step_poller(&session_id, &model).await {
-                            eprintln!("assistant poll step failed for {topic_id}: {error}");
+                        match assistant.step_poller(&session_id, &model).await {
+                            Ok(response) => tracing::info!(
+                                phase = "assistant_poll_handler",
+                                topic_id,
+                                session_id,
+                                response_len = response.response.len(),
+                                "poll step ok"
+                            ),
+                            Err(error) => tracing::error!(
+                                phase = "assistant_poll_handler",
+                                topic_id,
+                                session_id,
+                                error = %error,
+                                "poll step failed"
+                            ),
                         }
                         assistant.session_tracker.unregister(&session_id);
                         if let Ok(mut list) = touched.lock() {
@@ -285,6 +328,13 @@ impl AssistantSession {
                         }
                     });
                 }
+                tracing::info!(
+                    phase = "assistant_poll_handler",
+                    spawned = tasks.len(),
+                    skipped,
+                    parallelism,
+                    "PollAll tasks spawned"
+                );
                 while tasks.join_next().await.is_some() {}
                 let touched = touched.lock().map(|list| list.clone()).unwrap_or_default();
                 tracing::info!(
@@ -446,12 +496,28 @@ impl RoundHooks for AssistantHooks<'_> {
                     state.last_brief_round,
                     last_is_tool,
                 );
+                tracing::info!(
+                    phase = "assistant_hook",
+                    trigger = ?ctx.trigger,
+                    session_id = %ctx.session_id,
+                    topic_id = %topic_id,
+                    need_fresh,
+                    last_is_tool,
+                    poll_count = state.poll_count,
+                    reselect = state.poll_count % SELECTION_EVERY_N_ROUNDS == 0,
+                    "advance brief refresh decision"
+                );
                 if need_fresh {
                     let mut next = state.clone();
                     next.brief_cache = Some(fresh.clone());
                     next.last_brief_round = state.poll_count;
                     write_assistant_state(&self.assistant.topic_store, topic_id, next)?;
                     ctx.model_input = fresh;
+                    // 「生成一次，落库一次」：仅简报刷新（生成）的这一轮落 nudge 输入消息，
+                    // 复用缓存简报的推进轮不落重复 nudge。
+                    if ctx.trigger == RoundTriggerKind::Poller {
+                        ctx.nudge_persist = true;
+                    }
                 } else {
                     ctx.model_input = state.brief_cache.clone().unwrap_or(fresh);
                 }

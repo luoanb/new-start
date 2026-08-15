@@ -8,7 +8,7 @@
 ## Done Contract
 
 - `MessageBody` 新增 `Nudge { content }`（serde tag = `nudge`），存量 JSON 无迁移。
-- 轮询（`RoundTrigger::Poller`）实际执行时，简报以 `role=User, kind=nudge` 落库，插入位置早于该轮产出消息。
+- 轮询（`RoundTrigger::Poller`）实际执行时，**仅简报刷新（生成）的那一轮**以 `role=User, kind=nudge` 落库，插入位置早于该轮产出消息；复用缓存简报的推进轮不落重复 nudge（生成一次，落库一次）。
 - 落库的 nudge **不参与后续模型输入组装**（`message_to_model` 过滤），避免历史简报反复进 context。
 - 前端按 `kind === "nudge"` 灰显折叠渲染。
 - `cargo test` 通过；前端 `svelte-check` / 构建通过。
@@ -20,7 +20,8 @@
 
 ## 落库判据
 
-- `run_core` 中，当 `ctx.trigger == RoundTrigger::Poller` 时，将本轮 `user_input`（即 topic_brief，含 fallback 文案）落库为一条 `role=User, kind=nudge`。
+- `run_core` 中，当 `ctx.trigger == RoundTrigger::Poller` **且** 本轮简报刷新（生成）时，将本轮 `user_input`（即刷新后的 topic_brief）落库为一条 `role=User, kind=nudge`；复用缓存简报的轮次不落。
+- 实现机制：`RoundContext.nudge_persist: bool`，由 before hook（`should_refresh_brief` 命中）置位，persist 仅在该标志下落的 nudge；默认 false。
 - 时机：模型调用前（`user_input` 计算完成后、`assemble` 前），保证 nudge 位于该轮产出之前。
 - 模型调用失败时 nudge 仍保留（记录"发起过推进"），属预期审计行为。
 
@@ -59,3 +60,9 @@
   - `engine.rs`：`message_to_model_message` 补 `Nudge` → User 文本（穷尽性，engine 会话不会实际产生）。
   - 前端：`types.ts` union；`NudgeBlock.svelte` 折叠块组件（仿 ToolCall/ToolResult 样式，默认收起、展开看全文）；`ChatMessage.svelte` 分发渲染；i18n 文案（zh `轮询推进` / en `polling advance`）。
 - 未纳入（与本次诉求无关的独立议题，留待后续）：PollAll 跳过已运行会话（对话期间轮询介入的并发竞态）；run_core 空输出跳过 assistant 落库。
+
+## Change Log / Validation（2026-08-15，需求澄清：生成一次，落库一次）
+
+- 需求澄清：nudge 落库**跟着简报生成走**——简报刷新（`should_refresh_brief` 命中，见 08-13 spec）的那一轮才落一条 `kind=nudge`；复用缓存简报的推进轮**不落**，避免会话历史堆积重复简报。
+- 实现：`RoundContext` 新增 `nudge_persist: bool`（默认 false）；`AssistantHooks::before_round` 推进分支在 `need_fresh && trigger == Poller` 时置位；`ConversationRunner::persist` 的 Poller 分支仅 `nudge_persist` 时落库。ManualStep 仍不落 nudge（行为不变）。
+- 验证：`cargo check` / `cargo test` 通过。

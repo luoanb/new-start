@@ -4,7 +4,7 @@
   "description": "Pulsar（星脉）— 自主推进的 AI Agent 桌面客户端",
   "type": "module",
   "scripts": {
-    "dev": "vite dev",
+    "dev": "vite dev --host",
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",

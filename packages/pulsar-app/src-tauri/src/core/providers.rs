@@ -379,9 +379,71 @@ impl ProviderRegistry {
         // 空响应防御：模型返回 HTTP 200 但无文本且无 tool_calls 时视为异常，
         // 避免空消息落库后污染历史（providers 校验会拒绝空 assistant 消息锁死会话）。
         if output.trim().is_empty() && tool_calls.is_none() {
-            return Err(AppError::LlmRequestFailed(
-                "Provider returned empty response without tool_calls".into(),
-            ));
+            // 诊断日志：dump 响应元信息，区分「推理模型 content=null 仅 reasoning」、
+            // 「refusal 拒绝回答」、「finish_reason=length 截断」等上游原因。
+            let refusal = choice
+                .message
+                .refusal
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let reasoning_tokens = response
+                .usage
+                .as_ref()
+                .and_then(|u| u.completion_tokens_details.as_ref())
+                .and_then(|d| d.reasoning_tokens)
+                .unwrap_or(0);
+            // 完整请求体（最终发送给三方的 messages + tools），排查"输入是什么、为什么空返回"。
+            // 加长度上限防日志爆炸；tracing 字段用 Display 完整输出。
+            const MAX_REQ_LOG: usize = 120_000;
+            let mut req_messages = serde_json::to_string(&request.messages).unwrap_or_default();
+            if req_messages.chars().count() > MAX_REQ_LOG {
+                req_messages = format!(
+                    "{}…(truncated {})",
+                    req_messages.chars().take(MAX_REQ_LOG).collect::<String>(),
+                    req_messages.chars().count() - MAX_REQ_LOG
+                );
+            }
+            let req_tools = request
+                .tools
+                .as_ref()
+                .map(|tools| {
+                    tools
+                        .iter()
+                        .map(|t| t.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+                .unwrap_or_default();
+            tracing::warn!(
+                phase = "call_model",
+                provider_id = %request.provider_id,
+                model_id = %request.model_id,
+                response_id = %response.id,
+                finish_reason = %finish_reason,
+                refusal = %refusal,
+                usage_prompt_tokens = response.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0),
+                usage_completion_tokens = response.usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0),
+                usage_total_tokens = response.usage.as_ref().map(|u| u.total_tokens).unwrap_or(0),
+                reasoning_tokens,
+                req_tools,
+                req_messages,
+                "model returned empty response without tool_calls; dumping request and response metadata"
+            );
+            let mut detail = format!(
+                "Provider returned empty response without tool_calls (response_id={}, finish_reason={})",
+                response.id, finish_reason
+            );
+            if !refusal.is_empty() {
+                detail.push_str(&format!(", refusal={refusal}"));
+            }
+            if reasoning_tokens > 0 {
+                detail.push_str(&format!(
+                    ", reasoning_tokens={reasoning_tokens} (model reasoned but emitted no content — reasoning-model quirk)"
+                ));
+            }
+            return Err(AppError::LlmRequestFailed(detail));
         }
 
         Ok(ModelCallResponse {

@@ -136,14 +136,10 @@ impl ModelCallInput {
     ) -> Vec<ModelMessage> {
         let body = Self::with_user_input_for_append(content, user_input, template);
         if history.is_empty() {
-            let mut system = role_system.to_string();
-            if let Some(ctx) = context {
-                if !system.is_empty() {
-                    system.push_str("\n\n");
-                }
-                system.push_str(ctx);
-            }
-            let system = join_nonempty(&system, &body);
+            // 空历史：role_system 已含选中神经元 content（resolve_role 渲染），
+            // context 与之同源（B2 冻结后 = selected_neuron.content），再拼接会重复，
+            // 且无历史可供"稳定 system + 独立上下文"区分 → 跳过 context。
+            let system = join_nonempty(role_system, &body);
             return Self::replace_system(&[], &system);
         }
         let mut messages = Self::replace_system(history, role_system);

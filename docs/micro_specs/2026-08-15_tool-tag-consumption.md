@@ -4,17 +4,17 @@
 
 - 要解决什么问题：第一版已完成打标（`ToolTag`：Core / System / Normal），但消费语义未落地——发起对话时 tools wire 不会自动带上 Core / System 标签工具。本批实现消费逻辑。
 - 消费语义（既定契约，用户定义）：
-  - **Core**：任何对话都得带上的工具 → 无条件并入所有会话（Chat / Agent / Assistant / System）的 tools wire。
+  - **Core**：带工具能力的对话（Agent / Assistant / System）都得带上的工具 → 并入这些会话的 tools wire；**Chat 模式禁用工具，不注入**。
   - **System**：系统对话自动带上的工具 → 仅"系统模式"会话（发起会话时可选，= 助手模式附加系统工具）并入 tools wire。
   - **Normal**（默认）：由神经元管理 → 神经元持有哪些就带哪些（现状 `tool_ids` 白名单逻辑，行为不变）。
-- 验收结果：发起任意对话，Core 工具自动进入 wire；发起"系统模式"会话，Core + System 工具自动进入 wire；Normal 工具仍由神经元 / override 决定；系统模式成为会话创建的可选项（前后端 + TUI）。
+- 验收结果：发起 Agent / Assistant / System 对话，Core 工具自动进入 wire；发起"系统模式"会话，Core + System 工具自动进入 wire；**Chat 模式不注入任何工具**；Normal 工具仍由神经元 / override 决定；系统模式成为会话创建的可选项（前后端 + TUI）。
 
 ## Done Contract
 
 - 什么算完成：
   1. `ConversationMode` 新增 `System` 枚举值（前后端 + TUI 可创建/识别）。
   2. `RoundInput` 携带 `mode`；`converse()` 授权段消费标签：
-     - Core 工具无条件并入（所有模式）；
+     - Core 工具并入 Agent / Assistant / System（**Chat 模式不注入，禁用工具**）；
      - System 工具仅 `mode == System` 并入；
      - 其余按现状 `tool_override` / `behavior.tools`（∩ 注册表）。
   3. `ToolRegistry` 新增 `tools_with_tag(tag) -> Vec<String>`；工具执行授权校验自动跟随（wire 内即可调）。

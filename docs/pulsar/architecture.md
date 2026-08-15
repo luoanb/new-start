@@ -254,6 +254,87 @@ sequenceDiagram
 `Poller` tick → `AssistantSession.poll_all` → `NeuronCallService` 逐候选执行 → 状态变更经
 `StateChange` 广播 → 前端重拉。并行度由前端调整并经共享原子值运行时生效、持久化到 config。
 
+### 助手模式（Assistant）执行流程
+
+助手模式的一轮统一为「读会话 → before hooks → 主对话 → after hooks → 落库」，
+由 `ConversationRunner::run_round` 编排，`AssistantHooks` 承载课题副作用（打分 / 匹配 / 验收）。
+
+#### 1. 用户输入时（converse）
+
+```mermaid
+flowchart TB
+  subgraph ent["入口"]
+    UI["前端 sendMessage"] --> GW["Gateway.send_model_message<br/>(gateway.rs) 按 mode 路由"]
+  end
+  GW -->|"mode = Assistant / System"| CONV["AssistantSession.converse<br/>(assistant_session.rs)"]
+
+  subgraph runner["ConversationRunner.run_round<br/>(conversation_runner.rs)"]
+    LC["load_context<br/>读会话 seed / state / messages"]
+
+    subgraph before["before hooks（User 触发）"]
+      RBT["resolve_bound_topic<br/>按会话解析已绑定课题"] --> SF["score_feedback<br/>call_judgement 打分模型<br/>禁工具 · mode=None<br/>JSON 解析失败 → warn + skip"] --> MT["match_topic<br/>call_judgement 课题裁决<br/>禁工具 · mode=None<br/>action: switch / create"]
+    end
+
+    subgraph core["主对话（mode = Some(Assistant/System)）"]
+      RR["resolve_role<br/>种子分派 / 选型 select_one<br/>工具授权（+ Core 标签）"] --> MC["call_model → LLM"] --> TC["至多一次授权工具执行"]
+    end
+
+    subgraph after["after hooks（User 触发）"]
+      CMP["complete_scope<br/>call_judgement 勾选完成项<br/>失败阻断本轮"] --> TCK["tick_round_counters<br/>total / user_rounds +1<br/>poll_count 归零"]
+    end
+  end
+
+  CONV --> LC
+  LC --> before
+  before --> CS["NeuronCallService.converse<br/>(call_service.rs)"]
+  CS --> core
+  core --> PER["persist<br/>落库：输入消息 + 产物 + 会话态"]
+  PER --> after
+  after --> RES["返回 ChatResponse<br/>广播 StateChange"]
+  MT -.->|"switch 到其它会话<br/>reload 重读上下文"| LC
+```
+
+要点：
+
+- **hook 与主对话同源**：三个裁决 hook 与主对话共用 `ctx.model`（用户所选模型）与 `ctx.messages`（只读历史）。
+- **裁决禁工具**：`call_judgement` 构造 `RoundInput { mode: None, tool_override: Some(vec![]) }`，不注入任何标签工具。
+- **主对话注入 Core**：`mode = Some(...)`，Core 标签工具（`execute_command` / `get_current_time`）并入 wire。
+- **switch 会话**：`match_topic` 若裁决切换到其它课题绑定的会话，runner 检测 `session_id` 变化后 `reload` 重读上下文。
+
+#### 2. 轮询时（Poller）
+
+```mermaid
+flowchart TB
+  subgraph tick["Poller runtime（gateway.rs spawn_poller_runtime）"]
+    IV["interval.tick()<br/>base_interval_ms"] --> PT["poller.tick()<br/>任务到期检查"]
+  end
+  PT -->|"assistant_advance 到期<br/>（interval_ticks 个 tick）"| H["AssistantPollHandler.on_tick<br/>(poller_step.rs)<br/>发送 PollAll 到 channel"]
+  H --> REC["step_rx.recv()<br/>独立任务 + step_guard.try_lock()<br/>同一时刻仅一个 PollAll"]
+
+  subgraph pa["AssistantSession.process_step_request<br/>(assistant_session.rs)"]
+    LU["list_unfinished()<br/>列出未完成课题"] --> FILTER["过滤：无 session_id<br/>/ status Paused · Cancelled<br/>/ 会话已在运行<br/>（session_tracker 查重）"] --> SEM["按 poll_parallelism 信号量<br/>JoinSet 并发推进"] --> REG["register → update_step(polling)<br/>→ step_poller(session_id)"]
+  end
+  REC --> pa
+
+  subgraph poll_round["ConversationRunner.run_round<br/>（InputRecord::Nudge）"]
+    subgraph pbefore["before hooks（Poller 触发）"]
+      RBT2["resolve_bound_topic<br/>需课题已绑定（否则报错）"] --> BRIEF["build_topic_brief 简报<br/>should_refresh_brief 三条件<br/>命中则刷新 ctx.model_input"] --> RSL["reselect = poll_count % N == 0<br/>（选型频率，非每轮）"]
+    end
+    PCS["NeuronCallService.converse<br/>简报作为本轮指令<br/>（同样注入 Core）"] --> PPER["persist 落库"] --> PAH["after_round hooks<br/>complete_scope<br/>失败仅记录（不打断推进）<br/>+ poll_count +1"]
+  end
+
+  REG --> pbefore
+  pbefore --> PCS
+  PAH --> UNREG["unregister 会话"]
+  UNREG --> TOUCHED["收集 touched 会话<br/>非空 → 广播 Conversations{affected} + Topics"]
+```
+
+要点：
+
+- **nudge 落库**：轮询推进以 `InputRecord::Nudge` 落 nudge 消息，简报作为本轮指令进入 `model_input`。
+- **不打断推进**：Poller 触发下 `complete_scope` 失败仅记录；空转（无未完成课题 / 全部跳过）不发状态事件，避免无效刷新。
+- **串行化**：`step_guard.try_lock()` 保证同一时刻只有一个 PollAll；tick 循环不被模型调用拖住。
+
 ## 并发与锁纪律
 
 GUI 卡死 / 系统「无响应」的根因与目标契约见正式 spec：[`docs/specs/2026-08-01_12-07_gateway-lock-unfreeze.md`](../specs/2026-08-01_12-07_gateway-lock-unfreeze.md)。

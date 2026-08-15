@@ -587,7 +587,8 @@ impl Gateway {
                 );
                 self.agent.agent_loop(&conversation_id, input, &model).await
             }
-            // 系统模式 = 助手模式附加系统工具：路由与 Assistant 一致（工具并入在 call_service 授权段完成）。
+            // 系统模式 = 助手模式附加系统工具：路由与 Assistant 一致（标签并入由
+            // ConversationMode::tool_tags 决定，runner 透传给 service）。
             ConversationMode::System => {
                 tracing::info!(
                     phase = "send_model_message",

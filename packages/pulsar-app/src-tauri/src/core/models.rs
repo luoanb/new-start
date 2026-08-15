@@ -102,6 +102,20 @@ impl Default for ConversationMode {
     }
 }
 
+impl ConversationMode {
+    /// 本模式自动并入的标签工具（会话/路由层消费，call_service 只做数据驱动并入）。
+    /// - Chat：无（对话模式禁用标签工具）。
+    /// - Agent / Assistant：Core 标签（任何对话都得带的工具）。
+    /// - System：Core + System（= 助手模式附加系统工具）。
+    pub fn tool_tags(&self) -> Vec<ToolTag> {
+        match self {
+            ConversationMode::Chat => Vec::new(),
+            ConversationMode::Agent | ConversationMode::Assistant => vec![ToolTag::Core],
+            ConversationMode::System => vec![ToolTag::Core, ToolTag::System],
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Conversation {
     pub id: String,
