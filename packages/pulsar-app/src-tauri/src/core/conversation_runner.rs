@@ -108,6 +108,7 @@ impl ConversationRunner {
                     messages: ctx.messages.clone(),
                     tool_override: ctx.tool_override.clone(),
                     reselect: ctx.reselect,
+                    mode: Some(ctx.mode.clone()),
                 },
                 &ctx.model_input,
                 model,

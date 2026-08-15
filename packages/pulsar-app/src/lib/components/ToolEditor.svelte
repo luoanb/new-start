@@ -10,10 +10,18 @@
     HttpToolConfig,
     McpServerConfig,
     ToolConfigView,
+    ToolTag,
   } from "$lib/types";
   import { useViewContext } from "$lib/layout/viewContext";
 
   const ctx = useViewContext();
+
+  /// 工具标签选项：normal 由神经元管理（默认）／system 系统模式会话自动带／core 任何对话都带。
+  const TAG_OPTIONS: { value: ToolTag; label: string }[] = [
+    { value: "normal", label: "normal" },
+    { value: "system", label: "system" },
+    { value: "core", label: "core" },
+  ];
 
   let loading = $state(true);
   let saving = $state(false);
@@ -89,15 +97,16 @@
       url: "",
       headers: {},
       disabled: false,
+      tag: "normal",
     };
   }
 
   function newHttpTool(): HttpToolConfig {
-    return { name: "", desc: "", method: "GET", url: "", timeout_ms: null };
+    return { name: "", desc: "", method: "GET", url: "", timeout_ms: null, tag: "normal" };
   }
 
   function newCommandTool(): CommandToolConfig {
-    return { name: "", desc: "", template: "", timeout_ms: null };
+    return { name: "", desc: "", template: "", timeout_ms: null, tag: "normal" };
   }
 </script>
 
@@ -149,6 +158,14 @@
                       { value: "http", label: "http" },
                     ]}
                     onchange={(v) => (server.transport = v as "stdio" | "http")}
+                  />
+                </label>
+                <label class="field">
+                  <span class="field-label">{t("toolPanel.tag")}</span>
+                  <Select
+                    value={server.tag ?? "normal"}
+                    options={TAG_OPTIONS}
+                    onchange={(v) => (server.tag = v as ToolTag)}
                   />
                 </label>
                 <div class="field-toggle">
@@ -229,6 +246,14 @@
                     onchange={(v) => (tool.method = String(v))}
                   />
                 </label>
+                <label class="field">
+                  <span class="field-label">{t("toolPanel.tag")}</span>
+                  <Select
+                    value={tool.tag ?? "normal"}
+                    options={TAG_OPTIONS}
+                    onchange={(v) => (tool.tag = v as ToolTag)}
+                  />
+                </label>
                 <label class="field field-narrow">
                   <span class="field-label">{t("toolPanel.timeoutMs")}</span>
                   <input type="number" bind:value={tool.timeout_ms} placeholder={t("toolPanel.optional")} />
@@ -282,6 +307,14 @@
                 <label class="field">
                   <span class="field-label">{t("toolPanel.name")}</span>
                   <input type="text" bind:value={tool.name} placeholder="git_status" />
+                </label>
+                <label class="field">
+                  <span class="field-label">{t("toolPanel.tag")}</span>
+                  <Select
+                    value={tool.tag ?? "normal"}
+                    options={TAG_OPTIONS}
+                    onchange={(v) => (tool.tag = v as ToolTag)}
+                  />
                 </label>
                 <label class="field field-narrow">
                   <span class="field-label">{t("toolPanel.timeoutMs")}</span>

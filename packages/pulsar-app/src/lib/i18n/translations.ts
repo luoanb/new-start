@@ -75,6 +75,8 @@ export type Translations = {
     agentDesc: string;
     assistantLabel: string;
     assistantDesc: string;
+    systemLabel: string;
+    systemDesc: string;
   };
   connectDialog: {
     title: string;
@@ -327,6 +329,7 @@ export type Translations = {
     desc: string;
     template: string;
     disabled: string;
+    tag: string;
     transportHint: string;
     httpUrlHint: string;
     commandHint: string;
@@ -487,6 +490,8 @@ export const en: Translations = {
     agentDesc: "Can call tools for tasks.",
     assistantLabel: "Assistant",
     assistantDesc: "Autonomous progression.",
+    systemLabel: "System",
+    systemDesc: "Assistant with system tools.",
   },
   connectDialog: {
     title: "Connection",
@@ -750,6 +755,7 @@ export const en: Translations = {
     desc: "Description",
     template: "Template (command)",
     disabled: "Disabled",
+    tag: "Tag",
     transportHint: "stdio requires command; http requires URL",
     httpUrlHint: "Fixed endpoint; {query} filled by the model",
     commandHint: "Command passes safety rails: denylist / timeout / concurrency",
@@ -910,6 +916,8 @@ export const zh: Translations = {
     agentDesc: "可调用工具完成任务。",
     assistantLabel: "助手",
     assistantDesc: "自主推进模式。",
+    systemLabel: "系统",
+    systemDesc: "助手模式，附加系统工具。",
   },
   connectDialog: {
     title: "连接设置",
@@ -1173,6 +1181,7 @@ export const zh: Translations = {
     desc: "描述",
     template: "模板（命令模板）",
     disabled: "停用",
+    tag: "标签",
     transportHint: "stdio 需 command；http 需 url",
     httpUrlHint: "端点固定，{query} 由模型填充",
     commandHint: "命令经过安全护栏：denylist / 超时 / 并发",

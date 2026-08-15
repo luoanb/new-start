@@ -10,7 +10,7 @@ export type ChatResponse = {
 
 export type Conversation = {
   id: string;
-  mode: "chat" | "agent" | "assistant";
+  mode: "chat" | "agent" | "assistant" | "system";
   messages: Message[];
   created_at: number;
   updated_at: number;
@@ -64,10 +64,14 @@ export type SkillInfo = {
 
 export type ToolSource = "native" | "config" | "mcp";
 
+/** 工具标签（用途/行为维度）：normal 由神经元管理（默认）／system 系统模式会话自动带／core 任何对话都带。 */
+export type ToolTag = "normal" | "system" | "core";
+
 export type ToolInfo = {
   name: string;
   description: string;
   source: ToolSource;
+  tag: ToolTag;
   parameters: Record<string, unknown>;
 };
 
@@ -92,6 +96,8 @@ export type McpServerConfig = {
   url?: string | null;
   headers?: Record<string, string>;
   disabled?: boolean;
+  /** 该 server 下全部工具打此标，缺省 normal。 */
+  tag?: ToolTag;
 };
 
 export type HttpToolConfig = {
@@ -100,6 +106,7 @@ export type HttpToolConfig = {
   method?: string;
   url: string;
   timeout_ms?: number | null;
+  tag?: ToolTag;
 };
 
 export type CommandToolConfig = {
@@ -107,6 +114,7 @@ export type CommandToolConfig = {
   desc: string;
   template: string;
   timeout_ms?: number | null;
+  tag?: ToolTag;
 };
 
 export type ToolConfigView = {

@@ -367,8 +367,8 @@ impl TuiApp {
                     self.error_banner = Some(TuiErrorView::from(error));
                 }
             }
-            Command::NewAgent => {
-                if let Err(error) = self.create_new_session(ConversationMode::Agent) {
+            Command::NewSystem => {
+                if let Err(error) = self.create_new_session(ConversationMode::System) {
                     self.error_banner = Some(TuiErrorView::from(error));
                 }
             }
@@ -1509,7 +1509,7 @@ impl TuiApp {
             } else if idx == self.conversations.len() {
                 let _ = self.create_new_session(ConversationMode::Chat);
             } else if idx == self.conversations.len() + 1 {
-                let _ = self.create_new_session(ConversationMode::Agent);
+                let _ = self.create_new_session(ConversationMode::System);
             } else if idx == self.conversations.len() + 2 {
                 let _ = self.create_new_session(ConversationMode::Assistant);
             }

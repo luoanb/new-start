@@ -6,7 +6,7 @@ use serde_json;
 use super::{
     error::{AppError, AppResult},
     insert_catalog::InsertCatalog,
-    models::{ToolDefinition, ToolSource},
+    models::{ToolDefinition, ToolSource, ToolTag},
 };
 use std::sync::{Arc, Mutex};
 
@@ -31,11 +31,12 @@ pub struct ToolRegistry {
 struct ToolBox {
     tool: Arc<dyn Tool>,
     source: ToolSource,
+    tag: ToolTag,
 }
 
 impl ToolBox {
-    fn new(tool: Arc<dyn Tool>, source: ToolSource) -> Self {
-        Self { tool, source }
+    fn new(tool: Arc<dyn Tool>, source: ToolSource, tag: ToolTag) -> Self {
+        Self { tool, source, tag }
     }
 }
 
@@ -44,6 +45,7 @@ impl std::fmt::Debug for ToolBox {
         f.debug_struct("ToolBox")
             .field("name", &self.tool.name())
             .field("source", &self.source)
+            .field("tag", &self.tag)
             .finish()
     }
 }
@@ -53,6 +55,7 @@ impl Clone for ToolBox {
         Self {
             tool: self.tool.clone(),
             source: self.source,
+            tag: self.tag,
         }
     }
 }
@@ -86,28 +89,61 @@ impl ToolRegistry {
     }
 
     /// Register a project-owned native tool. Requires `inserts/<name>.md`
-    /// (self-describing gate).
+    /// (self-describing gate). 标签默认 Normal。
     pub fn register(&mut self, tool: impl Tool + 'static) {
-        self.register_source(tool, ToolSource::Native);
+        self.register_tagged(ToolTag::Normal, tool, ToolSource::Native);
     }
 
-    /// Register a tool with an explicit source.
+    /// Register a native tool tagged `Core`（任何对话都得带上的工具）。
+    pub fn register_core(&mut self, tool: impl Tool + 'static) {
+        self.register_tagged(ToolTag::Core, tool, ToolSource::Native);
+    }
+
+    /// Register a native tool tagged `System`（系统模式会话自动带上的工具）。
+    pub fn register_system(&mut self, tool: impl Tool + 'static) {
+        self.register_tagged(ToolTag::System, tool, ToolSource::Native);
+    }
+
+    /// Register a tool with an explicit source. 标签默认 Normal（向后兼容）。
     /// - `Native`: keeps the `inserts/<name>.md` gate.
     /// - `Config` / `Mcp`: dynamic channels are self-describing (schema is the
     ///   contract) and are exempt from the insert gate.
     pub fn register_source(&mut self, tool: impl Tool + 'static, source: ToolSource) {
+        self.register_tagged(ToolTag::Normal, tool, source);
+    }
+
+    /// Register a tool with explicit tag + source.
+    /// - `Native`: keeps the `inserts/<name>.md` gate.
+    /// - `Config` / `Mcp`: dynamic channels are self-describing (schema is the
+    ///   contract) and are exempt from the insert gate.
+    pub fn register_tagged(
+        &mut self,
+        tag: ToolTag,
+        tool: impl Tool + 'static,
+        source: ToolSource,
+    ) {
         let name = tool.name().to_string();
         if source == ToolSource::Native {
             let _insert = InsertCatalog::require(&name);
         }
         self.tools
-            .insert(name, ToolBox::new(Arc::new(tool), source));
+            .insert(name, ToolBox::new(Arc::new(tool), source, tag));
     }
 
     /// 按名取出工具引用（不持锁语义：调用方在读锁守卫内 clone 后即可释放锁，
     /// 再 await `execute`，避免读锁跨 await）。
     pub fn get_tool(&self, name: &str) -> Option<Arc<dyn Tool>> {
         self.tools.get(name).map(|tb| Arc::clone(&tb.tool))
+    }
+
+    /// 返回所有带指定标签的工具名（注册序）：标签消费（Core 无条件并入所有会话、
+    /// System 仅系统模式会话并入）的查询入口。
+    pub fn tools_with_tag(&self, tag: ToolTag) -> Vec<String> {
+        self.tools
+            .iter()
+            .filter(|(_, tb)| tb.tag == tag)
+            .map(|(name, _)| name.clone())
+            .collect()
     }
 
     pub fn list_definitions(&self) -> Vec<ToolDefinition> {
@@ -118,6 +154,7 @@ impl ToolRegistry {
                 description: tb.tool.description().to_string(),
                 parameters: tb.tool.parameters(),
                 source: tb.source,
+                tag: tb.tag,
             })
             .collect()
     }
@@ -131,6 +168,7 @@ impl ToolRegistry {
                     description: tb.tool.description().to_string(),
                     parameters: tb.tool.parameters(),
                     source: tb.source,
+                    tag: tb.tag,
                 })
             })
             .collect()
@@ -269,6 +307,7 @@ mod tests {
         assert_eq!(defs.len(), 1);
         assert_eq!(defs[0].name, "neuron.select_one");
         assert_eq!(defs[0].source, ToolSource::Native);
+        assert_eq!(defs[0].tag, ToolTag::Normal, "register() 默认 Normal");
     }
 
     #[test]
@@ -281,6 +320,32 @@ mod tests {
         let defs = registry.list_definitions();
         assert_eq!(defs.len(), 1, "同名字工具应覆盖注册");
         assert_eq!(defs[0].source, ToolSource::Mcp);
+        assert_eq!(defs[0].tag, ToolTag::Normal, "register_source 默认 Normal");
+    }
+
+    #[test]
+    fn register_core_and_system_tag() {
+        let mut registry = ToolRegistry::new();
+        registry.register_core(ProbeTool);
+        let defs = registry.list_definitions();
+        assert_eq!(defs[0].tag, ToolTag::Core);
+
+        let mut registry = ToolRegistry::new();
+        registry.register_system(ProbeTool);
+        let defs = registry.list_definitions();
+        assert_eq!(defs[0].tag, ToolTag::System);
+    }
+
+    #[test]
+    fn tag_is_governance_field_not_in_wire() {
+        let mut registry = ToolRegistry::new();
+        registry.register_core(ProbeTool);
+        let def = registry.list_definitions().remove(0);
+        // ToolDefinition 序列化（wire 形状）不得包含 tag。
+        let wire = serde_json::to_value(&def).unwrap();
+        assert!(wire.get("tag").is_none(), "tag 不应进入模型请求 wire");
+        assert!(wire.get("source").is_none(), "source 不应进入模型请求 wire");
+        assert!(wire.get("name").is_some());
     }
 
     #[tokio::test]

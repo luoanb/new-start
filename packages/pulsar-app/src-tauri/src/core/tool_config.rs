@@ -7,6 +7,7 @@
 
 use crate::core::cmd_exec;
 use crate::core::error::{AppError, AppResult};
+use crate::core::models::ToolTag;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -34,6 +35,9 @@ pub struct McpServerConfig {
     /// 显式禁用该 server（保留配置但不启用）。
     #[serde(default, skip_serializing_if = "is_false")]
     pub disabled: bool,
+    /// 工具标签：该 server 下全部工具打此标（面板注册可指定），缺省 normal。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<ToolTag>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -54,6 +58,9 @@ pub struct HttpToolConfig {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// 工具标签（面板注册可指定），缺省 normal。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<ToolTag>,
 }
 
 /// 配置驱动命令模板工具。
@@ -65,6 +72,9 @@ pub struct CommandToolConfig {
     pub template: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// 工具标签（面板注册可指定），缺省 normal。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<ToolTag>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -341,6 +351,42 @@ mod tests {
     }
 
     #[test]
+    fn parses_config_tag_field() {
+        let root = tmp_root();
+        // MCP server 与 DynamicTool 均可声明 tag；缺省为 None（→ Normal）。
+        write_file(
+            &root,
+            "mcp_servers.json",
+            r#"{
+                "mcp_servers": [
+                    { "name": "filesystem", "transport": "stdio", "command": "npx", "tag": "system" },
+                    { "name": "docs", "transport": "http", "url": "http://127.0.0.1:8000/mcp" }
+                ]
+            }"#,
+        );
+        let file = ToolConfigReader::new(&root).mcp_servers().unwrap();
+        assert_eq!(file.mcp_servers[0].tag, Some(ToolTag::System));
+        assert_eq!(file.mcp_servers[1].tag, None, "缺省 tag 为 None（→ Normal）");
+
+        write_file(
+            &root,
+            "dynamic_tools.json",
+            r#"{
+                "http": [
+                    { "name": "lookup_wiki", "desc": "d", "method": "GET",
+                      "url": "https://api.example.com/wiki?q={query}", "tag": "core" }
+                ],
+                "command": [
+                    { "name": "git_status", "desc": "d", "template": "git status --porcelain" }
+                ]
+            }"#,
+        );
+        let file = ToolConfigReader::new(&root).dynamic_tools().unwrap();
+        assert_eq!(file.http[0].tag, Some(ToolTag::Core));
+        assert_eq!(file.command[0].tag, None);
+    }
+
+    #[test]
     fn invalid_json_returns_error() {
         let root = tmp_root();
         write_file(&root, "mcp_servers.json", "not json");
@@ -361,6 +407,7 @@ mod tests {
                 url: None,
                 headers: Default::default(),
                 disabled: false,
+                tag: None,
             }],
             http_tools: vec![HttpToolConfig {
                 name: "lookup_wiki".into(),
@@ -368,12 +415,14 @@ mod tests {
                 method: "GET".into(),
                 url: "https://api.example.com/wiki?q={query}".into(),
                 timeout_ms: None,
+                tag: None,
             }],
             command_tools: vec![CommandToolConfig {
                 name: "git_status".into(),
                 desc: "查看 git 状态".into(),
                 template: "git status --porcelain".into(),
                 timeout_ms: None,
+                tag: None,
             }],
         }
     }

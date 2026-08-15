@@ -539,6 +539,7 @@ mod tests {
             url: Some(format!("http://{addr}/mcp")),
             headers: HashMap::new(),
             disabled: false,
+            tag: None,
         };
         let client = McpServerClient::connect(cfg).await.expect("http connect");
         let tools = client.discover_tools().await.expect("discover tools");
@@ -567,6 +568,7 @@ mod tests {
             url: Some("http://127.0.0.1:1/mcp".into()),
             headers: HashMap::new(),
             disabled: false,
+            tag: None,
         };
         let err = match McpServerClient::connect(cfg).await {
             Ok(_) => panic!("expected connection failure"),
@@ -609,6 +611,7 @@ mod tests {
             url: None,
             headers: HashMap::new(),
             disabled: false,
+            tag: None,
         };
         let err = match McpServerClient::connect(cfg).await {
             Ok(_) => panic!("expected error for unsupported transport"),

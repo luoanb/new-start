@@ -4,8 +4,8 @@ use crate::core::{Conversation, ModelInfo, ProviderInfo};
 pub enum Command {
     Help,
     New,
-    NewAgent,
     NewAssistant,
+    NewSystem,
     Skills,
     Providers,
     Sessions,
@@ -43,8 +43,8 @@ impl Command {
             "/status" => Some(Self::Status),
             "/config" => Some(Self::Config),
             "/compact" => Some(Self::Compact),
-            "/new_agent" => Some(Self::NewAgent),
             "/new_assistant" => Some(Self::NewAssistant),
+            "/new_system" => Some(Self::NewSystem),
             "/exit" | "/quit" => Some(Self::Exit),
             _ => {
                 let parts: Vec<&str> = trimmed.splitn(4, ' ').collect();
@@ -80,10 +80,13 @@ pub fn cmd_help_text() -> Vec<(String, String)> {
     vec![
         ("/help".into(), "Show this help".into()),
         ("/new".into(), "Create a new Chat session".into()),
-        ("/new_agent".into(), "Create a new Agent session".into()),
         (
             "/new_assistant".into(),
             "Create a new Assistant session".into(),
+        ),
+        (
+            "/new_system".into(),
+            "Create a new System session (assistant + system tools)".into(),
         ),
         ("/skills".into(), "List available skills".into()),
         ("/providers".into(), "List providers".into()),

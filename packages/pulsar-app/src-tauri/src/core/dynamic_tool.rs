@@ -312,6 +312,7 @@ mod tests {
             desc: "bad".into(),
             template: "rm -rf /".into(),
             timeout_ms: None,
+            tag: None,
         };
         let tool = CommandTool::from_config(&cfg);
         assert!(tool.execute(json!({})).await.is_err());
@@ -324,6 +325,7 @@ mod tests {
             desc: "greet".into(),
             template: "echo hello-{name}".into(),
             timeout_ms: Some(5000),
+            tag: None,
         };
         let tool = CommandTool::from_config(&cfg);
         let out = tool.execute(json!({ "name": "dyn" })).await.unwrap();

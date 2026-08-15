@@ -375,6 +375,7 @@ fn render_sessions_list(frame: &mut Frame, area: Rect, app: &TuiApp) {
                 ConversationMode::Chat => "[Chat]",
                 ConversationMode::Agent => "[Agent]",
                 ConversationMode::Assistant => "[Assistant]",
+                ConversationMode::System => "[System]",
             };
             let running_tag = if running_ids.contains(&conv.id) {
                 " [Running]"
@@ -399,11 +400,11 @@ fn render_sessions_list(frame: &mut Frame, area: Rect, app: &TuiApp) {
 
     // Add creation entries at the bottom
     let chat_new_idx = app.conversations.len();
-    let agent_new_idx = app.conversations.len() + 1;
-    let assistant_new_idx = app.conversations.len() + 2;
+    let assistant_new_idx = app.conversations.len() + 1;
+    let system_new_idx = app.conversations.len() + 2;
     let chat_selected = app.session_list_state.selected() == Some(chat_new_idx);
-    let agent_selected = app.session_list_state.selected() == Some(agent_new_idx);
     let assistant_selected = app.session_list_state.selected() == Some(assistant_new_idx);
+    let system_selected = app.session_list_state.selected() == Some(system_new_idx);
 
     items.push(
         ListItem::new(format!(
@@ -420,10 +421,10 @@ fn render_sessions_list(frame: &mut Frame, area: Rect, app: &TuiApp) {
     );
     items.push(
         ListItem::new(format!(
-            "{}[+] New Agent session",
-            if agent_selected { " > " } else { "   " }
+            "{}[+] New System session (assistant + system tools)",
+            if system_selected { " > " } else { "   " }
         ))
-        .style(if agent_selected {
+        .style(if system_selected {
             Style::default()
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD)

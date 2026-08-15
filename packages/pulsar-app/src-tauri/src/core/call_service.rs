@@ -9,9 +9,10 @@ use super::{
     insert_catalog::InsertCatalog,
     model_call_input::{ModelAppendTemplate, ModelCallInput},
     models::{
-        ChatModelSelection, Conversation, ModelCallRequest, ModelCallResponse, ModelMessage,
-        Message, MessageBody, MessageRole, NeighborhoodPoolPolicy, Neuron, SelectionPolicy,
-        SessionBehavior, ToolCall, ToolPolicy, DEFAULT_ASSISTANT_GLOBAL_LIMIT,
+        ChatModelSelection, Conversation, ConversationMode, ModelCallRequest, ModelCallResponse,
+        ModelMessage, Message, MessageBody, MessageRole, NeighborhoodPoolPolicy, Neuron,
+        SelectionPolicy, SessionBehavior, ToolCall, ToolPolicy, ToolTag,
+        DEFAULT_ASSISTANT_GLOBAL_LIMIT,
     },
     neuron_manager::NeuronManager,
     providers::ProviderRegistry,
@@ -149,6 +150,10 @@ pub struct RoundInput {
     /// 仅影响真正调 LLM 的分支（Global / 邻选），Fixed / None 分支不感知。
     /// 频率策略由调用方算好传入（业务层按推进轮次取模），引擎不持有任何轮次/频率概念。
     pub reselect: bool,
+    /// 会话模式（标签消费依据）：`Some(mode)` = 对话调用 → Core 工具无条件并入，
+    /// 且 `mode == System` 时并入 System 标签工具；`None` = 非对话调用（如禁工具的
+    /// 内部裁决），不注入任何标签工具，完全沿用 tool_override / behavior。
+    pub mode: Option<ConversationMode>,
 }
 
 /// 单轮对话产物：仅模型侧结果；落库由上层（ConversationRunner）负责。
@@ -239,18 +244,33 @@ impl NeuronCallService {
             },
         };
         // 块作用域持有读锁：保证跨 await 前释放（RwLockReadGuard 非 Send）。
+        // 标签消费：Core 无条件并入所有对话；System 仅系统模式会话并入；
+        // 非对话调用（mode=None，如禁工具的内部裁决）不注入，完全沿用 override/behavior。
         let (authorized_tool_ids, tools) = {
             let guard = self
                 .tool_registry
                 .read()
                 .expect("tool registry lock should not be poisoned");
+            let mut final_ids = Vec::new();
+            if let Some(mode) = input.mode.as_ref() {
+                final_ids.extend(guard.tools_with_tag(ToolTag::Core));
+                if *mode == ConversationMode::System {
+                    final_ids.extend(guard.tools_with_tag(ToolTag::System));
+                }
+            }
             let authorized_tool_ids = filter_authorized_tool_ids(&guard, &tool_ids);
-            let tools = if authorized_tool_ids.is_empty() {
+            // 去重保序（工具数少，O(n²) 可接受）：Core/System 在前，策略工具随后。
+            for id in authorized_tool_ids {
+                if !final_ids.contains(&id) {
+                    final_ids.push(id);
+                }
+            }
+            let tools = if final_ids.is_empty() {
                 None
             } else {
-                Some(guard.definitions_for(&authorized_tool_ids))
+                Some(guard.definitions_for(&final_ids))
             };
-            (authorized_tool_ids, tools)
+            (final_ids, tools)
         };
 
         // 模板由 insert_id 有无推导：有 → 操作说明书契约段；无 → 神经元角色段。
@@ -579,7 +599,7 @@ mod tests {
     use super::*;
     use crate::core::{
         error::AppResult,
-        models::{ChatModelSelection, ModelMessageRole, NeuronCreate, ToolSource},
+        models::{ChatModelSelection, ModelMessageRole, NeuronCreate, ToolDefinition, ToolSource},
         neuron::{
             config::NeuronConfigReader,
             manager::ASSISTANT_SELECT_NEURON,
@@ -653,6 +673,7 @@ mod tests {
         calls: Arc<AtomicUsize>,
         tool_call: Arc<Mutex<Option<ToolCall>>>,
         last_messages: Arc<Mutex<Vec<ModelMessage>>>,
+        last_tools: Arc<Mutex<Vec<ToolDefinition>>>,
     }
 
     #[async_trait]
@@ -660,6 +681,7 @@ mod tests {
         async fn call_model(&self, request: ModelCallRequest) -> AppResult<ModelCallResponse> {
             let call = self.calls.fetch_add(1, Ordering::Relaxed);
             *self.last_messages.lock().unwrap() = request.messages;
+            *self.last_tools.lock().unwrap() = request.tools.unwrap_or_default();
             Ok(ModelCallResponse {
                 provider_id: "test".into(),
                 model_id: "test-model".into(),
@@ -670,13 +692,21 @@ mod tests {
         }
     }
 
-    /// 测试工具：回显参数 text。
-    struct EchoTool;
+    /// 测试工具：回显参数 text（name 可配，便于注册多个不同标签/名称的工具）。
+    struct EchoTool {
+        name: &'static str,
+    }
+
+    impl EchoTool {
+        fn new(name: &'static str) -> Self {
+            Self { name }
+        }
+    }
 
     #[async_trait]
     impl crate::core::tool_registry::Tool for EchoTool {
         fn name(&self) -> &str {
-            "echo"
+            self.name
         }
         fn description(&self) -> &str {
             "echo back text"
@@ -698,6 +728,7 @@ mod tests {
         echo_calls: Arc<AtomicUsize>,
         echo_tool_call: Arc<Mutex<Option<ToolCall>>>,
         last_messages: Arc<Mutex<Vec<ModelMessage>>>,
+        last_tools: Arc<Mutex<Vec<ToolDefinition>>>,
         tool_registry: Arc<RwLock<ToolRegistry>>,
         root: std::path::PathBuf,
     }
@@ -729,6 +760,7 @@ mod tests {
         let echo_calls = Arc::new(AtomicUsize::new(0));
         let echo_tool_call: Arc<Mutex<Option<ToolCall>>> = Arc::new(Mutex::new(None));
         let last_messages: Arc<Mutex<Vec<ModelMessage>>> = Arc::new(Mutex::new(Vec::new()));
+        let last_tools: Arc<Mutex<Vec<ToolDefinition>>> = Arc::new(Mutex::new(Vec::new()));
         let selector = MockSelector {
             calls: Arc::clone(&selector_calls),
         };
@@ -736,6 +768,7 @@ mod tests {
             calls: Arc::clone(&echo_calls),
             tool_call: Arc::clone(&echo_tool_call),
             last_messages: Arc::clone(&last_messages),
+            last_tools: Arc::clone(&last_tools),
         });
         let tool_registry = Arc::new(RwLock::new(ToolRegistry::new()));
         let manager = Arc::new(NeuronManager::new(
@@ -757,6 +790,7 @@ mod tests {
             echo_calls,
             echo_tool_call,
             last_messages,
+            last_tools,
             tool_registry,
             root,
         }
@@ -837,6 +871,7 @@ mod tests {
                     messages: history,
                     tool_override: None,
                     reselect: true,
+                    mode: None,
                 },
                 "current",
                 &model(),
@@ -909,7 +944,7 @@ mod tests {
     #[test]
     fn filter_drops_unknown_tool_ids() {
         let mut registry = ToolRegistry::new();
-        registry.register_source(EchoTool, ToolSource::Config);
+        registry.register_source(EchoTool::new("echo"), ToolSource::Config);
         let out = filter_authorized_tool_ids(&registry, &["echo".into(), "nope".into()]);
         assert_eq!(out, vec!["echo".to_string()]);
     }
@@ -926,6 +961,7 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: true,
+                    mode: None,
                 },
                 "hello",
                 &model(),
@@ -956,6 +992,7 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: true,
+                    mode: None,
                 },
                 "go",
                 &model(),
@@ -987,6 +1024,7 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: true,
+                    mode: None,
                 },
                 "advance",
                 &model(),
@@ -1016,6 +1054,7 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: true,
+                    mode: None,
                 },
                 "hi",
                 &model(),
@@ -1056,6 +1095,7 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: true,
+                    mode: None,
                 },
                 "go",
                 &model(),
@@ -1094,6 +1134,7 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: true,
+                    mode: None,
                 },
                 "go",
                 &model(),
@@ -1133,6 +1174,7 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: true,
+                    mode: None,
                 },
                 "go",
                 &model(),
@@ -1149,7 +1191,7 @@ mod tests {
         h.tool_registry
             .write()
             .unwrap()
-            .register_source(EchoTool, ToolSource::Config);
+            .register_source(EchoTool::new("echo"), ToolSource::Config);
         *h.echo_tool_call.lock().unwrap() = Some(ToolCall {
             id: "call-1".into(),
             name: "echo".into(),
@@ -1164,6 +1206,7 @@ mod tests {
                     messages: vec![],
                     tool_override: Some(vec!["echo".into()]),
                     reselect: true,
+                    mode: None,
                 },
                 "go",
                 &model(),
@@ -1182,7 +1225,7 @@ mod tests {
         h.tool_registry
             .write()
             .unwrap()
-            .register_source(EchoTool, ToolSource::Config);
+            .register_source(EchoTool::new("echo"), ToolSource::Config);
         *h.echo_tool_call.lock().unwrap() = Some(ToolCall {
             id: "call-1".into(),
             name: "echo".into(),
@@ -1197,6 +1240,7 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: true,
+                    mode: None,
                 },
                 "go",
                 &model(),
@@ -1228,6 +1272,7 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: false,
+                    mode: None,
                 },
                 "advance",
                 &model(),
@@ -1266,6 +1311,7 @@ mod tests {
                         messages: vec![],
                         tool_override: None,
                         reselect: true,
+                        mode: None,
                     },
                     "advance",
                     &model(),
@@ -1300,6 +1346,7 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: false,
+                    mode: None,
                 },
                 "advance",
                 &model(),
@@ -1340,6 +1387,7 @@ mod tests {
                     messages: vec![],
                     tool_override: None,
                     reselect: false,
+                    mode: None,
                 },
                 "go",
                 &model(),
@@ -1354,5 +1402,83 @@ mod tests {
         );
         assert_eq!(h.selector_calls.load(Ordering::Relaxed), 0);
         assert_eq!(outcome.response, "echo-0");
+    }
+
+    /// 标签消费：Core 无条件并入所有对话 wire；System 仅系统模式会话并入；Normal 由神经元管理。
+    #[tokio::test]
+    async fn tag_consumption_into_wire() {
+        let h = harness();
+        {
+            let mut reg = h.tool_registry.write().unwrap();
+            reg.register_tagged(ToolTag::Core, EchoTool::new("core_echo"), ToolSource::Config);
+            reg.register_tagged(ToolTag::System, EchoTool::new("sys_echo"), ToolSource::Config);
+            reg.register_tagged(ToolTag::Normal, EchoTool::new("plain_echo"), ToolSource::Config);
+        }
+        let wire_names = || {
+            h.last_tools
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|d| d.name.clone())
+                .collect::<Vec<_>>()
+        };
+
+        // 1) Chat 对话（无 override、无神经元）：仅 Core 进 wire。
+        h.service
+            .converse(
+                RoundInput {
+                    seed: None,
+                    state: SessionState::default(),
+                    messages: vec![],
+                    tool_override: None,
+                    reselect: true,
+                    mode: Some(ConversationMode::Chat),
+                },
+                "hello",
+                &model(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(wire_names(), vec!["core_echo"], "Chat 对话应只注入 Core");
+
+        // 2) 系统模式对话：Core + System 进 wire，Normal（神经元管理）不进。
+        h.service
+            .converse(
+                RoundInput {
+                    seed: None,
+                    state: SessionState::default(),
+                    messages: vec![],
+                    tool_override: None,
+                    reselect: true,
+                    mode: Some(ConversationMode::System),
+                },
+                "hello",
+                &model(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            wire_names(),
+            vec!["core_echo", "sys_echo"],
+            "系统模式应注入 Core + System"
+        );
+
+        // 3) 非对话调用（mode=None，如禁工具的内部裁决）：不注入任何标签工具。
+        h.service
+            .converse(
+                RoundInput {
+                    seed: None,
+                    state: SessionState::default(),
+                    messages: vec![],
+                    tool_override: Some(Vec::new()),
+                    reselect: true,
+                    mode: None,
+                },
+                "go",
+                &model(),
+            )
+            .await
+            .unwrap();
+        assert!(wire_names().is_empty(), "非对话调用不应注入任何工具");
     }
 }

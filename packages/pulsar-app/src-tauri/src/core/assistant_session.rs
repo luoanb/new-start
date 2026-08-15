@@ -119,6 +119,8 @@ impl AssistantSession {
                     messages: history.to_vec(),
                     tool_override: Some(Vec::new()),
                     reselect: true,
+                    // 裁决调用非对话：不注入任何标签工具（禁工具语义保持不变）。
+                    mode: None,
                 },
                 &user_payload.to_string(),
                 model,

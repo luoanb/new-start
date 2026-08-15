@@ -20,7 +20,7 @@ use super::{
     models::{
         ChatModelSelection, ChatOptions, ChatResponse, Conversation, ConversationMode, Message,
         MessageBody, MessageRole, ModelCallRequest, ModelCallResponse, ModelInfo, ProviderInfo,
-        RuntimeStatus, SkillInfo, SystemPromptStatus, ToolInfo, ToolSource,
+        RuntimeStatus, SkillInfo, SystemPromptStatus, ToolInfo, ToolSource, ToolTag,
     },
     neuron_config::NeuronConfigReader,
     neuron_manager::NeuronManager,
@@ -417,6 +417,7 @@ impl Gateway {
                         name: d.name,
                         description: d.description,
                         source: d.source,
+                        tag: d.tag,
                         parameters: d.parameters,
                     })
                     .collect()
@@ -585,6 +586,16 @@ impl Gateway {
                     "routing to agent_session.agent_loop"
                 );
                 self.agent.agent_loop(&conversation_id, input, &model).await
+            }
+            // 系统模式 = 助手模式附加系统工具：路由与 Assistant 一致（工具并入在 call_service 授权段完成）。
+            ConversationMode::System => {
+                tracing::info!(
+                    phase = "send_model_message",
+                    mode = "system",
+                    conversation_id = %conversation_id,
+                    "routing to assistant_session.converse (system tools)"
+                );
+                assistant.converse(&conversation_id, input, &model).await
             }
         };
 
@@ -963,15 +974,25 @@ fn spawn_neuron_recycle_runtime(
 /// 豁免 insert 门禁；命令模板复用 cmd_exec 安全护栏。
 fn assemble_local_tools(storage_root: &std::path::Path) -> AppResult<ToolRegistry> {
     let mut registry = ToolRegistry::new();
-    registry.register(ExecuteCommandTool::new());
-    registry.register(GetCurrentTimeTool::new());
+    // 内置工具全部打标 Core（用户决策）：任何对话都得带上。
+    registry.register_core(ExecuteCommandTool::new());
+    registry.register_core(GetCurrentTimeTool::new());
     let tool_config = ToolConfigReader::new(storage_root.to_path_buf());
     let dynamic = tool_config.dynamic_tools()?;
     for cfg in dynamic.http {
-        registry.register_source(HttpTool::from_config(&cfg), ToolSource::Config);
+        // 外部工具：配置可声明 tag（面板注册时指定），缺省 Normal。
+        registry.register_tagged(
+            cfg.tag.unwrap_or(ToolTag::Normal),
+            HttpTool::from_config(&cfg),
+            ToolSource::Config,
+        );
     }
     for cfg in dynamic.command {
-        registry.register_source(CommandTool::from_config(&cfg), ToolSource::Config);
+        registry.register_tagged(
+            cfg.tag.unwrap_or(ToolTag::Normal),
+            CommandTool::from_config(&cfg),
+            ToolSource::Config,
+        );
     }
     Ok(registry)
 }
@@ -1036,7 +1057,12 @@ async fn assemble_mcp_progressive(
                         tracing::warn!(server = %name, "mcp server advertised no tools");
                     }
                     for tool in tools {
-                        registry.register_source(tool, ToolSource::Mcp);
+                        // 该 server 下的全部工具打同一 tag（面板注册可指定），缺省 Normal。
+                        registry.register_tagged(
+                            cfg.tag.unwrap_or(ToolTag::Normal),
+                            tool,
+                            ToolSource::Mcp,
+                        );
                     }
                     McpServerStatus {
                         name,
@@ -1354,6 +1380,7 @@ mod tests {
             method: "GET".into(),
             url: "https://api.example.com/wiki?q={query}".into(),
             timeout_ms: None,
+            tag: None,
         });
 
         let saved = gateway
@@ -1385,6 +1412,7 @@ mod tests {
             url: None,
             headers: Default::default(),
             disabled: false,
+            tag: None,
         });
 
         let err = gateway
@@ -1428,6 +1456,7 @@ mod tests {
                     method: "GET".into(),
                     url: "https://api.example.com/wiki?q={query}".into(),
                     timeout_ms: None,
+                    tag: None,
                 }],
                 command: vec![],
             })

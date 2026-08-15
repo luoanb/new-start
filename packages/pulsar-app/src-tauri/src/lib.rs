@@ -86,6 +86,7 @@ async fn create_conversation(
     let conv_mode = match mode.to_lowercase().as_str() {
         "agent" => ConversationMode::Agent,
         "assistant" => ConversationMode::Assistant,
+        "system" => ConversationMode::System,
         _ => ConversationMode::Chat,
     };
     let conversation_id = gateway
@@ -623,10 +624,14 @@ async fn open_session(
     let conv_mode = match mode.to_lowercase().as_str() {
         "assistant" => ConversationMode::Assistant,
         "agent" => ConversationMode::Agent,
+        "system" => ConversationMode::System,
         _ => ConversationMode::Chat,
     };
     let seed = match spec_neuron_id.trim() {
-        "" if conv_mode == ConversationMode::Assistant => Some(SessionSeed::Global),
+        // 系统模式沿用助手模式的全域选型（Global），仅附加 System 标签工具。
+        "" if conv_mode == ConversationMode::Assistant || conv_mode == ConversationMode::System => {
+            Some(SessionSeed::Global)
+        }
         "" => None,
         id => Some(SessionSeed::Neuron(id.to_string())),
     };

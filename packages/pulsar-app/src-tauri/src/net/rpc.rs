@@ -685,7 +685,11 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
             let p: OpenSessionParams = from_params(params)?;
             let conv_mode = conv_mode(&p.mode);
             let seed = match p.spec_neuron_id.trim() {
-                "" if conv_mode == ConversationMode::Assistant => Some(SessionSeed::Global),
+                "" if conv_mode == ConversationMode::Assistant
+                    || conv_mode == ConversationMode::System =>
+                {
+                    Some(SessionSeed::Global)
+                }
                 "" => None,
                 id => Some(SessionSeed::Neuron(id.to_string())),
             };
@@ -774,6 +778,7 @@ fn conv_mode(mode: &str) -> ConversationMode {
     match mode.to_lowercase().as_str() {
         "agent" => ConversationMode::Agent,
         "assistant" => ConversationMode::Assistant,
+        "system" => ConversationMode::System,
         _ => ConversationMode::Chat,
     }
 }

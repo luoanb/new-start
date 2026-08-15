@@ -9,8 +9,9 @@
 
   const modes = [
     { id: "chat", label: () => t("createModal.chatLabel"), desc: () => t("createModal.chatDesc") },
-    { id: "agent", label: () => t("createModal.agentLabel"), desc: () => t("createModal.agentDesc") },
     { id: "assistant", label: () => t("createModal.assistantLabel"), desc: () => t("createModal.assistantDesc") },
+    // Agent 模式暂不提供新建入口（隐藏，后端与历史会话保留）。
+    { id: "system", label: () => t("createModal.systemLabel"), desc: () => t("createModal.systemDesc") },
   ];
 </script>
 

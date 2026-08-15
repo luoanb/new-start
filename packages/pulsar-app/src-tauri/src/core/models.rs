@@ -92,6 +92,8 @@ pub enum ConversationMode {
     Chat,
     Agent,
     Assistant,
+    /// 系统模式（= 助手模式附加系统工具）：发起会话时可选，自动并入 System 标签工具。
+    System,
 }
 
 impl Default for ConversationMode {
@@ -360,6 +362,19 @@ pub enum ToolSource {
     Mcp,
 }
 
+/// 工具标签（用途/行为维度），与 ToolSource（来源维度）正交。
+/// - `core`：任何对话都得带上的工具（无条件进入所有会话 tools wire）。
+/// - `system`：系统模式会话（发起会话时可选，= 助手模式附加系统工具）自动带上的工具。
+/// - `normal`（默认）：不由系统自动带，由神经元管理（神经元持有哪些就带哪些）。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolTag {
+    #[default]
+    Normal,
+    System,
+    Core,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolDefinition {
     pub name: String,
@@ -368,6 +383,9 @@ pub struct ToolDefinition {
     /// 治理字段，不进模型请求 wire；缺省为 native（向后兼容）。
     #[serde(skip_serializing, default)]
     pub source: ToolSource,
+    /// 治理字段，不进模型请求 wire；缺省为 normal（向后兼容）。
+    #[serde(skip_serializing, default)]
+    pub tag: ToolTag,
 }
 
 /// 工具治理视图（供前端 DockPane 只读展示工具列表）。
@@ -376,6 +394,7 @@ pub struct ToolInfo {
     pub name: String,
     pub description: String,
     pub source: ToolSource,
+    pub tag: ToolTag,
     pub parameters: serde_json::Value,
 }
 

@@ -22,6 +22,7 @@
     chat: "Chat",
     agent: "Agent",
     assistant: "Assistant",
+    system: "System",
   };
 
   function formatTime(ts: number): string {
@@ -162,6 +163,7 @@
   .mode-badge.chat { background: color-mix(in srgb, var(--color-primary) 15%, transparent); color: var(--color-primary); }
   .mode-badge.agent { background: color-mix(in srgb, var(--color-success) 15%, transparent); color: var(--color-success); }
   .mode-badge.assistant { background: color-mix(in srgb, var(--color-warning) 15%, transparent); color: var(--color-warning); }
+  .mode-badge.system { background: color-mix(in srgb, var(--color-danger, #e5484d) 15%, transparent); color: var(--color-danger, #e5484d); }
   .session-count { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .session-time { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .session-actions { flex-shrink: 0; display: flex; align-items: center; gap: 2px; }
