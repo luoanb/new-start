@@ -34,13 +34,15 @@
   // 对话容器可视高度（px）：轮次小容器 min-height 的基准。
   // 不能直接用 CSS 百分比——.messages 是滚动容器，子元素 min-height:100%
   // 会因父级高度不确定而无法解析（computed 返回 "100%" 而非像素）。
+  // 减去 VIEWPORT_OFFSET：底部留 12px 呼吸空隙，避免最后一条内容贴死底边。
   let viewportH = $state(0);
+  const VIEWPORT_OFFSET = 16;
   $effect(() => {
     const el = containerEl;
     if (!el) return;
-    const ro = new ResizeObserver(() => (viewportH = el.clientHeight));
+    const ro = new ResizeObserver(() => (viewportH = el.clientHeight - VIEWPORT_OFFSET));
     ro.observe(el);
-    viewportH = el.clientHeight;
+    viewportH = el.clientHeight - VIEWPORT_OFFSET;
     return () => ro.disconnect();
   });
 
