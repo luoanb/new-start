@@ -26,6 +26,12 @@ export type ViewMeta = {
   id: string;
   label: string;
   icon?: string;
+  /** 动态标题（原始文本，非 i18n key）：提供时优先展示 */
+  title?: string;
+  /** 动态标题截断展示（限制宽度，如对话标题） */
+  truncate?: boolean;
+  /** icon 色调（对齐会话列表 mode-badge 色板）：chat/agent/assistant/system */
+  iconTone?: string;
 };
 
 export type ViewRegistration = {

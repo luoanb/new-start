@@ -258,12 +258,38 @@
     layoutStore.closePanel(panelId);
   }
 
+  /** 对话标题：复用会话侧栏规则（首条 user/assistant 文本消息，无则占位）。 */
+  let activeConversationTitle = $derived.by(() => {
+    const conv = dataStore.state.conversations.find(
+      (c) => c.id === dataStore.state.activeConversationId,
+    );
+    if (!conv) return t("views.chat");
+    const textMsg = conv.messages.find(
+      (m) => m.body.kind === "text" && (m.role === "user" || m.role === "assistant"),
+    );
+    const content = textMsg?.body.kind === "text" ? textMsg.body.content.trim() : "";
+    return content || t("sessionList.newSession");
+  });
+
+  /** 当前对话模式：chat tab 的 icon 跟随（字母 + 色调）。 */
+  let activeConversationMode = $derived(
+    dataStore.state.conversations.find(
+      (c) => c.id === dataStore.state.activeConversationId,
+    )?.mode ?? "chat",
+  );
+
   /** 分栏内 tab 列表：由该分栏的面板动态生成。 */
   function paneTabs(pane: (typeof mainPanes)[number]) {
     return pane.panels.map((p) => ({
       id: p.id,
       label: mainPanelMeta[p.type].label,
-      icon: mainPanelMeta[p.type].icon,
+      // 文字 icon：对话 tab 取当前对话模式首字母，其余取面板类型首字母
+      icon: (p.type === "chat" ? activeConversationMode : p.type).charAt(0).toUpperCase(),
+      // 对话 tab：色调跟随对话模式（对齐会话列表 mode-badge 色板）
+      iconTone: p.type === "chat" ? activeConversationMode : undefined,
+      // 对话 tab：展示对话标题（原始文本，截断显示）
+      title: p.type === "chat" ? activeConversationTitle : undefined,
+      truncate: p.type === "chat",
     }));
   }
 

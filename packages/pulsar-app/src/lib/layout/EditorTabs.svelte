@@ -136,8 +136,20 @@
         ondragend={handleDragEnd}
         onclick={() => onSelect(tab.id)}
       >
-        {#if tab.icon}<span class="icon">{@html tab.icon}</span>{/if}
-        <span class="label">{t(tab.label)}</span>
+        {#if tab.icon}
+          <span
+            class="icon"
+            class:tone-chat={tab.iconTone === "chat"}
+            class:tone-agent={tab.iconTone === "agent"}
+            class:tone-assistant={tab.iconTone === "assistant"}
+            class:tone-system={tab.iconTone === "system"}
+          >{tab.icon}</span>
+        {/if}
+        <span
+          class="label"
+          class:truncate={tab.truncate}
+          title={tab.truncate ? (tab.title ?? t(tab.label)) : undefined}
+        >{tab.title ?? t(tab.label)}</span>
         <span
           class="close"
           role="button"
@@ -219,8 +231,34 @@
     border-top-color: var(--color-primary);
   }
 
-  .icon { display: inline-flex; align-items: center; font-size: 12px; line-height: 1; }
+  /* 文字 icon 徽章：背景/文字色与会话列表 mode-badge 对齐 */
+  .icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 3px;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--color-primary) 15%, transparent);
+    color: var(--color-primary);
+  }
+  /* 模式色调：对齐会话列表 mode-badge 色板（chat 主色 / agent 成功 / assistant 警告 / system 危险） */
+  .icon.tone-chat { background: color-mix(in srgb, var(--color-primary) 15%, transparent); color: var(--color-primary); }
+  .icon.tone-agent { background: color-mix(in srgb, var(--color-success) 15%, transparent); color: var(--color-success); }
+  .icon.tone-assistant { background: color-mix(in srgb, var(--color-warning) 15%, transparent); color: var(--color-warning); }
+  .icon.tone-system { background: color-mix(in srgb, var(--color-danger, #e5484d) 15%, transparent); color: var(--color-danger, #e5484d); }
   .label { font-size: var(--fs-xs); font-weight: 500; }
+  /* 动态标题（对话标题）截断：限制宽度，最多展示约 5 个字 */
+  .label.truncate {
+    max-width: 5em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   .close {
     display: inline-flex;
