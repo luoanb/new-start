@@ -1,7 +1,6 @@
 pub mod agent_session;
 pub mod app_log;
 pub mod assistant_session;
-pub mod call_service;
 pub mod chat_session;
 pub mod cmd_exec;
 pub mod compactor;
@@ -36,6 +35,9 @@ pub mod neuron_store {
 pub mod poller;
 pub mod poller_step;
 pub mod providers;
+pub mod round_executor;
+pub mod round_resolver;
+pub mod round_types;
 pub mod session_tracker;
 pub mod spec_manager {
     pub use super::neuron::spec::*;
@@ -51,7 +53,6 @@ pub use assistant_session::{
     AssistantSession, SYSTEM_TYPE_COMPLETE_SCOPE, SYSTEM_TYPE_MATCH_TOPIC,
     SYSTEM_TYPE_SCORE_FEEDBACK, SYSTEM_TYPE_SELECT_NEURON,
 };
-pub use call_service::{NeuronCallService, SessionSeed, SessionState};
 pub use conversation_runner::{ConversationRunner, RoundHooks};
 pub use error::{AppError, AppResult};
 pub use events::{StateChange, StateEmitter, STATE_CHANGED_EVENT};
@@ -59,6 +60,7 @@ pub use gateway::Gateway;
 pub use insert_catalog::InsertCatalog;
 pub use mcp::{McpServerClient, McpServerStatus, McpServerStatusKind};
 pub use model_call_input::{ModelAppendTemplate, ModelCallInput};
+pub use round_types::{ResolvedRound, RoundOutcome, SessionSeed, SessionState, WireRound};
 pub use models::{
     AssistantCandidateScope, BootstrapReport, CandidateQuery, ChatModelSelection, ChatOptions,
     ChatResponse, CompactionConfig, Connection, Conversation, ConversationMode, CreateNeuronInput,

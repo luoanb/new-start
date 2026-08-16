@@ -7,7 +7,6 @@ use tokio::sync::mpsc;
 use super::{
     agent_session::AgentSession,
     assistant_session::AssistantSession,
-    call_service::{ModelCaller, NeuronCallService, SessionSeed},
     chat_session::ChatSession,
     cmd_exec::ExecuteCommandTool,
     conversation_runner::ConversationRunner,
@@ -29,6 +28,9 @@ use super::{
     poller::{new_shared_poll_parallelism, Poller, PollerConfigReader, PollerStatus},
     poller_step::AssistantStepRequest,
     providers::ProviderRegistry,
+    round_executor::{ModelCaller, RoundExecutor},
+    round_resolver::RoundResolver,
+    round_types::SessionSeed,
     session_tracker::SessionTracker,
     tool_config::{
         validate_tool_config, DynamicToolsFile, McpServersFile, ToolConfigReader, ToolConfigView,
@@ -206,18 +208,19 @@ impl Gateway {
         let poll_parallelism =
             new_shared_poll_parallelism(poller_settings.assistant_poll_parallelism as usize);
 
-        // 执行面：无状态单轮对话引擎（不持有 store；读会话/落库由 Runner + 业务文件负责）。
-        let call_service = Arc::new(NeuronCallService::new(
+        // 三段管道：选型（RoundResolver）→ 组装（MessageAssembler，runner 内）→ 执行（RoundExecutor）。
+        // 均不持有 store；读会话/落库由 Runner + 业务文件负责。
+        let resolver = Arc::new(RoundResolver::new(Arc::clone(&neuron_manager)));
+        let executor = Arc::new(RoundExecutor::new(
             match test_model_caller {
                 Some(caller) => caller,
                 None => Arc::new(providers.clone()) as Arc<dyn ModelCaller>,
             },
-            Arc::clone(&neuron_manager),
             Arc::clone(&tool_registry),
         ));
 
         // 单轮编排 + 业务接入（各业务独立文件，业务逻辑不进入 Gateway）。
-        let runner = ConversationRunner::new(store.clone(), Arc::clone(&call_service));
+        let runner = ConversationRunner::new(store.clone(), resolver, executor);
         let chat = ChatSession::new(runner.clone());
         let agent = AgentSession::new(runner.clone(), Arc::clone(&tool_registry));
         let assistant = Arc::new(AssistantSession::new(
@@ -226,7 +229,6 @@ impl Gateway {
             Arc::clone(&topic_store),
             Arc::clone(&neuron_store),
             runner.clone(),
-            Arc::clone(&call_service),
             step_tx,
             session_tracker.clone(),
             Arc::clone(&poll_parallelism),
@@ -1133,8 +1135,8 @@ fn replace_statuses_shared(
 mod tests {
     use super::*;
     use crate::core::{
-        call_service::ModelCaller,
         models::ToolCall,
+        round_executor::ModelCaller,
         tool_config::{HttpToolConfig, McpServerConfig},
         tool_registry::Tool,
     };

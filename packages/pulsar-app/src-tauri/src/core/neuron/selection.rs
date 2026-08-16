@@ -506,7 +506,7 @@ impl NeuronSelection {
         });
         // Append subject is the select-one manual; neuron content stays in role_system.
         let insert = InsertCatalog::require("neuron.select_one");
-        let messages = ModelCallInput::assemble(
+        let wire = ModelCallInput::assemble(
             history,
             &selector.content,
             insert,
@@ -528,7 +528,7 @@ impl NeuronSelection {
             insert_text = %insert,
             "select_neuron full model input (debug)"
         );
-        let output = self.model_caller.call_model(messages).await?;
+        let output = self.model_caller.call_model(wire.messages).await?;
         tracing::info!(
             phase = "select_neuron.model_output",
             raw_output = %output,
@@ -658,7 +658,7 @@ impl NeuronSelection {
     ) -> AppResult<Vec<GeneratedNeuronDraft>> {
         // Append subject is the draft manual; creator/prompt neuron stays in role_system.
         let insert = InsertCatalog::require("neuron.draft_from_model");
-        let messages = ModelCallInput::assemble(
+        let wire = ModelCallInput::assemble(
             history,
             system_prompt,
             insert,
@@ -667,12 +667,12 @@ impl NeuronSelection {
         );
         tracing::info!(
             phase = "generate_drafts",
-            message_count = messages.len(),
+            message_count = wire.messages.len(),
             user_len = user_prompt.len(),
             expected,
             "generate_drafts model call start"
         );
-        let output = match self.model_caller.call_model(messages).await {
+        let output = match self.model_caller.call_model(wire.messages).await {
             Ok(output) => output,
             Err(error) => {
                 tracing::error!(

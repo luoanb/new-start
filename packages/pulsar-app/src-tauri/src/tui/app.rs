@@ -546,7 +546,8 @@ impl TuiApp {
                             "",
                             &message,
                             ModelAppendTemplate::Neuron,
-                        ),
+                        )
+                        .messages,
                         tools: None,
                     })
                     .await

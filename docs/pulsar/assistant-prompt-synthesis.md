@@ -22,8 +22,7 @@
 body = with_user_input_for_append(content, user_input, template)  // template ∈ {Neuron, Manual}
 
 if history.is_empty():
-  system = join_nonempty(role_system, body)   # body 并入 System，不产 User
-  messages = replace_system([], system)
+  messages = [System(role_system)] + [User(body)]   # 分开（与落库顺序一致：首轮 System + 输入）
 else:
   messages = replace_system(history, role_system)
   messages = append(messages, User(body))     # body 非空时
@@ -246,7 +245,7 @@ tools = ToolRegistry.definitions_for(authorized_tool_ids) 或 None
 │  role_system = 系统 neuron.content                          │
 │  body = with_user_input_for_append(insert, JSON/payload, Manual) │
 │  history = ctx.messages（只读）；不 add_message               │
-│  空历史 → body 并入 System；非空 → User append body          │
+│  空历史 → System(role_system) + User(body)；非空 → User append body          │
 └──────────────────────────────────────────────────────────────┘
 
 ┌─ 主对话 run_core（Neuron）──────────────────────────────────┐
@@ -275,7 +274,7 @@ tools = ToolRegistry.definitions_for(authorized_tool_ids) 或 None
 1. **轮次对象同源**：共享 `AssistantRoundContext`。  
 2. **模型输入同源历史**：Hook / 选型经 `assemble(history=ctx.messages, …)` **只读拼入**会话消息；**不**为 Hook 合成轮次 `add_message`。  
 3. **主对话**：`Neuron` 模板 + 选中 neuron content；负责落库。  
-4. **说明书位置**：insert 作为 `Manual` 的 `content` 进入 body，不再焊进 `role_system`（空历史时 body 仍会并入 System）。
+4. **说明书位置**：insert 作为 `Manual` 的 `content` 进入 body，不再焊进 `role_system`（空历史时 body 作为独立 User 消息）。
 
 ---
 

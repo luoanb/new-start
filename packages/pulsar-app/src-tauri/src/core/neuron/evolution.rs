@@ -193,14 +193,14 @@ impl NeuronEvolution {
             "parent_creator_content": creator.content,
         });
         let insert = InsertCatalog::require("creator.variant_evolve");
-        let messages = ModelCallInput::assemble(
+        let wire = ModelCallInput::assemble(
             &[],
             &creator.content,
             insert,
             &payload.to_string(),
             ModelAppendTemplate::Manual,
         );
-        let output = self.model_caller.call_model(messages).await?;
+        let output = self.model_caller.call_model(wire.messages).await?;
         let decision = extract_json_object(&output)?;
         let desc = decision
             .get("desc")

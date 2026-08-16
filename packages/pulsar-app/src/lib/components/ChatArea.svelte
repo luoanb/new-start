@@ -145,13 +145,17 @@
 
   // ── 轮次分组（纯前端展示层，不改数据）──
   // 一轮对话 = 以用户输入为起点、到下一个用户输入之前（不含）为止的连续消息。
-  // nudge 消息 role=user 但 body.kind==="nudge"，是轮内简报，不作为轮起点。
+  // nudge 消息 role=user 但 body.kind==="nudge"，是轮内简报，不作为轮起点；
+  // role_context 消息 role=user 但 body.kind==="role_context"，是 B2 角色切换（审计/展示），也不作为轮起点。
   type MessageRound = { startIndex: number; messages: Message[] };
   const rounds = $derived.by<MessageRound[]>(() => {
     const groups: MessageRound[] = [];
     let current: MessageRound | null = null;
     messages.forEach((msg, i) => {
-      const isRoundStart = msg.role === "user" && msg.body.kind !== "nudge";
+      const isRoundStart =
+        msg.role === "user" &&
+        msg.body.kind !== "nudge" &&
+        msg.body.kind !== "role_context";
       if (isRoundStart) {
         current = { startIndex: i, messages: [msg] };
         groups.push(current);

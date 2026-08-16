@@ -35,8 +35,11 @@ pub enum MessageBody {
         summary_of: Vec<String>,
         content: String,
     },
-    /// 轮询推进简报：机器人自发推进时记录的模型输入（审计/展示用），不参与后续模型输入组装。
+    /// 轮询推进简报：机器人自发推进时记录的模型输入（落库与 wire 同源，回灌进后续模型输入）。
     Nudge { content: String },
+    /// B2 角色 RoleContext：冻结后每轮注入的选中神经元（`[当前角色]` 前缀，与 wire 一致）。
+    /// 落库顺序与 wire 注入顺序一致，回灌进后续模型输入（历史 = wire）。
+    RoleContext { content: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -57,7 +60,8 @@ impl Message {
             | MessageBody::ToolCall { content, .. }
             | MessageBody::ToolResult { content, .. }
             | MessageBody::Compaction { content, .. }
-            | MessageBody::Nudge { content } => content,
+            | MessageBody::Nudge { content }
+            | MessageBody::RoleContext { content } => content,
         }
     }
 
@@ -103,7 +107,7 @@ impl Default for ConversationMode {
 }
 
 impl ConversationMode {
-    /// 本模式自动并入的标签工具（会话/路由层消费，call_service 只做数据驱动并入）。
+    /// 本模式自动并入的标签工具（会话/路由层消费，RoundExecutor 只做数据驱动并入）。
     /// - Chat：无（对话模式禁用标签工具）。
     /// - Agent / Assistant：Core 标签（任何对话都得带的工具）。
     /// - System：Core + System（= 助手模式附加系统工具）。

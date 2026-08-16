@@ -17,9 +17,6 @@ use serde_json::json;
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::{
-    call_service::{
-        NeuronCallService, RoundInput, SessionSeed, SessionState,
-    },
     conversation_runner::{
         ConversationRunner, InputRecord, RoundContext, RoundHooks, RoundTriggerKind,
     },
@@ -34,6 +31,7 @@ use super::{
     neuron_store::NeuronStore,
     poller::{Poller, SharedPollParallelism},
     poller_step::{AssistantPollHandler, AssistantStepRequest, ASSISTANT_POLL_TASK},
+    round_types::{SessionSeed, SessionState},
     session_tracker::SessionTracker,
     topic_store::TopicStore,
 };
@@ -52,10 +50,9 @@ pub struct AssistantSession {
     neuron_manager: Arc<NeuronManager>,
     topic_store: Arc<Mutex<TopicStore>>,
     neuron_store: Arc<Mutex<NeuronStore>>,
-    /// 单轮编排：读会话 → before hooks → converse → after hooks → 落库。
+    /// 单轮编排：读会话 → before hooks → 三段管道 → after hooks → 落库。
+    /// 裁决调用（call_judgement）经 `run_raw_round` 与主对话共用同一三段管道。
     runner: ConversationRunner,
-    /// 无状态单轮对话引擎：裁决调用（call_judgement）与主对话共用同一执行入口。
-    call_service: Arc<NeuronCallService>,
     step_tx: UnboundedSender<AssistantStepRequest>,
     session_tracker: SessionTracker,
     /// 与 Poller 共享的轮询并发推进数量（运行时可变，前端可调）。
@@ -76,7 +73,6 @@ impl AssistantSession {
         topic_store: Arc<Mutex<TopicStore>>,
         neuron_store: Arc<Mutex<NeuronStore>>,
         runner: ConversationRunner,
-        call_service: Arc<NeuronCallService>,
         step_tx: UnboundedSender<AssistantStepRequest>,
         session_tracker: SessionTracker,
         poll_parallelism: SharedPollParallelism,
@@ -87,18 +83,17 @@ impl AssistantSession {
             topic_store,
             neuron_store,
             runner,
-            call_service,
             step_tx,
             session_tracker,
             poll_parallelism,
         }
     }
 
-    /// 裁决类系统提示词调用：懒创建系统神经元 → 用 [`NeuronCallService::converse`] 跑一轮
-    /// （系统类型 seed + 禁工具 + 无会话态）→ 解析 JSON 决策。
+    /// 裁决类系统提示词调用：懒创建系统神经元 → 用 [`ConversationRunner::run_raw_round`]
+    /// 跑一轮原始管道（系统类型 seed + 禁工具 + 无会话态）→ 解析 JSON 决策。
     ///
-    /// 取代旧 `NeuronManager::call_system_prompt`：裁决语义即 converse 的一种调用形态，
-    /// 模型调用统一收敛到 `converse` 唯一公共入口，NeuronManager 回归纯管理面。
+    /// 取代旧 `NeuronManager::call_system_prompt`：裁决语义即单轮管道的一种调用形态，
+    /// 模型调用统一收敛到 `run_raw_round` 唯一公共入口，NeuronManager 回归纯管理面。
     async fn call_judgement(
         &self,
         system_type: &str,
@@ -120,18 +115,16 @@ impl AssistantSession {
             .ensure_system_neuron(system_type, EnsureSystemOpts { reset: false })
             .await?;
         let outcome = self
-            .call_service
-            .converse(
-                RoundInput {
-                    seed: Some(SessionSeed::Neuron(spec.id)),
-                    state: SessionState::default(),
-                    messages: history.to_vec(),
-                    tool_override: Some(Vec::new()),
-                    reselect: true,
-                    // 裁决调用非对话：不注入任何标签工具（禁工具语义保持不变）。
-                    tool_tags: Vec::new(),
-                },
+            .runner
+            .run_raw_round(
+                Some(SessionSeed::Neuron(spec.id)),
+                SessionState::default(),
+                history.to_vec(),
                 &user_payload.to_string(),
+                Some(Vec::new()),
+                // 裁决调用非对话：不注入任何标签工具（禁工具语义保持不变）。
+                Vec::new(),
+                true,
                 model,
             )
             .await?;

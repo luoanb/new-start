@@ -61,7 +61,8 @@ async fn run() -> AppResult<()> {
                         "",
                         &message,
                         ModelAppendTemplate::Neuron,
-                    ),
+                    )
+                    .messages,
                     tools: None,
                 })
                 .await?;

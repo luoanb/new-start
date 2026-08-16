@@ -10,7 +10,7 @@ use std::collections::HashSet;
 
 use super::{
     error::{AppError, AppResult},
-    models::{ModelMessage, ModelMessageRole},
+    models::{Message, MessageBody, MessageRole, ModelMessage, ModelMessageRole},
 };
 
 /// Built-in append templates, aligned with product intent.
@@ -107,9 +107,9 @@ impl ModelCallInput {
         }
     }
 
-    /// Assemble a full message list for `call_model`.
+    /// Assemble a full message list for `call_model`（独立组装点用，不参与主链路拼接）。
     ///
-    /// - Empty `history`: fold `body` into System (no User message).
+    /// - Empty `history`: `System(role_system)` + `User(body)`（与落库顺序一致：首轮 System + 输入）。
     /// - Non-empty `history`: `replace_system` with `role_system`, then append User(`body`).
     pub fn assemble(
         history: &[ModelMessage],
@@ -118,43 +118,25 @@ impl ModelCallInput {
         user_input: &str,
         template: ModelAppendTemplate,
     ) -> Vec<ModelMessage> {
-        Self::assemble_with_context(history, role_system, content, None, user_input, template)
-    }
-
-    /// Assemble with an optional context message (B2: stable system prompt + selected neuron).
-    ///
-    /// - `context == None`: same as `assemble`.
-    /// - `context == Some(ctx)`: insert a User(`[当前角色]\n{ctx}`) message between history and user input.
-    ///   First round (empty history): `ctx` is folded into the System message.
-    pub fn assemble_with_context(
-        history: &[ModelMessage],
-        role_system: &str,
-        content: &str,
-        context: Option<&str>,
-        user_input: &str,
-        template: ModelAppendTemplate,
-    ) -> Vec<ModelMessage> {
         let body = Self::with_user_input_for_append(content, user_input, template);
         if history.is_empty() {
-            // 空历史：role_system 已含选中神经元 content（resolve_role 渲染），
-            // context 与之同源（B2 冻结后 = selected_neuron.content），再拼接会重复，
-            // 且无历史可供"稳定 system + 独立上下文"区分 → 跳过 context。
-            let system = join_nonempty(role_system, &body);
-            return Self::replace_system(&[], &system);
+            // 空历史：System(role_system) + User(body) 分开；role_system 空则无 System，
+            // body 空则无 User（LLM API 校验非空 content）。
+            let mut single = Vec::new();
+            if !role_system.trim().is_empty() {
+                single.push(Self::message(ModelMessageRole::System, role_system));
+            }
+            if !body.is_empty() {
+                single.push(Self::message(ModelMessageRole::User, &body));
+            }
+            single
+        } else {
+            let mut messages = Self::replace_system(history, role_system);
+            if !body.is_empty() {
+                messages.push(Self::message(ModelMessageRole::User, &body));
+            }
+            messages
         }
-        let mut messages = Self::replace_system(history, role_system);
-        if let Some(ctx) = context {
-            messages.push(ModelMessage {
-                role: ModelMessageRole::User,
-                content: format!("[当前角色]\n{ctx}"),
-                tool_calls: None,
-                tool_call_id: None,
-            });
-        }
-        if !body.is_empty() {
-            messages.push(Self::message(ModelMessageRole::User, &body));
-        }
-        messages
     }
 
     /// Normalize tool-call/tool-result pairing before sending to the model.
@@ -233,6 +215,89 @@ impl ModelCallInput {
         out
     }
 
+    /// 落库 `Message[]` → 模型侧历史：`from_message` 逐条投影 + 防御过滤 + `sanitize_tool_pairs`。
+    ///
+    /// 真相源唯一约定：发送前（executor）与选型上下文（resolver）共用同一投影，不存在第二份
+    /// 「给模型的 msg」。防御过滤丢弃「非 tool_call 且 content 空」的 assistant 残留（模型偶发
+    /// 空响应，不清理会锁死后续调用）。
+    pub fn project_history(messages: &[Message]) -> Vec<ModelMessage> {
+        Self::sanitize_tool_pairs(
+            &messages
+                .iter()
+                .filter_map(Self::from_message)
+                .filter(|m| {
+                    !(m.role == ModelMessageRole::Assistant
+                        && m.tool_calls.as_ref().map_or(true, |c| c.is_empty())
+                        && m.content.trim().is_empty())
+                })
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    /// `Message` → `ModelMessage` 投影（原 `call_service::message_to_model` 迁入）。
+    ///
+    /// - `Compaction` 摘要按 System 角色携带（与 engine 对齐），避免长会话压缩后丢失上下文。
+    /// - `ToolResult` / `ToolCall` 按 tool / assistant 角色发送（OpenAI 兼容接口要求配对）。
+    /// - `Nudge`（轮询简报）与 `RoleContext`（B2 角色声明）落库后均回灌为 User 文本：
+    ///   落库顺序与 wire 注入顺序一致（首轮 System → RC → 输入 → 产物），回灌即还原模型
+    ///   实际所见（历史 = wire，严格前缀累积）；条数由「生成一次落库一次」与每轮一次注入控制。
+    pub fn from_message(message: &Message) -> Option<ModelMessage> {
+        match &message.body {
+            MessageBody::Compaction { content, .. } => Some(ModelMessage {
+                role: ModelMessageRole::System,
+                content: format!("[Previous conversation summary]: {content}"),
+                tool_calls: None,
+                tool_call_id: None,
+            }),
+            MessageBody::ToolResult {
+                tool_call_id,
+                content,
+                ..
+            } => Some(ModelMessage {
+                role: ModelMessageRole::Tool,
+                content: content.clone(),
+                tool_calls: None,
+                tool_call_id: Some(tool_call_id.clone()),
+            }),
+            MessageBody::ToolCall {
+                content,
+                tool_calls,
+            } => Some(ModelMessage {
+                role: ModelMessageRole::Assistant,
+                content: content.clone(),
+                tool_calls: Some(tool_calls.clone()),
+                tool_call_id: None,
+            }),
+            MessageBody::Nudge { content } => Some(ModelMessage {
+                role: ModelMessageRole::User,
+                content: content.clone(),
+                tool_calls: None,
+                tool_call_id: None,
+            }),
+            MessageBody::RoleContext { content } => Some(ModelMessage {
+                role: ModelMessageRole::User,
+                content: content.clone(),
+                tool_calls: None,
+                tool_call_id: None,
+            }),
+            MessageBody::Text { content } => {
+                let role = match message.role {
+                    MessageRole::User => ModelMessageRole::User,
+                    // Tool 角色不会携带 Text 正文（Tool 只对应 ToolResult），兜底按 Assistant 发送。
+                    MessageRole::Assistant | MessageRole::Tool => ModelMessageRole::Assistant,
+                    MessageRole::System => ModelMessageRole::System,
+                    MessageRole::Compaction => unreachable!("handled above"),
+                };
+                Some(ModelMessage {
+                    role,
+                    content: content.clone(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                })
+            }
+        }
+    }
+
     fn message(role: ModelMessageRole, content: &str) -> ModelMessage {
         ModelMessage {
             role,
@@ -240,15 +305,6 @@ impl ModelCallInput {
             tool_calls: None,
             tool_call_id: None,
         }
-    }
-}
-
-fn join_nonempty(left: &str, right: &str) -> String {
-    match (left.is_empty(), right.is_empty()) {
-        (false, false) => format!("{left}\n\n{right}"),
-        (false, true) => left.to_string(),
-        (true, false) => right.to_string(),
-        (true, true) => String::new(),
     }
 }
 
@@ -568,13 +624,24 @@ mod tests {
     }
 
     #[test]
-    fn assemble_empty_history_folds_body_into_system() {
+    fn assemble_empty_history_splits_system_and_user() {
+        // 首轮：System(role_system) + User(body) 分开（与落库顺序一致，回灌即还原 wire）。
         let out = ModelCallInput::assemble(&[], "role", "c", "u", ModelAppendTemplate::Neuron);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].role, ModelMessageRole::System);
+        assert_eq!(out[0].content, "role");
+        assert_eq!(out[1].role, ModelMessageRole::User);
+        assert!(out[1].content.starts_with("【神经元】"));
+        assert!(out[1].content.contains("## 角色与能力\n\nc"));
+        assert!(out[1].content.contains("## 本轮输入\n\nu"));
+        // role_system 空（直连）：无 System，仅 User(body)。
+        let out = ModelCallInput::assemble(&[], "", "c", "u", ModelAppendTemplate::Neuron);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].role, ModelMessageRole::User);
+        // body 空：仅 System(role_system)。
+        let out = ModelCallInput::assemble(&[], "role", "", "", ModelAppendTemplate::Neuron);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].role, ModelMessageRole::System);
-        assert!(out[0].content.starts_with("role\n\n【神经元】"));
-        assert!(out[0].content.contains("## 角色与能力\n\nc"));
-        assert!(out[0].content.contains("## 本轮输入\n\nu"));
     }
 
     #[test]
@@ -597,5 +664,32 @@ mod tests {
             .content
             .contains("## 操作说明书（工具与输出契约）\n\nmanual"));
         assert!(out[2].content.contains("## 待处理输入\n\npayload"));
+    }
+
+    #[test]
+    fn from_message_refills_nudge_and_role_context() {
+        let nudge = Message {
+            role: MessageRole::User,
+            body: MessageBody::Nudge {
+                content: "brief".into(),
+            },
+            timestamp: 0,
+            neuron_id: None,
+        };
+        let context = Message {
+            role: MessageRole::User,
+            body: MessageBody::RoleContext {
+                content: "[当前角色]\nctx".into(),
+            },
+            timestamp: 0,
+            neuron_id: None,
+        };
+        // 落库简报与角色声明均回灌为 User 文本（历史 = wire，严格前缀累积）。
+        let nudge_back = ModelCallInput::from_message(&nudge).expect("nudge refills");
+        assert_eq!(nudge_back.role, ModelMessageRole::User);
+        assert_eq!(nudge_back.content, "brief");
+        let ctx_back = ModelCallInput::from_message(&context).expect("role context refills");
+        assert_eq!(ctx_back.role, ModelMessageRole::User);
+        assert_eq!(ctx_back.content, "[当前角色]\nctx");
     }
 }

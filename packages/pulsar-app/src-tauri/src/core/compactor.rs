@@ -198,12 +198,12 @@ impl Compactor {
         model: &super::models::ChatModelSelection,
         prompt: &str,
     ) -> AppResult<String> {
-        let messages = ModelCallInput::assemble(&[], prompt, "", "", ModelAppendTemplate::Neuron);
+        let wire = ModelCallInput::assemble(&[], prompt, "", "", ModelAppendTemplate::Neuron);
         let response = providers
             .call_model(ModelCallRequest {
                 provider_id: model.provider_id.clone(),
                 model_id: model.model_id.clone(),
-                messages,
+                messages: wire.messages,
                 tools: None,
             })
             .await
