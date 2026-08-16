@@ -40,6 +40,7 @@ pub const SYSTEM_TYPE_SELECT_NEURON: &str = "assistant_select_neuron";
 pub const SYSTEM_TYPE_MATCH_TOPIC: &str = "assistant_match_topic";
 pub const SYSTEM_TYPE_COMPLETE_SCOPE: &str = "assistant_complete_scope";
 pub const SYSTEM_TYPE_SCORE_FEEDBACK: &str = "assistant_score_feedback";
+pub const SYSTEM_TYPE_REVISE_TOPIC: &str = "assistant_revise_topic";
 
 /// Re-export default interval ticks (overridable via `config.json` → `poller`).
 pub use super::poller::DEFAULT_ASSISTANT_POLL_TICKS;
@@ -475,18 +476,30 @@ impl RoundHooks for AssistantHooks<'_> {
     }
 
     async fn after_round(&self, ctx: &mut RoundContext) -> AppResult<()> {
+        // 先改内容再验收：revise_topic（范围修订）先于 complete_scope（进度验收）执行，
+        // 新加/修订项本轮即可参与验收勾选。
+        let revised = self.revise_topic(ctx).await;
         let completed = self.complete_scope(ctx).await;
         match ctx.trigger {
             RoundTriggerKind::User => {
+                revised?;
                 completed?;
                 self.tick_round_counters(ctx, true)?;
             }
             RoundTriggerKind::ManualStep => {
+                revised?;
                 completed?;
                 self.tick_round_counters(ctx, false)?;
             }
             RoundTriggerKind::Poller => {
                 // 轮询推进不得被课题副作用打断（失败仅记录）。
+                if let Err(error) = revised {
+                    tracing::error!(
+                        phase = "assistant_poller",
+                        error = %error,
+                        "revise_topic afterhook failed; ignored"
+                    );
+                }
                 if let Err(error) = completed {
                     tracing::error!(
                         phase = "assistant_poller",
@@ -786,6 +799,169 @@ impl AssistantHooks<'_> {
                     ctx.topic_id = Some(created.id);
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// 课题范围修订：调用模型裁决 scope_in 增删改（add/remove/update），逐项容错落库并留痕。
+    ///
+    /// - 与 `complete_scope` 平行（在其之前执行）：先改内容再验收，新加项本轮即可参与勾选。
+    /// - 触发类型门禁：`completed` 项仅 User 轮允许 edit/remove；ManualStep / Poller 一律跳过（记 skipped_ids）。
+    /// - 空 diff 无副作用（不写留痕）；reason 缺失时用占位「（无 reason）」。
+    async fn revise_topic(&self, ctx: &mut RoundContext) -> AppResult<()> {
+        let Some(topic_id) = ctx.topic_id.clone() else {
+            tracing::info!(phase = "revise_topic_hook", "skip: no topic");
+            return Ok(());
+        };
+        let topic = match self.assistant.topics()?.get(&topic_id)? {
+            Some(topic) => topic,
+            None => {
+                tracing::info!(
+                    phase = "revise_topic_hook",
+                    topic_id = %topic_id,
+                    "skip: topic missing"
+                );
+                return Ok(());
+            }
+        };
+        if topic.scope_in.is_empty() {
+            tracing::info!(
+                phase = "revise_topic_hook",
+                topic_id = %topic_id,
+                "skip: empty scope_in"
+            );
+            return Ok(());
+        }
+        // 暂停 / 等待用户课题不做变更写入（避免触发 mutate 报错）。
+        if matches!(
+            topic.status,
+            TopicStatus::Paused | TopicStatus::WaitingUser
+        ) {
+            tracing::info!(
+                phase = "revise_topic_hook",
+                topic_id = %topic_id,
+                status = ?topic.status,
+                "skip: topic paused or waiting user"
+            );
+            return Ok(());
+        }
+        let outcome = ctx
+            .outcome
+            .as_ref()
+            .ok_or_else(|| AppError::InvalidInput("revise_topic requires a finished round".into()))?;
+        let model_output = outcome.model_output.clone();
+        let tool_results = outcome.tool_results.clone();
+        let trigger = match ctx.trigger {
+            RoundTriggerKind::User => "user",
+            RoundTriggerKind::ManualStep => "manual",
+            RoundTriggerKind::Poller => "poller",
+            RoundTriggerKind::AgentLoop => "agent_loop",
+        };
+        tracing::info!(
+            phase = "revise_topic_hook",
+            topic_id = %topic_id,
+            trigger,
+            scope_items = topic.scope_in.len(),
+            "calling revise-topic model"
+        );
+        // 同源：用本轮主对话同一模型（用户所选），不读配置默认。
+        let model = &ctx.model;
+        let decision = self
+            .assistant
+            .call_judgement(
+                SYSTEM_TYPE_REVISE_TOPIC,
+                json!({
+                    "topic_id": topic_id,
+                    "scope_in": topic.scope_in,
+                    "model_output": model_output,
+                    "tool_results": tool_results,
+                    "user_input": ctx.model_input,
+                    "trigger": trigger,
+                }),
+                &model,
+                &ctx.messages,
+            )
+            .await?;
+        let reason = decision
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("（无 reason）")
+            .to_string();
+        // 当前各项状态快照：completed 门禁仅 User 轮放行（Poller/ManualStep 一律跳过）。
+        let is_user_round = matches!(ctx.trigger, RoundTriggerKind::User);
+        let mut status_of: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+        for item in &topic.scope_in {
+            status_of.insert(item.id.as_str(), item.status.as_str());
+        }
+        let plan = parse_scope_revision(&decision, &status_of, is_user_round);
+        let mut added = 0usize;
+        let mut removed_ids: Vec<String> = Vec::new();
+        let mut updated_ids: Vec<String> = Vec::new();
+        let skipped_ids = plan.skipped_ids;
+        {
+            // 独立作用域：应用结束后释放 TopicStore 锁，供后续 append_revision_log 再取。
+            let stores = self.assistant.topics()?;
+            for (goal, contract) in &plan.add_items {
+                match stores.add_scope_item(&topic_id, goal, contract) {
+                    Ok(_) => added += 1,
+                    Err(error) => tracing::warn!(
+                        phase = "revise_topic_hook",
+                        error = %error,
+                        "add scope item failed"
+                    ),
+                }
+            }
+            for item_id in &plan.remove_item_ids {
+                match stores.delete_scope_item(&topic_id, item_id) {
+                    Ok(_) => removed_ids.push(item_id.clone()),
+                    Err(error) => tracing::warn!(
+                        phase = "revise_topic_hook",
+                        error = %error,
+                        item_id,
+                        "remove scope item failed"
+                    ),
+                }
+            }
+            for (item_id, goal, contract) in &plan.update_items {
+                match stores.update_scope_item(&topic_id, item_id, goal.as_deref(), contract.as_deref())
+                {
+                    Ok(_) => updated_ids.push(item_id.clone()),
+                    Err(error) => tracing::warn!(
+                        phase = "revise_topic_hook",
+                        error = %error,
+                        item_id,
+                        "update scope item failed"
+                    ),
+                }
+            }
+        }
+        // 留痕：有实际应用（add/remove/update 任一）或门禁跳过时记录；空 diff 不写。
+        if added > 0 || !removed_ids.is_empty() || !updated_ids.is_empty() || !skipped_ids.is_empty() {
+            let removed_len = removed_ids.len();
+            let updated_len = updated_ids.len();
+            let skipped_len = skipped_ids.len();
+            let event = json!({
+                "ts": now_ms(),
+                "trigger": trigger,
+                "reason": reason,
+                "added": added,
+                "removed_ids": removed_ids,
+                "updated_ids": updated_ids,
+                "skipped_ids": skipped_ids,
+            });
+            let _ = append_revision_log(&self.assistant.topic_store, &topic_id, event);
+            tracing::info!(
+                phase = "revise_topic_hook",
+                topic_id = %topic_id,
+                trigger,
+                added,
+                removed = removed_len,
+                updated = updated_len,
+                skipped = skipped_len,
+                "revision applied"
+            );
         }
         Ok(())
     }
@@ -1141,6 +1317,136 @@ fn write_assistant_state(
     Ok(())
 }
 
+/// 课题修订留痕：追加一条事件到 `topic.extra.revisions` 数组（复用 `write_assistant_state`
+/// 的 extra 读改写模式；事件由调用方构造，含 ts / trigger / reason / 变更明细）。
+fn append_revision_log(
+    topic_store: &Arc<Mutex<TopicStore>>,
+    topic_id: &str,
+    event: serde_json::Value,
+) -> AppResult<()> {
+    let store = topic_store
+        .lock()
+        .map_err(|e| AppError::StorageError(format!("TopicStore lock failed: {e}")))?;
+    let topic = store
+        .get(topic_id)?
+        .ok_or_else(|| AppError::ConversationNotFound(topic_id.to_string()))?;
+    let mut extra = topic.extra.unwrap_or_else(|| json!({}));
+    if !extra.is_object() {
+        extra = json!({});
+    }
+    let revisions = extra
+        .as_object_mut()
+        .unwrap()
+        .entry(String::from("revisions"))
+        .or_insert_with(|| json!([]));
+    if let Some(arr) = revisions.as_array_mut() {
+        arr.push(event);
+    }
+    store.update(
+        topic_id,
+        TopicUpdate {
+            extra: Some(Some(extra)),
+            ..Default::default()
+        },
+    )?;
+    Ok(())
+}
+
+/// Unix 毫秒时间戳（修订留痕事件时间戳；SystemTime 失败回退 0）。
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// 修订计划：`revise_topic` 裁决 JSON 的解析结果（应用前纯计算，便于单测）。
+#[derive(Debug, Default)]
+struct RevisionPlan {
+    /// 待新增项：(goal, done_contract)，已过滤空字段。
+    add_items: Vec<(String, String)>,
+    /// 待删除项 id。
+    remove_item_ids: Vec<String>,
+    /// 待编辑项：(id, goal, done_contract)（各自 trim 后非空才携带，全空仍进入计划，
+    /// 由存储层 `update_scope_item` 拒绝并降级为 warn）。
+    update_items: Vec<(String, Option<String>, Option<String>)>,
+    /// 门禁跳过的 id（`completed` 项且非 User 轮，仅留痕不执行）。
+    skipped_ids: Vec<String>,
+}
+
+/// 解析 revise 裁决 JSON 为修订计划：
+/// - `add_items`：goal / done_contract 均非空才进入计划（缺一即整项丢弃）。
+/// - `remove_item_ids` / `update_items`：id 必须非空；`completed` 项且非 User 轮 → 记 skipped_ids。
+/// - `update_items`：goal / done_contract 各自 trim 后非空才携带。
+fn parse_scope_revision(
+    decision: &serde_json::Value,
+    status_of: &std::collections::HashMap<&str, &str>,
+    is_user_round: bool,
+) -> RevisionPlan {
+    let mut plan = RevisionPlan::default();
+    if let Some(items) = decision.get("add_items").and_then(|v| v.as_array()) {
+        for item in items {
+            let goal = item
+                .get("goal")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            let contract = item
+                .get("done_contract")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            if let (Some(goal), Some(contract)) = (goal, contract) {
+                plan.add_items.push((goal, contract));
+            }
+        }
+    }
+    if let Some(ids) = decision.get("remove_item_ids").and_then(|v| v.as_array()) {
+        for id in ids {
+            let Some(item_id) = id.as_str() else {
+                continue;
+            };
+            if !is_user_round && status_of.get(item_id).copied() == Some("completed") {
+                plan.skipped_ids.push(item_id.to_string());
+            } else {
+                plan.remove_item_ids.push(item_id.to_string());
+            }
+        }
+    }
+    if let Some(items) = decision.get("update_items").and_then(|v| v.as_array()) {
+        for item in items {
+            let Some(item_id) = item
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            else {
+                continue;
+            };
+            if !is_user_round && status_of.get(item_id).copied() == Some("completed") {
+                plan.skipped_ids.push(item_id.to_string());
+                continue;
+            }
+            let goal = item
+                .get("goal")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            let contract = item
+                .get("done_contract")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            plan.update_items.push((item_id.to_string(), goal, contract));
+        }
+    }
+    plan
+}
+
 /// PollAll 是否跳过该课题：`list_unfinished` 天然包含 `waiting_user`（SQL 排除仅 done/cancelled），
 /// 若此处不显式跳过，等待用户介入的课题会被 Poller 每轮空转推进（边界 1）。纯函数便于单测。
 fn skip_polling(status: &TopicStatus) -> bool {
@@ -1473,5 +1779,117 @@ mod tests {
 
         let normal = build_topic_brief(&brief_topic(TopicStatus::InProgress, vec![]));
         assert!(!normal.contains("本轮无需调用工具"));
+    }
+
+    fn status_map(pairs: &[(&'static str, &'static str)]) -> std::collections::HashMap<&'static str, &'static str> {
+        pairs.iter().copied().collect()
+    }
+
+    #[test]
+    fn revision_parses_full_diff_with_field_filters() {
+        // 完整 diff：add（含空字段丢弃）/ remove / update（含部分空字段）。
+        let decision = serde_json::json!({
+            "add_items": [
+                {"goal": "新子目标", "done_contract": "可判定验收"},
+                {"goal": "  ", "done_contract": "缺 goal 整项丢弃"},
+                {"goal": "缺 contract", "done_contract": ""}
+            ],
+            "remove_item_ids": ["s1", "s_missing"],
+            "update_items": [
+                {"id": "s2", "goal": "新目标", "done_contract": "新验收"},
+                {"id": "s3", "done_contract": "只改验收"}
+            ],
+            "reason": "用户补充需求"
+        });
+        let status_of = status_map(&[("s1", "pending"), ("s2", "pending"), ("s3", "pending")]);
+        let plan = parse_scope_revision(&decision, &status_of, true);
+        assert_eq!(plan.add_items.len(), 1);
+        assert_eq!(plan.add_items[0], ("新子目标".to_string(), "可判定验收".to_string()));
+        assert_eq!(plan.remove_item_ids, vec!["s1".to_string(), "s_missing".to_string()]);
+        assert_eq!(plan.update_items.len(), 2);
+        assert_eq!(
+            plan.update_items[0],
+            ("s2".to_string(), Some("新目标".to_string()), Some("新验收".to_string()))
+        );
+        assert_eq!(
+            plan.update_items[1],
+            ("s3".to_string(), None, Some("只改验收".to_string()))
+        );
+        assert!(plan.skipped_ids.is_empty());
+    }
+
+    #[test]
+    fn revision_empty_diff_yields_empty_plan() {
+        // 空 diff（无任何字段）→ 空计划，hook 层据此不产生副作用、不写留痕。
+        let decision = serde_json::json!({"reason": "本轮无变更"});
+        let status_of = status_map(&[]);
+        let plan = parse_scope_revision(&decision, &status_of, false);
+        assert!(plan.add_items.is_empty());
+        assert!(plan.remove_item_ids.is_empty());
+        assert!(plan.update_items.is_empty());
+        assert!(plan.skipped_ids.is_empty());
+    }
+
+    #[test]
+    fn revision_gate_skips_completed_items_outside_user_round() {
+        // completed 门禁：Poller/ManualStep（非 User 轮）对 completed 项一律跳过（仅留痕）。
+        let decision = serde_json::json!({
+            "remove_item_ids": ["s_done"],
+            "update_items": [{"id": "s_done", "goal": "改已完成项"}],
+            "reason": "轮询轮尝试改动"
+        });
+        let status_of = status_map(&[("s_done", "completed")]);
+        let plan = parse_scope_revision(&decision, &status_of, false);
+        assert!(plan.remove_item_ids.is_empty());
+        assert!(plan.update_items.is_empty());
+        assert_eq!(plan.skipped_ids, vec!["s_done".to_string(), "s_done".to_string()]);
+
+        // User 轮放行：completed 项可 edit/remove（存储层负责重置 pending）。
+        let plan_user = parse_scope_revision(&decision, &status_of, true);
+        assert_eq!(plan_user.remove_item_ids, vec!["s_done".to_string()]);
+        assert_eq!(plan_user.update_items.len(), 1);
+        assert!(plan_user.skipped_ids.is_empty());
+    }
+
+    #[test]
+    fn revision_pending_items_always_editable() {
+        // 非 completed 项（pending/blocked）不受门禁限制，任意轮都可改。
+        let decision = serde_json::json!({
+            "update_items": [{"id": "s_pending", "goal": "调整"}],
+            "remove_item_ids": ["s_blocked"],
+            "reason": "契约过时"
+        });
+        let status_of = status_map(&[("s_pending", "pending"), ("s_blocked", "blocked")]);
+        let plan = parse_scope_revision(&decision, &status_of, false);
+        assert_eq!(plan.update_items.len(), 1);
+        assert_eq!(plan.remove_item_ids, vec!["s_blocked".to_string()]);
+        assert!(plan.skipped_ids.is_empty());
+    }
+
+    #[test]
+    fn revision_update_with_all_empty_fields_still_planned() {
+        // update 全空字段：仍进入计划（goal/contract 均为 None），由存储层拒绝降级为 warn。
+        let decision = serde_json::json!({
+            "update_items": [{"id": "s1"}],
+            "reason": "非法更新"
+        });
+        let status_of = status_map(&[("s1", "pending")]);
+        let plan = parse_scope_revision(&decision, &status_of, true);
+        assert_eq!(plan.update_items.len(), 1);
+        assert_eq!(plan.update_items[0], ("s1".to_string(), None, None));
+    }
+
+    #[test]
+    fn revision_ignores_non_string_ids_and_missing_ids() {
+        // id 非字符串 / 缺失 → 该条忽略（不编造 id）。
+        let decision = serde_json::json!({
+            "remove_item_ids": [123, null],
+            "update_items": [{"goal": "无 id"}, {}],
+            "reason": "脏数据"
+        });
+        let status_of = status_map(&[]);
+        let plan = parse_scope_revision(&decision, &status_of, true);
+        assert!(plan.remove_item_ids.is_empty());
+        assert!(plan.update_items.is_empty());
     }
 }

@@ -41,6 +41,7 @@ pub const REBOOTSTRAP_SYSTEM_TYPES: &[&str] = &[
     "assistant_match_topic",
     "assistant_complete_scope",
     "assistant_score_feedback",
+    "assistant_revise_topic",
 ];
 pub(crate) const DEFAULT_SELECT_N: usize = DEFAULT_ASSISTANT_GLOBAL_LIMIT;
 pub(crate) const MAX_CREATE_NEURON_COUNT: usize = 10;
@@ -52,6 +53,7 @@ pub fn default_behavior_for_system_type(system_type: &str) -> Option<SessionBeha
         "assistant_match_topic" => Some("assistant.match_topic"),
         "assistant_score_feedback" => Some("assistant.score_feedback"),
         "assistant_complete_scope" => Some("assistant.complete_scope"),
+        "assistant_revise_topic" => Some("assistant.revise_topic"),
         _ => None,
     };
     insert_id.map(|id| SessionBehavior {

@@ -373,6 +373,43 @@ impl TopicStore {
         })
     }
 
+    /// 编辑 scope 项文本（goal / done_contract，仅非空字段生效）。
+    /// - 不改 status；唯一例外：编辑 `completed` 项时自动重置为 `pending`（契约已变，需重新验收）。
+    /// - 复用 `mutate_scope`：事务化、Paused 拒绝写入、变更后重算 progress / status。
+    pub fn update_scope_item(
+        &self,
+        topic_id: &str,
+        item_id: &str,
+        goal: Option<&str>,
+        done_contract: Option<&str>,
+    ) -> AppResult<Topic> {
+        let goal = goal.map(str::trim).filter(|s| !s.is_empty());
+        let done_contract = done_contract.map(str::trim).filter(|s| !s.is_empty());
+        if goal.is_none() && done_contract.is_none() {
+            return Err(AppError::InvalidInput(
+                "update_scope_item requires at least one non-empty field".into(),
+            ));
+        }
+        self.mutate_scope(topic_id, |items| {
+            let item = items
+                .iter_mut()
+                .find(|item| item.id == item_id)
+                .ok_or_else(|| {
+                    AppError::InvalidInput(format!("Scope item not found: {item_id}"))
+                })?;
+            if let Some(goal) = goal {
+                item.goal = goal.to_string();
+            }
+            if let Some(done_contract) = done_contract {
+                item.done_contract = done_contract.to_string();
+            }
+            if item.status == "completed" {
+                item.status = "pending".into();
+            }
+            Ok(())
+        })
+    }
+
     pub fn complete_scope_item(&self, topic_id: &str, item_id: &str) -> AppResult<Topic> {
         self.mutate_scope(topic_id, |items| {
             let item = items
@@ -864,6 +901,97 @@ mod tests {
         assert!(deleted.scope_in.is_empty());
         assert_eq!(deleted.progress, 0);
         assert_eq!(deleted.status, TopicStatus::Todo);
+    }
+
+    #[test]
+    fn test_update_scope_item_edits_fields_keeps_progress() {
+        let store = test_store("update_scope_item_fields");
+        let created = store
+            .create("Topic", "", TopicStatus::Todo, vec![], None)
+            .unwrap();
+        let added = store
+            .add_scope_item(&created.id, "Goal 1", "Contract 1")
+            .unwrap();
+        let item_id = added.scope_in[0].id.clone();
+
+        let updated = store
+            .update_scope_item(
+                &created.id,
+                &item_id,
+                Some("Goal 1 v2"),
+                Some("Contract 1 v2"),
+            )
+            .unwrap();
+        assert_eq!(updated.scope_in[0].goal, "Goal 1 v2");
+        assert_eq!(updated.scope_in[0].done_contract, "Contract 1 v2");
+        assert_eq!(updated.scope_in[0].status, "pending");
+        // 未完成项编辑不改变进度口径。
+        assert_eq!(updated.progress, 0);
+        assert_eq!(updated.status, TopicStatus::Todo);
+
+        // 仅传一个非空字段：另一字段保持不变。
+        let partial = store
+            .update_scope_item(&created.id, &item_id, None, Some("Contract only"))
+            .unwrap();
+        assert_eq!(partial.scope_in[0].goal, "Goal 1 v2");
+        assert_eq!(partial.scope_in[0].done_contract, "Contract only");
+    }
+
+    #[test]
+    fn test_update_scope_item_resets_completed_to_pending() {
+        let store = test_store("update_scope_item_reset");
+        let created = store
+            .create("Topic", "", TopicStatus::Todo, vec![], None)
+            .unwrap();
+        let added = store
+            .add_scope_item(&created.id, "Goal 1", "Contract 1")
+            .unwrap();
+        let item_id = added.scope_in[0].id.clone();
+        let completed = store.complete_scope_item(&created.id, &item_id).unwrap();
+        assert_eq!(completed.progress, 100);
+        assert_eq!(completed.status, TopicStatus::Done);
+
+        // 编辑 completed 项：契约已变，自动重置 pending 重新验收。
+        let reset = store
+            .update_scope_item(&created.id, &item_id, Some("Goal 1 v2"), None)
+            .unwrap();
+        assert_eq!(reset.scope_in[0].status, "pending");
+        assert_eq!(reset.progress, 0);
+        assert_eq!(reset.status, TopicStatus::Todo);
+    }
+
+    #[test]
+    fn test_update_scope_item_requires_at_least_one_field() {
+        let store = test_store("update_scope_item_required");
+        let created = store
+            .create("Topic", "", TopicStatus::Todo, vec![], None)
+            .unwrap();
+        let added = store
+            .add_scope_item(&created.id, "Goal 1", "Contract 1")
+            .unwrap();
+        let item_id = added.scope_in[0].id.clone();
+
+        let err = store
+            .update_scope_item(&created.id, &item_id, None, None)
+            .unwrap_err();
+        assert!(err.to_string().contains("at least one non-empty"));
+        // 空白字段同样视为无效。
+        let err = store
+            .update_scope_item(&created.id, &item_id, Some("  "), Some(""))
+            .unwrap_err();
+        assert!(err.to_string().contains("at least one non-empty"));
+    }
+
+    #[test]
+    fn test_update_scope_item_missing_item_errors() {
+        let store = test_store("update_scope_item_missing");
+        let created = store
+            .create("Topic", "", TopicStatus::Todo, vec![], None)
+            .unwrap();
+        let err = store
+            .update_scope_item(&created.id, "no_such_id", Some("g"), None)
+            .unwrap_err();
+        assert!(err.to_string().contains("Scope item not found"));
     }
 
     #[test]
