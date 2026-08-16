@@ -151,6 +151,11 @@ export type Translations = {
     dark: string;
     system: string;
   };
+  settings: {
+    title: string;
+    theme: string;
+    language: string;
+  };
   toolCall: {
     arguments: string;
   };
@@ -569,6 +574,11 @@ export const en: Translations = {
     light: "Light",
     dark: "Dark",
     system: "System",
+  },
+  settings: {
+    title: "Settings",
+    theme: "Theme",
+    language: "Language",
   },
   toolCall: {
     arguments: "Arguments",
@@ -1001,6 +1011,11 @@ export const zh: Translations = {
     light: "浅色",
     dark: "深色",
     system: "跟随系统",
+  },
+  settings: {
+    title: "设置",
+    theme: "主题",
+    language: "语言",
   },
   toolCall: {
     arguments: "参数",

@@ -4,6 +4,7 @@
   import StatusBar from "$lib/components/StatusBar.svelte";
   import SessionCreateModal from "$lib/components/SessionCreateModal.svelte";
   import ConnectDialog from "$lib/components/ConnectDialog.svelte";
+  import SettingsDialog from "$lib/components/SettingsDialog.svelte";
   import ErrorBanner from "$lib/components/ErrorBanner.svelte";
   import ActivityBar from "$lib/layout/ActivityBar.svelte";
   import Splitter from "$lib/layout/Splitter.svelte";
@@ -51,6 +52,7 @@
   let error = $state("");
   let showCreateModal = $state(false);
   let showConnectDialog = $state(false);
+  let showSettingsDialog = $state(false);
   // 非 Tauri 环境为纯远程访问：连接失败时自动弹出连接弹窗，并锁定不可关闭（直到连接成功）。
   let remoteConnLocked = $state(false);
   let drawerSidebar = $state(false);
@@ -350,6 +352,16 @@
       {#snippet footer()}
         <button
           class="activity-item"
+          title={t("settings.title")}
+          aria-label={t("settings.title")}
+          onclick={() => (showSettingsDialog = true)}
+        >
+          <span class="activity-icon">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </span>
+        </button>
+        <button
+          class="activity-item"
           title={t("connectDialog.title")}
           aria-label={t("connectDialog.title")}
           onclick={() => (showConnectDialog = true)}
@@ -540,6 +552,11 @@
     showConnectDialog = false;
     remoteConnLocked = false;
   }}
+/>
+
+<SettingsDialog
+  open={showSettingsDialog}
+  onClose={() => (showSettingsDialog = false)}
 />
 
 {#if isTauriEnv}

@@ -1,8 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import ThemeSwitcher from "./ThemeSwitcher.svelte";
-  import LocaleSwitcher from "./LocaleSwitcher.svelte";
   import { t } from "$lib/i18n";
   import { isTauriEnv } from "$lib/api";
 
@@ -186,9 +184,6 @@
         <line class="frame" x1="10" y1="2.5" x2="10" y2="13.5" />
       </svg>
     </button>
-
-    <LocaleSwitcher />
-    <ThemeSwitcher />
 
     <span class="window-sep"></span>
     {#if appWindow}
