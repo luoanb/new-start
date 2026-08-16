@@ -23,8 +23,8 @@
   let newScopeContract = $state("");
   let addingScope = $state(false);
 
-  // 三段式聚合：未完成 = todo+in_progress+paused；已完成 = done+cancelled。
-  const ACTIVE: TopicStatus[] = ["todo", "in_progress", "paused"];
+  // 三段式聚合：未完成 = todo+in_progress+paused+waiting_user+wrapping_up；已完成 = done+cancelled。
+  const ACTIVE: TopicStatus[] = ["todo", "in_progress", "paused", "waiting_user", "wrapping_up"];
   const DONE: TopicStatus[] = ["done", "cancelled"];
 
   // ── Derived ──
@@ -314,7 +314,11 @@
                         <div class="scope-contract" title={item.done_contract}>{item.done_contract}</div>
                       </div>
                       <div class="scope-item-actions">
-                        {#if item.status !== "completed"}
+                        {#if item.status === "completed"}
+                          <span class="status-badge done">{t("topicPanel.scopeStatusDone")}</span>
+                        {:else if item.status === "blocked"}
+                          <span class="status-badge blocked">{t("topicPanel.scopeStatusBlocked")}</span>
+                        {:else}
                           <button
                             class="icon-btn done"
                             onclick={() => handleCompleteScopeItem(topic.id, item.id)}
@@ -324,8 +328,6 @@
                           >
                             <svg class="icon" aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
                           </button>
-                        {:else}
-                          <span class="status-badge done">{t("topicPanel.scopeStatusDone")}</span>
                         {/if}
                         <button
                           class="icon-btn danger"
@@ -447,6 +449,9 @@
   .status-badge.paused { background: color-mix(in oklch, var(--color-warning) 12%, transparent); color: var(--color-warning); }
   .status-badge.done { background: color-mix(in oklch, var(--color-success) 12%, transparent); color: var(--color-success); }
   .status-badge.cancelled { background: color-mix(in oklch, var(--color-error) 12%, transparent); color: var(--color-error); }
+  .status-badge.waiting_user { background: color-mix(in oklch, var(--color-warning) 12%, transparent); color: var(--color-warning); }
+  .status-badge.wrapping_up { background: color-mix(in oklch, var(--color-primary) 12%, transparent); color: var(--color-primary); }
+  .status-badge.blocked { background: color-mix(in oklch, var(--color-warning) 12%, transparent); color: var(--color-warning); }
   .progress-row { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-1); }
   .progress-bar-bg { flex: 1; height: 4px; background: var(--color-border); border-radius: 2px; overflow: hidden; }
   .progress-bar-fill { height: 100%; background: var(--color-primary); border-radius: 2px; transition: width var(--duration-normal) var(--ease-out); }

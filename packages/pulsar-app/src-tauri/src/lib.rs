@@ -274,6 +274,8 @@ fn topic_status_filter(status: Option<&str>) -> Option<TopicStatus> {
         "paused" => Some(TopicStatus::Paused),
         "done" => Some(TopicStatus::Done),
         "cancelled" => Some(TopicStatus::Cancelled),
+        "waiting_user" => Some(TopicStatus::WaitingUser),
+        "wrapping_up" => Some(TopicStatus::WrappingUp),
         _ => None,
     })
 }

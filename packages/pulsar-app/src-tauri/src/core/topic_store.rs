@@ -368,6 +368,66 @@ impl TopicStore {
         })
     }
 
+    pub fn mark_scope_item_blocked(&self, topic_id: &str, item_id: &str) -> AppResult<Topic> {
+        self.mutate_scope(topic_id, |items| {
+            let item = items
+                .iter_mut()
+                .find(|item| item.id == item_id)
+                .ok_or_else(|| {
+                    AppError::InvalidInput(format!("Scope item not found: {item_id}"))
+                })?;
+            item.status = "blocked".into();
+            Ok(())
+        })
+    }
+
+    /// 用户接入后解除所有 blocked 项并重推导课题状态。
+    /// - `WaitingUser` 课题恢复为推导状态（Todo/InProgress/Done），继续被轮询；
+    /// - 用户手动暂停（`Paused`）课题仅解除 blocked，保持 `Paused`；
+    /// - 其余课题（部分 blocked）同步 scope 变更后的推导状态。
+    pub fn unblock_scope_items(&self, topic_id: &str) -> AppResult<Topic> {
+        let mut topic = self
+            .get(topic_id)?
+            .ok_or_else(|| AppError::ConversationNotFound(format!("Topic not found: {topic_id}")))?;
+        if !topic.scope_in.iter().any(|item| item.status == "blocked") {
+            return Ok(topic);
+        }
+        for item in &mut topic.scope_in {
+            if item.status == "blocked" {
+                item.status = "pending".into();
+            }
+        }
+        let (progress, derived) = derive_topic_state(&topic.scope_in);
+        // 用户手动暂停的课题不被自动恢复
+        let status = if topic.status == TopicStatus::Paused {
+            TopicStatus::Paused
+        } else {
+            derived
+        };
+        let scope_json = serde_json::to_string(&topic.scope_in)
+            .map_err(|e| AppError::StorageError(format!("Failed to encode scope_in: {}", e)))?;
+        let now = now_ms();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
+        conn.execute(
+            "UPDATE topics SET scope_in = ?1, progress = ?2, status = ?3, updated_at = ?4 WHERE id = ?5",
+            params![
+                scope_json,
+                progress,
+                status_to_string(&status),
+                now as i64,
+                topic_id
+            ],
+        )
+        .map_err(|e| AppError::StorageError(format!("Failed to unblock scope items: {}", e)))?;
+        topic.progress = progress;
+        topic.status = status;
+        topic.updated_at = now;
+        Ok(topic)
+    }
+
     pub fn pause(&self, id: &str) -> AppResult<Topic> {
         self.set_status(id, TopicStatus::Paused)
     }
@@ -446,7 +506,7 @@ impl TopicStore {
         Ok(topic)
     }
 
-    fn set_status(&self, id: &str, status: TopicStatus) -> AppResult<Topic> {
+    pub fn set_status(&self, id: &str, status: TopicStatus) -> AppResult<Topic> {
         let now = now_ms();
         let conn = self
             .conn
@@ -562,6 +622,8 @@ fn normalize_scope_items(items: &mut [ScopeInItem]) {
         }
         item.status = match item.status.as_str() {
             "completed" | "done" => "completed".into(),
+            // blocked（等待用户）是合法持久状态，重启/迁移后必须保留
+            "blocked" => "blocked".into(),
             _ => "pending".into(),
         };
     }
@@ -575,11 +637,18 @@ fn derive_topic_state(items: &[ScopeInItem]) -> (u8, TopicStatus) {
         .iter()
         .filter(|item| item.status == "completed")
         .count();
+    let blocked = items
+        .iter()
+        .filter(|item| item.status == "blocked")
+        .count();
     let progress = ((completed * 100) / items.len()) as u8;
-    let status = if completed == 0 {
-        TopicStatus::Todo
-    } else if completed == items.len() {
+    let status = if completed == items.len() {
         TopicStatus::Done
+    } else if blocked > 0 && completed + blocked == items.len() {
+        // 无未完成非 blocked 项：剩下的都在等待用户介入
+        TopicStatus::WaitingUser
+    } else if completed == 0 {
+        TopicStatus::Todo
     } else {
         TopicStatus::InProgress
     };
@@ -884,5 +953,152 @@ mod tests {
         assert_eq!(found.id, topic.id);
         let unfinished = store.list_unfinished().unwrap();
         assert!(unfinished.iter().any(|t| t.id == topic.id));
+    }
+
+    #[test]
+    fn test_derive_topic_state_matrix() {
+        // 空 scope → Todo
+        assert_eq!(derive_topic_state(&[]), (0, TopicStatus::Todo));
+        // 全 pending → Todo
+        assert_eq!(
+            derive_topic_state(&[scope_item("a", "pending"), scope_item("b", "pending")]),
+            (0, TopicStatus::Todo)
+        );
+        // 全 completed → Done
+        assert_eq!(
+            derive_topic_state(&[scope_item("a", "completed"), scope_item("b", "completed")]),
+            (100, TopicStatus::Done)
+        );
+        // 部分 completed（仍有 pending）→ InProgress
+        assert_eq!(
+            derive_topic_state(&[scope_item("a", "completed"), scope_item("b", "pending")]),
+            (50, TopicStatus::InProgress)
+        );
+        // 全 blocked → WaitingUser
+        assert_eq!(
+            derive_topic_state(&[scope_item("a", "blocked"), scope_item("b", "blocked")]),
+            (0, TopicStatus::WaitingUser)
+        );
+        // blocked + completed（无 pending）→ WaitingUser
+        assert_eq!(
+            derive_topic_state(&[scope_item("a", "blocked"), scope_item("b", "completed")]),
+            (50, TopicStatus::WaitingUser)
+        );
+        // blocked + pending（无 completed）→ Todo
+        assert_eq!(
+            derive_topic_state(&[scope_item("a", "blocked"), scope_item("b", "pending")]),
+            (0, TopicStatus::Todo)
+        );
+        // blocked + pending + completed → InProgress
+        assert_eq!(
+            derive_topic_state(&[
+                scope_item("a", "blocked"),
+                scope_item("b", "pending"),
+                scope_item("c", "completed")
+            ]),
+            (33, TopicStatus::InProgress)
+        );
+    }
+
+    #[test]
+    fn test_normalize_preserves_blocked_status() {
+        // 迁移/重启路径：blocked 是合法持久状态，必须保留；其余非法值归并 pending。
+        let mut items = vec![
+            scope_item("a", "active"),
+            scope_item("b", "blocked"),
+            scope_item("c", "done"),
+        ];
+        normalize_scope_items(&mut items);
+        let statuses: Vec<&str> = items.iter().map(|i| i.status.as_str()).collect();
+        assert_eq!(statuses, vec!["pending", "blocked", "completed"]);
+    }
+
+    #[test]
+    fn test_blocked_scope_items_derive_waiting_user() {
+        let store = test_store("blocked_waiting");
+        let created = store
+            .create("T", "", TopicStatus::Todo, vec![], None)
+            .unwrap();
+        let t = store.add_scope_item(&created.id, "G1", "C1").unwrap();
+        let t = store.add_scope_item(&t.id, "G2", "C2").unwrap();
+        let id1 = t.scope_in[0].id.clone();
+        let id2 = t.scope_in[1].id.clone();
+        // 部分 blocked（仍有 pending）→ Todo
+        let t = store.mark_scope_item_blocked(&created.id, &id1).unwrap();
+        assert_eq!(t.status, TopicStatus::Todo);
+        // 全部 blocked → WaitingUser
+        let t = store.mark_scope_item_blocked(&created.id, &id2).unwrap();
+        assert_eq!(t.status, TopicStatus::WaitingUser);
+        assert_eq!(t.progress, 0);
+    }
+
+    #[test]
+    fn test_paused_topic_rejects_blocked_mutation() {
+        let store = test_store("paused_rejects_blocked");
+        let created = store
+            .create("T", "", TopicStatus::Todo, vec![], None)
+            .unwrap();
+        let t = store.add_scope_item(&created.id, "G1", "C1").unwrap();
+        let id = t.scope_in[0].id.clone();
+        let _ = store.pause(&created.id).unwrap();
+        // mutate_scope 的 Paused 检查对 blocked 写入同样生效
+        assert!(store.mark_scope_item_blocked(&created.id, &id).is_err());
+    }
+
+    #[test]
+    fn test_unblock_scope_items_recovers_polling_state() {
+        let store = test_store("unblock_recovers");
+        let created = store
+            .create("T", "", TopicStatus::Todo, vec![], None)
+            .unwrap();
+        let t = store.add_scope_item(&created.id, "G1", "C1").unwrap();
+        let t = store.add_scope_item(&t.id, "G2", "C2").unwrap();
+        let id1 = t.scope_in[0].id.clone();
+        let id2 = t.scope_in[1].id.clone();
+        let _ = store.mark_scope_item_blocked(&created.id, &id1).unwrap();
+        let t = store.mark_scope_item_blocked(&created.id, &id2).unwrap();
+        assert_eq!(t.status, TopicStatus::WaitingUser);
+        // 用户接入 → 解除 blocked → 全 pending → 恢复 Todo（可轮询）
+        let t = store.unblock_scope_items(&created.id).unwrap();
+        assert_eq!(t.status, TopicStatus::Todo);
+        assert!(t.scope_in.iter().all(|i| i.status == "pending"));
+        // 无 blocked 项时幂等
+        let t2 = store.unblock_scope_items(&created.id).unwrap();
+        assert_eq!(t2.status, TopicStatus::Todo);
+    }
+
+    #[test]
+    fn test_unblock_keeps_manually_paused_topic_paused() {
+        let store = test_store("unblock_keeps_paused");
+        let created = store
+            .create("T", "", TopicStatus::Todo, vec![], None)
+            .unwrap();
+        let t = store.add_scope_item(&created.id, "G1", "C1").unwrap();
+        let id = t.scope_in[0].id.clone();
+        let t = store.mark_scope_item_blocked(&created.id, &id).unwrap();
+        assert_eq!(t.status, TopicStatus::WaitingUser);
+        let _ = store.pause(&created.id).unwrap();
+        // 手动暂停课题解除 blocked 后保持 Paused（不被自动恢复）
+        let t = store.unblock_scope_items(&created.id).unwrap();
+        assert_eq!(t.status, TopicStatus::Paused);
+        assert!(t.scope_in.iter().all(|i| i.status == "pending"));
+    }
+
+    #[test]
+    fn test_list_unfinished_includes_waiting_user() {
+        let store = test_store("unfinished_waiting");
+        let created = store
+            .create("T", "", TopicStatus::Todo, vec![], None)
+            .unwrap();
+        let t = store.add_scope_item(&created.id, "G1", "C1").unwrap();
+        let id = t.scope_in[0].id.clone();
+        let t = store.mark_scope_item_blocked(&created.id, &id).unwrap();
+        assert_eq!(t.status, TopicStatus::WaitingUser);
+        // list_unfinished SQL 仅排除 done/cancelled：waiting_user 仍在列表
+        // （PollAll 必须在过滤层显式跳过，否则等待用户课题仍被轮询空转）
+        let unfinished = store.list_unfinished().unwrap();
+        assert!(unfinished
+            .iter()
+            .any(|t| t.status == TopicStatus::WaitingUser));
     }
 }

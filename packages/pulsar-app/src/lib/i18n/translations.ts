@@ -190,6 +190,7 @@ export type Translations = {
     scopeAdd: string;
     scopeStatusPending: string;
     scopeStatusDone: string;
+    scopeStatusBlocked: string;
     status: string;
     description: string;
     updated: string;
@@ -606,6 +607,7 @@ export const en: Translations = {
     scopeAdd: "Add",
     scopeStatusPending: "Pending",
     scopeStatusDone: "Done",
+    scopeStatusBlocked: "Waiting user",
     status: "Status",
     description: "Description",
     updated: "Updated",
@@ -617,6 +619,8 @@ export const en: Translations = {
       paused: "Paused",
       done: "Done",
       cancelled: "Cancelled",
+      waiting_user: "Waiting for user",
+      wrapping_up: "Wrapping up",
     },
     createFailed: "Create failed: {error}",
     pauseFailed: "Pause failed: {error}",
@@ -1033,6 +1037,7 @@ export const zh: Translations = {
     scopeAdd: "添加",
     scopeStatusPending: "待办",
     scopeStatusDone: "完成",
+    scopeStatusBlocked: "等待用户",
     status: "状态",
     description: "描述",
     updated: "更新于",
@@ -1044,6 +1049,8 @@ export const zh: Translations = {
       paused: "已暂停",
       done: "已完成",
       cancelled: "已取消",
+      waiting_user: "等待用户",
+      wrapping_up: "收尾中",
     },
     createFailed: "创建失败：{error}",
     pauseFailed: "暂停失败：{error}",

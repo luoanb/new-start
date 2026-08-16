@@ -263,7 +263,7 @@ impl AssistantSession {
                         skipped += 1;
                         continue;
                     };
-                    if matches!(topic.status, TopicStatus::Paused | TopicStatus::Cancelled) {
+                    if skip_polling(&topic.status) {
                         skipped += 1;
                         continue;
                     }
@@ -459,6 +459,8 @@ impl RoundHooks for AssistantHooks<'_> {
         self.resolve_bound_topic(ctx)?;
         match ctx.trigger {
             RoundTriggerKind::User => {
+                // 用户接入即解除等待用户状态（blocked 项 → pending，恢复课题轮询）。
+                self.release_waiting_user(ctx)?;
                 self.score_feedback(ctx).await?;
                 self.match_topic(ctx).await?;
             }
@@ -513,6 +515,17 @@ impl AssistantHooks<'_> {
             .topics()?
             .find_by_session_id(&ctx.session_id)?
             .map(|topic| topic.id);
+        Ok(())
+    }
+
+    /// 用户接入：解除课题内全部 blocked 项（等待用户）并重推导课题状态。
+    /// - `WaitingUser` 课题恢复为可轮询状态；用户手动暂停（`Paused`）课题保持暂停；
+    /// - 无 blocked 项时无副作用（普通课题每轮 User 输入都会轻量检查）。
+    fn release_waiting_user(&self, ctx: &RoundContext) -> AppResult<()> {
+        let Some(topic_id) = ctx.topic_id.as_ref() else {
+            return Ok(());
+        };
+        self.assistant.topics()?.unblock_scope_items(topic_id)?;
         Ok(())
     }
 
@@ -798,6 +811,38 @@ impl AssistantHooks<'_> {
             );
             return Ok(());
         }
+        // 暂停 / 等待用户课题不做裁决写入（避免触发 mutate 报错）。
+        if matches!(
+            topic.status,
+            TopicStatus::Paused | TopicStatus::WaitingUser
+        ) {
+            tracing::info!(
+                phase = "complete_scope_hook",
+                topic_id = %topic_id,
+                status = ?topic.status,
+                "skip: topic paused or waiting user"
+            );
+            return Ok(());
+        }
+        // 本轮最后一条是否为工具调用结果（persist_outcome 先于 after hooks，反映本轮）。
+        let last_is_tool = self
+            .assistant
+            .runner
+            .last_message_is_tool_result(&ctx.session_id)?;
+        // 收尾关闭判断（前置）：WrappingUp 课题在本轮以文本收尾（无工具调用）后关闭。
+        if topic.status == TopicStatus::WrappingUp {
+            if !last_is_tool {
+                self.assistant
+                    .topics()?
+                    .set_status(&topic_id, TopicStatus::Done)?;
+                tracing::info!(
+                    phase = "complete_scope_hook",
+                    topic_id = %topic_id,
+                    "wrap-up round finished; topic closed"
+                );
+            }
+            return Ok(());
+        }
         let outcome = ctx
             .outcome
             .as_ref()
@@ -832,12 +877,18 @@ impl AssistantHooks<'_> {
             .and_then(|v| v.as_array())
             .cloned()
             .unwrap_or_default();
+        let blocked_ids = decision
+            .get("blocked_item_ids")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
         tracing::info!(
             phase = "complete_scope_hook",
             completed = ids.len(),
-            "completing scope items"
+            blocked = blocked_ids.len(),
+            "updating scope items"
         );
-        for id in ids {
+        for id in &ids {
             let Some(item_id) = id.as_str() else {
                 continue;
             };
@@ -845,6 +896,31 @@ impl AssistantHooks<'_> {
                 .assistant
                 .topics()?
                 .complete_scope_item(&topic_id, item_id);
+        }
+        for id in &blocked_ids {
+            let Some(item_id) = id.as_str() else {
+                continue;
+            };
+            let _ = self
+                .assistant
+                .topics()?
+                .mark_scope_item_blocked(&topic_id, item_id);
+        }
+        // 延迟关闭判断（后置）：最后一项本轮完成，但本轮以工具调用结束（模型尚未产出
+        // 最终总结）→ 置 WrappingUp 保持轮询，下一轮给收尾机会，而不是直接关闭课题。
+        let topic_after = match self.assistant.topics()?.get(&topic_id)? {
+            Some(topic) => topic,
+            None => return Ok(()),
+        };
+        if should_delay_close(&topic_after.status, last_is_tool) {
+            self.assistant
+                .topics()?
+                .set_status(&topic_id, TopicStatus::WrappingUp)?;
+            tracing::info!(
+                phase = "complete_scope_hook",
+                topic_id = %topic_id,
+                "scope completed via tool round; topic wrapping up"
+            );
         }
         Ok(())
     }
@@ -975,21 +1051,28 @@ fn build_topic_brief(topic: &Topic) -> String {
         out.push_str("- （无待办项）\n");
     } else {
         for item in &topic.scope_in {
-            let mark = if item.status == "completed" {
-                "[x]"
-            } else {
-                "[ ]"
+            let (mark, label) = match item.status.as_str() {
+                "completed" => ("[x]", "验收"),
+                // 等待用户介入的项：简报标记"等待用户"，模型勿选
+                "blocked" => ("[⏳]", "等待用户"),
+                _ => ("[ ]", "验收"),
             };
             out.push_str(&format!(
-                "- {mark} {}\n    验收：{}\n",
+                "- {mark} {}\n    {label}：{}\n",
                 item.goal.trim(),
                 item.done_contract.trim()
             ));
         }
     }
-    out.push_str(
-        "本轮任务：基于上述课题，选择一件尚未完成的事项推进；必要时调用可用工具执行，并在回复中说明本轮进展。若所有事项均已完成，输出完成总结。",
-    );
+    if topic.status == TopicStatus::WrappingUp {
+        out.push_str(
+            "本轮任务：所有事项均已完成，请输出最终总结并复核本课题的完成情况，本轮无需调用工具。",
+        );
+    } else {
+        out.push_str(
+            "本轮任务：基于上述课题，选择一件尚未完成的事项推进；必要时调用可用工具执行，并在回复中说明本轮进展。若所有事项均已完成，输出完成总结。",
+        );
+    }
     out
 }
 
@@ -1056,6 +1139,21 @@ fn write_assistant_state(
         },
     )?;
     Ok(())
+}
+
+/// PollAll 是否跳过该课题：`list_unfinished` 天然包含 `waiting_user`（SQL 排除仅 done/cancelled），
+/// 若此处不显式跳过，等待用户介入的课题会被 Poller 每轮空转推进（边界 1）。纯函数便于单测。
+fn skip_polling(status: &TopicStatus) -> bool {
+    matches!(
+        status,
+        TopicStatus::Paused | TopicStatus::Cancelled | TopicStatus::WaitingUser
+    )
+}
+
+/// 延迟关闭判断：scope 已 100% 完成但本轮以工具调用结束（模型尚未产出最终总结）→ 置
+/// `WrappingUp` 保持轮询；非工具轮则存储层已推导为 `Done`。纯函数便于单测。
+fn should_delay_close(status: &TopicStatus, last_is_tool: bool) -> bool {
+    *status == TopicStatus::Done && last_is_tool
 }
 
 /// 简报是否需刷新：三条件任一命中即刷新（供 before_round 推进分支使用，纯函数便于单测）。
@@ -1297,5 +1395,83 @@ mod tests {
         let roundtrip: AssistantTopicState =
             serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
         assert_eq!(roundtrip.poll_count, 3);
+    }
+
+    #[test]
+    fn poll_skip_filter_excludes_waiting_user() {
+        // PollAll 跳过清单：Paused / Cancelled / WaitingUser（waiting_user 必须显式排除，
+        // 否则 list_unfinished 天然列出它并导致等待用户课题被轮询空转——边界 1）。
+        assert!(skip_polling(&TopicStatus::Paused));
+        assert!(skip_polling(&TopicStatus::Cancelled));
+        assert!(skip_polling(&TopicStatus::WaitingUser));
+        assert!(!skip_polling(&TopicStatus::Todo));
+        assert!(!skip_polling(&TopicStatus::InProgress));
+        assert!(!skip_polling(&TopicStatus::Done));
+        // WrappingUp 仍需轮询（等待收尾总结）
+        assert!(!skip_polling(&TopicStatus::WrappingUp));
+    }
+
+    #[test]
+    fn delay_close_only_when_done_via_tool_round() {
+        // 边界 2：scope 100% 完成但本轮以工具调用结束 → 延迟关闭（置 WrappingUp）。
+        assert!(should_delay_close(&TopicStatus::Done, true));
+        // 非工具轮（模型已产出文本收尾）→ 正常关闭为 Done。
+        assert!(!should_delay_close(&TopicStatus::Done, false));
+        assert!(!should_delay_close(&TopicStatus::WrappingUp, true));
+        assert!(!should_delay_close(&TopicStatus::InProgress, true));
+    }
+
+    fn brief_topic(status: TopicStatus, scope: Vec<ScopeInItem>) -> Topic {
+        Topic {
+            id: "t1".into(),
+            name: "Test".into(),
+            status,
+            description: String::new(),
+            scope_in: scope,
+            progress: 0,
+            session_id: None,
+            extra: None,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    #[test]
+    fn topic_brief_marks_blocked_items_and_skips_normal_instruction() {
+        // blocked 项渲染 [⏳] + "等待用户"（模型勿选）；completed 项仍 [x]。
+        let topic = brief_topic(
+            TopicStatus::WaitingUser,
+            vec![
+                ScopeInItem {
+                    id: "s1".into(),
+                    goal: "G1".into(),
+                    done_contract: "C1".into(),
+                    status: "blocked".into(),
+                },
+                ScopeInItem {
+                    id: "s2".into(),
+                    goal: "G2".into(),
+                    done_contract: "C2".into(),
+                    status: "completed".into(),
+                },
+            ],
+        );
+        let brief = build_topic_brief(&topic);
+        assert!(brief.contains("[⏳] G1"));
+        assert!(brief.contains("等待用户：C1"));
+        assert!(brief.contains("[x] G2"));
+        // WaitingUser 课题仍走常规推进指令（等待用户介入后由 before hook 解除）
+        assert!(!brief.contains("本轮无需调用工具"));
+    }
+
+    #[test]
+    fn topic_brief_wrapping_up_uses_wrapup_instruction() {
+        // WrappingUp 课题：指令切换为"输出最终总结、本轮无需调用工具"。
+        let wrap = build_topic_brief(&brief_topic(TopicStatus::WrappingUp, vec![]));
+        assert!(wrap.contains("所有事项均已完成"));
+        assert!(wrap.contains("本轮无需调用工具"));
+
+        let normal = build_topic_brief(&brief_topic(TopicStatus::InProgress, vec![]));
+        assert!(!normal.contains("本轮无需调用工具"));
     }
 }

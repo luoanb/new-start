@@ -201,13 +201,20 @@ export type ProviderConfigView = {
 
 // ── Topic / Poller ──
 
-export type TopicStatus = "todo" | "in_progress" | "paused" | "done" | "cancelled";
+export type TopicStatus =
+  | "todo"
+  | "in_progress"
+  | "paused"
+  | "done"
+  | "cancelled"
+  | "waiting_user"
+  | "wrapping_up";
 
 export type ScopeInItem = {
   id: string;
   goal: string;
   done_contract: string;
-  status: string; // "pending" | "completed"
+  status: string; // "pending" | "completed" | "blocked"
 };
 
 export type Topic = {

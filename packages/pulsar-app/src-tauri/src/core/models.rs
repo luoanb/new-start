@@ -460,6 +460,10 @@ pub enum TopicStatus {
     Paused,
     Done,
     Cancelled,
+    /// 全部未完成 scope 项均在等待用户介入（scope 推导产出，PollAll 过滤显式跳过）
+    WaitingUser,
+    /// scope 已 100% 完成但最后一轮以工具调用结束，等待收尾总结（hook 层过渡态）
+    WrappingUp,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
