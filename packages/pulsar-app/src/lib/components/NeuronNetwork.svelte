@@ -115,14 +115,6 @@
     display: flex; align-items: center; gap: var(--space-1);
     font-size: var(--fs-xs); color: var(--color-text-muted);
   }
-  .depth-ctrl select {
-    font-size: var(--fs-sm);
-    padding: 2px 6px;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--color-border);
-    background: var(--color-bg);
-    color: var(--color-text);
-  }
   .mode-toggle { display: flex; border: 1px solid var(--color-border); border-radius: var(--radius-sm); overflow: hidden; }
   .mode-toggle button {
     font-size: var(--fs-xs); padding: 4px 10px; border: none;

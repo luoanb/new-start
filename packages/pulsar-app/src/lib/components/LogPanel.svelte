@@ -113,8 +113,7 @@
 
 <div class="log-panel">
   {#if errorMsg}
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-    <div class="error-banner" onclick={() => (errorMsg = "")}>{errorMsg}</div>
+    <button class="error-banner" type="button" onclick={() => (errorMsg = "")}>{errorMsg}</button>
   {/if}
 
   <div class="toolbar">

@@ -265,7 +265,7 @@
       <span class="title">{t("neuronPanel.drawerTitle")}</span>
       <button
         class="pos-btn"
-        on:click={togglePosition}
+        onclick={togglePosition}
         title={position === "bottom" ? t("neuronPanel.posRight") : t("neuronPanel.posBottom")}
         aria-label={position === "bottom" ? t("neuronPanel.posRight") : t("neuronPanel.posBottom")}
       >
@@ -283,7 +283,7 @@
       </button>
       <button
         class="close"
-        on:click={onClose}
+        onclick={onClose}
         title={t("neuronPanel.close")}
         aria-label={t("neuronPanel.close")}
       >
@@ -296,18 +296,18 @@
 
     <div class="drawer-body">
       <div class="field">
-        <label>{t("neuronEditor.systemType")}</label>
+        <span class="field-label">{t("neuronEditor.systemType")}</span>
         {#if neuron.system_type}
           <div class="system-type-row">
             <span class="type-badge" style:background={systemTypeColor(neuron.system_type)}>
               {neuron.system_type}
             </span>
-            <button class="btn small" on:click={() => (bindMode = true)}>
+            <button class="btn small" onclick={() => (bindMode = true)}>
               {t("neuronEditor.rebind")}
             </button>
             <button
               class="btn small danger"
-              on:click={() => askConfirm({ kind: "unbind" })}
+              onclick={() => askConfirm({ kind: "unbind" })}
             >
               {t("neuronEditor.unbind")}
             </button>
@@ -315,7 +315,7 @@
         {:else}
           <div class="system-type-row">
             <span class="value muted">{t("neuronEditor.systemTypeUnbound")}</span>
-            <button class="btn small" on:click={() => (bindMode = true)}>
+            <button class="btn small" onclick={() => (bindMode = true)}>
               {t("neuronEditor.bind")}
             </button>
           </div>
@@ -325,7 +325,7 @@
             <input
               bind:value={bindTypeInput}
               placeholder={t("neuronEditor.bindPlaceholder")}
-              on:keydown={(e) => {
+              onkeydown={(e) => {
                 if (e.key === "Enter" && bindTypeInput.trim() && !actionBusy)
                   askConfirm({ kind: "bind", type: bindTypeInput.trim() });
               }}
@@ -333,13 +333,13 @@
             <button
               class="btn small primary"
               disabled={actionBusy || !bindTypeInput.trim()}
-              on:click={() => askConfirm({ kind: "bind", type: bindTypeInput.trim() })}
+              onclick={() => askConfirm({ kind: "bind", type: bindTypeInput.trim() })}
             >
               {t("neuronEditor.confirm")}
             </button>
             <button
               class="btn small"
-              on:click={() => {
+              onclick={() => {
                 bindMode = false;
                 bindTypeInput = "";
               }}
@@ -350,56 +350,57 @@
         {/if}
       </div>
       <div class="field">
-        <label>{t("neuronPanel.id")}</label>
+        <span class="field-label">{t("neuronPanel.id")}</span>
         <div class="id-row">
           <span class="value mono id-text" title={neuron.id}>{neuron.id}</span>
-          <button class="copy-btn" on:click={copyId} title={t("neuronPanel.copy")}>
+          <button class="copy-btn" onclick={copyId} title={t("neuronPanel.copy")}>
             {copied ? t("neuronPanel.copied") : t("neuronPanel.copy")}
           </button>
         </div>
       </div>
       <div class="field">
-        <label>{t("neuronPanel.weight")}</label>
+        <span class="field-label">{t("neuronPanel.weight")}</span>
         <div class="stepper">
-          <button class="step-btn" on:click={() => adjustNeuron(-WEIGHT_STEP)} disabled={weightBusy}>−</button>
+          <button class="step-btn" onclick={() => adjustNeuron(-WEIGHT_STEP)} disabled={weightBusy}>−</button>
           <span class="value mono step-val">{neuron.weight.toFixed(4)}</span>
-          <button class="step-btn" on:click={() => adjustNeuron(WEIGHT_STEP)} disabled={weightBusy}>＋</button>
+          <button class="step-btn" onclick={() => adjustNeuron(WEIGHT_STEP)} disabled={weightBusy}>＋</button>
         </div>
         <div class="delta-row">
-          <label class="delta-label">{t("neuronPanel.delta")}</label>
+          <label class="delta-label" for="neuron-delta-input">{t("neuronPanel.delta")}</label>
           <input
+            id="neuron-delta-input"
             class="delta-input"
             type="number"
             step="0.05"
             bind:value={weightDelta}
-            on:keydown={(e) => { if (e.key === "Enter") adjustNeuron(weightDelta); }}
+            onkeydown={(e) => { if (e.key === "Enter") adjustNeuron(weightDelta); }}
           />
-          <button class="btn small primary" on:click={() => adjustNeuron(weightDelta)} disabled={weightBusy}>
+          <button class="btn small primary" onclick={() => adjustNeuron(weightDelta)} disabled={weightBusy}>
             {t("neuronPanel.apply")}
           </button>
         </div>
       </div>
 
       <div class="field">
-        <label>{t("neuronPanel.description")}</label>
+        <label for="neuron-desc">{t("neuronPanel.description")}</label>
         {#if editing}
-          <textarea bind:value={desc} rows="2"></textarea>
+          <textarea id="neuron-desc" bind:value={desc} rows="2"></textarea>
         {:else}
           <span class="value">{neuron.desc || "—"}</span>
         {/if}
       </div>
 
       <div class="field">
-        <label>{t("neuronPanel.content")}</label>
+        <label for="neuron-content">{t("neuronPanel.content")}</label>
         {#if editing}
-          <textarea bind:value={content} rows="6"></textarea>
+          <textarea id="neuron-content" bind:value={content} rows="6"></textarea>
         {:else}
           <span class="value pre">{neuron.content || "—"}</span>
         {/if}
       </div>
 
       <div class="field">
-        <label>{t("neuronPanel.toolIds")}</label>
+        <span class="field-label">{t("neuronPanel.toolIds")}</span>
         {#if editing}
           {#if availableTools.length === 0}
             <span class="value muted">{t("neuronPanel.noToolsAvailable")}</span>
@@ -410,7 +411,7 @@
                   <input
                     type="checkbox"
                     checked={toolIds.includes(tool.name)}
-                    on:change={() => toggleTool(tool.name)}
+                    onchange={() => toggleTool(tool.name)}
                   />
                   <span class="tool-name">{tool.name}</span>
                   <span class="tool-desc">{tool.description}</span>
@@ -428,17 +429,17 @@
       </div>
 
       <div class="field">
-        <label>{t("neuronPanel.createdAt")}</label>
+        <span class="field-label">{t("neuronPanel.createdAt")}</span>
         <span class="value">{fmtTime(neuron.created_at)}</span>
       </div>
       <div class="field">
-        <label>{t("neuronPanel.updatedAt")}</label>
+        <span class="field-label">{t("neuronPanel.updatedAt")}</span>
         <span class="value">{fmtTime(neuron.updated_at)}</span>
       </div>
 
       {#if neuron.system_type}
         <div class="field col behavior-block">
-          <label>{t("neuronEditor.behavior")}</label>
+          <span class="field-label">{t("neuronEditor.behavior")}</span>
           <BehaviorFields
             value={neuron.behavior ?? null}
             onChange={(b) => (behaviorDraft = b)}
@@ -446,7 +447,7 @@
           <button
             class="btn small primary behavior-save"
             disabled={behaviorSaving}
-            on:click={() => void saveBehavior()}
+            onclick={() => void saveBehavior()}
           >
             {behaviorSaving ? t("neuronPanel.saving") : t("neuronEditor.saveBehavior")}
           </button>
@@ -454,7 +455,7 @@
       {/if}
 
       <div class="field col">
-        <label>{t("neuronPanel.connections")} ({connections.length})</label>
+        <span class="field-label">{t("neuronPanel.connections")} ({connections.length})</span>
         {#if connections.length === 0}
           <span class="value muted">—</span>
         {:else}
@@ -462,21 +463,21 @@
             {#each connections as c (c.source + "->" + c.target)}
               {@const selfId = neuron!.id}
               <li>
-                <button class="conn-link" on:click={() => onJumpTo(c.source === selfId ? c.target : c.source)}>
+                <button class="conn-link" onclick={() => onJumpTo(c.source === selfId ? c.target : c.source)}>
                   {c.source === selfId ? c.target : c.source}
                 </button>
                 <div class="stepper small">
-                  <button class="step-btn" on:click={() => adjustEdge(c, -WEIGHT_STEP)} disabled={weightBusy}>−</button>
+                  <button class="step-btn" onclick={() => adjustEdge(c, -WEIGHT_STEP)} disabled={weightBusy}>−</button>
                   <span class="conn-w">w{c.weight.toFixed(2)}</span>
-                  <button class="step-btn" on:click={() => adjustEdge(c, WEIGHT_STEP)} disabled={weightBusy}>＋</button>
+                  <button class="step-btn" onclick={() => adjustEdge(c, WEIGHT_STEP)} disabled={weightBusy}>＋</button>
                   <input
                     class="delta-input small"
                     type="number"
                     step="0.05"
                     bind:value={edgeDelta}
-                    on:keydown={(e) => { if (e.key === "Enter") adjustEdge(c, edgeDelta); }}
+                    onkeydown={(e) => { if (e.key === "Enter") adjustEdge(c, edgeDelta); }}
                   />
-                  <button class="btn small primary" on:click={() => adjustEdge(c, edgeDelta)} disabled={weightBusy}>
+                  <button class="btn small primary" onclick={() => adjustEdge(c, edgeDelta)} disabled={weightBusy}>
                     {t("neuronPanel.apply")}
                   </button>
                 </div>
@@ -492,8 +493,14 @@
     {/if}
 
     {#if confirmAction}
-      <div class="confirm-mask" on:click={() => (confirmAction = null)}>
-        <div class="confirm-box" on:click|stopPropagation>
+      <div
+        class="confirm-mask"
+        role="presentation"
+        onclick={(e) => {
+          if (e.target === e.currentTarget) confirmAction = null;
+        }}
+      >
+        <div class="confirm-box">
           <div class="confirm-title">
             {confirmAction.kind === "bind"
               ? t("neuronEditor.bindConfirmTitle")
@@ -505,13 +512,13 @@
               : t("neuronEditor.unbindConfirmBody")}
           </div>
           <div class="confirm-actions">
-            <button class="btn" on:click={() => (confirmAction = null)} disabled={actionBusy}>
+            <button class="btn" onclick={() => (confirmAction = null)} disabled={actionBusy}>
               {t("neuronEditor.cancel")}
             </button>
             <button
               class="btn primary"
               disabled={actionBusy}
-              on:click={() => void runConfirmAction()}
+              onclick={() => void runConfirmAction()}
             >
               {actionBusy ? t("neuronPanel.saving") : t("neuronEditor.confirm")}
             </button>
@@ -521,16 +528,16 @@
     {/if}
 
     <div class="drawer-foot">
-      <button class="btn primary" on:click={() => onRequestCreateDownstream(neuron!.id)}>
+      <button class="btn primary" onclick={() => onRequestCreateDownstream(neuron!.id)}>
         {t("neuronPanel.createDownstreamFromHere")}
       </button>
       {#if editing}
-        <button class="btn primary" on:click={handleSave} disabled={saving}>
+        <button class="btn primary" onclick={handleSave} disabled={saving}>
           {saving ? t("neuronPanel.saving") : t("neuronPanel.save")}
         </button>
-        <button class="btn" on:click={handleCancel}>{t("neuronPanel.cancel")}</button>
+        <button class="btn" onclick={handleCancel}>{t("neuronPanel.cancel")}</button>
       {:else}
-        <button class="btn" on:click={() => (editing = true)}>{t("neuronPanel.edit")}</button>
+        <button class="btn" onclick={() => (editing = true)}>{t("neuronPanel.edit")}</button>
       {/if}
     </div>
   {/if}
@@ -664,6 +671,13 @@
   }
   label {
     font-size: 11px;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .field-label {
+    font-size: 11px;
+    font-weight: 600;
     color: var(--color-text-muted);
     text-transform: uppercase;
     letter-spacing: 0.03em;

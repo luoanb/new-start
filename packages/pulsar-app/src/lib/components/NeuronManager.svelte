@@ -340,7 +340,7 @@
 
 <div class="neuron-manager">
   <div class="toolbar">
-    <button class="create-btn" on:click={openCreateOrphan}>
+    <button class="create-btn" onclick={openCreateOrphan}>
       ＋ {t("neuronPanel.create")}
     </button>
     <div class="depth">
@@ -409,22 +409,28 @@
   </div>
 
   {#if showCreate}
-    <div class="modal-mask" role="presentation" on:click={cancelCreate}>
-      <div class="modal" role="dialog" aria-modal="true" on:click|stopPropagation>
+    <div
+      class="modal-mask"
+      role="presentation"
+      onclick={(e) => {
+        if (e.target === e.currentTarget) cancelCreate();
+      }}
+    >
+      <div class="modal" role="dialog" aria-modal="true" tabindex="-1">
         <div class="modal-title">{t("neuronPanel.createTitle")}</div>
 
         <div class="modal-row modes">
           <button
             class="mode-btn"
             class:active={createMode === "orphan"}
-            on:click={() => (createMode = "orphan")}
+            onclick={() => (createMode = "orphan")}
           >
             {t("neuronPanel.createOrphan")}
           </button>
           <button
             class="mode-btn"
             class:active={createMode === "downstream"}
-            on:click={() => (createMode = "downstream")}
+            onclick={() => (createMode = "downstream")}
           >
             {t("neuronPanel.createDownstream")}
           </button>
@@ -432,7 +438,7 @@
 
         {#if createMode === "downstream"}
           <div class="modal-row">
-            <label class="modal-label">{t("neuronPanel.createSource")}</label>
+            <span class="modal-label">{t("neuronPanel.createSource")}</span>
             <Select
               bind:value={createSource}
               placeholder={t("neuronPanel.createSourcePlaceholder")}
@@ -442,8 +448,9 @@
         {/if}
 
         <div class="modal-row">
-          <label class="modal-label">{t("neuronPanel.createDescLabel")}</label>
+          <label class="modal-label" for="create-desc">{t("neuronPanel.createDescLabel")}</label>
           <input
+            id="create-desc"
             class="modal-input"
             placeholder={t("neuronPanel.createDescPlaceholder")}
             bind:value={createDesc}
@@ -451,8 +458,9 @@
         </div>
 
         <div class="modal-row">
-          <label class="modal-label">{t("neuronPanel.createContentLabel")}</label>
+          <label class="modal-label" for="create-content">{t("neuronPanel.createContentLabel")}</label>
           <textarea
+            id="create-content"
             class="modal-input"
             rows="4"
             placeholder={t("neuronPanel.createContentPlaceholder")}
@@ -461,7 +469,7 @@
         </div>
 
         <div class="modal-row">
-          <label class="modal-label">{t("neuronPanel.createToolIdsLabel")}</label>
+          <span class="modal-label">{t("neuronPanel.createToolIdsLabel")}</span>
           {#if availableTools.length === 0}
             <span class="modal-hint">{t("neuronPanel.noToolsAvailable")}</span>
           {:else}
@@ -471,7 +479,7 @@
                   <input
                     type="checkbox"
                     checked={createToolIds.includes(tool.name)}
-                    on:change={() => toggleCreateTool(tool.name)}
+                    onchange={() => toggleCreateTool(tool.name)}
                   />
                   <span class="tool-name">{tool.name}</span>
                   <span class="tool-desc">{tool.description}</span>
@@ -486,8 +494,8 @@
         {/if}
 
         <div class="modal-actions">
-          <button class="btn-ghost" on:click={cancelCreate}>{t("neuronPanel.cancel")}</button>
-          <button class="btn-primary" on:click={submitCreate} disabled={creating}>
+          <button class="btn-ghost" onclick={cancelCreate}>{t("neuronPanel.cancel")}</button>
+          <button class="btn-primary" onclick={submitCreate} disabled={creating}>
             {creating ? t("neuronPanel.creating") : t("neuronPanel.createConfirm")}
           </button>
         </div>
@@ -514,55 +522,7 @@
     flex-wrap: wrap;
   }
 
-  .search {
-    flex: 1;
-    min-width: 140px;
-    max-width: 260px;
-    background: var(--color-bg);
-    border: 1px solid var(--color-border);
-    border-radius: 8px;
-    padding: 6px 10px;
-    color: var(--color-text);
-    font-size: 12.5px;
-  }
-  .search:focus {
-    outline: none;
-    border-color: var(--color-primary);
-  }
-
-  .filters {
-    display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
-  }
-  .chip {
-    border: 1px solid var(--color-border);
-    background: var(--color-surface);
-    color: var(--color-text-muted);
-    border-radius: 999px;
-    padding: 3px 10px;
-    font-size: 11px;
-    cursor: pointer;
-    transition:
-      background 0.15s ease,
-      color 0.15s ease,
-      border-color 0.15s ease;
-  }
-  .chip:hover {
-    color: var(--color-text);
-  }
-  .chip.active {
-    color: var(--color-on-primary);
-    background: var(--chip-color, var(--color-primary));
-    border-color: var(--chip-color, var(--color-primary));
-  }
-
   .depth {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .core-select {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -589,17 +549,6 @@
     display: flex;
     align-items: center;
     gap: 6px;
-  }
-
-  .clear {
-    background: none;
-    border: none;
-    color: var(--color-text-muted);
-    cursor: pointer;
-    font-size: 13px;
-  }
-  .clear:hover {
-    color: var(--color-text);
   }
 
   .create-btn {

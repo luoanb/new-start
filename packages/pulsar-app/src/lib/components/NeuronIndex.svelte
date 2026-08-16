@@ -45,7 +45,7 @@
   {:else}
     {#each groups as group (group.type)}
       <div class="group">
-        <button class="group-head" on:click={() => toggle(group.type)}>
+        <button class="group-head" onclick={() => toggle(group.type)}>
           <span class="caret" class:open={!collapsed[group.type]}>▸</span>
           <span class="type-name">{group.type}</span>
           <span class="type-count">{group.items.length}</span>
@@ -55,7 +55,7 @@
             <button
               class="index-row"
               class:selected={n.id === selectedId}
-              on:click={() => onSelect(n.id)}
+              onclick={() => onSelect(n.id)}
               title={n.desc}
             >
               <span

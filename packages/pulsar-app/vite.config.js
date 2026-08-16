@@ -7,7 +7,7 @@ const host = process.env.TAURI_DEV_HOST;
 // 重启后按 URL 复用旧版 CSS/JS 导致样式错乱。dev server 不走 tauri:// 协议，
 // Rust 侧 on_web_resource_request 拦截不到，因此在 dev 中间件统一加 no-store。
 function noStoreDev() {
-  return {
+  return /** @type {import("vite").Plugin} */ ({
     name: "no-store-dev",
     apply: "serve",
     configureServer(server) {
@@ -16,7 +16,7 @@ function noStoreDev() {
         next();
       });
     },
-  };
+  });
 }
 
 // https://vite.dev/config/

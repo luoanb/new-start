@@ -118,6 +118,7 @@
   <div
     class="editor-tabs"
     role="tablist"
+    tabindex="0"
     bind:this={barEl}
     ondragover={handleBarDragOver}
     ondragleave={handleBarDragLeave}

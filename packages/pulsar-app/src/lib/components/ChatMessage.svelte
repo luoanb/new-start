@@ -231,16 +231,15 @@
   .message { display: flex; padding: var(--space-1) var(--space-4); animation: msg-fadein var(--duration-normal) var(--ease-out); }
   @keyframes msg-fadein { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
   .message.user { justify-content: flex-end; }
-  .message.assistant, .message.system, .message.tool { justify-content: flex-start; }
+  .message.assistant, .message.system { justify-content: flex-start; }
   .msg-col { display: flex; flex-direction: column; gap: var(--space-1); width: 100%; min-width: 0; }
   .message.user .msg-col { align-items: flex-end; }
   /* 非 user：子项拉伸全宽，保证折叠块（tool_call/tool_result/nudge/role_context）等宽 */
-  .message.assistant .msg-col, .message.system .msg-col, .message.tool .msg-col, .message.nudge .msg-col, .message.roleContext .msg-col { align-items: stretch; }
+  .message.assistant .msg-col, .message.system .msg-col, .message.nudge .msg-col, .message.roleContext .msg-col { align-items: stretch; }
   /* 默认气泡：仅 user 使用；其余消息无外壳（透明、无边框、无内边距、全宽） */
   .bubble { max-width: 100%; padding: 0; border-radius: var(--radius-md); background: transparent; border: none; }
   .message.user .bubble { max-width: 75%; padding: var(--space-2) var(--space-3); background: var(--color-primary); color: var(--color-on-primary); border: var(--border-width) solid var(--color-primary); border-bottom-right-radius: var(--space-1); }
   .message.system .bubble { padding: 0; text-align: left; }
-  .message.compaction .bubble { text-align: center; padding: var(--space-1) var(--space-3); }
   /* 轮询简报 / 角色切换（B2 role context）：容器左对齐，气泡透明无壳（NudgeBlock 自带外壳与边框）；
      需显式重置 user 气泡泄漏（nudge/role_context 消息 role=user，同时命中 .message.user .bubble） */
   .message.nudge, .message.roleContext { justify-content: flex-start; }

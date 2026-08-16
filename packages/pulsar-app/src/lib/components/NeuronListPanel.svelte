@@ -231,6 +231,13 @@
                 e.stopPropagation();
                 handleEdit(n);
               }}
+              onkeydown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  handleEdit(n);
+                }
+              }}
             >
               <svg
                 viewBox="0 0 24 24"
@@ -255,6 +262,13 @@
                 onclick={(e) => {
                   e.stopPropagation();
                   handleLaunch(n);
+                }}
+                onkeydown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleLaunch(n);
+                  }
                 }}
               >
                 <svg

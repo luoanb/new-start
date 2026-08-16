@@ -28,7 +28,10 @@
   // floating edge variant: auto connects to the nearest edge point of each node
   let variant = $derived<string>((data as { variant?: string } | undefined)?.variant ?? "bezier");
 
+  // 边实例的 source/target 固定；xyflow 的 useInternalNode 需在组件初始化时调用一次
+  // svelte-ignore state_referenced_locally
   const sourceNode = useInternalNode(source);
+  // svelte-ignore state_referenced_locally
   const targetNode = useInternalNode(target);
 
   type Pt = { x: number; y: number };

@@ -146,7 +146,7 @@
         offset={14}
       >
         <div class="node-toolbar">
-          <button class="nt-btn nt-primary" on:click={() => onSetSeed(tid)}>
+          <button class="nt-btn nt-primary" onclick={() => onSetSeed(tid)}>
             {t("neuronPanel.setAsSeed")}
           </button>
         </div>

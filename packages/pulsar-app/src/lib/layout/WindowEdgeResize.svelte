@@ -4,14 +4,14 @@
 </script>
 
 <div class="window-edge-resize" aria-hidden="true">
-  <div class="edge edge-top" />
-  <div class="edge edge-bottom" />
-  <div class="edge edge-left" />
-  <div class="edge edge-right" />
-  <div class="corner corner-tl" />
-  <div class="corner corner-tr" />
-  <div class="corner corner-bl" />
-  <div class="corner corner-br" />
+  <div class="edge edge-top"></div>
+  <div class="edge edge-bottom"></div>
+  <div class="edge edge-left"></div>
+  <div class="edge edge-right"></div>
+  <div class="corner corner-tl"></div>
+  <div class="corner corner-tr"></div>
+  <div class="corner corner-bl"></div>
+  <div class="corner corner-br"></div>
 </div>
 
 <style>

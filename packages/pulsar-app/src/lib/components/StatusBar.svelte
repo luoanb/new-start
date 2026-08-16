@@ -94,6 +94,8 @@
   }
 </script>
 
+<!-- 标题栏承担窗口拖拽/双击最大化，属于桌面 chrome 而非语义内容，跳过静态元素交互 a11y 检查 -->
+<!-- svelte-ignore a11y_no_static_element_interactions a11y_no_noninteractive_element_interactions -->
 <header
   class="status-bar"
   onmousedown={onBarMouseDown}

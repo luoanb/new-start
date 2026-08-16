@@ -14,6 +14,8 @@
     extraClass?: string;
   } = $props();
 
+  // 分割方向与回调在挂载后不变化；useResizable 在内部闭包捕获 options，仅初始化读取一次
+  // svelte-ignore state_referenced_locally
   const resizable = useResizable({
     axis: orientation === "vertical" ? "x" : "y",
     onResize,

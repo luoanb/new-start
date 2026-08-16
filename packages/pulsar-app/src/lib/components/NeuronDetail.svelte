@@ -98,10 +98,10 @@
       <div class="detail-section">
         {#if editing}
           <div class="edit-form">
-            <label>{t("neuronPanel.description")}</label>
-            <textarea bind:value={editDesc} disabled={saving} rows="2"></textarea>
-            <label>{t("neuronPanel.content")}</label>
-            <textarea bind:value={editContent} disabled={saving} rows="4"></textarea>
+            <label for="edit-desc">{t("neuronPanel.description")}</label>
+            <textarea id="edit-desc" bind:value={editDesc} disabled={saving} rows="2"></textarea>
+            <label for="edit-content">{t("neuronPanel.content")}</label>
+            <textarea id="edit-content" bind:value={editContent} disabled={saving} rows="4"></textarea>
             <div class="edit-actions">
               <button class="btn btn-primary" onclick={handleSave} disabled={saving}>
                 {saving ? t("neuronPanel.saving") : t("neuronPanel.save")}
