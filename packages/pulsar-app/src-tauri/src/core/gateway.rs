@@ -25,6 +25,7 @@ use super::{
     neuron_manager::NeuronManager,
     neuron_model::DefaultNeuronModelCaller,
     neuron_store::NeuronStore,
+    neuron::tools::register_system_tools,
     poller::{new_shared_poll_parallelism, Poller, PollerConfigReader, PollerStatus},
     poller_step::AssistantStepRequest,
     providers::ProviderRegistry,
@@ -150,6 +151,23 @@ impl Gateway {
                 Arc::new(RwLock::new(local_registry))
             }
         };
+
+        // NeuronManager 需要共享 tool_registry 的 Arc，因此在 registry 就绪后立即创建，
+        // 以便把神经元管理 System 工具注册进装配链（三处装配统一见 register_system_tools）。
+        let neuron_config = NeuronConfigReader::new(store.root().to_path_buf());
+        let neuron_recycle_interval_ms = neuron_config.recycle_interval_ms()?;
+        let neuron_manager = Arc::new(NeuronManager::new(
+            Arc::clone(&neuron_store),
+            Arc::new(DefaultNeuronModelCaller::new(providers.clone())),
+            neuron_config,
+            Arc::clone(&tool_registry),
+        ));
+        // 测试注入 registry 时跳过（注入集合由测试自持，避免混入 neuron 工具）。
+        if test_tool_registry.is_none() {
+            if let Ok(mut reg) = tool_registry.write() {
+                register_system_tools(&mut reg, Arc::clone(&neuron_manager));
+            }
+        }
         let mcp_server_statuses: Arc<RwLock<Vec<McpServerStatus>>> =
             Arc::new(RwLock::new(Vec::new()));
         let assemble_lock: Arc<tokio::sync::Mutex<()>> = Arc::new(tokio::sync::Mutex::new(()));
@@ -162,15 +180,18 @@ impl Gateway {
             let mcp_server_statuses = Arc::clone(&mcp_server_statuses);
             let assemble_lock = Arc::clone(&assemble_lock);
             let storage_root = store.root().to_path_buf();
+            let neuron_manager_for_assembly = Arc::clone(&neuron_manager);
             tauri::async_runtime::spawn(async move {
                 let _guard = assemble_lock.lock().await;
-                let base_registry = match assemble_local_tools(&storage_root) {
+                let mut base_registry = match assemble_local_tools(&storage_root) {
                     Ok(registry) => registry,
                     Err(error) => {
                         tracing::error!(phase = "tool_config", error = %error, "background mcp assembly: local tools failed");
                         return;
                     }
                 };
+                // base 装配 = 本地内置 + 神经元 System 工具；MCP 随后按状态增量合并。
+                register_system_tools(&mut base_registry, neuron_manager_for_assembly);
                 if let Err(error) = assemble_mcp_progressive(
                     &storage_root,
                     base_registry,
@@ -185,14 +206,6 @@ impl Gateway {
             });
         }
 
-        let neuron_config = NeuronConfigReader::new(store.root().to_path_buf());
-        let neuron_recycle_interval_ms = neuron_config.recycle_interval_ms()?;
-        let neuron_manager = Arc::new(NeuronManager::new(
-            Arc::clone(&neuron_store),
-            Arc::new(DefaultNeuronModelCaller::new(providers.clone())),
-            neuron_config,
-            Arc::clone(&tool_registry),
-        ));
         let compactor = Compactor::new(CompactionConfig::default());
 
         let (step_tx, step_rx) = mpsc::unbounded_channel::<AssistantStepRequest>();
@@ -492,7 +505,9 @@ impl Gateway {
     /// 通过装配互斥与启动期后台装配串行化，保证「以最后一次为准」。
     async fn assemble_and_replace(&self) -> AppResult<()> {
         let _guard = self.assemble_lock.lock().await;
-        let base_registry = assemble_local_tools(&self.store.root())?;
+        let mut base_registry = assemble_local_tools(&self.store.root())?;
+        // base 装配统一含神经元 System 工具，保证保存配置后的重装配与启动装配一致。
+        register_system_tools(&mut base_registry, Arc::clone(&self.neuron_manager));
         let (new_registry, new_statuses) = assemble_mcp_progressive(
             &self.store.root(),
             base_registry,

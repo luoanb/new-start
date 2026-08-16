@@ -127,7 +127,7 @@
         {/if}
         <ToolCallBlock {toolCalls} />
       {:else if isSystem}
-        <p class="content">{message.body.content}</p>
+        <div class="system-prompt">{message.body.content}</div>
       {:else if isCompaction}
         <div class="content compaction-content">
           <MarkdownRenderer content={message.body.content} />
@@ -239,7 +239,8 @@
   /* 默认气泡：仅 user 使用；其余消息无外壳（透明、无边框、无内边距、全宽） */
   .bubble { max-width: 100%; padding: 0; border-radius: var(--radius-md); background: transparent; border: none; }
   .message.user .bubble { max-width: 75%; padding: var(--space-2) var(--space-3); background: var(--color-primary); color: var(--color-on-primary); border: var(--border-width) solid var(--color-primary); border-bottom-right-radius: var(--space-1); }
-  .message.system .bubble, .message.compaction .bubble { text-align: center; padding: var(--space-1) var(--space-3); }
+  .message.system .bubble { padding: 0; text-align: left; }
+  .message.compaction .bubble { text-align: center; padding: var(--space-1) var(--space-3); }
   /* 轮询简报 / 角色切换（B2 role context）：容器左对齐，气泡透明无壳（NudgeBlock 自带外壳与边框）；
      需显式重置 user 气泡泄漏（nudge/role_context 消息 role=user，同时命中 .message.user .bubble） */
   .message.nudge, .message.roleContext { justify-content: flex-start; }
@@ -248,6 +249,18 @@
   .role-label { font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.6; }
   .timestamp { font-size: var(--fs-xs); opacity: 0.4; }
   .content { font-size: var(--fs-base); line-height: 1.5; }
+  /* 系统提示词：参考 TopicPanel 的弱化样式——小字号、muted 色、细边框卡片，降低视觉权重 */
+  .system-prompt {
+    font-size: var(--fs-sm);
+    line-height: 1.5;
+    color: var(--color-text-muted);
+    background: color-mix(in oklch, var(--color-text-muted) 5%, transparent);
+    border: var(--border-width) solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: var(--space-2) var(--space-3);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
   .content.markdown-content :global(p) { margin: 0.3em 0; }
   .content.markdown-content :global(p:first-child) { margin-top: 0; }
   .content.markdown-content :global(p:last-child) { margin-bottom: 0; }

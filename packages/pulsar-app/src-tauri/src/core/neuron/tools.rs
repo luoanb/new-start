@@ -1,6 +1,9 @@
-//! AI tool adapters（保留未注册，等 insert 引入后再启用）。
+//! AI tool adapters（注册为 System 标签工具，供系统模式会话调用）。
 //!
 //! 每个 tool 组合持有 `Arc<NeuronManager>`（Facade），通过其公开方法访问多服务。
+//! 以前 Agent / Assistant 的 AI 创建流程（insert 驱动：neuron.draft_from_model /
+//! neuron.select_one / creator.variant_evolve）不变；本文件是**新增入口**，
+//! 与既有流程共用同一底层（create_neuron / select_candidates）。
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -8,18 +11,55 @@ use serde_json::Value;
 
 use crate::core::{
     error::{AppError, AppResult},
-    models::{CandidateQuery, CreateNeuronInput, NeuronUpdate},
-    tool_registry::Tool,
+    models::{
+        CandidateQuery, CreateNeuronInput, NeuronKindFilter, NeuronUpdate, ToolSource, ToolTag,
+    },
+    tool_registry::{Tool, ToolRegistry},
 };
 
 use super::manager::NeuronManager;
 
-#[allow(dead_code)]
+/// 注册神经元管理 System 工具（系统模式会话自动带上；AI 创建流程不变）。
+///
+/// 全部以 `ToolTag::System + ToolSource::Native` 注册；Native 门禁要求
+/// `inserts/<name>.md` 契约手册存在（由 `register_tagged` 内 `InsertCatalog::require` 强制）。
+pub fn register_system_tools(registry: &mut ToolRegistry, manager: Arc<NeuronManager>) {
+    registry.register_tagged(
+        ToolTag::System,
+        GetNeuronTool::new(Arc::clone(&manager)),
+        ToolSource::Native,
+    );
+    registry.register_tagged(
+        ToolTag::System,
+        ListNeuronsTool::new(Arc::clone(&manager)),
+        ToolSource::Native,
+    );
+    registry.register_tagged(
+        ToolTag::System,
+        UpdateNeuronTool::new(Arc::clone(&manager)),
+        ToolSource::Native,
+    );
+    registry.register_tagged(
+        ToolTag::System,
+        GetNetworkTool::new(Arc::clone(&manager)),
+        ToolSource::Native,
+    );
+    registry.register_tagged(
+        ToolTag::System,
+        CreateNeuronTool::new(Arc::clone(&manager)),
+        ToolSource::Native,
+    );
+    registry.register_tagged(
+        ToolTag::System,
+        SelectNeuronCandidatesTool::new(Arc::clone(&manager)),
+        ToolSource::Native,
+    );
+}
+
 struct GetNeuronTool {
     manager: Arc<NeuronManager>,
 }
 
-#[allow(dead_code)]
 impl GetNeuronTool {
     fn new(manager: Arc<NeuronManager>) -> Self {
         Self { manager }
@@ -60,12 +100,10 @@ impl Tool for GetNeuronTool {
     }
 }
 
-#[allow(dead_code)]
 struct ListNeuronsTool {
     manager: Arc<NeuronManager>,
 }
 
-#[allow(dead_code)]
 impl ListNeuronsTool {
     fn new(manager: Arc<NeuronManager>) -> Self {
         Self { manager }
@@ -79,25 +117,44 @@ impl Tool for ListNeuronsTool {
     }
 
     fn description(&self) -> &str {
-        "List all neurons"
+        "List neurons in pages (page/page_size/search/kind), returns { items, total, has_more }; never returns the full set at once"
     }
 
     fn parameters(&self) -> Value {
-        serde_json::json!({"type": "object", "properties": {}})
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "page": {"type": "integer", "minimum": 0, "default": 0, "description": "Page index, 0-based"},
+                "page_size": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20, "description": "Items per page (hard cap 100)"},
+                "search": {"type": "string", "description": "Optional fuzzy match on desc / id"},
+                "kind": {"type": "string", "enum": ["all", "system", "normal"], "default": "all", "description": "Filter by neuron kind"}
+            }
+        })
     }
 
-    async fn execute(&self, _args: Value) -> AppResult<String> {
-        serde_json::to_string(&self.manager.list_neurons()?)
-            .map_err(|e| AppError::StorageError(e.to_string()))
+    async fn execute(&self, args: Value) -> AppResult<String> {
+        let page = args.get("page").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let page_size = args.get("page_size").and_then(Value::as_u64).unwrap_or(20) as usize;
+        let search = args.get("search").and_then(Value::as_str).map(str::to_string);
+        let kind = args
+            .get("kind")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| "all".to_string());
+        let result = self.manager.list_neurons_page(
+            page,
+            page_size,
+            search.as_deref(),
+            NeuronKindFilter::parse(&kind),
+        )?;
+        serde_json::to_string(&result).map_err(|e| AppError::StorageError(e.to_string()))
     }
 }
 
-#[allow(dead_code)]
 struct UpdateNeuronTool {
     manager: Arc<NeuronManager>,
 }
 
-#[allow(dead_code)]
 impl UpdateNeuronTool {
     fn new(manager: Arc<NeuronManager>) -> Self {
         Self { manager }
@@ -146,12 +203,10 @@ impl Tool for UpdateNeuronTool {
     }
 }
 
-#[allow(dead_code)]
 struct GetNetworkTool {
     manager: Arc<NeuronManager>,
 }
 
-#[allow(dead_code)]
 impl GetNetworkTool {
     fn new(manager: Arc<NeuronManager>) -> Self {
         Self { manager }
@@ -187,12 +242,10 @@ impl Tool for GetNetworkTool {
     }
 }
 
-#[allow(dead_code)]
 struct CreateNeuronTool {
     manager: Arc<NeuronManager>,
 }
 
-#[allow(dead_code)]
 impl CreateNeuronTool {
     fn new(manager: Arc<NeuronManager>) -> Self {
         Self { manager }
@@ -237,12 +290,10 @@ impl Tool for CreateNeuronTool {
     }
 }
 
-#[allow(dead_code)]
 struct SelectNeuronCandidatesTool {
     manager: Arc<NeuronManager>,
 }
 
-#[allow(dead_code)]
 impl SelectNeuronCandidatesTool {
     fn new(manager: Arc<NeuronManager>) -> Self {
         Self { manager }
@@ -290,7 +341,6 @@ impl Tool for SelectNeuronCandidatesTool {
     }
 }
 
-#[allow(dead_code)]
 fn required_str<'a>(args: &'a Value, key: &str) -> AppResult<&'a str> {
     args.get(key)
         .and_then(Value::as_str)
