@@ -31,6 +31,19 @@
     onTogglePanel?: () => void;
   } = $props();
 
+  // ── 响应式：800px 以下为小屏（抽屉模式），用于布局按钮 active 状态切换 ──
+  let isMobile = $state(false);
+  $effect(() => {
+    const mq = window.matchMedia("(max-width: 800px)");
+    const update = () => (isMobile = mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  });
+
+  // 左栏开关按钮：小屏跟随抽屉开关态，大屏跟随栏位可见态
+  let sidebarActive = $derived(isMobile ? drawerSidebar : sidebarVisible);
+
   // ── 自绘标题栏：窗口控制（decorations: false，标题栏由本组件承载）──
   // 仅 Tauri 环境可用；浏览器等环境不构造窗口句柄，窗口控制按钮整体隐藏。
   const appWindow = isTauriEnv ? getCurrentWindow() : null;
@@ -95,10 +108,10 @@
     </svg>
     <span class="app-name">{appName}</span>
 
-    <!-- 小屏触发图标对齐大屏：左栏 + 底栏图标放在 logo/标题右侧，右栏图标在 bar-right -->
+    <!-- 左栏开关按钮（大屏/小屏均显示）：小屏跟随抽屉态，大屏跟随栏位可见态 -->
     <button
-      class="layout-btn mobile-only"
-      class:active={drawerSidebar}
+      class="layout-btn"
+      class:active={sidebarActive}
       onclick={onToggleSidebar}
       title={t("statusBar.toggleSidebar")}
       aria-label={t("statusBar.toggleSidebar")}
@@ -129,20 +142,6 @@
 
   <div class="bar-right">
     <span class="layout-sep"></span>
-
-    <button
-      class="layout-btn desktop-only"
-      class:active={sidebarVisible}
-      onclick={onToggleSidebar}
-      title={t("statusBar.toggleSidebar")}
-      aria-label={t("statusBar.toggleSidebar")}
-    >
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <rect class="frame" x="1.5" y="2.5" width="13" height="11" rx="1.5" />
-        <rect class="fill" x="1.5" y="2.5" width="4.5" height="11" />
-        <line class="frame" x1="6" y1="2.5" x2="6" y2="13.5" />
-      </svg>
-    </button>
 
     <button
       class="layout-btn desktop-only"

@@ -88,7 +88,7 @@
     <p class="empty">{t("pollerPanel.noPoller")}</p>
   {:else}
     <div class="columns">
-      <!-- 左栏：状态 -->
+      <!-- 左栏：状态展示，暂停/触发按钮与状态徽章同行（最右侧） -->
       <div class="col col-status">
         <div class="status-card">
           <div class="status-row">
@@ -100,6 +100,20 @@
             >
               {pollerStatus.state === "running" ? t("pollerPanel.running") : t("pollerPanel.paused")}
             </span>
+            <div class="controls">
+              {#if pollerStatus.state === "running"}
+                <button class="btn btn-warning" onclick={handlePause} disabled={operating}>
+                  {t("pollerPanel.pause")}
+                </button>
+              {:else}
+                <button class="btn btn-primary" onclick={handleResume} disabled={operating}>
+                  {t("pollerPanel.resume")}
+                </button>
+              {/if}
+              <button class="btn" onclick={handleTrigger} disabled={operating}>
+                {operating ? t("pollerPanel.triggering") : t("pollerPanel.trigger")}
+              </button>
+            </div>
           </div>
 
           <div class="status-row">
@@ -126,7 +140,7 @@
         </div>
       </div>
 
-      <!-- 右栏：并发推进 + 恢复/触发 -->
+      <!-- 右栏：并发推进 -->
       <div class="col col-actions">
         <div class="parallelism-card">
           <div class="parallelism-header">
@@ -152,21 +166,6 @@
               {t("pollerPanel.save")}
             </button>
           </div>
-        </div>
-
-        <div class="controls">
-          {#if pollerStatus.state === "running"}
-            <button class="btn btn-warning" onclick={handlePause} disabled={operating}>
-              {t("pollerPanel.pause")}
-            </button>
-          {:else}
-            <button class="btn btn-primary" onclick={handleResume} disabled={operating}>
-              {t("pollerPanel.resume")}
-            </button>
-          {/if}
-          <button class="btn" onclick={handleTrigger} disabled={operating}>
-            {operating ? t("pollerPanel.triggering") : t("pollerPanel.trigger")}
-          </button>
         </div>
       </div>
     </div>
@@ -202,7 +201,7 @@
   .parallelism-footer { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); }
   .parallelism-hint { font-size: var(--fs-xs); color: var(--color-text-muted); line-height: 1.4; }
 
-  .controls { display: flex; gap: var(--space-1); }
+  .controls { display: flex; align-items: center; gap: var(--space-1); margin-left: auto; }
   .btn { font-size: var(--fs-sm); padding: var(--space-1) var(--space-3); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-sm); background: transparent; color: var(--color-text); cursor: pointer; }
   .btn-primary { background: var(--color-primary); color: var(--color-on-primary); border-color: var(--color-primary); }
   .btn-warning { background: var(--color-warning, #f59e0b); color: #fff; border-color: var(--color-warning, #f59e0b); }

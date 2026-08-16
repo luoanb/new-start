@@ -167,8 +167,8 @@
           {#each tools as tool (tool.name)}
             <li class="tool-item">
               <div class="tool-main">
-                <span class="tool-name">{tool.name}</span>
-                <span class="tool-desc">{tool.description}</span>
+                <span class="tool-name" title={tool.name}>{tool.name}</span>
+                <span class="tool-desc" title={tool.description}>{tool.description}</span>
               </div>
               {#if tool.tag !== "normal"}
                 <span
@@ -407,22 +407,16 @@
   .source.src-config .source-dot { background: var(--color-warning); }
   .source.src-mcp .source-dot { background: var(--color-success); }
 
-  /* 标签徽标（core / system；normal 不显式显示） */
+  /* 标签（core / system；normal 不显式显示）：弱化展示，仅文字区分 */
   .tag {
     display: inline-flex;
     align-items: center;
-    padding: 1px var(--space-2);
-    border: var(--border-width) solid var(--color-border);
-    border-radius: var(--radius-full);
     font-size: var(--fs-xs);
-    font-weight: 500;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
     color: var(--color-text-muted);
     flex-shrink: 0;
   }
-  .tag-core { color: var(--color-primary); border-color: var(--color-primary); }
-  .tag-system { color: var(--color-warning); border-color: var(--color-warning); }
+  .tag-core { color: var(--color-primary); }
+  .tag-system { color: var(--color-warning); }
 
   .server-error {
     list-style: none;
