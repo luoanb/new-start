@@ -10,6 +10,7 @@
   import ErrorBanner from "$lib/components/ErrorBanner.svelte";
   import ActivityBar from "$lib/layout/ActivityBar.svelte";
   import Splitter from "$lib/layout/Splitter.svelte";
+  import WindowEdgeResize from "$lib/layout/WindowEdgeResize.svelte";
   import EditorTabs from "$lib/layout/EditorTabs.svelte";
   import ViewHost from "$lib/layout/ViewHost.svelte";
   import ViewContainer from "$lib/layout/ViewContainer.svelte";
@@ -544,6 +545,11 @@
     remoteConnLocked = false;
   }}
 />
+
+{#if isTauriEnv}
+  <!-- 无边框窗口边缘 resize 光标提示（Linux/WebKitGTK 下系统不渲染，见 spec window-edge-resize-cursor） -->
+  <WindowEdgeResize />
+{/if}
 
 {#if !ready}
   <div class="loading-overlay">
