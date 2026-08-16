@@ -1,5 +1,7 @@
 # Spec: 模型空响应处理（根源 + 防御 + 数据清理）
 
+> 历史决策记录（2026-08-14 已实现）。防御过滤的现行落位：v2（Round Pipeline）后 `to_model_messages` 已迁入 `ModelCallInput::project_history`（[model_call_input.rs](../../packages/pulsar-app/src-tauri/src/core/model_call_input.rs#L223-L235)），行为不变——跳过非 tool_call 且 content 空的 assistant 消息。
+
 ## Goal
 
 * 要解决什么问题：模型偶发返回 HTTP 200 + 空 content 时，被 `unwrap_or_default()` 静默吞成空消息并落库；该空消息随后触发 `Model message content cannot be empty` 校验拒绝，锁死会话后续调用。

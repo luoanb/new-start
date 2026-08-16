@@ -8,11 +8,11 @@ use super::{
     model_call_input::ModelCallInput,
     models::{
         ChatModelSelection, ChatResponse, Conversation, ConversationMode, Message, MessageBody,
-        MessageRole, ModelMessage, ModelMessageRole, ToolTag,
+        MessageRole, ModelMessage, Neuron, ToolTag,
     },
     round_executor::RoundExecutor,
     round_resolver::RoundResolver,
-    round_types::{ResolvedRound, RoundOutcome, SessionSeed, SessionState, WireRound},
+    round_types::{RoundOutcome, SessionSeed, SessionState},
 };
 
 /// 触发类型：仅业务编排感知（决定输入侧落库形态），管道不感知。
@@ -45,7 +45,9 @@ pub struct RoundContext {
     pub mode: ConversationMode,
     pub seed: Option<SessionSeed>,
     pub state: SessionState,
-    pub messages: Vec<ModelMessage>,
+    /// 真相源：before 时 = 会话历史；resolve + 追加输入消息后 = 完整 wire（本轮的
+    /// System / RoleContext / 输入 / Nudge 均在此，落库即 `[old_len..]` 增量）。
+    pub messages: Vec<Message>,
     pub model_input: String,
     /// 本轮模型（用户所选）：主对话与 hook 裁决共用，保证同源。
     pub model: ChatModelSelection,
@@ -55,14 +57,13 @@ pub struct RoundContext {
     pub topic_id: Option<String>,
     /// 本轮是否进行选型（业务 hooks 按频率算好；runner 透传）。默认 true = 每轮选型。
     pub reselect: bool,
-    /// 本轮是否落 nudge 输入消息。Poller 轮由 before hook 在简报刷新（生成）时置位：
-    /// 「生成一次，落库一次」，复用缓存简报的推进轮不落重复 nudge。
+    /// 是否将简报构造为 Nudge 消息进 wire（进 wire 必落库）。Poller 轮由 before hook
+    /// 在简报刷新（生成）时置位：「生成一次，进 wire 一次」；复用缓存简报的推进轮不构造
+    /// （历史回灌自带简报）。
     pub nudge_persist: bool,
-    /// ① 本轮身份决策（选型产物）：三段管道的中间数据，hooks 可审计；persist 读 next_state。
-    pub resolved: Option<ResolvedRound>,
-    /// ② 本轮完整 wire（一等产物）：hooks / persist（RoleContext）消费。
-    pub wire: Option<WireRound>,
-    /// ③ 单轮产物：persist 落库（tool_call/tool_result 或 assistant text）。
+    /// ① resolve 后填充：本轮选中神经元（hooks 审计「选了谁」；产物落库盖章）。
+    pub selected_neuron: Option<Neuron>,
+    /// ② 单轮产物：persist 落库（tool_call/tool_result 或 assistant text）。
     pub outcome: Option<RoundOutcome>,
 }
 
@@ -96,10 +97,12 @@ impl ConversationRunner {
         }
     }
 
-    /// 一轮端到端：读会话（seed/state/messages）→ before hooks → 三段管道（resolve →
-    /// assemble → execute）→ after hooks → 落库（输入消息 + 产物 + 会话态）。
+    /// 一轮端到端：读会话（seed/state/messages）→ before hooks → resolve（选型+角色拼接）
+    /// → 写回锚点（发送前）→ 构造输入消息 → persist_input（落 wire 增量）→ execute →
+    /// persist_outcome → after hooks。
     ///
-    /// `tool_override`：本轮工具授权覆盖（Agent 传全部工具；Chat/Assistant 传 None 按 seed 推导）。
+    /// `tool_override`：本轮工具授权覆盖（Agent 传全部工具；Chat/Assistant 传 None 按模式取
+    /// 神经元 tool_ids）；标签并入按 `ConversationMode::tool_tags()`，均落点在 executor。
     pub async fn run_round(
         &self,
         session_id: &str,
@@ -132,31 +135,46 @@ impl ConversationRunner {
                 self.reload(&mut ctx)?;
             }
         }
-        // ① 选型决策：种子分派 → ResolvedRound（role_system / behavior / next_state 显式可见）。
-        let resolved = self
+        // ① 选型 + 角色上下文拼接（resolve 目标单一：获取角色神经元）。
+        // 输出 = old + 角色上下文（首轮 System / 后续 RoleContext），不含本轮输入消息。
+        let old_len = ctx.messages.len();
+        let (with_role, neuron) = self
             .resolver
-            .resolve(ctx.seed.as_ref(), &ctx.state, &ctx.messages, ctx.reselect)
+            .resolve(
+                ctx.seed.as_ref(),
+                ctx.state.last_selected_neuron_id.as_deref(),
+                &ctx.messages,
+                ctx.reselect,
+            )
             .await?;
         tracing::info!(
             phase = "run_round",
             session_id = %ctx.session_id,
-            selected_neuron_id = ?resolved.selected_neuron.as_ref().map(|n| n.id.as_str()),
-            role_len = resolved.role_system.len(),
-            stable_frozen = resolved.next_state.stable_system_frozen,
+            selected_neuron_id = ?neuron.as_ref().map(|n| n.id.as_str()),
+            role_msgs = with_role.len() - old_len,
             "resolve done"
         );
-        // ② wire 组装：ResolvedRound → 模板 / 契约段 / B2 context → 完整模型输入（一等产物）。
-        let wire = ModelCallInput::assemble_round(&resolved, &ctx.messages, &ctx.model_input);
-        // 发送前落输入：首轮 System + RoleContext + 输入消息（wire 组装后即可确定，不依赖
-        // outcome）——模型调用失败/超时也不丢用户消息；产物与会话态在发送后落。
-        self.persist_input(&ctx, &resolved, &wire)?;
-        // ③ 执行：工具授权（override 优先 → behavior 三策略 → 标签并入）→ 模型调用 → 工具执行。
-        // 标签工具按会话模式映射（领域规则在 ConversationMode::tool_tags），runner 仅透传。
+        // 发送前写回锚点（D7）：resolve 已定选中神经元，模型调用前落会话态。
+        // 选中 → 写回其 id；未选中（直连/选型失败）→ 清空锚点。
+        let anchor = neuron.as_ref().map(|n| n.id.clone());
+        if anchor != ctx.state.last_selected_neuron_id {
+            ctx.state.last_selected_neuron_id = anchor;
+            write_session_state(&self.store, &ctx.session_id, &ctx.state)?;
+        }
+        ctx.selected_neuron = neuron;
+        ctx.messages = with_role;
+        // ② 构造输入消息（User / Continue / Nudge → Message，kind 自明）append，构成完整 wire。
+        self.append_input_message(&mut ctx);
+        // 发送前落输入增量：wire[old.len()..]（System / RoleContext / 输入 / Nudge）全落——
+        // 模型调用失败/超时也不丢用户消息；产物在发送后落。
+        self.persist_input(&ctx, old_len)?;
+        // ③ 执行：工具授权落点（override 优先 → neuron.tool_ids → 标签并入 ∩ 注册表）→
+        // 发送前投影 ModelMessage → 模型调用 → 单轮全部工具执行。
         let outcome = self
             .executor
             .execute(
-                &resolved,
-                &wire,
+                ctx.selected_neuron.as_ref(),
+                &ctx.messages,
                 model,
                 ctx.tool_override.clone(),
                 ctx.mode.tool_tags(),
@@ -170,11 +188,9 @@ impl ConversationRunner {
             selected_neuron_id = ?outcome.selected_neuron_id,
             "execute done"
         );
-        ctx.resolved = Some(resolved);
-        ctx.wire = Some(wire);
         ctx.outcome = Some(outcome.clone());
-        // 发送后落产物 + 会话态，再跑 after hooks：课题副作用（如 complete_scope 模型调用）
-        // 失败只影响副作用本身，不丢失本轮模型产物（与旧 AssistantMode 行为一致）。
+        // 发送后落产物（会话态已在发送前写回），再跑 after hooks：课题副作用
+        // （如 complete_scope 模型调用）失败只影响副作用本身，不丢失本轮模型产物。
         self.persist_outcome(&ctx)?;
         tracing::info!(phase = "run_round", session_id = %ctx.session_id, "persist done");
         if let Some(hooks) = hooks {
@@ -187,34 +203,46 @@ impl ConversationRunner {
         })
     }
 
-    /// 原始单轮管道（无会话）：① resolve → ② assemble → ③ execute，不读库、不落库、不跑 hooks。
+    /// 原始单轮管道（无会话）：① resolve（选型+角色拼接）→ 追加输入 → ② execute，
+    /// 不读库、不落库、不跑 hooks、不写回锚点。
     ///
-    /// 供内部非对话调用（assistant 裁决等）复用同一三段逻辑；`state` 进、产物 `next_state` 出。
+    /// 供内部非对话调用（assistant 裁决等）复用同一管道；`last_selected` 仅作选型锚点入参，
+    /// 产物 `selected_neuron_id` 由 executor 盖章返回。
     pub async fn run_raw_round(
         &self,
         seed: Option<SessionSeed>,
-        state: SessionState,
-        messages: Vec<ModelMessage>,
+        last_selected: Option<String>,
+        old_messages: Vec<Message>,
         model_input: &str,
         tool_override: Option<Vec<String>>,
         tool_tags: Vec<ToolTag>,
         reselect: bool,
         model: &ChatModelSelection,
     ) -> AppResult<RoundOutcome> {
-        let resolved = self
+        let (with_role, neuron) = self
             .resolver
-            .resolve(seed.as_ref(), &state, &messages, reselect)
+            .resolve(seed.as_ref(), last_selected.as_deref(), &old_messages, reselect)
             .await?;
-        let wire = ModelCallInput::assemble_round(&resolved, &messages, model_input);
+        let mut wire = with_role;
+        if !model_input.trim().is_empty() {
+            wire.push(Message {
+                role: MessageRole::User,
+                body: MessageBody::Text {
+                    content: model_input.to_string(),
+                },
+                timestamp: now_ms(),
+                neuron_id: None,
+            });
+        }
         self.executor
-            .execute(&resolved, &wire, model, tool_override, tool_tags)
+            .execute(neuron.as_ref(), &wire, model, tool_override, tool_tags)
             .await
     }
 
-    /// 会话历史（模型侧，sanitize 后）。
+    /// 会话历史（模型侧，project_history 投影 + 防御过滤 + sanitize 后）。
     pub fn history_for(&self, session_id: &str) -> AppResult<Vec<ModelMessage>> {
         let conversation = self.store.require_conversation(session_id)?;
-        Ok(Self::to_model_messages(&conversation.messages))
+        Ok(ModelCallInput::project_history(&conversation.messages))
     }
 
     /// Agent 收敛判据：会话最后一条消息是否为工具结果。
@@ -225,22 +253,6 @@ impl ConversationRunner {
             .last()
             .map(|m| matches!(m.body, MessageBody::ToolResult { .. }))
             .unwrap_or(false))
-    }
-
-    fn to_model_messages(messages: &[Message]) -> Vec<ModelMessage> {
-        ModelCallInput::sanitize_tool_pairs(
-            &messages
-                .iter()
-                .filter_map(ModelCallInput::from_message)
-                // 防御：过滤历史脏数据——模型偶发空响应的残留（非 tool_call 且 content 空的
-                // assistant 消息），否则会被 providers 本地校验拒绝，锁死会话后续调用。
-                .filter(|m| {
-                    !(m.role == ModelMessageRole::Assistant
-                        && m.tool_calls.as_ref().map_or(true, |c| c.is_empty())
-                        && m.content.trim().is_empty())
-                })
-                .collect::<Vec<_>>(),
-        )
     }
 
     fn load_context(
@@ -264,7 +276,7 @@ impl ConversationRunner {
         // 先取全部借用值，最后再 move `mode`（ConversationMode 非 Copy）。
         let seed = session_seed(&conversation);
         let state = read_session_state(&conversation);
-        let messages = Self::to_model_messages(&conversation.messages);
+        let messages = conversation.messages.clone();
         Ok(RoundContext {
             session_id: session_id.to_string(),
             mode: conversation.mode,
@@ -278,8 +290,7 @@ impl ConversationRunner {
             topic_id: None,
             reselect: true,
             nudge_persist: false,
-            resolved: None,
-            wire: None,
+            selected_neuron: None,
             outcome: None,
         })
     }
@@ -289,7 +300,7 @@ impl ConversationRunner {
         let conversation = self.store.require_conversation(&ctx.session_id)?;
         let seed = session_seed(&conversation);
         let state = read_session_state(&conversation);
-        let messages = Self::to_model_messages(&conversation.messages);
+        let messages = conversation.messages.clone();
         ctx.mode = conversation.mode;
         ctx.seed = seed;
         ctx.state = state;
@@ -297,91 +308,44 @@ impl ConversationRunner {
         Ok(())
     }
 
-    /// 落库（发送前）：首轮 System（冻结角色）→ RoleContext → 输入消息（按触发形态）。
-    ///
-    /// wire 组装后即可确定（不依赖 outcome）——模型调用失败/超时也不丢用户消息。
-    /// 落库顺序与 wire 注入顺序一致，保证 `from_message` 回灌即还原模型实际所见
-    /// （历史 = wire，严格前缀累积，缓存可命中）。
-    fn persist_input(
-        &self,
-        ctx: &RoundContext,
-        resolved: &ResolvedRound,
-        wire: &WireRound,
-    ) -> AppResult<()> {
-        // 本轮选中神经元（resolve 后即知）：RC / Nudge 等产物类消息盖章（用户输入不盖章）。
-        let stamped = resolved
-            .selected_neuron
-            .as_ref()
-            .map(|n| n.id.clone());
-        // 首轮 System 落库：仅当历史为空且 wire 首条为 System（role_system 非空，如 B2 冻结）
-        // 时，把 wire 的 System 消息落为历史第一条——落库 = wire，回灌即还原。
-        // 内容直接取自 wire，无需判断 stable_system_frozen（那是 resolve 侧 B2 概念）。
-        let first_round_system = if ctx.messages.is_empty() {
-            wire.messages
-                .first()
-                .filter(|m| m.role == ModelMessageRole::System)
-                .map(|m| m.content.clone())
-        } else {
-            None
-        };
-        if let Some(system_content) = first_round_system {
-            self.store.add_message(
-                &ctx.session_id,
-                Message {
-                    role: MessageRole::System,
-                    body: MessageBody::Text { content: system_content },
-                    timestamp: now_ms(),
-                    neuron_id: None,
-                },
-            )?;
-        }
-        // B2 角色 RoleContext 落库（非首轮每轮一条）：位置在用户输入之前，与 wire 注入顺序
-        // 一致；内容与 wire 同源（`assemble_with_context` 提前计算），由 `from_message` 回灌。
-        if let Some(context) = wire.role_context_message.clone() {
-            self.store.add_message(
-                &ctx.session_id,
-                Message {
-                    role: MessageRole::User,
-                    body: MessageBody::RoleContext {
-                        content: context.clone(),
-                    },
-                    timestamp: now_ms(),
-                    neuron_id: stamped.clone(),
-                },
-            )?;
-        }
+    /// 按触发形态构造输入消息（`InputRecord` → `Message`，kind 自明）append 到 `ctx.messages`，
+    /// 与 resolve 的角色上下文一起构成完整 wire（进 wire 即落库）。
+    fn append_input_message(&self, ctx: &mut RoundContext) {
         match ctx.trigger {
             RoundTriggerKind::User => {
-                self.store.add_message(
-                    &ctx.session_id,
-                    Message {
+                ctx.messages.push(Message {
+                    role: MessageRole::User,
+                    body: MessageBody::Text {
+                        content: ctx.model_input.clone(),
+                    },
+                    timestamp: now_ms(),
+                    neuron_id: None,
+                });
+            }
+            RoundTriggerKind::Poller => {
+                // 「生成一次，进 wire 一次」：仅简报刷新（nudge_persist 由 before hook 置位）
+                // 的这一轮构造 Nudge 进 wire（进 wire 必落库）；复用缓存简报的推进轮不构造，
+                // 历史回灌自带简报。
+                if ctx.nudge_persist {
+                    ctx.messages.push(Message {
                         role: MessageRole::User,
-                        body: MessageBody::Text {
+                        body: MessageBody::Nudge {
                             content: ctx.model_input.clone(),
                         },
                         timestamp: now_ms(),
-                        neuron_id: None,
-                    },
-                )?;
-            }
-            RoundTriggerKind::Poller => {
-                // 「生成一次，落库一次」：仅简报刷新（nudge_persist 由 before hook 置位）
-                // 的这一轮落 nudge 输入消息，复用缓存简报的推进轮不落。
-                if ctx.nudge_persist {
-                    self.store.add_message(
-                        &ctx.session_id,
-                        Message {
-                            role: MessageRole::User,
-                            body: MessageBody::Nudge {
-                                content: ctx.model_input.clone(),
-                            },
-                            timestamp: now_ms(),
-                            neuron_id: stamped.clone(),
-                        },
-                    )?;
+                        neuron_id: ctx.selected_neuron.as_ref().map(|n| n.id.clone()),
+                    });
                 }
             }
             RoundTriggerKind::ManualStep | RoundTriggerKind::AgentLoop => {}
+        }
+    }
+
+    /// 落库（发送前）：落 `ctx.messages[old_len..]` 增量，全落（System / RoleContext / 输入 /
+    /// Nudge）——wire 即落库，模型调用失败/超时也不丢用户消息；产物在发送后落。
+    fn persist_input(&self, ctx: &RoundContext, old_len: usize) -> AppResult<()> {
+        for message in &ctx.messages[old_len..] {
+            self.store.add_message(&ctx.session_id, message.clone())?;
         }
         Ok(())
     }
@@ -454,19 +418,14 @@ impl ConversationRunner {
                 },
             )?;
         }
-        // 会话态落库：读 ResolvedRound.next_state（execute 不推进状态）。
-        let next_state = ctx
-            .resolved
-            .as_ref()
-            .map(|r| r.next_state.clone())
-            .unwrap_or_default();
-        write_session_state(&self.store, &ctx.session_id, &next_state)
+        // 会话态已在本轮发送前写回（last_selected 锚点），产物落库不再推进状态。
+        Ok(())
     }
 }
 
 // ---------------------------------------------------------------------------
 // 会话元数据读写（原 call_service.rs 迁入）：`conversation.extra.session` 的
-// 种子 / 运行态 / 发起神经元绑定。仅 Runner 消费（读会话、写回 next_state）。
+// 种子 / 运行态（选型锚点）/ 发起神经元绑定。仅 Runner 消费（读会话、发送前写回锚点）。
 // ---------------------------------------------------------------------------
 
 const EXTRA_SESSION_KEY: &str = "session";
@@ -556,10 +515,9 @@ mod tests {
     use super::*;
     use crate::core::{
         error::{AppError, AppResult},
-        model_call_input::ModelCallInput,
         models::{
             ChatModelSelection, ConversationMode, ModelCallRequest, ModelCallResponse,
-            ModelMessage, ModelMessageRole, Neuron, NeuronCreate, SelectionPolicy,
+            ModelMessage, Neuron, NeuronCreate, SelectionPolicy,
             SessionBehavior, ToolCall, ToolDefinition, ToolPolicy, ToolSource, ToolTag,
         },
         neuron::{
@@ -571,7 +529,6 @@ mod tests {
         neuron_manager::NeuronManager,
         round_executor::{ModelCaller, RoundExecutor},
         round_resolver::RoundResolver,
-        round_types::{ResolvedRound, WireRound},
         tool_registry::Tool,
         tool_registry::ToolRegistry,
     };
@@ -765,28 +722,50 @@ mod tests {
         }
     }
 
-    /// 三段管道驱动（原 `NeuronCallService::converse` 测试语义迁移）：
-    /// ① resolve → ② assemble_round → ③ execute。显式产出中间产物，供断言消费。
+    /// 原始管道驱动（v2 语义，mirror `run_raw_round`）：resolve（选型+角色拼接）→
+    /// 追加输入消息 → execute。产出完整 wire（Vec<Message>）+ 选中神经元，供断言消费。
     async fn run_pipeline(
         h: &Harness,
         seed: Option<SessionSeed>,
-        state: SessionState,
-        messages: Vec<ModelMessage>,
+        last_selected: Option<String>,
+        messages: Vec<Message>,
         model_input: &str,
         tool_override: Option<Vec<String>>,
         tool_tags: Vec<ToolTag>,
         reselect: bool,
-    ) -> AppResult<(ResolvedRound, WireRound, RoundOutcome)> {
-        let resolved = h
+    ) -> AppResult<(Vec<Message>, Option<Neuron>, RoundOutcome)> {
+        let (with_role, neuron) = h
             .resolver
-            .resolve(seed.as_ref(), &state, &messages, reselect)
+            .resolve(seed.as_ref(), last_selected.as_deref(), &messages, reselect)
             .await?;
-        let wire = ModelCallInput::assemble_round(&resolved, &messages, model_input);
+        let mut wire = with_role;
+        if !model_input.trim().is_empty() {
+            wire.push(Message {
+                role: MessageRole::User,
+                body: MessageBody::Text {
+                    content: model_input.to_string(),
+                },
+                timestamp: now_ms(),
+                neuron_id: None,
+            });
+        }
         let outcome = h
             .executor
-            .execute(&resolved, &wire, &model(), tool_override, tool_tags)
+            .execute(neuron.as_ref(), &wire, &model(), tool_override, tool_tags)
             .await?;
-        Ok((resolved, wire, outcome))
+        Ok((wire, neuron, outcome))
+    }
+
+    /// 落库层用户消息构造（测试便捷）。
+    fn user_msg(content: &str) -> Message {
+        Message {
+            role: MessageRole::User,
+            body: MessageBody::Text {
+                content: content.to_string(),
+            },
+            timestamp: now_ms(),
+            neuron_id: None,
+        }
     }
 
     /// 确保选型系统神经元存在（否则 `select_one_from_with_history` 回退按权重选）。
@@ -847,18 +826,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn converse_keeps_history_and_role_in_model_input() {
+    async fn converse_keeps_history_and_input_in_model_input() {
         let h = harness();
-        let history = vec![ModelMessage {
-            role: ModelMessageRole::User,
-            content: "past".into(),
-            tool_calls: None,
-            tool_call_id: None,
-        }];
-        let (_, _, _outcome) = run_pipeline(
+        let history = vec![user_msg("past")];
+        let (wire, neuron, _outcome) = run_pipeline(
             &h,
             None,
-            SessionState::default(),
+            None,
             history,
             "current",
             None,
@@ -867,7 +841,11 @@ mod tests {
         )
         .await
         .unwrap();
-        // 直连：role_system 为空 → Neuron 模板系统段 + 历史 + 本轮输入。
+        // 直连：不选型、不注入角色上下文；wire = 历史 + 本轮输入（无模板层）。
+        assert!(neuron.is_none());
+        assert_eq!(wire.len(), 2);
+        assert_eq!(wire[0].text(), "past");
+        assert_eq!(wire[1].text(), "current");
         let blob = h
             .last_messages
             .lock()
@@ -877,7 +855,10 @@ mod tests {
             .collect::<String>();
         assert!(blob.contains("past"), "history should reach model: {blob}");
         assert!(blob.contains("current"), "current input should reach model: {blob}");
-        assert!(blob.contains("【神经元】"), "neuron template system section expected: {blob}");
+        assert!(
+            !blob.contains("【神经元】"),
+            "v2 无模板层：历史与输入原样投影: {blob}"
+        );
     }
 
     #[test]
@@ -922,14 +903,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn converse_frozen_round_carries_context_message() {
+    async fn converse_role_first_round_system_then_context() {
         let h = harness();
         let iso = insert_plain(&h, "iso");
-        // 第一轮：冻结 system prompt；角色信息在 System（role_context_message 为空，不落 RC）。
-        let (first_resolved, first_wire, _) = run_pipeline(
+        // 第一轮（空历史）：选中神经元角色进 System（落库即稳定，替代 B2 冻结状态机）。
+        let (first_wire, first_neuron, _) = run_pipeline(
             &h,
             Some(SessionSeed::Neuron(iso.id.clone())),
-            SessionState::default(),
+            None,
             vec![],
             "go",
             None,
@@ -938,24 +919,16 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(first_resolved.next_state.stable_system_frozen);
-        assert!(first_resolved.next_state.stable_system_prompt.is_some());
-        assert!(
-            first_wire.role_context_message.is_none(),
-            "首轮角色信息在 System，不产出 RoleContext"
-        );
-        // 第二轮（已冻结 + 有历史）：选中神经元以 [当前角色] 前缀带出 context，
-        // 冻结 system prompt 保持不变（B2 稳定角色）。
-        let (second_resolved, second_wire, _) = run_pipeline(
+        let first = first_wire.first().expect("first round has a system message");
+        assert_eq!(first.role, MessageRole::System);
+        assert_eq!(first.neuron_id, None);
+        let anchor = first_neuron.expect("first round selects").id.clone();
+        // 第二轮（有历史 + 复用轮）：选中神经元以 [当前角色] 前缀带出 RoleContext。
+        let (second_wire, _, _) = run_pipeline(
             &h,
             Some(SessionSeed::Neuron(iso.id.clone())),
-            first_resolved.next_state.clone(),
-            vec![ModelMessage {
-                role: ModelMessageRole::User,
-                content: "previous turn".into(),
-                tool_calls: None,
-                tool_call_id: None,
-            }],
+            Some(anchor),
+            vec![user_msg("previous turn")],
             "again",
             None,
             Vec::new(),
@@ -963,24 +936,21 @@ mod tests {
         )
         .await
         .unwrap();
+        assert_eq!(second_wire.first().unwrap().role, MessageRole::User);
         let ctx = second_wire
-            .role_context_message
-            .expect("frozen round carries role context");
-        assert!(ctx.starts_with("[当前角色]\n"), "ctx: {ctx}");
-        assert!(second_resolved.next_state.stable_system_frozen);
-        assert_eq!(
-            second_resolved.next_state.stable_system_prompt,
-            first_resolved.next_state.stable_system_prompt
-        );
+            .iter()
+            .find(|m| matches!(m.body, MessageBody::RoleContext { .. }))
+            .expect("non-first round carries role context");
+        assert!(ctx.text().starts_with("[当前角色]\n"), "ctx: {}", ctx.text());
     }
 
     #[tokio::test]
     async fn converse_direct_seed_no_selection() {
         let h = harness();
-        let (resolved, _, outcome) = run_pipeline(
+        let (wire, neuron, outcome) = run_pipeline(
             &h,
             None,
-            SessionState::default(),
+            None,
             vec![],
             "hello",
             None,
@@ -990,7 +960,9 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(outcome.selected_neuron_id, None);
-        assert_eq!(resolved.next_state.last_selected_neuron_id, None);
+        assert!(neuron.is_none());
+        assert_eq!(wire.len(), 1, "直连：wire = 仅输入消息");
+        assert_eq!(wire[0].text(), "hello");
         assert_eq!(outcome.response, "echo-0");
         assert_eq!(h.echo_calls.load(Ordering::Relaxed), 1);
         assert_eq!(h.selector_calls.load(Ordering::Relaxed), 0);
@@ -1004,10 +976,10 @@ mod tests {
         for i in 0..7 {
             insert_plain(&h, &format!("cand-{i}"));
         }
-        let (resolved, _, outcome) = run_pipeline(
+        let (_, neuron, outcome) = run_pipeline(
             &h,
             Some(SessionSeed::Global),
-            SessionState::default(),
+            None,
             vec![],
             "go",
             None,
@@ -1018,7 +990,10 @@ mod tests {
         .unwrap();
         assert_eq!(h.selector_calls.load(Ordering::Relaxed), 1);
         let selected = outcome.selected_neuron_id.expect("global round selects");
-        assert!(matches!(resolved.next_state.last_selected_neuron_id.as_deref(), Some(id) if id == selected));
+        assert_eq!(
+            neuron.as_ref().map(|n| n.id.clone()).as_deref(),
+            Some(selected.as_str())
+        );
         assert_ne!(selected, "");
     }
 
@@ -1029,13 +1004,10 @@ mod tests {
         let root = insert_plain(&h, "root");
         let child_a = insert_downstream(&h, &root.id, "child-a");
         let _child_b = insert_downstream(&h, &root.id, "child-b");
-        let (resolved, _, outcome) = run_pipeline(
+        let (_, neuron, outcome) = run_pipeline(
             &h,
             Some(SessionSeed::Global),
-            SessionState {
-                last_selected_neuron_id: Some(child_a.id.clone()),
-                ..Default::default()
-            },
+            Some(child_a.id.clone()),
             vec![],
             "advance",
             None,
@@ -1048,7 +1020,7 @@ mod tests {
         assert!(h.selector_calls.load(Ordering::Relaxed) >= 1);
         let selected = outcome.selected_neuron_id.unwrap();
         assert_eq!(
-            resolved.next_state.last_selected_neuron_id.as_deref(),
+            neuron.as_ref().map(|n| n.id.clone()).as_deref(),
             Some(selected.as_str())
         );
     }
@@ -1058,10 +1030,10 @@ mod tests {
         let h = harness();
         // 普通神经元 seed → 推导默认邻域行为（锚点 = 自身）；邻域候选按策略扩展创建后选型。
         let iso = insert_plain(&h, "iso");
-        let (resolved, _, outcome) = run_pipeline(
+        let (_, neuron, outcome) = run_pipeline(
             &h,
             Some(SessionSeed::Neuron(iso.id.clone())),
-            SessionState::default(),
+            None,
             vec![],
             "hi",
             None,
@@ -1073,7 +1045,7 @@ mod tests {
         assert!(h.selector_calls.load(Ordering::Relaxed) >= 1);
         let selected = outcome.selected_neuron_id.expect("neighborhood selects");
         assert_eq!(
-            resolved.next_state.last_selected_neuron_id.as_deref(),
+            neuron.as_ref().map(|n| n.id.clone()).as_deref(),
             Some(selected.as_str())
         );
         assert_eq!(outcome.response, "echo-0");
@@ -1092,13 +1064,10 @@ mod tests {
             },
             "FIXED-CONTENT",
         );
-        let (resolved, _, outcome) = run_pipeline(
+        let (_, neuron, outcome) = run_pipeline(
             &h,
             Some(SessionSeed::Neuron(sys.id.clone())),
-            SessionState {
-                last_selected_neuron_id: Some("pre".into()),
-                ..Default::default()
-            },
+            Some("pre".into()),
             vec![],
             "go",
             None,
@@ -1107,12 +1076,10 @@ mod tests {
         )
         .await
         .unwrap();
-        // Fixed：选中系统神经元自身，且不改写历史锚点。
+        // Fixed：选中系统神经元自身（runner 发送前写回其 id，覆盖旧锚点）；不调 selector。
         assert_eq!(outcome.selected_neuron_id.as_deref(), Some(sys.id.as_str()));
-        assert_eq!(
-            resolved.next_state.last_selected_neuron_id.as_deref(),
-            Some("pre")
-        );
+        assert_eq!(neuron.as_ref().map(|n| n.id.as_str()), Some(sys.id.as_str()));
+        assert_eq!(h.selector_calls.load(Ordering::Relaxed), 0);
         assert_eq!(h.echo_calls.load(Ordering::Relaxed), 1);
     }
 
@@ -1130,10 +1097,10 @@ mod tests {
             },
             "GLOBAL-BUT-SYSTEM",
         );
-        let (resolved, _, outcome) = run_pipeline(
+        let (_, neuron, outcome) = run_pipeline(
             &h,
             Some(SessionSeed::Neuron(sys.id.clone())),
-            SessionState::default(),
+            None,
             vec![],
             "go",
             None,
@@ -1145,7 +1112,7 @@ mod tests {
         assert!(h.selector_calls.load(Ordering::Relaxed) >= 1);
         let selected = outcome.selected_neuron_id.expect("neighborhood selects");
         assert_eq!(
-            resolved.next_state.last_selected_neuron_id.as_deref(),
+            neuron.as_ref().map(|n| n.id.clone()).as_deref(),
             Some(selected.as_str())
         );
     }
@@ -1163,13 +1130,10 @@ mod tests {
             },
             "no-selection",
         );
-        let (resolved, _, outcome) = run_pipeline(
+        let (_, neuron, outcome) = run_pipeline(
             &h,
             Some(SessionSeed::Neuron(sys.id.clone())),
-            SessionState {
-                last_selected_neuron_id: Some("pre".into()),
-                ..Default::default()
-            },
+            Some("pre".into()),
             vec![],
             "go",
             None,
@@ -1179,7 +1143,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(outcome.selected_neuron_id, None);
-        assert_eq!(resolved.next_state.last_selected_neuron_id, None);
+        assert!(neuron.is_none(), "None 策略不选型，runner 发送前清空锚点");
     }
 
     #[tokio::test]
@@ -1197,7 +1161,7 @@ mod tests {
         let (_, _, outcome) = run_pipeline(
             &h,
             None,
-            SessionState::default(),
+            None,
             vec![],
             "go",
             Some(vec!["echo".into()]),
@@ -1242,7 +1206,7 @@ mod tests {
         let (_, _, outcome) = run_pipeline(
             &h,
             None,
-            SessionState::default(),
+            None,
             vec![],
             "go",
             Some(vec!["echo".into(), "echo2".into()]),
@@ -1280,7 +1244,7 @@ mod tests {
         let err = run_pipeline(
             &h,
             None,
-            SessionState::default(),
+            None,
             vec![],
             "go",
             // echo 未授权：override 空 + 无标签工具 → 声明 echo 必须被拒绝。
@@ -1303,13 +1267,10 @@ mod tests {
             insert_plain(&h, &format!("cand-{i}"));
         }
         let anchor = insert_plain(&h, "anchor");
-        let (resolved, _, outcome) = run_pipeline(
+        let (_, neuron, outcome) = run_pipeline(
             &h,
             Some(SessionSeed::Global),
-            SessionState {
-                last_selected_neuron_id: Some(anchor.id.clone()),
-                ..Default::default()
-            },
+            Some(anchor.id.clone()),
             vec![],
             "advance",
             None,
@@ -1321,7 +1282,7 @@ mod tests {
         assert_eq!(h.selector_calls.load(Ordering::Relaxed), 0, "复用轮不得调 selector");
         assert_eq!(outcome.selected_neuron_id.as_deref(), Some(anchor.id.as_str()));
         assert_eq!(
-            resolved.next_state.last_selected_neuron_id.as_deref(),
+            neuron.as_ref().map(|n| n.id.as_str()),
             Some(anchor.id.as_str())
         );
         assert_eq!(outcome.response, "echo-0");
@@ -1341,10 +1302,7 @@ mod tests {
             let (_, _, outcome) = run_pipeline(
                 &h,
                 Some(SessionSeed::Global),
-                SessionState {
-                    last_selected_neuron_id: Some(anchor.id.clone()),
-                    ..Default::default()
-                },
+                Some(anchor.id.clone()),
                 vec![],
                 "advance",
                 None,
@@ -1372,10 +1330,10 @@ mod tests {
         for i in 0..7 {
             insert_plain(&h, &format!("cand-{i}"));
         }
-        let (resolved, _, outcome) = run_pipeline(
+        let (_, neuron, outcome) = run_pipeline(
             &h,
             Some(SessionSeed::Global),
-            SessionState::default(),
+            None,
             vec![],
             "advance",
             None,
@@ -1387,7 +1345,7 @@ mod tests {
         assert_eq!(h.selector_calls.load(Ordering::Relaxed), 1);
         let selected = outcome.selected_neuron_id.expect("无锚点时复用轮也回退选型");
         assert_eq!(
-            resolved.next_state.last_selected_neuron_id.as_deref(),
+            neuron.as_ref().map(|n| n.id.clone()).as_deref(),
             Some(selected.as_str())
         );
     }
@@ -1406,13 +1364,10 @@ mod tests {
             },
             "FIXED-CONTENT",
         );
-        let (resolved, _, outcome) = run_pipeline(
+        let (_, neuron, outcome) = run_pipeline(
             &h,
             Some(SessionSeed::Neuron(sys.id.clone())),
-            SessionState {
-                last_selected_neuron_id: Some("pre".into()),
-                ..Default::default()
-            },
+            Some("pre".into()),
             vec![],
             "go",
             None,
@@ -1421,12 +1376,9 @@ mod tests {
         )
         .await
         .unwrap();
-        // Fixed：复用轮也读自己 content，不写锚点、不调 selector。
+        // Fixed：复用轮也读自己 content，不调 selector（runner 发送前写回其 id）。
         assert_eq!(outcome.selected_neuron_id.as_deref(), Some(sys.id.as_str()));
-        assert_eq!(
-            resolved.next_state.last_selected_neuron_id.as_deref(),
-            Some("pre")
-        );
+        assert_eq!(neuron.as_ref().map(|n| n.id.as_str()), Some(sys.id.as_str()));
         assert_eq!(h.selector_calls.load(Ordering::Relaxed), 0);
         assert_eq!(outcome.response, "echo-0");
     }
@@ -1454,7 +1406,7 @@ mod tests {
         run_pipeline(
             &h,
             None,
-            SessionState::default(),
+            None,
             vec![],
             "hello",
             None,
@@ -1469,7 +1421,7 @@ mod tests {
         run_pipeline(
             &h,
             None,
-            SessionState::default(),
+            None,
             vec![],
             "hello",
             None,
@@ -1488,7 +1440,7 @@ mod tests {
         run_pipeline(
             &h,
             None,
-            SessionState::default(),
+            None,
             vec![],
             "go",
             Some(Vec::new()),

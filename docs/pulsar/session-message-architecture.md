@@ -21,7 +21,7 @@ flowchart LR
     R["按 body.kind 分支渲染<br/>ChatMessage / ToolCallBlock ..."]
   end
 
-  M -- "message_to_model<br/>(model_call_input.rs)" --> MM
+  M -- "project_history / from_message<br/>(model_call_input.rs)" --> MM
   MM -- "persist_input / persist_outcome<br/>(conversation_runner.rs)" --> M
   M -- "history() / StateChange 重拉" --> R
 
@@ -62,9 +62,7 @@ erDiagram
     json state "运行态"
   }
   STATE {
-    string last_selected_neuron_id
-    string stable_system_prompt
-    bool stable_system_frozen
+    string last_selected_neuron_id "选型锚点（v2 仅此一项）"
   }
   TOPIC {
     string id
@@ -81,12 +79,12 @@ erDiagram
 
 ### 会话级运行态 `SessionState`
 
-存于 `conversation.extra.session.state`，是「跨轮记忆」的唯一持久化载体（定义见 [round_types.rs](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src-tauri/src/core/round_types.rs#L18-L35)）：
+存于 `conversation.extra.session.state`，是「跨轮记忆」的唯一持久化载体（定义见 [round_types.rs](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src-tauri/src/core/round_types.rs#L23-L27)）：
 
-- `last_selected_neuron_id`：选型锚点，邻域推进依据（旧数据从 `topic.extra.assistant` 迁出，读时回退兼容）。
-- `stable_system_prompt` / `stable_system_frozen`：B2 方案——首轮选中 neuron.content 冻结为稳定 System 提示词，后续轮不再变化（规范见 [docs/specs/2026-08-14_16-00_neuron-stable-system-prompt-b2.md](../specs/2026-08-14_16-00_neuron-stable-system-prompt-b2.md)）。
+- `last_selected_neuron_id`：选型锚点，邻域推进依据（旧数据从 `topic.extra.assistant` 迁出，读时回退兼容）。**发送前写回**（resolve 已定选中神经元）：选中 → 写回其 id；未选中 → 清空。
+- B2 冻结字段 `stable_system_prompt` / `stable_system_frozen` **已删除（v2）**：首轮 System 落库后历史自带稳定角色，无需跨轮状态（见 [docs/specs/2026-08-16_18-00_round-resolver-message-truth.md](../specs/2026-08-16_18-00_round-resolver-message-truth.md)）。
 
-读写入口：`read_session_state` / `session_seed` / `write_session_state`（[conversation_runner.rs](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src-tauri/src/core/conversation_runner.rs#L478-L540)）。
+读写入口：`read_session_state` / `session_seed` / `write_session_state`（[conversation_runner.rs](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src-tauri/src/core/conversation_runner.rs#L437-L499)）。
 
 ## 3. 消息数据模型
 
@@ -99,13 +97,13 @@ erDiagram
 | `tool_result` | tool | 工具返回，`tool_call_id` 与声明配对 | ✓ 转 Tool |
 | `compaction` | system | 手动压缩摘要（`summary_of` = 被摘要时间戳集） | ✓ 转 System（`[Previous conversation summary]`） |
 | `nudge` | user | 轮询推进简报（落库与 wire 同源） | ✓ 转 User 文本（回灌，`nudge_persist` 控制条数） |
-| `role_context` | user | B2 冻结后每轮注入的选中神经元（`[当前角色]` 前缀） | ✓ 转 User 文本（回灌；首轮无 RC，角色在 System） |
+| `role_context` | user | resolve 每轮拼接的选中神经元（`[当前角色]` 前缀；首轮无 RC，角色在 System） | ✓ 转 User 文本（回灌） |
 
-> `Message.neuron_id`：assistant 模式每轮选中神经元，落库产物消息统一盖章；用户输入消息不盖章（见 [conversation_runner.rs](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src-tauri/src/core/conversation_runner.rs#L247-L251)）。评分区间由 `interval_neuron_ids` 按盖章边界推导。
+> `Message.neuron_id`：assistant 模式每轮选中神经元，落库产物消息统一盖章；RC / Nudge 消息也盖章（见 [round_resolver.rs](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src-tauri/src/core/round_resolver.rs#L235-L242)）；用户输入与首轮 System 不盖章。评分区间由 `interval_neuron_ids` 按盖章边界推导。
 
 ### 3.1 落库 → 模型映射
 
-`MessageAssembler::from_message`（[model_call_input.rs](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src-tauri/src/core/model_call_input.rs#L282-L330)）+ `ConversationRunner::to_model_messages`（[conversation_runner.rs](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src-tauri/src/core/conversation_runner.rs#L228-L246)）：
+`ModelCallInput::project_history`（[model_call_input.rs](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src-tauri/src/core/model_call_input.rs#L223-L235)，`from_message` 逐条投影）：
 
 1. 逐条映射（见上表）；`Nudge` / `RoleContext` 均回灌为 User 文本（落库顺序 = wire 注入顺序）。
 2. 防御过滤：模型偶发空响应的残留（非 tool_call 且 content 空的 assistant 消息）。
@@ -113,7 +111,7 @@ erDiagram
 
 ### 3.2 模型 → 落库映射（persist_outcome 产物）
 
-发送后经 `persist_outcome`（[conversation_runner.rs](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src-tauri/src/core/conversation_runner.rs#L389-L455)）把 `RoundOutcome` 落库：
+发送后经 `persist_outcome`（[conversation_runner.rs](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src-tauri/src/core/conversation_runner.rs#L354-L423)）把 `RoundOutcome` 落库：
 
 - 有 tool_calls → 1 条 `assistant(tool_call)` + 每个声明 1 条 `tool(tool_result)`（一一配对，不落 assistant text）。
 - 无 tool_calls → 1 条 `assistant(text)`（`outcome.response`）。
@@ -136,59 +134,54 @@ erDiagram
 ```mermaid
 flowchart TB
   subgraph run["ConversationRunner.run_round<br/>(conversation_runner.rs)"]
-    LC["load_context<br/>读会话：seed / state / messages<br/>（require_conversation → 转 ModelMessage）"]
+    LC["load_context<br/>读会话：seed / state / messages（Vec&lt;Message&gt; 真相源）"]
     BH["before hooks<br/>（RoundHooks 可选）"]
     SW{"before hook 切换了会话？<br/>（match_topic switch）"}
     RV["reload<br/>重读上下文"]
-    RZ["① resolve<br/>RoundResolver：种子分派 → ResolvedRound"]
-    AM["② assemble<br/>MessageAssembler：ResolvedRound + 历史 + 输入<br/>→ WireRound"]
-    PI["persist_input（发送前）<br/>首轮 System → RoleContext → 输入消息"]
-    EX["③ execute<br/>RoundExecutor：工具授权 → 模型调用<br/>→ 单轮工具执行 → RoundOutcome"]
-    PO["persist_outcome（发送后）<br/>产物 → 会话态"]
+    RZ["① resolve<br/>RoundResolver：选型 + 角色上下文拼接<br/>→ (with_role, neuron)"]
+    AN["写回锚点（发送前）<br/>last_selected_neuron_id"]
+    AI["构造输入消息<br/>append_input_message（User / Nudge）"]
+    PI["persist_input（发送前）<br/>wire[old_len..] 增量，全落"]
+    EX["② execute<br/>RoundExecutor：工具授权 → 投影 ModelMessage<br/>→ 模型调用 → 单轮工具执行 → RoundOutcome"]
+    PO["persist_outcome（发送后）<br/>产物落库"]
     AH["after hooks<br/>（课题副作用，失败不丢产物）"]
   end
 
   LC --> BH --> SW
   SW -- "是" --> RV --> RZ
   SW -- "否" --> RZ
-  RZ --> AM --> PI --> EX --> PO --> AH
+  RZ --> AN --> AI --> PI --> EX --> PO --> AH
 ```
 
-要点（[conversation_runner.rs](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src-tauri/src/core/conversation_runner.rs#L103-L183)）：
+要点（[conversation_runner.rs](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src-tauri/src/core/conversation_runner.rs#L106-L204)）：
 
-- **两段式落库**：`persist_input`（发送前）落首轮 System → RoleContext → 输入消息，不依赖 outcome——模型调用失败/超时也不丢用户消息；`persist_outcome`（发送后）落产物与会话态。
+- **真相源唯一**：管道内全程 `Vec<Message>`（`MessageBody` 带 kind，自描述），无 `ResolvedRound` / `WireRound` 中间层；发送前统一 `project_history` 投影为 `ModelMessage`。
+- **进 wire 必落库**：`persist_input`（发送前）落 `wire[old_len..]` 全量增量（System / RoleContext / 输入 / Nudge），不依赖模型产物——模型调用失败/超时也不丢用户消息；`persist_outcome`（发送后）落产物。
+- **锚点发送前写回**：resolve 已定选中神经元，模型调用前落 `last_selected_neuron_id`（选中 → 写回其 id；未选中 → 清空）。
 - **先落库再跑 after hooks**：`complete_scope` 等副作用失败只影响副作用本身，不丢失本轮模型产物。
 - **hook 与主对话同源**：`RoundContext` 携带 `model` / `messages` / `state`，before/after hooks 共享，裁决与主对话用同一模型。
-- **工具标签**：`RoundInput.tool_tags = ctx.mode.tool_tags()`，service 只做数据驱动并入（规范见 [docs/micro_specs/2026-08-16_hoist-tool-tag-mapping.md](../micro_specs/2026-08-16_hoist-tool-tag-mapping.md)）。
+- **工具标签**：`execute(tool_tags) = ctx.mode.tool_tags()`，executor 只做数据驱动并入（规范见 [docs/micro_specs/2026-08-16_hoist-tool-tag-mapping.md](../micro_specs/2026-08-16_hoist-tool-tag-mapping.md)）。
 
 ### 4.3 persist 两段式落库顺序
 
 ```mermaid
 flowchart TB
   subgraph in["persist_input（发送前，wire 组装后即可确定）"]
-    PI0{"历史为空 且<br/>wire 首条为 System?"}
-    PI0 -- "是" --> PS["落 system(text)<br/>内容 = wire System 消息<br/>（首轮角色冻结，不盖章）"]
-    PI0 -- "否" --> PRC
-    PS --> PRC{"role_context_message?"}
-    PRC -- "有" --> RC["落 user(role_context)<br/>（产物之前，盖章 neuron_id）"]
-    PRC -- "无" --> PIT{"trigger 形态"}
-    RC --> PIT
-    PIT -- "User" --> U["落 user(text)<br/>model_input"]
-    PIT -- "Poller" --> N["nudge_persist ?<br/>落 user(nudge)"]
-    PIT -- "ManualStep / AgentLoop" --> X["不落输入消息"]
+    IN["wire[old_len..] 增量<br/>resolve 角色上下文（首轮 System / 后续 RoleContext）<br/>+ 输入消息（User / Nudge）"]
+    IN --> PIS["逐条 add_message，全落<br/>System 不盖章；RC / Nudge 盖章 neuron_id"]
   end
   subgraph out["persist_outcome（发送后，依赖 outcome）"]
     OT{"outcome.tool_calls 非空?"}
     OT -- "是" --> TC["落 assistant(tool_call)<br/>+ 逐条 tool(tool_result)"]
     OT -- "否" --> TX["落 assistant(text)<br/>outcome.response"]
-    TC --> ST; TX --> ST
-    ST["write_session_state<br/>会话态写回 extra.session.state"]
+    TC --> E; TX --> E
+    E["结束（会话态已在本轮发送前写回）"]
   end
 
-  EX["③ execute 完成"] --> OT
+  EX["② execute 完成"] --> OT
 ```
 
-（实现见 [conversation_runner.rs](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src-tauri/src/core/conversation_runner.rs#L300-L455)）
+（实现见 [conversation_runner.rs](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src-tauri/src/core/conversation_runner.rs#L346-L423)）
 
 ## 5. 模式路由
 
@@ -269,15 +262,16 @@ sequenceDiagram
   RUN->>RUN: load_context（读会话 seed/state/messages）
   RUN->>AS: before_round hooks（resolve_bound_topic → score_feedback → match_topic）
   AS-->>RUN: 可能 switch 会话 → reload
-  RUN->>RV: resolve（种子分派 → ResolvedRound）
-  RUN->>RUN: assemble（ResolvedRound + 历史 + 输入 → WireRound）
-  RUN->>RUN: persist_input（发送前：首轮 System → RoleContext → 输入消息）
-  RUN->>EX: execute（WireRound + 工具授权）
+  RUN->>RV: resolve（选型 + 角色上下文拼接 → (with_role, neuron)）
+  RUN->>RUN: 发送前写回锚点 last_selected_neuron_id
+  RUN->>RUN: append 输入消息 → persist_input（发送前：wire[old_len..] 增量）
+  RUN->>EX: execute(neuron, ctx.messages, 工具授权)
+  EX->>EX: project_history 投影（Nudge / RoleContext → User 文本）
   EX->>LLM: call_model（含 [当前角色] RoleContext + 标签工具）
   LLM-->>EX: ModelCallResponse（文本 或 tool_calls）
   EX->>EX: 执行本轮全部工具（结果拼接进 response）
   EX-->>RUN: RoundOutcome
-  RUN->>RUN: persist_outcome（发送后：产物 → 会话态）
+  RUN->>RUN: persist_outcome（发送后：产物落库）
   RUN->>AS: after_round hooks（complete_scope → tick_round_counters）
   RUN-->>GW: ChatResponse
   GW->>ST: unregister(conversation_id)
@@ -324,7 +318,7 @@ sequenceDiagram
 | `Sessions` | SessionTracker 变化 | 刷新运行中会话列表 |
 | `Topics` | 课题副作用（打分/验收/切换） | 刷新 TopicPanel |
 
-前端 `dataStore` 监听后按 kind 重拉，`nudge` / `role_context` 消息按 `body.kind` 渲染但不作为轮起点（B2 规范要求，见 [2026-08-14_16-00_neuron-stable-system-prompt-b2.md](../specs/2026-08-14_16-00_neuron-stable-system-prompt-b2.md#L45-L49)）。
+前端 `dataStore` 监听后按 kind 重拉，`nudge` / `role_context` 消息按 `body.kind` 渲染但不作为轮起点（role_context 落库语义见 [docs/specs/2026-08-16_18-00_round-resolver-message-truth.md](../specs/2026-08-16_18-00_round-resolver-message-truth.md)）。
 
 ## 10. 相关文档
 
@@ -334,5 +328,6 @@ sequenceDiagram
 | [storage.md](./storage.md) | 会话 JSON 存储布局与一致性规则 |
 | [model-call-sites.md](./model-call-sites.md) | 模型调用点对照 |
 | [assistant-prompt-synthesis.md](./assistant-prompt-synthesis.md) | 助手模式各模型调度点的 prompt 拼装 |
-| [docs/specs/2026-08-14_16-00_neuron-stable-system-prompt-b2.md](../specs/2026-08-14_16-00_neuron-stable-system-prompt-b2.md) | B2：稳定系统提示词 + RoleContext 落库 |
+| [docs/specs/2026-08-16_18-00_round-resolver-message-truth.md](../specs/2026-08-16_18-00_round-resolver-message-truth.md) | Round Pipeline v2：真相源 `Vec<Message>`、删 B2 冻结状态机、工具授权按模式 |
+| [docs/specs/2026-08-14_16-00_neuron-stable-system-prompt-b2.md](../specs/2026-08-14_16-00_neuron-stable-system-prompt-b2.md) | B2：稳定系统提示词 + RoleContext 落库（v2 已取代其冻结状态机，首轮 System 落库保留） |
 | [docs/micro_specs/2026-08-16_hoist-tool-tag-mapping.md](../micro_specs/2026-08-16_hoist-tool-tag-mapping.md) | 模式 → 标签工具映射上移 |

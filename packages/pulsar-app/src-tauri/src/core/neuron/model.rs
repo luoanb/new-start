@@ -32,7 +32,7 @@ impl DefaultNeuronModelCaller {
         template: ModelAppendTemplate,
     ) -> AppResult<String> {
         let wire = ModelCallInput::assemble(&[], role_system, content, user_input, template);
-        self.call_model(wire.messages).await
+        self.call_model(wire).await
     }
 }
 

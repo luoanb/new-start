@@ -1,9 +1,12 @@
 # Spec: 神经元稳定系统提示词 + 独立角色消息（B2）
 
+> **已取代（2026-08-16）**：本方案的「冻结状态机」部分（`stable_system_prompt` / `stable_system_frozen` / `freeze_or_replace` / `inject_context`）已被 [2026-08-16_18-00_round-resolver-message-truth.md](./2026-08-16_18-00_round-resolver-message-truth.md)（Round Pipeline v2）取代——首轮 System 直接落库后历史自带稳定角色，无需跨轮状态；`SessionState` 仅存选型锚点 `last_selected_neuron_id`。保留的结论：**首轮角色进 System（落库）、后续轮角色进 RoleContext（`[当前角色]` 前缀，落库回灌）**、`MessageBody::RoleContext` 形态。冻结字段若存在于旧会话 `extra.session.state`，读取时按 serde `default` 忽略。本文保留为决策记录，实现以 v2 spec 与代码为准。
+
 ## Goal
 
 - 要解决什么问题：当前每轮将选中 neuron.content 替换 System 消息，导致首条 System 提示词频繁变化，模型 KV 缓存失效、角色不一致。
 - 验收结果：首轮选中的 neuron.content 冻结为稳定 System 提示词，后续轮次选中的神经元作为独立 RoleContext 消息插入（与真实用户输入区分），System 消息不再变化。
+  > v2 实现方式：不冻结、不跨轮状态——首轮 System 落库为历史第一条（天然稳定），后续轮 `resolve` 的 `attach_role` 每轮在历史后追加 RoleContext（见 [round_resolver.rs](../../packages/pulsar-app/src-tauri/src/core/round_resolver.rs) 实现）。
 
 ## Done Contract
 

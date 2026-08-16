@@ -29,12 +29,13 @@ v1 三段管道（Resolver / Assembler / Executor）引入 `ResolvedRound` / `Wi
 | D2 | **删类型**：`ResolvedRound`、`WireRound` 整体删除；`SessionState` 删 `stable_system_prompt` / `stable_system_frozen`，仅留 `last_selected_neuron_id` |
 | D3 | **删冻结逻辑**：`freeze_or_replace` / `inject_context` / `next_state` / `role_system` / behavior 推导全部删除 |
 | D4 | **拼接内聚于 resolve**：选中神经元时——首轮（old 为空）→ `System(neuron.content)` + 输入由 runner 追加；非首轮 → `RoleContext("[当前角色]\n" + neuron.content)`。无选中神经元 → 仅追加输入消息 |
+| D4a | **insert 契约段并入角色内容（方案 1，不改追加流程）**：选中神经元带 `behavior.insert_id` 时，契约段并入本轮角色消息内容（首轮 System 或非首轮 RoleContext），`format!("{}\n\n{}", 角色内容, InsertCatalog::require(insert_id))`；不改 attach_role 追加分支、不加独立消息。注入条件：`old_messages` 中无消息内容包含该契约段——主对话首轮拼、后续轮历史回灌自带不重复；裁决调用（`run_raw_round`）历史无契约段 → 每轮拼接。v1 的 `insert_or_empty` 契约段注入由 `assemble_with_context` 迁入 `attach_role`，恢复裁决模型收到的硬契约（action/scope_in 等） |
 | D5 | **输入消息 runner 管**：`InputRecord`（User / Continue / Nudge）→ `Message`（kind 自明）由 runner 构造，append 到 resolve 结果构成 wire |
 | D6 | **进 wire 必落库**：`persist_input` 直接落 `wire[old.len()..]` 增量，System / RoleContext / Nudge / 输入全部落（取消 nudge_persist 例外） |
 | D7 | **last_selected 发送前写回**：resolve 返回选中神经元后、模型调用前，把 id 写入 `SessionState` |
 | D8 | **工具授权按会话模式**：落点在 `round_executor::execute`；`ConversationMode::tool_tags()` 标签并入机制保留，`tool_override` 参数保留（Agent 业务层显式授权） |
 | D9 | **保留外部契约**：`ModelCallInput::assemble` / `replace_system` / `from_message` / `sanitize_tool_pairs` 保留（selection / evolution / compactor / neuron-model / tui / cli 6 个独立组装点仍使用，均传空历史） |
-| D10 | **删 `assemble_round` / `assemble_with_context`**：主链路不再调用；`insert_id` 契约段随删除（主链路已无使用） |
+| D10 | **删 `assemble_round` / `assemble_with_context`**：主链路不再调用；**契约段注入迁入 `attach_role`（D4a 形态 B）**，不再随函数删除 |
 
 ## 4. 新实体与接口
 
@@ -72,8 +73,8 @@ impl RoundResolver {
     /// 普通 Neuron 邻域、系统 Neuron behavior 三策略+宽容回退）、reuse_selected_neuron 降频、
     /// 单候选短路。
     ///
-    /// 拼接：选中神经元且 old 为空 → 追加 System(neuron.content)；
-    ///       选中神经元且 old 非空 → 追加 RoleContext("[当前角色]\n" + neuron.content)；
+    /// 拼接：选中神经元且 old 为空 → 追加 System(neuron.content)；带 insert_id 时
+    ///       契约段并入角色内容（首轮 System / 非首轮 RoleContext，历史已含则不拼，D4a）；
     ///       未选中 → 原样返回 old。
     pub async fn resolve(
         &self,
@@ -185,7 +186,7 @@ Runner.run_round:
   读会话 → old = Message[]（落库真相源）
   → before hooks（可改 seed / reselect / input）
   → ① resolver.resolve(seed, last_selected, &old)
-       → (with_role, neuron)          // with_role = old + [System | RoleContext]，不含输入
+       → (with_role, neuron)          // with_role = old + [System(角色+契约) | RoleContext(角色+契约)]，不含输入
   → 写回 SessionState.last_selected_neuron_id（发送前）
   → input_msg = 按 trigger 构造（User / Continue / Nudge → Message，kind 自明）
   → wire = with_role + [input_msg]
@@ -205,6 +206,7 @@ Runner.run_round:
 | B3 | 工具授权：`behavior.tools` 三策略 → 按会话模式（Assistant/System 取 `neuron.tool_ids`）；标签并入与 override 机制不变 |
 | B4 | 首轮 System 落库内容 = `neuron.content`（不再经 `stable_system_frozen` 判断，该字段已删） |
 | B5 | 角色上下文识别靠 `MessageBody::RoleContext`（kind），不再依赖 `[当前角色]` 前缀推断（前缀保留为自描述内容，供模型与审计阅读） |
+| B6 | **裁决契约段恢复（回归 v1）**：选中神经元带 `behavior.insert_id` 时，契约段并入角色内容（方案 1，D4a）——修复 r1-r8 重构中契约段随 `assemble_with_context` 删除导致的裁决模型收不到 action/scope_in 硬契约（曾致 `match topic create requires non-empty scope_in` 报错与裁决 JSON 解析失败） |
 
 ## 7. 迁移矩阵
 
@@ -215,7 +217,7 @@ Runner.run_round:
 | `SessionState.stable_system_prompt` / `stable_system_frozen` | 删除（首轮 System 落库即稳定） |
 | `resolve(seed, state, history: &[ModelMessage], reselect) -> ResolvedRound` | `resolve(seed, last_selected, old: &[Message]) -> (Vec<Message>, Option<Neuron>)` |
 | `freeze_or_replace` / `inject_context` / `next_state` / `role_system` | 删除 |
-| `assemble_round` / `assemble_with_context` | 删除（拼接进 resolve + runner 追加输入） |
+| `assemble_round` / `assemble_with_context` | 删除（拼接进 resolve + runner 追加输入）；**契约段注入迁入 `attach_role`（D4a 方案 1：并入角色内容）** |
 | `to_model_messages`（runner） | 迁入 `round_executor::execute`（投影 + 防御 + sanitize） |
 | `persist_input`（三态落库 + nudge_persist 例外） | 落 `wire[old.len()..]` 增量，全落 |
 | 会话态写回 `resolved.next_state` | `last_selected_neuron_id` 发送前写回 |
@@ -236,7 +238,7 @@ Runner.run_round:
 
 ## 9. 测试计划
 
-- **Resolver 单测**：种子三路分派全分支；降频（reselect=false 且锚点 → 沿用）；拼接规则（首轮空历史 → System；非空 → RoleContext 前缀；未选中 → 原样）。
+- **Resolver 单测**：种子三路分派全分支；降频（reselect=false 且锚点 → 沿用）；拼接规则（首轮空历史 → System；非空 → RoleContext 前缀；未选中 → 原样）；**契约段方案 1（带 insert_id：System/RoleContext 内容含契约段；历史已含契约 → 不重复拼接）**。
 - **Executor 单测**：发送前投影（Nudge/RoleContext → User 文本）；sanitize 配对保留；工具授权按模式四象限；未授权工具拒绝；多 tool_calls 全执行。
 - **Runner 集成**：persist_input 增量落库（System / RC / Nudge 全落）；last_selected 发送前写回；产物落库盖章。
 - **业务回归**：Chat（无选型无工具）、Agent（override 全工具多轮）、Assistant / System（神经元工具 + 标签）行为不变；`call_judgement` 走 `run_raw_round` 不落库。
@@ -255,13 +257,16 @@ Runner.run_round:
 - [x] 删 B2 冻结状态机：首轮 System 落库即稳定，`SessionState` 仅留锚点
 - [x] 三个行为变化确认：进 wire 必落库 / last_selected 发送前写回 / 工具授权按会话模式
 - [x] 保留边界确认：`assemble` / `from_message` / `sanitize_tool_pairs` / `replace_system` / 会话读写 / 选型硬规则
-- [ ] 进入实现（r1→r9，待用户批准）
+- [x] 进入实现（r1→r9）——r1-r7 代码与测试、r8 编译与测试验收、r9 文档同步均已完成
 
 ## 12. Change Log
 
 | 日期 | 变更 |
 |---|---|
 | 2026-08-16 | 初稿：推翻三段管道 v1，resolve 收拢（选型+拼接合一），真相源收敛为 `Vec<Message>`，删 B2 冻结状态机，工具授权按会话模式 |
+| 2026-08-16 | 实现完成（r1→r8）：`cargo check --all-targets` 零 error / warning；`cargo test --all-targets` 221 passed 全绿。锚点语义实义化：**发送前统一按 resolve 结果写回**——选中 → 写回其 id（含 Fixed 系统神经元，v1 为保持 pre）；未选中 → 清空 |
+| 2026-08-16 | r9 文档同步完成：msgs-lifecycle / session-message-architecture 更新为 v2 语义；micro_spec（rolecontext-refill）与 B2 spec 标记被取代 |
+| 2026-08-16 | **契约段回归修复（D4a/B6）**：发现 r1-r8 重构误删 `insert_id` 契约段注入（D10 原述「契约段随删除」），裁决模型收不到 action/scope_in 硬契约，致 `match topic create requires non-empty scope_in` 报错与裁决 JSON 解析失败。修正：契约段注入迁入 `attach_role`，**方案 1（并入角色内容，不改追加流程）**，历史已含契约则不重复；裁决调用（历史无契约）每轮拼接 |
 
 ## 13. Validation / Resume
 

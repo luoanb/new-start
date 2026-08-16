@@ -24,14 +24,14 @@ use super::{
     error::{AppError, AppResult},
     models::{
         ChatModelSelection, ChatResponse, EnsureSystemOpts, Message, MessageBody, MessageRole,
-        ModelMessage, ScopeInItem, Topic, TopicStatus, TopicUpdate,
+        ScopeInItem, Topic, TopicStatus, TopicUpdate,
     },
     neuron::model::extract_json_object,
     neuron_manager::NeuronManager,
     neuron_store::NeuronStore,
     poller::{Poller, SharedPollParallelism},
     poller_step::{AssistantPollHandler, AssistantStepRequest, ASSISTANT_POLL_TASK},
-    round_types::{SessionSeed, SessionState},
+    round_types::SessionSeed,
     session_tracker::SessionTracker,
     topic_store::TopicStore,
 };
@@ -99,7 +99,7 @@ impl AssistantSession {
         system_type: &str,
         user_payload: serde_json::Value,
         model: &ChatModelSelection,
-        history: &[ModelMessage],
+        history: &[Message],
     ) -> AppResult<serde_json::Value> {
         tracing::info!(
             phase = "call_judgement",
@@ -118,7 +118,7 @@ impl AssistantSession {
             .runner
             .run_raw_round(
                 Some(SessionSeed::Neuron(spec.id)),
-                SessionState::default(),
+                None,
                 history.to_vec(),
                 &user_payload.to_string(),
                 Some(Vec::new()),

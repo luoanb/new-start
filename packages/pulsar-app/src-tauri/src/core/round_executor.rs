@@ -108,6 +108,23 @@ impl RoundExecutor {
 
         // 发送前统一投影：Message（落库真相源）→ ModelMessage（模型层），与选型共用 project_history。
         let model_messages = ModelCallInput::project_history(messages);
+        // 排查辅助：打印最终投给模型的完整消息（role + 内容，单条截断 3000 字符防日志爆炸）。
+        let wire_view: Vec<String> = model_messages
+            .iter()
+            .map(|m| {
+                format!(
+                    "[{:?}] {}",
+                    m.role,
+                    m.content.chars().take(3000).collect::<String>()
+                )
+            })
+            .collect();
+        tracing::info!(
+            phase = "round_execute",
+            message_count = model_messages.len(),
+            messages = ?wire_view,
+            "model input (final messages)"
+        );
         let model_response = self
             .model_caller
             .call_model(ModelCallRequest {

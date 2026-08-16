@@ -203,7 +203,7 @@ impl Compactor {
             .call_model(ModelCallRequest {
                 provider_id: model.provider_id.clone(),
                 model_id: model.model_id.clone(),
-                messages: wire.messages,
+                messages: wire,
                 tools: None,
             })
             .await

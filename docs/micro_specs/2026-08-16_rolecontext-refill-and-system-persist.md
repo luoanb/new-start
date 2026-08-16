@@ -1,6 +1,8 @@
 # Spec: RoleContext 回灌 + 首轮 System 落库（历史=wire，缓存稳定）
 
-> B2 落库补充的修订方案（方案 C）。用户审阅 `docs/specs/2026-08-14_16-00_neuron-stable-system-prompt-b2.md` 后确认：RoleContext 必须回灌；首轮不允许 System 冻结值与 RC₁ 内容重复。
+> **已取代**：本方案的关键落点已被 [docs/specs/2026-08-16_18-00_round-resolver-message-truth.md](../specs/2026-08-16_18-00_round-resolver-message-truth.md)（Round Pipeline v2）吸收并简化——`resolve` 收拢选型+拼接（`attach_role`），`Vec<Message>` 为唯一真相源，`persist_input` 落 `wire[old_len..]` 增量（进 wire 必落库），删 B2 冻结状态机。本文保留为决策记录；**结论以 v2 spec 与代码为准**（v2 落位见文末对照表）。
+
+> 历史背景：B2 落库补充的修订方案（方案 C）。用户审阅 `docs/specs/2026-08-14_16-00_neuron-stable-system-prompt-b2.md` 后确认：RoleContext 必须回灌；首轮不允许 System 冻结值与 RC₁ 内容重复。
 
 ## Goal
 
@@ -49,14 +51,26 @@
 
 ## Done Contract
 
+> v2 已简化实现路径，本契约中标注的落位均为历史版本；当前实现见文末「v2 落位对照」。
+
 - `models.rs`：无改动（`MessageBody::RoleContext`、`MessageRole::System` 已存在）。
 - `call_service.rs`：`message_to_model`：`RoleContext => Some(...)` 回灌（User 角色）；`Nudge => Some(...)` 回灌（User 角色）。
-  > round-pipeline-split 重构后落位：`MessageAssembler::from_message`（`model_call_input.rs`）；首轮 System 落库由 `persist_input` 判「历史为空 且 wire 首条为 System」直接取 wire 内容，无需 `frozen_this_round`。
+  > round-pipeline-split 重构后落位：`ModelCallInput::from_message`（`model_call_input.rs`）；首轮 System 落库由 `persist_input` 判「历史为空 且 wire 首条为 System」直接取 wire 内容，无需 `frozen_this_round`。
   > `role_context_message` 空历史排除在 `assemble_with_context`（`model_call_input.rs`）。
 - `conversation_runner.rs`：落库拆两段——`persist_input`（发送前）：`[首轮 System] → [RC] → 输入`；`persist_outcome`（发送后）：`[产物] → [会话态]`。
 - 前端：无改动（首轮 System 消息走既有 system 渲染；RC 已支持）。
 - 测试更新：`converse_frozen_round_carries_context_message`（首轮 `role_context_message=None`；次轮 `Some`）；`from_message` 测试（Nudge/RoleContext 均回灌）；persist 集成测试（首轮 System 消息 + 次轮 RC 在 U 前 + 回灌 wire 严格前缀）。
 - `docs/specs/2026-08-14_16-00_neuron-stable-system-prompt-b2.md` Reverse Sync（落库/回灌描述同步）。
+
+## v2 落位对照（2026-08-16 Round Pipeline v2 后）
+
+| 本文（历史方案） | v2 实现（`docs/specs/2026-08-16_18-00_round-resolver-message-truth.md`） |
+|---|---|
+| `assemble_with_context` / `role_context_message` / `frozen_this_round` | 删除；`resolve`（[round_resolver.rs](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src-tauri/src/core/round_resolver.rs#L46-L211)）收拢选型+拼接，`attach_role`（[L216-L245](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src-tauri/src/core/round_resolver.rs#L216-L245)）拼首轮 System / 后续 RoleContext |
+| 首轮 System 落库：`persist_input` 判「历史为空 且 wire 首条为 System」 | `attach_role` 直接把 System 拼进 `ctx.messages`，`persist_input` 落 `wire[old_len..]` 全量增量（[conversation_runner.rs L346-L351](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src-tauri/src/core/conversation_runner.rs#L346-L351)），无需特殊分支 |
+| `frozen_this_round` / B2 冻结状态机 | 删除；首轮 System 落库后历史自带稳定角色，`SessionState` 仅存选型锚点 |
+| `message_to_model` 回灌 | `ModelCallInput::from_message` / `project_history`（[model_call_input.rs L223-L235](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src-tauri/src/core/model_call_input.rs#L223-L235)）；Nudge / RoleContext 均回灌为 User 文本（结论不变） |
+| persist_outcome 写会话态 | 会话态（`last_selected_neuron_id`）改为**发送前写回**；persist_outcome 只落产物 |
 
 ## 兼容性
 
@@ -72,6 +86,8 @@
 
 ## 改动点
 
+> 历史落位（v2 已按「v2 落位对照」简化，本表保留决策记录）。
+
 | 文件 | 改动 |
 |---|---|
 | `src/core/model_call_input.rs` | `from_message` RoleContext/Nudge 均回灌；`assemble_with_context` 空历史排除 RC |
@@ -84,3 +100,4 @@
 - 2026-08-16: 初版方案（方案 C，待批准后实现）。
 - 2026-08-16（实现修订）：用户确认 **Nudge 同样回灌**（"落库的也需要给模型发送过去" + "RoleContext也要啊"）——推翻初版「Nudge 不回灌」，`Nudge` / `RoleContext` 均回灌为 User 文本；首轮 System 落库与 persist 顺序重排按方案 C 落地（在 round-pipeline-split 重构后的三段管道中实现，见上）。
 - 2026-08-16（实现修订）：用户提出 **分开落库**（"为什么不分开落库 发送给模型前，应该可以落库了呀？"）——`persist` 拆为 `persist_input`（发送前，wire 组装后即可确定：首轮 System → RC → 输入）与 `persist_outcome`（发送后：产物 → 会话态），模型调用失败/超时不再丢用户消息。
+- 2026-08-16（v2 取代）：Round Pipeline v2（[2026-08-16_18-00_round-resolver-message-truth.md](../specs/2026-08-16_18-00_round-resolver-message-truth.md)）实现落地后，本方案的组装/冻结机制被简化：`assemble_with_context` / `role_context_message` / `frozen_this_round` 删除，`resolve` 收拢选型+拼接，`Vec<Message>` 为唯一真相源，`persist_input` 落 `wire[old_len..]` 全量增量；行为结论（Nudge / RoleContext 回灌、首轮 System 落库、严格前缀）不变，落位见「v2 落位对照」。

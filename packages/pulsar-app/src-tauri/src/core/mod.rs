@@ -60,7 +60,7 @@ pub use gateway::Gateway;
 pub use insert_catalog::InsertCatalog;
 pub use mcp::{McpServerClient, McpServerStatus, McpServerStatusKind};
 pub use model_call_input::{ModelAppendTemplate, ModelCallInput};
-pub use round_types::{ResolvedRound, RoundOutcome, SessionSeed, SessionState, WireRound};
+pub use round_types::{RoundOutcome, SessionSeed, SessionState};
 pub use models::{
     AssistantCandidateScope, BootstrapReport, CandidateQuery, ChatModelSelection, ChatOptions,
     ChatResponse, CompactionConfig, Connection, Conversation, ConversationMode, CreateNeuronInput,

@@ -1,5 +1,6 @@
 # Round Pipeline：取消 NeuronCallService，三段管道（Resolver / Assembler / Executor）
 
+> **已取代（2026-08-16）**：三段管道 v1 被 [2026-08-16_18-00_round-resolver-message-truth.md](./2026-08-16_18-00_round-resolver-message-truth.md)（Round Pipeline v2）推翻——删 `ResolvedRound` / `WireRound` 中间层，`Vec<Message>` 为唯一真相源，resolve 收拢选型+拼接，删 B2 冻结状态机。本文保留为决策记录，实现以 v2 spec 与代码为准。
 > 状态：设计定稿，待实现
 > 需求来源：与用户讨论 NeuronCallService 边界问题（message 生产/消费紧耦合）后的重构方案
 

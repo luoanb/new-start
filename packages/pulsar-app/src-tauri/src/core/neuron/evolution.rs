@@ -200,7 +200,7 @@ impl NeuronEvolution {
             &payload.to_string(),
             ModelAppendTemplate::Manual,
         );
-        let output = self.model_caller.call_model(wire.messages).await?;
+        let output = self.model_caller.call_model(wire).await?;
         let decision = extract_json_object(&output)?;
         let desc = decision
             .get("desc")
