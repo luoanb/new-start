@@ -4,6 +4,10 @@
   import { t, tMap } from "$lib/i18n";
   import { errorMessage } from "$lib/errorMessage";
   import { dataStore } from "$lib/stores/dataStore.svelte";
+  import { useViewContext } from "$lib/layout/viewContext";
+
+  // 组合根注入的视图命令：打开对话 = 切换会话 + 插入/激活 main 区 chat 面板。
+  const { commands } = useViewContext();
 
   // 统一从 dataStore 读取 topics，不再由父组件 bind 传入。
   let topics = $derived(dataStore.state.topics);
@@ -131,6 +135,11 @@
       errorMsg = t("topicPanel.deleteScopeFailed", { error: errorMessage(e) });
     }
   }
+
+  /** 打开课题绑定会话的对话：切换会话 + 插入/激活 main 区 chat 面板（与 SessionList 行为一致）。 */
+  function handleOpenConversation(sessionId: string) {
+    commands.selectConversation(sessionId);
+  }
 </script>
 
 <div class="topic-panel">
@@ -205,6 +214,20 @@
             <div class="topic-header">
               <span class="topic-name" title={topic.name}>{topic.name}</span>
               <div class="topic-header-actions">
+                {#if topic.session_id}
+                  <button
+                    class="icon-btn"
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      handleOpenConversation(topic.session_id!);
+                    }}
+                    title={t("topicPanel.openConversation")}
+                    aria-label={t("topicPanel.openConversation")}
+                  >
+                    <!-- 打开对话：消息气泡图标 -->
+                    <svg class="icon" aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                  </button>
+                {/if}
                 {#if topic.status === "todo" || topic.status === "in_progress" || topic.status === "paused"}
                   <button
                     class="icon-btn"
@@ -228,9 +251,6 @@
                     {/if}
                   </button>
                 {/if}
-                <span class="status-badge {topic.status}">
-                  {tMap("topicPanel.topicStatus", topic.status)}
-                </span>
                 {#if deleteConfirmId === topic.id}
                   <span class="delete-confirm" title={t("topicPanel.deleteConfirm")}>
                     <button class="btn btn-sm btn-danger" onclick={() => handleDelete(topic.id)}>
@@ -257,6 +277,9 @@
                 <div class="progress-bar-fill" style="width: {Math.round(topic.progress)}%"></div>
               </div>
               <span class="progress-text">{Math.round(topic.progress)}%</span>
+              <span class="status-badge {topic.status}">
+                {tMap("topicPanel.topicStatus", topic.status)}
+              </span>
             </div>
             <div class="topic-meta">
               {t("topicPanel.updated")}: {formatTime(topic.updated_at)}
@@ -438,6 +461,23 @@
   .topic-summary { padding: var(--space-2); cursor: pointer; }
   .topic-header { display: flex; justify-content: space-between; align-items: center; gap: var(--space-1); margin-bottom: var(--space-1); }
   .topic-header-actions { display: flex; align-items: center; gap: var(--space-1); }
+  /* 按钮组聚合标题右侧：整卡 hover / 键盘聚焦时才展示（触屏无 hover 则始终可见）。
+     visibility 隐藏保证不可见时不可点击；opacity 保留布局空间防抖动。
+     删除确认态（delete-confirm）不受此控制，始终可见。 */
+  @media (hover: hover) {
+    .topic-card .topic-header-actions > .icon-btn {
+      opacity: 0;
+      visibility: hidden;
+    }
+    .topic-card:hover .topic-header-actions > .icon-btn,
+    .topic-card:focus-within .topic-header-actions > .icon-btn {
+      opacity: 1;
+      visibility: visible;
+    }
+  }
+  .topic-header-actions .icon-btn {
+    transition: opacity var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+  }
   .topic-name { font-size: var(--fs-sm); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .status-badge {
     display: inline-flex;

@@ -183,6 +183,7 @@ export type Translations = {
     pause: string;
     resume: string;
     progress: string;
+    openConversation: string;
     scopeItems: string;
     addScopeItem: string;
     scopeGoal: string;
@@ -600,6 +601,7 @@ export const en: Translations = {
     pause: "Pause",
     resume: "Resume",
     progress: "Progress",
+    openConversation: "Open conversation",
     scopeItems: "Scope Items",
     addScopeItem: "Add Item",
     scopeGoal: "Goal",
@@ -1030,6 +1032,7 @@ export const zh: Translations = {
     pause: "暂停",
     resume: "恢复",
     progress: "进度",
+    openConversation: "打开对话",
     scopeItems: "范围项",
     addScopeItem: "添加项",
     scopeGoal: "目标",
