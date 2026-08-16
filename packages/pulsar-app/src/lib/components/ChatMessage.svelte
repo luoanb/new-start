@@ -264,8 +264,20 @@
   .content.markdown-content :global(p:first-child) { margin-top: 0; }
   .content.markdown-content :global(p:last-child) { margin-bottom: 0; }
 
-  .actions { display: inline-flex; align-items: center; gap: var(--space-1); position: relative; opacity: 0; transition: opacity var(--duration-fast) var(--ease-out); }
-  .message:hover .actions { opacity: 1; }
+  .actions { display: inline-flex; align-items: center; gap: var(--space-1); position: relative; transition: opacity var(--duration-fast) var(--ease-out); }
+  /* 仅支持 hover 的设备隐藏消息操作栏（hover/键盘聚焦时显示）；
+     触屏（hover: none）始终可见，保证可发现性。见 .cursor/rules/ui-hover-reveal.mdc */
+  @media (hover: hover) {
+    .actions {
+      opacity: 0;
+      visibility: hidden;
+    }
+    .message:hover .actions,
+    .message:focus-within .actions {
+      opacity: 1;
+      visibility: visible;
+    }
+  }
   .action-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px; padding: 0; border: var(--border-width) solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text-muted); cursor: pointer; }
   .action-btn:hover { color: var(--color-text); border-color: var(--color-primary); }
   .action-btn.copied { color: var(--color-primary); border-color: var(--color-primary); }

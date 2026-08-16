@@ -231,13 +231,29 @@
     font-size: 10px;
     border-radius: var(--radius-sm);
     color: inherit;
-    opacity: 0;
     transition: opacity var(--duration-fast) var(--ease-out);
   }
 
-  .tab:hover .close { opacity: 0.7; }
-  .tab.active .close { opacity: 0.6; }
   .close:hover { opacity: 1 !important; background: var(--color-hover); }
+
+  /* 仅支持 hover 的设备隐藏关闭按钮（hover/键盘聚焦时显示）；
+     触屏（hover: none）始终可见，保证可发现性。见 .cursor/rules/ui-hover-reveal.mdc */
+  @media (hover: hover) {
+    .tab .close {
+      opacity: 0;
+      visibility: hidden;
+    }
+    .tab:hover .close,
+    .tab:focus-within .close {
+      opacity: 0.7;
+      visibility: visible;
+    }
+    /* 激活 tab 的关闭按钮常显（不依赖 hover） */
+    .tab.active .close {
+      opacity: 0.6;
+      visibility: visible;
+    }
+  }
 
   .tabs-spacer { flex: 1; height: 100%; position: relative; }
 

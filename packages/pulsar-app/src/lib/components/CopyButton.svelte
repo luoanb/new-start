@@ -64,17 +64,28 @@
     cursor: pointer;
     border-radius: var(--radius-sm);
     flex-shrink: 0;
-    opacity: 0;
     transition:
       opacity var(--duration-fast) var(--ease-out),
       color var(--duration-fast) var(--ease-out),
       background var(--duration-fast) var(--ease-out);
   }
-  /* 悬停折叠块（或键盘聚焦）时显示复制按钮；复制成功后常显 */
-  :global(.block-header:hover) .copy-btn,
-  :global(.block-header:focus-within) .copy-btn,
+  /* 复制成功后常显（所有设备） */
   .copy-btn.copied {
     opacity: 1;
+    visibility: visible;
+  }
+  /* 仅支持 hover 的设备隐藏复制按钮（悬停折叠块或键盘聚焦时显示）；
+     触屏（hover: none）始终可见，保证可发现性。见 .cursor/rules/ui-hover-reveal.mdc */
+  @media (hover: hover) {
+    .copy-btn {
+      opacity: 0;
+      visibility: hidden;
+    }
+    :global(.block-header:hover) .copy-btn,
+    :global(.block-header:focus-within) .copy-btn {
+      opacity: 1;
+      visibility: visible;
+    }
   }
   .copy-btn:hover {
     color: var(--color-text);

@@ -276,11 +276,20 @@
     align-items: center;
     gap: var(--space-2);
     margin-left: auto;
-    opacity: 0;
     transition: opacity var(--duration-fast) var(--ease-out);
   }
-  .provider-row:hover .row-actions {
-    opacity: 1;
+  /* 仅支持 hover 的设备隐藏行操作按钮（hover/键盘聚焦时显示）；
+     触屏（hover: none）始终可见，保证可发现性。见 .cursor/rules/ui-hover-reveal.mdc */
+  @media (hover: hover) {
+    .row-actions {
+      opacity: 0;
+      visibility: hidden;
+    }
+    .provider-row:hover .row-actions,
+    .provider-row:focus-within .row-actions {
+      opacity: 1;
+      visibility: visible;
+    }
   }
   .row-btn {
     display: inline-flex;

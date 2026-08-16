@@ -167,11 +167,25 @@
   .session-count { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .session-time { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .session-actions { flex-shrink: 0; display: flex; align-items: center; gap: 2px; }
-  .copy-btn { background: none; border: none; cursor: pointer; font-size: 14px; color: inherit; opacity: 0; padding: 2px 4px; border-radius: var(--radius-sm); line-height: 1; transition: opacity var(--duration-fast) var(--ease-out); }
-  .session-item:hover .copy-btn { opacity: 0.6; }
+  .copy-btn { background: none; border: none; cursor: pointer; font-size: 14px; color: inherit; padding: 2px 4px; border-radius: var(--radius-sm); line-height: 1; transition: opacity var(--duration-fast) var(--ease-out); }
   .copy-btn:hover { opacity: 1 !important; background: var(--color-hover); }
-  .close-btn { background: none; border: none; cursor: pointer; color: inherit; opacity: 0; padding: 2px 4px; border-radius: var(--radius-sm); line-height: 1; display: inline-flex; align-items: center; justify-content: center; transition: opacity var(--duration-fast) var(--ease-out); }
+  .close-btn { background: none; border: none; cursor: pointer; color: inherit; padding: 2px 4px; border-radius: var(--radius-sm); line-height: 1; display: inline-flex; align-items: center; justify-content: center; transition: opacity var(--duration-fast) var(--ease-out); }
   .close-btn svg { display: block; }
-  .session-item:hover .close-btn { opacity: 0.6; }
   .close-btn:hover { opacity: 1 !important; background: var(--color-hover); }
+  /* 仅支持 hover 的设备隐藏行操作按钮（hover/键盘聚焦时显示）；
+     触屏（hover: none）始终可见，保证可发现性。见 .cursor/rules/ui-hover-reveal.mdc */
+  @media (hover: hover) {
+    .copy-btn,
+    .close-btn {
+      opacity: 0;
+      visibility: hidden;
+    }
+    .session-item:hover .copy-btn,
+    .session-item:focus-within .copy-btn,
+    .session-item:hover .close-btn,
+    .session-item:focus-within .close-btn {
+      opacity: 0.6;
+      visibility: visible;
+    }
+  }
 </style>
