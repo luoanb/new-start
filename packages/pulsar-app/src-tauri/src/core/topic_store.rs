@@ -5,6 +5,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use super::{
     error::{AppError, AppResult},
+    events::{StateChange, StateEmitter},
     models::{ScopeInItem, Topic, TopicStatus, TopicUpdate},
 };
 
@@ -14,6 +15,8 @@ static SCOPE_ITEM_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// TopicStore manages the `topics` table in the shared App-level SQLite database.
 pub struct TopicStore {
     conn: Arc<Mutex<Connection>>,
+    /// 变更通知：写操作成功后统一广播，供前端/远程端重拉课题列表。
+    on_change: Option<StateEmitter>,
 }
 
 impl std::fmt::Debug for TopicStore {
@@ -23,8 +26,16 @@ impl std::fmt::Debug for TopicStore {
 }
 
 impl TopicStore {
-    pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
-        Self { conn }
+    pub fn new(conn: Arc<Mutex<Connection>>, on_change: Option<StateEmitter>) -> Self {
+        Self { conn, on_change }
+    }
+
+    /// 课题变更统一广播：创建/更新/状态流转等写操作成功后通知监听端刷新列表。
+    /// 事件源收敛在这里，各调用入口（会话推进、命令层、RPC）不再各自发射。
+    fn emit_change(&self) {
+        if let Some(emit) = self.on_change.as_ref() {
+            emit(StateChange::Topics);
+        }
     }
 
     pub fn init_table(&self) -> AppResult<()> {
@@ -191,8 +202,11 @@ impl TopicStore {
             )));
         }
         drop(conn);
-        self.get(topic_id)?
-            .ok_or_else(|| AppError::ConversationNotFound(format!("Topic not found: {topic_id}")))
+        let topic = self
+            .get(topic_id)?
+            .ok_or_else(|| AppError::ConversationNotFound(format!("Topic not found: {topic_id}")))?;
+        self.emit_change();
+        Ok(topic)
     }
 
     pub fn create(
@@ -237,6 +251,7 @@ impl TopicStore {
             params![id, name, status_str, description, scope_in_str, progress, extra_str, now as i64],
         )
         .map_err(|e| AppError::StorageError(format!("Failed to create topic: {}", e)))?;
+        self.emit_change();
 
         Ok(Topic {
             id,
@@ -304,7 +319,10 @@ impl TopicStore {
             .map_err(|e| AppError::StorageError(format!("Failed to query topic: {}", e)))?;
 
         match rows.next() {
-            Some(Ok(topic)) => Ok(topic),
+            Some(Ok(topic)) => {
+                self.emit_change();
+                Ok(topic)
+            }
             Some(Err(e)) => Err(AppError::StorageError(format!(
                 "Failed to read topic row: {}",
                 e
@@ -425,6 +443,7 @@ impl TopicStore {
         topic.progress = progress;
         topic.status = status;
         topic.updated_at = now;
+        self.emit_change();
         Ok(topic)
     }
 
@@ -450,6 +469,7 @@ impl TopicStore {
         topic.progress = progress;
         topic.status = status;
         topic.updated_at = now;
+        self.emit_change();
         Ok(topic)
     }
 
@@ -503,6 +523,7 @@ impl TopicStore {
         topic.progress = progress;
         topic.status = status;
         topic.updated_at = now;
+        self.emit_change();
         Ok(topic)
     }
 
@@ -524,8 +545,11 @@ impl TopicStore {
                 "Topic not found: {id}"
             )));
         }
-        self.get(id)?
-            .ok_or_else(|| AppError::ConversationNotFound(format!("Topic not found: {id}")))
+        let topic = self
+            .get(id)?
+            .ok_or_else(|| AppError::ConversationNotFound(format!("Topic not found: {id}")))?;
+        self.emit_change();
+        Ok(topic)
     }
 
     pub fn delete(&self, id: &str) -> AppResult<bool> {
@@ -536,6 +560,9 @@ impl TopicStore {
         let affected = conn
             .execute("DELETE FROM topics WHERE id = ?1", params![id])
             .map_err(|e| AppError::StorageError(format!("Failed to delete topic: {}", e)))?;
+        if affected > 0 {
+            self.emit_change();
+        }
         Ok(affected > 0)
     }
 }
@@ -715,7 +742,7 @@ mod tests {
         let _ = name;
         let conn = Connection::open_in_memory().unwrap();
         let conn = Arc::new(Mutex::new(conn));
-        let store = TopicStore::new(conn);
+        let store = TopicStore::new(conn, None);
         store.init_table().unwrap();
         store
     }
@@ -926,7 +953,7 @@ mod tests {
             );",
         )
         .unwrap();
-        let store = TopicStore::new(Arc::new(Mutex::new(conn)));
+        let store = TopicStore::new(Arc::new(Mutex::new(conn)), None);
         store.init_table().unwrap();
         let migrated = store.get("legacy").unwrap().unwrap();
         assert!(!migrated.scope_in[0].id.is_empty());

@@ -474,7 +474,6 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
             let topic = with_topic(state, |store| {
                 store.create(&p.name, &p.description, TopicStatus::Todo, vec![], None)
             })?;
-            (state.state_emit)(StateChange::Topics);
             value(topic)
         }
         "update_topic" => {
@@ -489,13 +488,11 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
                     },
                 )
             })?;
-            (state.state_emit)(StateChange::Topics);
             value(topic)
         }
         "delete_topic" => {
             let p: IdParams = from_params(params)?;
             let deleted = with_topic(state, |store| store.delete(&p.id))?;
-            (state.state_emit)(StateChange::Topics);
             value(deleted)
         }
         "add_topic_scope_item" => {
@@ -503,14 +500,12 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
             let topic = with_topic(state, |store| {
                 store.add_scope_item(&p.topic_id, &p.goal, &p.done_contract)
             })?;
-            (state.state_emit)(StateChange::Topics);
             value(topic)
         }
         "delete_topic_scope_item" => {
             let p: ScopeItemParams = from_params(params)?;
             let topic =
                 with_topic(state, |store| store.delete_scope_item(&p.topic_id, &p.item_id))?;
-            (state.state_emit)(StateChange::Topics);
             value(topic)
         }
         "complete_topic_scope_item" => {
@@ -518,19 +513,16 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
             let topic = with_topic(state, |store| {
                 store.complete_scope_item(&p.topic_id, &p.item_id)
             })?;
-            (state.state_emit)(StateChange::Topics);
             value(topic)
         }
         "pause_topic" => {
             let p: IdParams = from_params(params)?;
             let topic = with_topic(state, |store| store.pause(&p.id))?;
-            (state.state_emit)(StateChange::Topics);
             value(topic)
         }
         "resume_topic" => {
             let p: IdParams = from_params(params)?;
             let topic = with_topic(state, |store| store.resume(&p.id))?;
-            (state.state_emit)(StateChange::Topics);
             value(topic)
         }
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import type { TopicStatus } from "$lib/types";
   import { t, tMap } from "$lib/i18n";
   import { errorMessage } from "$lib/errorMessage";
@@ -6,6 +7,13 @@
 
   // 统一从 dataStore 读取 topics，不再由父组件 bind 传入。
   let topics = $derived(dataStore.state.topics);
+
+  // 兜底刷新：课题在会话推进中被创建/更新时后端已广播 Topics（send_chat_message /
+  // poller 均会 emit），此处额外在面板每次挂载（打开/切换到课题 tab）时重拉一次，
+  // 避免因任何漏发事件导致列表长期不更新。
+  onMount(() => {
+    void dataStore.refreshTopics();
+  });
 
   // ── State ──
   type TopicFilter = "all" | "active" | "done";

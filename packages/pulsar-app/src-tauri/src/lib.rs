@@ -304,26 +304,24 @@ async fn get_topic(
 #[tauri::command]
 async fn create_topic(
     topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
-    state_emit: State<'_, StateEmitter>,
     name: String,
     description: String,
 ) -> TauriResult<Topic> {
-    let topic = with_topic_store(&topic_store, |store| {
+    // 课题变更事件由 TopicStore 写操作统一广播。
+    with_topic_store(&topic_store, |store| {
         store.create(&name, &description, TopicStatus::Todo, vec![], None)
-    })?;
-    state_emit.inner()(StateChange::Topics);
-    Ok(topic)
+    })
 }
 
 #[tauri::command]
 async fn update_topic(
     topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
-    state_emit: State<'_, StateEmitter>,
     id: String,
     name: Option<String>,
     description: Option<String>,
 ) -> TauriResult<Topic> {
-    let topic = with_topic_store(&topic_store, |store| {
+    // 课题变更事件由 TopicStore 写操作统一广播。
+    with_topic_store(&topic_store, |store| {
         store.update(
             &id,
             TopicUpdate {
@@ -332,85 +330,71 @@ async fn update_topic(
                 extra: None,
             },
         )
-    })?;
-    state_emit.inner()(StateChange::Topics);
-    Ok(topic)
+    })
 }
 
 #[tauri::command]
 async fn delete_topic(
     topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
-    state_emit: State<'_, StateEmitter>,
     id: String,
 ) -> TauriResult<bool> {
-    let deleted = with_topic_store(&topic_store, |store| store.delete(&id))?;
-    state_emit.inner()(StateChange::Topics);
-    Ok(deleted)
+    // 课题变更事件由 TopicStore 写操作统一广播（删除成功时）。
+    with_topic_store(&topic_store, |store| store.delete(&id))
 }
 
 #[tauri::command]
 async fn add_topic_scope_item(
     topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
-    state_emit: State<'_, StateEmitter>,
     topic_id: String,
     goal: String,
     done_contract: String,
 ) -> TauriResult<Topic> {
-    let topic = with_topic_store(&topic_store, |store| {
+    // 课题变更事件由 TopicStore 写操作统一广播。
+    with_topic_store(&topic_store, |store| {
         store.add_scope_item(&topic_id, &goal, &done_contract)
-    })?;
-    state_emit.inner()(StateChange::Topics);
-    Ok(topic)
+    })
 }
 
 #[tauri::command]
 async fn delete_topic_scope_item(
     topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
-    state_emit: State<'_, StateEmitter>,
     topic_id: String,
     item_id: String,
 ) -> TauriResult<Topic> {
-    let topic = with_topic_store(&topic_store, |store| {
+    // 课题变更事件由 TopicStore 写操作统一广播。
+    with_topic_store(&topic_store, |store| {
         store.delete_scope_item(&topic_id, &item_id)
-    })?;
-    state_emit.inner()(StateChange::Topics);
-    Ok(topic)
+    })
 }
 
 #[tauri::command]
 async fn complete_topic_scope_item(
     topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
-    state_emit: State<'_, StateEmitter>,
     topic_id: String,
     item_id: String,
 ) -> TauriResult<Topic> {
-    let topic = with_topic_store(&topic_store, |store| {
+    // 课题变更事件由 TopicStore 写操作统一广播。
+    with_topic_store(&topic_store, |store| {
         store.complete_scope_item(&topic_id, &item_id)
-    })?;
-    state_emit.inner()(StateChange::Topics);
-    Ok(topic)
+    })
 }
 
 #[tauri::command]
 async fn pause_topic(
     topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
-    state_emit: State<'_, StateEmitter>,
     id: String,
 ) -> TauriResult<Topic> {
-    let topic = with_topic_store(&topic_store, |store| store.pause(&id))?;
-    state_emit.inner()(StateChange::Topics);
-    Ok(topic)
+    // 课题变更事件由 TopicStore 写操作统一广播（set_status 内部）。
+    with_topic_store(&topic_store, |store| store.pause(&id))
 }
 
 #[tauri::command]
 async fn resume_topic(
     topic_store: State<'_, Arc<StdMutex<TopicStore>>>,
-    state_emit: State<'_, StateEmitter>,
     id: String,
 ) -> TauriResult<Topic> {
-    let topic = with_topic_store(&topic_store, |store| store.resume(&id))?;
-    state_emit.inner()(StateChange::Topics);
-    Ok(topic)
+    // 课题变更事件由 TopicStore 写操作统一广播。
+    with_topic_store(&topic_store, |store| store.resume(&id))
 }
 
 // ── Poller ──

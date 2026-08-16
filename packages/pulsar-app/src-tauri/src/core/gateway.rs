@@ -117,7 +117,10 @@ impl Gateway {
             .map_err(|e| AppError::StorageError(format!("Failed to open app.db: {}", e)))?;
         let conn = Arc::new(Mutex::new(conn));
 
-        let topic_store = Arc::new(Mutex::new(TopicStore::new(Arc::clone(&conn))));
+        let topic_store = Arc::new(Mutex::new(TopicStore::new(
+            Arc::clone(&conn),
+            state_emit.clone(),
+        )));
         topic_store
             .lock()
             .map_err(|e| AppError::StorageError(format!("Lock error: {}", e)))?
@@ -263,7 +266,7 @@ impl Gateway {
         spawn_neuron_recycle_runtime(
             Arc::clone(&neuron_manager),
             neuron_recycle_interval_ms,
-            state_emit,
+            state_emit.clone(),
         );
 
         Ok(Self {
@@ -730,9 +733,16 @@ impl Gateway {
 
     /// Create a new blank conversation with the given mode and return its id.
     /// The current conversation is left unchanged.
+    /// Assistant / System 模式默认 Global 种子（全域首轮选型），与 `open_session` 空 spec 行为一致；
+    /// Chat / Agent 模式直连（`None`）。
     pub fn create_new_conversation(&self, mode: ConversationMode) -> AppResult<String> {
-        let conv = self.store.create_conversation(None, mode)?;
-        Ok(conv.id)
+        let conversation = match mode {
+            ConversationMode::Assistant | ConversationMode::System => {
+                self.start_session(Some(SessionSeed::Global), mode)?
+            }
+            _ => self.store.create_conversation(None, mode)?,
+        };
+        Ok(conversation.id)
     }
 
     pub fn status(&self) -> AppResult<RuntimeStatus> {
@@ -915,10 +925,10 @@ fn spawn_poller_runtime(
                         let touched = assistant.process_step_request(request, &model).await;
                         // 仅在实际推进了会话（写入消息/课题）时才通知前端重新拉取；
                         // 空转轮询（无未完成课题 / 全部跳过）不发事件，避免无效刷新与滚动。
+                        // 课题变化由 TopicStore 写操作统一广播，这里只广播会话变化。
                         if !touched.is_empty() {
                             if let Some(emit) = emit.as_ref() {
                                 emit(StateChange::Conversations { affected: touched });
-                                emit(StateChange::Topics);
                             }
                         }
                     });
@@ -1474,6 +1484,61 @@ mod tests {
             tools.iter().any(|t| t.name == "lookup_wiki"),
             "expected lookup_wiki after reassemble: {:?}",
             tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn create_new_conversation_assistant_writes_global_seed() {
+        let gateway = test_gateway("create_new_conversation_assistant_writes_global_seed");
+        let id = gateway
+            .create_new_conversation(ConversationMode::Assistant)
+            .expect("assistant conversation should be created");
+        let conv = gateway
+            .store
+            .require_conversation(&id)
+            .expect("conversation should exist");
+        let session = conv
+            .extra
+            .as_ref()
+            .and_then(|extra| extra.get("session"))
+            .expect("session meta should be written");
+        assert_eq!(session["seed"], serde_json::json!({"kind": "global"}));
+    }
+
+    #[test]
+    fn create_new_conversation_system_writes_global_seed() {
+        let gateway = test_gateway("create_new_conversation_system_writes_global_seed");
+        let id = gateway
+            .create_new_conversation(ConversationMode::System)
+            .expect("system conversation should be created");
+        let conv = gateway
+            .store
+            .require_conversation(&id)
+            .expect("conversation should exist");
+        let session = conv
+            .extra
+            .as_ref()
+            .and_then(|extra| extra.get("session"))
+            .expect("session meta should be written");
+        assert_eq!(session["seed"], serde_json::json!({"kind": "global"}));
+    }
+
+    #[test]
+    fn create_new_conversation_chat_stays_blank() {
+        let gateway = test_gateway("create_new_conversation_chat_stays_blank");
+        let id = gateway
+            .create_new_conversation(ConversationMode::Chat)
+            .expect("chat conversation should be created");
+        let conv = gateway
+            .store
+            .require_conversation(&id)
+            .expect("conversation should exist");
+        assert!(
+            conv.extra
+                .as_ref()
+                .and_then(|extra| extra.get("session"))
+                .is_none(),
+            "chat conversation should have no session meta"
         );
     }
 
