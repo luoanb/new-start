@@ -164,6 +164,7 @@ export type Translations = {
   drawer: {
     sessions: string;
     info: string;
+    panel: string;
   };
   topicPanel: {
     topics: string;
@@ -582,6 +583,7 @@ export const en: Translations = {
   drawer: {
     sessions: "Sessions",
     info: "Info",
+    panel: "Panel",
   },
   topicPanel: {
     topics: "Topics",
@@ -1013,6 +1015,7 @@ export const zh: Translations = {
   drawer: {
     sessions: "会话列表",
     info: "信息",
+    panel: "面板",
   },
   topicPanel: {
     topics: "课题",

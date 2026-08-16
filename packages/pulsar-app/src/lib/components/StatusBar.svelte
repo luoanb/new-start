@@ -8,31 +8,28 @@
 
   let {
     appName,
-    sessionId,
-    mode,
     sidebarVisible = true,
     infoVisible = true,
     panelVisible = true,
+    // 小屏抽屉开关态：用于移动端布局图标的高亮（对齐大屏的 active 表现）
+    drawerSidebar = false,
+    drawerInfo = false,
+    drawerPanel = false,
     onToggleSidebar,
     onToggleInfo,
     onTogglePanel,
   }: {
     appName: string;
-    sessionId: string;
-    mode: string;
     sidebarVisible?: boolean;
     infoVisible?: boolean;
     panelVisible?: boolean;
+    drawerSidebar?: boolean;
+    drawerInfo?: boolean;
+    drawerPanel?: boolean;
     onToggleSidebar?: () => void;
     onToggleInfo?: () => void;
     onTogglePanel?: () => void;
   } = $props();
-
-  const modeLabel: Record<string, string> = {
-    chat: "Chat",
-    agent: "Agent",
-    assistant: "Assistant",
-  };
 
   // ── 自绘标题栏：窗口控制（decorations: false，标题栏由本组件承载）──
   // 仅 Tauri 环境可用；浏览器等环境不构造窗口句柄，窗口控制按钮整体隐藏。
@@ -90,9 +87,6 @@
   ondblclick={onBarDblClick}
 >
   <div class="bar-left">
-    <button class="drawer-btn mobile-only" onclick={onToggleSidebar} title={t("drawer.sessions")}>
-      ☰
-    </button>
     <!-- 品牌标识：Spark Node（星点方徽），颜色跟随主题 CSS 变量 -->
     <svg class="app-logo" viewBox="0 0 48 48" aria-hidden="true">
       <rect x="2" y="2" width="44" height="44" rx="14" fill="var(--color-primary)" />
@@ -100,13 +94,38 @@
       <circle cx="34" cy="34" r="3.2" fill="var(--color-on-primary)" fill-opacity="0.85" />
     </svg>
     <span class="app-name">{appName}</span>
+
+    <!-- 小屏触发图标对齐大屏：左栏 + 底栏图标放在 logo/标题右侧，右栏图标在 bar-right -->
+    <button
+      class="layout-btn mobile-only"
+      class:active={drawerSidebar}
+      onclick={onToggleSidebar}
+      title={t("statusBar.toggleSidebar")}
+      aria-label={t("statusBar.toggleSidebar")}
+    >
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <rect class="frame" x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+        <rect class="fill" x="1.5" y="2.5" width="4.5" height="11" />
+        <line class="frame" x1="6" y1="2.5" x2="6" y2="13.5" />
+      </svg>
+    </button>
+
+    <button
+      class="layout-btn mobile-only"
+      class:active={drawerPanel}
+      onclick={onTogglePanel}
+      title={t("statusBar.togglePanel")}
+      aria-label={t("statusBar.togglePanel")}
+    >
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <rect class="frame" x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+        <rect class="fill" x="1.5" y="9.5" width="13" height="4" />
+        <line class="frame" x1="1.5" y1="9.5" x2="14.5" y2="9.5" />
+      </svg>
+    </button>
   </div>
 
-  <div class="bar-center">
-    {#if sessionId}
-      <span class="mode-tag">{modeLabel[mode] ?? mode}</span>
-    {/if}
-  </div>
+  <div class="bar-center"></div>
 
   <div class="bar-right">
     <span class="layout-sep"></span>
@@ -153,8 +172,18 @@
       </svg>
     </button>
 
-    <button class="drawer-btn mobile-only" onclick={onToggleInfo} title={t("drawer.info")}>
-      ⓘ
+    <button
+      class="layout-btn mobile-only"
+      class:active={drawerInfo}
+      onclick={onToggleInfo}
+      title={t("statusBar.toggleInfo")}
+      aria-label={t("statusBar.toggleInfo")}
+    >
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <rect class="frame" x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+        <rect class="fill" x="10" y="2.5" width="4.5" height="11" />
+        <line class="frame" x1="10" y1="2.5" x2="10" y2="13.5" />
+      </svg>
     </button>
 
     <LocaleSwitcher />
@@ -228,33 +257,6 @@
 
   .app-name { font-weight: 600; font-size: var(--fs-base); }
 
-  .mode-tag {
-    font-size: var(--fs-xs);
-    font-weight: 600;
-    text-transform: uppercase;
-    padding: 2px var(--space-2);
-    border-radius: var(--radius-sm);
-    background: var(--color-primary);
-    color: var(--color-on-primary);
-    letter-spacing: 0.03em;
-  }
-
-  .drawer-btn {
-    display: none;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border: var(--border-width) solid var(--color-border);
-    border-radius: var(--radius-sm);
-    background: var(--color-surface);
-    color: var(--color-text);
-    cursor: pointer;
-    font-size: 16px;
-    line-height: 1;
-    transition: background var(--duration-fast) var(--ease-out);
-  }
-
   .layout-sep {
     width: 1px;
     height: 20px;
@@ -307,8 +309,6 @@
 
   .layout-btn.active { color: var(--color-primary); }
   .layout-btn.active svg :global(.fill) { opacity: 0.9; }
-
-  .drawer-btn:hover { background: var(--color-hover); }
 
   /* ── 窗口控制按钮（自绘标题栏）── */
   .window-sep {

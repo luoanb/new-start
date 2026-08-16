@@ -2,9 +2,6 @@
   import { onMount } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import StatusBar from "$lib/components/StatusBar.svelte";
-  import SessionList from "$lib/components/SessionList.svelte";
-  import ProvidersModelsPanel from "$lib/components/ProvidersModelsPanel.svelte";
-  import TopicPanel from "$lib/components/TopicPanel.svelte";
   import SessionCreateModal from "$lib/components/SessionCreateModal.svelte";
   import ConnectDialog from "$lib/components/ConnectDialog.svelte";
   import ErrorBanner from "$lib/components/ErrorBanner.svelte";
@@ -15,7 +12,7 @@
   import ViewHost from "$lib/layout/ViewHost.svelte";
   import ViewContainer from "$lib/layout/ViewContainer.svelte";
   import { layoutStore } from "$lib/layout/LayoutStore.svelte";
-  import { activityItems, mainViews, mainPanelMeta } from "$lib/layout/views";
+  import { mainViews, mainPanelMeta } from "$lib/layout/views";
   import { setViewContext, type ViewContext } from "$lib/layout/viewContext";
   import { t } from "$lib/i18n";
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
@@ -24,12 +21,8 @@
   import { isTauriEnv } from "$lib/api";
 
   // ── 统一数据（dataStore 驱动：bootstrap + 事件订阅刷新）──
-  let conversations = $derived(dataStore.state.conversations);
   let runtimeStatus = $derived(dataStore.state.runtimeStatus);
   let ready = $derived(dataStore.state.ready);
-
-  // ── Active selection（会话选择由 dataStore 管理；provider/model 持久化到 localStorage）──
-  let activeConversationId = $derived(dataStore.state.activeConversationId ?? "");
 
   // 读取 localStorage 选择项并一次性迁移旧键（agent-app:* → pulsar:*）
   function persistedSelection(key: string, legacyKey: string): string {
@@ -62,12 +55,8 @@
   let remoteConnLocked = $state(false);
   let drawerSidebar = $state(false);
   let drawerInfo = $state(false);
-  // 移动端 drawer-info：原 Info 组合面板拆分后的聚合视图，drawer 内以本地 tab 切换承载
-  let drawerInfoTab = $state("providers-models");
-  let infoDrawerTabs = $derived([
-    { id: "providers-models", label: t("views.providersModels") },
-    { id: "topics", label: t("topicPanel.topics") },
-  ]);
+  // 移动端底栏：panel 容器以底部抽屉（drawer-bottom）展示
+  let drawerPanel = $state(false);
 
   // ── Layout (store-driven) ──
   let mainRef = $state<HTMLElement | null>(null);
@@ -99,10 +88,6 @@
   );
 
   // ── Derived ──
-  let activeConversation = $derived(
-    conversations.find((c) => c.id === activeConversationId)
-  );
-  let activeMode = $derived(activeConversation?.mode ?? "chat");
   let hasModel = $derived(!!ui.activeProviderId && !!ui.activeModelId);
 
   // 非 Tauri 环境（纯远程访问）：一旦出现连接错误即自动弹出连接弹窗并锁定，
@@ -226,6 +211,7 @@
         showCreateModal = true;
         drawerSidebar = false;
         drawerInfo = false;
+        drawerPanel = false;
       },
       showError: (msg) => (error = msg),
       dismissError: () => (error = ""),
@@ -340,12 +326,14 @@
     if (e.key === "Escape") {
       drawerSidebar = false;
       drawerInfo = false;
+      drawerPanel = false;
     }
   }
 
   function closeDrawers() {
     drawerSidebar = false;
     drawerInfo = false;
+    drawerPanel = false;
   }
 </script>
 
@@ -353,8 +341,9 @@
 
 <div class="app-layout">
   <nav class="activity-area">
+    <!-- 顶栏布局图标已接管栏位开关，ActivityBar 仅保留底部连接入口 -->
     <ActivityBar
-      items={activityItems}
+      items={[]}
       activeId={activityBarActive}
       onSelect={handleActivitySelect}
     >
@@ -376,11 +365,12 @@
   <header class="status-area">
     <StatusBar
       appName={runtimeStatus?.app_name ?? "星脉"}
-      sessionId={activeConversationId}
-      mode={activeMode}
       sidebarVisible={layoutStore.state.sidebar.visible}
       infoVisible={layoutStore.state.info.visible}
       panelVisible={layoutStore.state.panel.visible}
+      drawerSidebar={drawerSidebar}
+      drawerInfo={drawerInfo}
+      drawerPanel={drawerPanel}
       onToggleSidebar={() => {
         if (window.innerWidth <= 800) drawerSidebar = !drawerSidebar;
         else layoutStore.toggleSidebar();
@@ -389,7 +379,10 @@
         if (window.innerWidth <= 800) drawerInfo = !drawerInfo;
         else layoutStore.toggleInfo();
       }}
-      onTogglePanel={() => layoutStore.togglePanel()}
+      onTogglePanel={() => {
+        if (window.innerWidth <= 800) drawerPanel = !drawerPanel;
+        else layoutStore.togglePanel();
+      }}
     />
   </header>
 
@@ -498,7 +491,10 @@
       <h2>{t("drawer.sessions")}</h2>
       <button class="drawer-close" onclick={closeDrawers}>×</button>
     </div>
-    <SessionList />
+    <div class="drawer-body">
+      <!-- 左抽屉对齐桌面 sidebar 容器：渲染容器内全部视图（sessions/topics/tools，tab 切换） -->
+      <ViewContainer containerId="sidebar" />
+    </div>
   </aside>
 {/if}
 
@@ -510,23 +506,23 @@
       <h2>{t("drawer.info")}</h2>
       <button class="drawer-close" onclick={closeDrawers}>×</button>
     </div>
-    <div class="drawer-tabs">
-      {#each infoDrawerTabs as tab}
-        <button
-          class="drawer-tab"
-          class:active={drawerInfoTab === tab.id}
-          onclick={() => (drawerInfoTab = tab.id)}
-        >
-          {tab.label}
-        </button>
-      {/each}
+    <div class="drawer-body">
+      <!-- 右抽屉对齐桌面 info 容器：渲染容器内全部视图（providers-models/neurons-list 等，tab 切换） -->
+      <ViewContainer containerId="info" />
+    </div>
+  </aside>
+{/if}
+
+{#if drawerPanel}
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+  <div class="drawer-backdrop" role="presentation" onclick={closeDrawers}></div>
+  <aside class="drawer drawer-bottom">
+    <div class="drawer-header">
+      <h2>{t("drawer.panel")}</h2>
+      <button class="drawer-close" onclick={closeDrawers}>×</button>
     </div>
     <div class="drawer-body">
-      {#if drawerInfoTab === "providers-models"}
-        <ProvidersModelsPanel />
-      {:else}
-        <TopicPanel />
-      {/if}
+      <ViewContainer containerId="panel" />
     </div>
   </aside>
 {/if}
@@ -737,6 +733,25 @@
   .drawer-left { left: 0; }
   .drawer-right { right: 0; border-right: none; border-left: var(--border-width) solid var(--color-border); }
 
+  /* 底部抽屉：覆盖 .drawer 的全高定位，改为从底部弹出的横向抽屉 */
+  .drawer-bottom {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    max-width: 100%;
+    height: 45vh;
+    border-right: none;
+    border-top: var(--border-width) solid var(--color-border);
+    animation-name: drawer-slidein-bottom;
+  }
+
+  @keyframes drawer-slidein-bottom {
+    from { transform: translateY(20px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+
   @keyframes drawer-slidein {
     from { transform: translateX(-20px); opacity: 0; }
     to { transform: translateX(0); opacity: 1; }
@@ -770,24 +785,6 @@
     width: 100% !important;
     border-right: none;
   }
-
-  .drawer-tabs {
-    display: flex;
-    border-bottom: var(--border-width) solid var(--color-border);
-    flex-shrink: 0;
-  }
-  .drawer-tab {
-    flex: 1;
-    padding: var(--space-2);
-    border: none;
-    background: transparent;
-    cursor: pointer;
-    font-size: var(--fs-sm);
-    font-weight: 500;
-    color: var(--color-text-muted);
-    border-bottom: 2px solid transparent;
-  }
-  .drawer-tab.active { color: var(--color-primary); border-bottom-color: var(--color-primary); }
 
   .drawer-body {
     flex: 1;
