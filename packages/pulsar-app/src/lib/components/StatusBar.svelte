@@ -13,6 +13,9 @@
     drawerSidebar = false,
     drawerInfo = false,
     drawerPanel = false,
+    // 小屏导航栏（ActivityBar）显隐态与切换回调：点击顶栏 logo 触发
+    activityOpen = false,
+    onToggleActivity,
     onToggleSidebar,
     onToggleInfo,
     onTogglePanel,
@@ -24,6 +27,8 @@
     drawerSidebar?: boolean;
     drawerInfo?: boolean;
     drawerPanel?: boolean;
+    activityOpen?: boolean;
+    onToggleActivity?: () => void;
     onToggleSidebar?: () => void;
     onToggleInfo?: () => void;
     onTogglePanel?: () => void;
@@ -100,12 +105,24 @@
   ondblclick={onBarDblClick}
 >
   <div class="bar-left">
-    <!-- 品牌标识：Spark Node（星点方徽），颜色跟随主题 CSS 变量 -->
-    <svg class="app-logo" viewBox="0 0 48 48" aria-hidden="true">
-      <rect x="2" y="2" width="44" height="44" rx="14" fill="var(--color-primary)" />
-      <path d="M24 13 C25.2 19.4 28.6 22.8 35 24 C28.6 25.2 25.2 28.6 24 35 C22.8 28.6 19.4 25.2 13 24 C19.4 22.8 22.8 19.4 24 13 Z" fill="var(--color-on-primary)" />
-      <circle cx="34" cy="34" r="3.2" fill="var(--color-on-primary)" fill-opacity="0.85" />
-    </svg>
+    <!-- 品牌标识：Spark Node（星点方徽），颜色跟随主题 CSS 变量；
+         小屏下作为左侧导航栏开关：点击切换显隐（触屏可点，不依赖 hover） -->
+    <button
+      class="logo-btn"
+      class:clickable={isMobile}
+      class:active={activityOpen}
+      onclick={isMobile ? onToggleActivity : undefined}
+      tabindex={isMobile ? 0 : -1}
+      title={isMobile ? t("statusBar.toggleNav") : undefined}
+      aria-label={isMobile ? t("statusBar.toggleNav") : undefined}
+      aria-expanded={isMobile ? activityOpen : undefined}
+    >
+      <svg class="app-logo" viewBox="0 0 48 48" aria-hidden="true">
+        <rect x="2" y="2" width="44" height="44" rx="14" fill="var(--color-primary)" />
+        <path d="M24 13 C25.2 19.4 28.6 22.8 35 24 C28.6 25.2 25.2 28.6 24 35 C22.8 28.6 19.4 25.2 13 24 C19.4 22.8 22.8 19.4 24 13 Z" fill="var(--color-on-primary)" />
+        <circle cx="34" cy="34" r="3.2" fill="var(--color-on-primary)" fill-opacity="0.85" />
+      </svg>
+    </button>
     <span class="app-name">{appName}</span>
 
     <!-- 左栏开关按钮（大屏/小屏均显示）：小屏跟随抽屉态，大屏跟随栏位可见态 -->
@@ -141,8 +158,6 @@
   <div class="bar-center"></div>
 
   <div class="bar-right">
-    <span class="layout-sep"></span>
-
     <button
       class="layout-btn desktop-only"
       class:active={infoVisible}
@@ -185,8 +200,8 @@
       </svg>
     </button>
 
-    <span class="window-sep"></span>
     {#if appWindow}
+      <span class="window-sep"></span>
       <div class="window-controls">
         <button class="win-btn" onclick={minimize} title="Minimize" aria-label="Minimize">
           <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
@@ -249,16 +264,31 @@
     flex-shrink: 0;
   }
 
+  /* logo 按钮：仅小屏可点击（切换左侧导航栏显隐），大屏不响应 */
+  .logo-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    cursor: default;
+  }
+  .logo-btn.clickable {
+    cursor: pointer;
+    transition: background var(--duration-fast) var(--ease-out);
+  }
+  .logo-btn.clickable:hover { background: var(--color-hover); }
+  .logo-btn.clickable.active { box-shadow: inset 0 0 0 1px var(--color-primary); }
+  .logo-btn:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 1px;
+  }
+
   .bar-center { flex: 1; justify-content: center; }
 
   .app-name { font-weight: 600; font-size: var(--fs-base); }
-
-  .layout-sep {
-    width: 1px;
-    height: 20px;
-    background: var(--color-border);
-    margin: 0 var(--space-1);
-  }
 
   .layout-btn {
     display: flex;

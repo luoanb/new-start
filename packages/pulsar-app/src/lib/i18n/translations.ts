@@ -18,6 +18,7 @@ export type Translations = {
     toggleSidebar: string;
     toggleInfo: string;
     togglePanel: string;
+    toggleNav: string;
   };
   sessionList: {
     title: string;
@@ -436,6 +437,7 @@ export const en: Translations = {
     toggleSidebar: "Toggle sidebar",
     toggleInfo: "Toggle info panel",
     togglePanel: "Toggle bottom panel",
+    toggleNav: "Toggle navigation bar",
   },
   sessionList: {
     title: "Sessions",
@@ -873,6 +875,7 @@ export const zh: Translations = {
     toggleSidebar: "切换左栏",
     toggleInfo: "切换右栏",
     togglePanel: "切换底栏",
+    toggleNav: "切换导航栏",
   },
   sessionList: {
     title: "会话",

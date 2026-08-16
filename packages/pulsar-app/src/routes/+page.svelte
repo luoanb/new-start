@@ -59,6 +59,8 @@
   let drawerInfo = $state(false);
   // 移动端底栏：panel 容器以底部抽屉（drawer-bottom）展示
   let drawerPanel = $state(false);
+  // 小屏导航栏（ActivityBar）显隐：默认隐藏，点击顶栏 logo 切换
+  let activityOpen = $state(false);
 
   // ── Layout (store-driven) ──
   let mainRef = $state<HTMLElement | null>(null);
@@ -341,7 +343,7 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<div class="app-layout">
+<div class="app-layout" class:nav-open={activityOpen}>
   <nav class="activity-area">
     <!-- 顶栏布局图标已接管栏位开关，ActivityBar 仅保留底部连接入口 -->
     <ActivityBar
@@ -383,6 +385,8 @@
       drawerSidebar={drawerSidebar}
       drawerInfo={drawerInfo}
       drawerPanel={drawerPanel}
+      activityOpen={activityOpen}
+      onToggleActivity={() => (activityOpen = !activityOpen)}
       onToggleSidebar={() => {
         if (window.innerWidth <= 800) drawerSidebar = !drawerSidebar;
         else layoutStore.toggleSidebar();
@@ -815,6 +819,10 @@
   /* ── Responsive: <800px hide desktop panels, show drawers ── */
   @media (max-width: 800px) {
     .desktop-only { display: none; }
+
+    /* 小屏默认隐藏左侧导航栏，点击顶栏 logo 切换显隐（nav-open 显示） */
+    .activity-area { display: none; }
+    .app-layout.nav-open .activity-area { display: flex; }
 
     .app-layout {
       grid-template-rows: auto 1fr auto;
