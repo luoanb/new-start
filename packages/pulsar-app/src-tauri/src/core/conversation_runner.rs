@@ -434,7 +434,7 @@ const EXTRA_SPEC_NEURON_ID_KEY: &str = "spec_neuron_id";
 const EXTRA_SEED_KEY: &str = "seed";
 
 /// 读取会话运行态（缺失 / 非法回落默认）。
-fn read_session_state(conversation: &Conversation) -> SessionState {
+pub(crate) fn read_session_state(conversation: &Conversation) -> SessionState {
     conversation
         .extra
         .as_ref()
@@ -468,7 +468,7 @@ fn session_seed(conversation: &Conversation) -> Option<SessionSeed> {
 }
 
 /// 将运行态写回 `extra.session.state`（保留其它 extra 键与发起神经元绑定）。
-fn set_session_state(conversation: &mut Conversation, state: &SessionState) {
+pub(crate) fn set_session_state(conversation: &mut Conversation, state: &SessionState) {
     let mut extra = conversation.extra.take().unwrap_or_else(|| serde_json::json!({}));
     if !extra.is_object() {
         extra = serde_json::json!({});
@@ -488,7 +488,7 @@ fn set_session_state(conversation: &mut Conversation, state: &SessionState) {
 }
 
 /// 写回会话运行态。
-fn write_session_state(
+pub(crate) fn write_session_state(
     store: &ConversationStore,
     session_id: &str,
     state: &SessionState,
@@ -534,10 +534,7 @@ mod tests {
     };
 
     fn model() -> ChatModelSelection {
-        ChatModelSelection {
-            provider_id: "test".into(),
-            model_id: "test-model".into(),
-        }
+        ChatModelSelection::new("test", "test-model")
     }
 
     /// 空会话（`Conversation` 未实现 `Default`，测试手工构造）。

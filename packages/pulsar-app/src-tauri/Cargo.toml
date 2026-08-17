@@ -23,7 +23,6 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-async-openai = { version = "0.41.1", features = ["chat-completion"] }
 tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "time", "sync", "process"] }
 ratatui = "0.30"
 crossterm = "0.28"
@@ -36,7 +35,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "regist
 parking_lot = "0.12"
 rust-embed = "8"
 rmcp = { version = "3", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 http = "1"
 # 内嵌网络服务（远程模式）：统一 RPC 端点 + SSE 状态推送。
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }

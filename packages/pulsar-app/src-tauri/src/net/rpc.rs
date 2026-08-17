@@ -120,6 +120,10 @@ struct SendChatParams {
     provider_id: String,
     model_id: String,
     conversation_id: Option<String>,
+    #[serde(default)]
+    params: Option<crate::core::SamplingParams>,
+    #[serde(default)]
+    thinking: Option<crate::core::ThinkingConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -316,6 +320,8 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
                         provider_id: p.provider_id,
                         model_id: p.model_id,
                         conversation_id: p.conversation_id,
+                        params: p.params,
+                        thinking: p.thinking,
                     },
                 )
                 .await

@@ -205,6 +205,8 @@ impl Compactor {
                 model_id: model.model_id.clone(),
                 messages: wire,
                 tools: None,
+                params: model.params.clone(),
+                thinking: model.thinking.clone(),
             })
             .await
             .map_err(|e| AppError::CompactionFailed(format!("LLM summary call failed: {e}")))?;

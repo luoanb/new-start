@@ -63,6 +63,8 @@ async fn run() -> AppResult<()> {
                         ModelAppendTemplate::Neuron,
                     ),
                     tools: None,
+                    params: None,
+                    thinking: None,
                 })
                 .await?;
             println!("provider: {}", response.provider_id);

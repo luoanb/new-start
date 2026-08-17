@@ -428,10 +428,10 @@ impl TuiApp {
             Command::Model(provider_id, model_id) => {
                 match self.gateway.require_model(&provider_id, &model_id) {
                     Ok(()) => {
-                        self.active_model = Some(ChatModelSelection {
-                            provider_id: provider_id.clone(),
-                            model_id: model_id.clone(),
-                        });
+                        self.active_model = Some(ChatModelSelection::new(
+                            provider_id.clone(),
+                            model_id.clone(),
+                        ));
                         self.messages.push(TuiMessage::status(format!(
                             "Selected model: {}/{}",
                             provider_id, model_id
@@ -548,6 +548,8 @@ impl TuiApp {
                             ModelAppendTemplate::Neuron,
                         ),
                         tools: None,
+                        params: None,
+                        thinking: None,
                     })
                     .await
                 {
@@ -648,6 +650,8 @@ impl TuiApp {
                     provider_id: model.provider_id.clone(),
                     model_id: model.model_id.clone(),
                     conversation_id: Some(self.active_session_id.clone()),
+                    params: model.params.clone(),
+                    thinking: model.thinking.clone(),
                 },
             )
             .await;

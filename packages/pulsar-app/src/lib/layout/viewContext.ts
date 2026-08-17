@@ -8,6 +8,7 @@
 import { getContext, setContext } from "svelte";
 import { dataStore } from "$lib/stores/dataStore.svelte";
 import { layoutStore } from "./LayoutStore.svelte";
+import type { SamplingParams, ThinkingConfig } from "$lib/types";
 
 export const VIEW_CTX_KEY = "openclaw:view-ctx";
 
@@ -17,7 +18,7 @@ export type ViewCommands = {
   selectConversation: (id: string) => void;
   createSession: (mode: string) => Promise<void>;
   closeSession: (id: string) => Promise<void>;
-  changeModel: (providerId: string, modelId: string) => void;
+  changeModel: (providerId: string, modelId: string, params?: SamplingParams, thinking?: ThinkingConfig) => void;
   openCreateModal: () => void;
   showError: (msg: string) => void;
   dismissError: () => void;
@@ -31,10 +32,16 @@ export type ViewCommands = {
 
 /** 会话级 UI 状态（组合根持有，$state 保证响应式传播）。
  * 运行状态以 dataStore.runningSessions 为唯一权威来源（后端多会话并行）；
- * sendingIds 仅为发送按钮防抖锁，拦截同一会话连点重复发送，不参与运行状态判定。 */
+ * sendingIds 仅为发送按钮防抖锁，拦截同一会话连点重复发送，不参与运行状态判定。
+ * activeProviderId/activeModelId 为当前会话后端选中（读取自会话 state.model，后端权威）；
+ * activeParams/activeThinking 为会话级采样参数与思考模式。 */
 export type ViewUiState = {
   activeProviderId: string;
   activeModelId: string;
+  /** 会话级采样参数（可选，随发送携带；改选时写回后端）。 */
+  activeParams?: SamplingParams;
+  /** 会话级思考模式（可选）。 */
+  activeThinking?: ThinkingConfig;
   sendingIds: Set<string>;
 };
 

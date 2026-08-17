@@ -19,6 +19,8 @@ export type Conversation = {
     session?: {
       state?: {
         last_selected_neuron_id?: string | null;
+        /** 会话级模型选择（后端持有，前端切换会话回显；None = 未指定回退全局默认）。 */
+        model?: ChatModelSelection | null;
       };
     };
   } | null;
@@ -141,6 +143,41 @@ export type ModelCapabilities = {
   extras?: Record<string, string>;
 };
 
+/** 采样参数（统一规范，对齐后端 SamplingParams）：全字段可选，逐级合并。 */
+export type SamplingParams = {
+  temperature?: number;
+  top_p?: number;
+  /** 单次请求输出上限；覆盖模型定义 max_output_tokens。 */
+  max_tokens?: number;
+  presence_penalty?: number;
+  frequency_penalty?: number;
+  stop?: string[];
+  seed?: number;
+};
+
+export type ThinkingEffort = "low" | "high" | "max";
+
+/** 思考模式（深度思考）配置（对齐后端 ThinkingConfig）。 */
+export type ThinkingConfig = {
+  enabled?: boolean;
+  effort?: ThinkingEffort;
+};
+
+/** 模型思考能力声明（对齐后端 ThinkingCapability）。 */
+export type ThinkingCapability = {
+  supported: boolean;
+  default_enabled?: boolean;
+  default_effort?: ThinkingEffort;
+};
+
+/** 会话级 / 调用级统一模型选择（对齐后端 ChatModelSelection）。 */
+export type ChatModelSelection = {
+  provider_id: string;
+  model_id: string;
+  params?: SamplingParams;
+  thinking?: ThinkingConfig;
+};
+
 export type ModelInfo = {
   id: string;
   provider_id: string;
@@ -148,6 +185,10 @@ export type ModelInfo = {
   capabilities: ModelCapabilities;
   context_window?: number;
   max_output_tokens?: number;
+  /** 模型定义级默认采样参数（作为会话覆盖的底层默认）。 */
+  sampling?: SamplingParams;
+  /** 模型思考模式能力 + 默认。 */
+  thinking?: ThinkingCapability;
   pricing_input?: number;
   pricing_output?: number;
 };
@@ -173,6 +214,8 @@ export type ModelEditInfo = {
   capabilities: ModelCapabilities;
   context_window?: number | null;
   max_output_tokens?: number | null;
+  sampling?: SamplingParams | null;
+  thinking?: ThinkingCapability | null;
   pricing_input?: number | null;
   pricing_output?: number | null;
   pricing_cache_input?: number | null;

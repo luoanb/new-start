@@ -25,6 +25,9 @@ import type {
   Topic,
   PollerStatus,
   RunningSession,
+  SamplingParams,
+  ThinkingConfig,
+  ChatModelSelection,
 } from "$lib/types";
 import { formatInvokeError } from "$lib/utils/formatInvokeError";
 
@@ -234,6 +237,8 @@ async function sendMessage(
   text: string,
   providerId: string,
   modelId: string,
+  params?: SamplingParams,
+  thinking?: ThinkingConfig,
 ): Promise<ChatResponse> {
   if (!state.activeConversationId) {
     throw new Error("No active session. Create a new session first.");
@@ -249,6 +254,8 @@ async function sendMessage(
     providerId,
     modelId,
     conversationId: state.activeConversationId,
+    params,
+    thinking,
   });
   // 乐观追加 assistant 回复；后端 emit 会再触发一次权威刷新（幂等）。
   state.messages = [
@@ -260,6 +267,14 @@ async function sendMessage(
     },
   ];
   return res;
+}
+
+/** 持久化会话级模型选择到后端（后端持有）；写成功依赖 Conversations 事件刷新列表回显。 */
+async function setSessionModel(
+  conversationId: string,
+  selection: ChatModelSelection,
+): Promise<void> {
+  await api.invoke("set_session_model", { conversationId, selection });
 }
 
 async function clearConversation(): Promise<void> {
@@ -438,6 +453,7 @@ export const dataStore = {
   createConversation,
   closeSession,
   sendMessage,
+  setSessionModel,
   clearConversation,
   scoreFeedback,
   // 神经元统一管理（列表 ←→ 画布共享）

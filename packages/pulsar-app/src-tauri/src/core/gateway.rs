@@ -568,6 +568,8 @@ impl Gateway {
         let model = ChatModelSelection {
             provider_id: options.provider_id.clone(),
             model_id: options.model_id.clone(),
+            params: options.params.clone(),
+            thinking: options.thinking.clone(),
         };
 
         // Clone handles before any network await — callers must not hold an outer Gateway lock.
@@ -637,6 +639,22 @@ impl Gateway {
         };
         self.set_current_conversation_id(response.conversation_id.clone())?;
         Ok(response)
+    }
+
+    /// 持久化会话级模型选择（后端持有）：校验模型存在 → 写 `extra.session.state.model`。
+    /// 前端切换会话读取后端选中，改选时调此命令落库。
+    pub fn set_session_model(
+        &self,
+        conversation_id: &str,
+        selection: &ChatModelSelection,
+    ) -> AppResult<()> {
+        self.providers
+            .require_model(&selection.provider_id, &selection.model_id)?;
+        let mut conversation = self.store.require_conversation(conversation_id)?;
+        let mut state = super::conversation_runner::read_session_state(&conversation);
+        state.model = Some(selection.clone());
+        super::conversation_runner::set_session_state(&mut conversation, &state);
+        self.store.save_conversation(&conversation)
     }
 
     pub async fn assistant_step(
@@ -1248,10 +1266,7 @@ mod tests {
             .store
             .create_conversation(None, ConversationMode::Agent)
             .expect("agent conversation should be created");
-        let model = ChatModelSelection {
-            provider_id: "fake".into(),
-            model_id: "fake".into(),
-        };
+        let model = ChatModelSelection::new("fake", "fake");
 
         let response = gateway
             .agent
@@ -1291,10 +1306,7 @@ mod tests {
             .store
             .create_conversation(None, ConversationMode::Agent)
             .expect("agent conversation should be created");
-        let model = ChatModelSelection {
-            provider_id: "fake".into(),
-            model_id: "fake".into(),
-        };
+        let model = ChatModelSelection::new("fake", "fake");
 
         let err = gateway
             .agent
@@ -1386,6 +1398,8 @@ mod tests {
                     provider_id: "deepseek".to_string(),
                     model_id: "missing-model".to_string(),
                     conversation_id: None,
+                    params: None,
+                    thinking: None,
                 },
             )
             .await

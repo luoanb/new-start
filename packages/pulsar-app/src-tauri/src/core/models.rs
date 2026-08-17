@@ -238,17 +238,95 @@ pub struct ChatResponse {
     pub response: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// 采样参数（统一规范，对外契约）：全字段可选，供「模型定义默认 → 会话覆盖 → 单次覆盖」逐级合并。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SamplingParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    /// 单次请求输出上限；覆盖模型定义 `max_output_tokens`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<i64>,
+}
+
+/// 思考模式强度档位（统一规范；服务商差异由 providers 抹平）。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ThinkingEffort {
+    Low,
+    High,
+    Max,
+}
+
+/// 思考模式（深度思考）配置（统一规范，对外契约）。
+/// 用户视角为「开关 + 强度」；`None` 字段表示跟随模型定义默认 / 全局默认。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ThinkingConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<ThinkingEffort>,
+}
+
+/// 模型思考模式能力声明（模型定义层）：`supported=false` 或 `None` = 不支持思考，开关 UI 置灰、调用忽略。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ThinkingCapability {
+    /// 是否支持思考模式。
+    #[serde(default)]
+    pub supported: bool,
+    /// 模型默认是否开启思考（用户未指定时）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_enabled: Option<bool>,
+    /// 模型默认思考强度（用户未指定时）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_effort: Option<ThinkingEffort>,
+}
+
+/// 会话级 / 调用级统一模型选择（对外契约）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChatModelSelection {
     pub provider_id: String,
     pub model_id: String,
+    /// 会话级采样参数；服务商差异由 providers 翻译层抹平。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<SamplingParams>,
+    /// 会话级思考模式；`None` = 跟随模型默认。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+impl ChatModelSelection {
+    pub fn new(provider_id: impl Into<String>, model_id: impl Into<String>) -> Self {
+        Self {
+            provider_id: provider_id.into(),
+            model_id: model_id.into(),
+            params: None,
+            thinking: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChatOptions {
     pub provider_id: String,
     pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation_id: Option<String>,
+    /// 单次采样参数覆盖（会话级 / 模型定义默认之上）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<SamplingParams>,
+    /// 单次思考模式覆盖。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -338,6 +416,12 @@ pub struct ModelInfo {
     pub capabilities: ModelCapabilities,
     pub context_window: Option<u32>,
     pub max_output_tokens: Option<u32>,
+    /// 模型定义级默认采样参数（作为会话覆盖的底层默认）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<SamplingParams>,
+    /// 模型思考模式能力 + 默认（声明是否支持、默认开关/强度）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingCapability>,
     pub pricing_input: Option<f64>,
     pub pricing_output: Option<f64>,
     pub pricing_cache_input: Option<f64>,
@@ -361,6 +445,9 @@ pub struct ModelMessage {
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// 推理模型思维链（DeepSeek 等，与 content 同级）。有工具调用的多轮必须回传。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -416,13 +503,19 @@ pub struct ToolInfo {
     pub parameters: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ModelCallRequest {
     pub provider_id: String,
     pub model_id: String,
     pub messages: Vec<ModelMessage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<ToolDefinition>>,
+    /// 单次采样参数覆盖（最高优先级）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<SamplingParams>,
+    /// 单次思考模式覆盖（最高优先级）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

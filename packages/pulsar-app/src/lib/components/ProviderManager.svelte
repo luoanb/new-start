@@ -129,6 +129,8 @@
       capabilities: { chat: true, tools: false, streaming: true },
       context_window: null,
       max_output_tokens: null,
+      sampling: null,
+      thinking: null,
       pricing_input: null,
       pricing_output: null,
     };
@@ -330,6 +332,51 @@
                           {cap.label}
                         </label>
                       {/each}
+                    </div>
+                  </div>
+                  <div class="field-row">
+                    <div class="field-narrow">
+                      <span class="field-label">默认温度</span>
+                      <input
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        max="2"
+                        placeholder="默认"
+                        value={m.sampling?.temperature ?? null}
+                        onchange={(e) => {
+                          const v = e.currentTarget.value;
+                          if (!m.sampling) m.sampling = {};
+                          m.sampling.temperature = v === "" ? undefined : parseFloat(v);
+                        }}
+                      />
+                    </div>
+                    <div class="field-narrow">
+                      <span class="field-label">默认 top_p</span>
+                      <input
+                        type="number"
+                        step="0.05"
+                        min="0"
+                        max="1"
+                        placeholder="默认"
+                        value={m.sampling?.top_p ?? null}
+                        onchange={(e) => {
+                          const v = e.currentTarget.value;
+                          if (!m.sampling) m.sampling = {};
+                          m.sampling.top_p = v === "" ? undefined : parseFloat(v);
+                        }}
+                      />
+                    </div>
+                    <div class="field-narrow">
+                      <span class="field-label">支持思考模式</span>
+                      <input
+                        type="checkbox"
+                        checked={m.thinking?.supported ?? false}
+                        onchange={(e) => {
+                          if (!m.thinking) m.thinking = { supported: false };
+                          m.thinking.supported = e.currentTarget.checked;
+                        }}
+                      />
                     </div>
                     <div class="model-actions">
                       <Tooltip label={t("providerManager.deleteModel")} position="top">

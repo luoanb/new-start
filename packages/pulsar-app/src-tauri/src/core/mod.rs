@@ -32,6 +32,7 @@ pub mod neuron_model {
 pub mod neuron_store {
     pub use super::neuron::store::*;
 }
+pub mod openai_compat;
 pub mod poller;
 pub mod poller_step;
 pub mod providers;
@@ -67,9 +68,10 @@ pub use models::{
     EnsureSystemOpts, GeneratedNeuronDraft, Message, MessageBody, MessageRole, ModelCallRequest,
     ModelCallResponse, ModelCapabilities, ModelInfo, ModelMessage, ModelMessageRole,
     NeighborhoodPoolPolicy, Neuron, NeuronCreate, NeuronKindFilter, NeuronPage, NeuronSubgraph,
-    NeuronUpdate, ProviderInfo, ProviderKind, RuntimeStatus, ScopeInItem, SelectionPolicy,
-    SessionBehavior, SkillInfo, SystemPromptStatus, ToolCall, ToolDefinition, ToolInfo, ToolPolicy,
-    ToolSource, Topic, TopicStatus, TopicUpdate, DEFAULT_ASSISTANT_GLOBAL_LIMIT,
+    NeuronUpdate, ProviderInfo, ProviderKind, RuntimeStatus, SamplingParams, ScopeInItem,
+    SelectionPolicy, SessionBehavior, SkillInfo, SystemPromptStatus, ThinkingCapability,
+    ThinkingConfig, ThinkingEffort, ToolCall, ToolDefinition, ToolInfo, ToolPolicy, ToolSource,
+    Topic, TopicStatus, TopicUpdate, DEFAULT_ASSISTANT_GLOBAL_LIMIT,
 };
 pub use poller::{
     PollHandler, Poller, PollerConfigReader, PollerRunState, PollerSettings, PollerStatus,

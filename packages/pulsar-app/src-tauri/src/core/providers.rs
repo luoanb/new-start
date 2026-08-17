@@ -2,20 +2,12 @@ use super::{
     error::{AppError, AppResult},
     models::{
         ChatModelSelection, ModelCallRequest, ModelCallResponse, ModelCapabilities, ModelInfo,
-        ModelMessage, ModelMessageRole, ProviderInfo, ProviderKind,
+        ModelMessage, ModelMessageRole, ProviderInfo, ProviderKind, SamplingParams,
+        ThinkingCapability, ThinkingConfig, ThinkingEffort,
     },
-};
-use async_openai::{
-    config::OpenAIConfig,
-    types::chat::{
-        ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
-        ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestAssistantMessageContent,
-        ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
-        ChatCompletionRequestToolMessageArgs, ChatCompletionRequestToolMessageContent,
-        ChatCompletionRequestUserMessageArgs, ChatCompletionTool, ChatCompletionTools,
-        CreateChatCompletionRequestArgs, FinishReason, FunctionCall, FunctionObject,
+    openai_compat::{
+        self, ChatMessage, ChatRequest, FunctionCallWire, FunctionDef, ToolCallWire, ToolDef,
     },
-    Client,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -87,6 +79,10 @@ struct ConfiguredModel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     max_output_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    sampling: Option<SamplingParams>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thinking: Option<ThinkingCapability>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pricing_input: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pricing_output: Option<f64>,
@@ -141,6 +137,10 @@ pub struct ModelEditInfo {
     pub context_window: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<SamplingParams>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingCapability>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing_input: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -270,10 +270,7 @@ impl ProviderRegistry {
         match (defaults.provider, defaults.model) {
             (Some(provider_id), Some(model_id)) => {
                 self.require_model(&provider_id, &model_id)?;
-                Ok(Some(ChatModelSelection {
-                    provider_id,
-                    model_id,
-                }))
+                Ok(Some(ChatModelSelection::new(provider_id, model_id)))
             }
             (None, None) => Ok(None),
             _ => Err(AppError::InvalidInput(
@@ -288,65 +285,95 @@ impl ProviderRegistry {
         self.require_model_definition(&provider, file_config.providers.get(provider_id), model_id)
     }
 
+    /// 读取模型定义级默认采样参数 + 思考能力（providers 抹平的底层默认）。
+    /// 允许未登记模型（allow_unlisted_models）时返回 None 默认。
+    fn model_runtime_spec(
+        &self,
+        provider: &ProviderDefinition,
+        model_id: &str,
+    ) -> (Option<SamplingParams>, Option<ThinkingCapability>) {
+        let file_config = self.read_config().ok();
+        let provider_config = file_config.as_ref().and_then(|c| c.providers.get(&provider.info.id));
+        match configured_models(provider, provider_config)
+            .into_iter()
+            .find(|m| m.id == model_id)
+        {
+            Some(model) => (model.sampling, model.thinking),
+            None => (None, None),
+        }
+    }
+
     pub async fn call_model(&self, request: ModelCallRequest) -> AppResult<ModelCallResponse> {
         self.validate_request(&request)?;
 
         self.require_model(&request.provider_id, &request.model_id)?;
         let provider = self.require_provider(&request.provider_id)?;
         let config = self.resolve_provider_config(&provider)?;
-        let client = Client::with_config(build_openai_config(config));
-        let messages = request
-            .messages
-            .iter()
-            .map(to_chat_message)
-            .collect::<AppResult<Vec<_>>>()?;
 
-        let mut args = CreateChatCompletionRequestArgs::default();
-        let builder = args.model(&request.model_id).messages(messages);
+        // 统一规范 → providers 抹平：取模型定义级默认 + 调用级覆盖，逐级合并。
+        let (model_sampling, model_thinking) =
+            self.model_runtime_spec(&provider, &request.model_id);
+        let sampling = resolve_sampling(model_sampling.as_ref(), request.params.as_ref());
+        let thinking = resolve_thinking(model_thinking.as_ref(), request.thinking.as_ref());
 
-        // Attach tools if present
-        if let Some(tools) = &request.tools {
-            let openai_tools: Vec<ChatCompletionTools> = tools
-                .iter()
-                .map(|t| {
-                    ChatCompletionTools::Function(ChatCompletionTool {
-                        function: FunctionObject {
-                            name: t.name.clone(),
-                            description: Some(t.description.clone()),
-                            parameters: Some(t.parameters.clone()),
-                            strict: None,
-                        },
-                    })
-                })
-                .collect();
-            builder.tools(openai_tools);
-        }
+        let base = config
+            .api_base
+            .as_deref()
+            .unwrap_or("https://api.openai.com/v1");
+        let client = openai_compat::Client::new(base, config.api_key);
 
-        let chat_request = args
-            .build()
-            .map_err(|error| AppError::InvalidInput(error.to_string()))?;
+        let mut chat_request = ChatRequest::new(&request.model_id, to_chat_messages(&request.messages)?);
+        apply_sampling(&mut chat_request, &sampling);
+        apply_tools(&mut chat_request, &request.tools);
+        // 思考模式：`reasoning_effort`（OpenAI 标准）+ DeepSeek `thinking` 开关 → extra 透传。
+        apply_thinking(&mut chat_request, thinking.as_ref());
 
-        let response = client
-            .chat()
-            .create(chat_request)
-            .await
-            .map_err(|error| AppError::LlmRequestFailed(error.to_string()))?;
+        let response = client.chat(&chat_request).await?;
+        self.parse_chat_response(response, &request)
+    }
 
+    /// 流式调用入口（协议层已实现 SSE；round_executor 尚未接入增量渲染，暂保留供后续使用）。
+    #[allow(dead_code)]
+    pub async fn call_model_stream(
+        &self,
+        request: ModelCallRequest,
+        on_chunk: impl FnMut(openai_compat::StreamChunk),
+    ) -> AppResult<ModelCallResponse> {
+        self.validate_request(&request)?;
+        self.require_model(&request.provider_id, &request.model_id)?;
+        let provider = self.require_provider(&request.provider_id)?;
+        let config = self.resolve_provider_config(&provider)?;
+        let (model_sampling, model_thinking) =
+            self.model_runtime_spec(&provider, &request.model_id);
+        let sampling = resolve_sampling(model_sampling.as_ref(), request.params.as_ref());
+        let thinking = resolve_thinking(model_thinking.as_ref(), request.thinking.as_ref());
+
+        let base = config
+            .api_base
+            .as_deref()
+            .unwrap_or("https://api.openai.com/v1");
+        let client = openai_compat::Client::new(base, config.api_key);
+        let mut chat_request = ChatRequest::new(&request.model_id, to_chat_messages(&request.messages)?);
+        apply_sampling(&mut chat_request, &sampling);
+        apply_tools(&mut chat_request, &request.tools);
+        apply_thinking(&mut chat_request, thinking.as_ref());
+
+        let stream = client.chat_stream(&chat_request, on_chunk).await?;
+        self.parse_chat_response(stream, &request)
+    }
+
+    fn parse_chat_response(
+        &self,
+        response: openai_compat::ChatResponse,
+        request: &ModelCallRequest,
+    ) -> AppResult<ModelCallResponse> {
         let choice = response
             .choices
             .first()
             .ok_or_else(|| AppError::LlmRequestFailed("Provider returned no choices".into()))?;
 
-        // Parse finish_reason
-        let finish_reason = match choice.finish_reason {
-            Some(FinishReason::Stop) => "stop",
-            Some(FinishReason::ToolCalls) => "tool_calls",
-            Some(FinishReason::Length) => "length",
-            Some(FinishReason::ContentFilter) => "content_filter",
-            Some(FinishReason::FunctionCall) => "function_call",
-            None => "stop",
-        }
-        .to_string();
+        // finish_reason 已是 OpenAI 契约字符串（stop/length/tool_calls/content_filter/function_call）。
+        let finish_reason = choice.finish_reason.clone().unwrap_or_else(|| "stop".to_string());
 
         // Parse tool_calls from response
         let tool_calls: Option<Vec<super::models::ToolCall>> = choice
@@ -356,18 +383,15 @@ impl ProviderRegistry {
             .map(|calls| {
                 calls
                     .iter()
-                    .filter_map(|tc| match tc {
-                        ChatCompletionMessageToolCalls::Function(ftc) => {
-                            let name = ftc.function.name.clone();
-                            let args: serde_json::Value =
-                                serde_json::from_str(&ftc.function.arguments).unwrap_or_default();
-                            Some(super::models::ToolCall {
-                                id: ftc.id.clone(),
-                                name,
-                                arguments: args,
-                            })
-                        }
-                        _ => None,
+                    .filter_map(|tc| {
+                        let name = tc.function.name.clone();
+                        let args: serde_json::Value =
+                            serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                        Some(super::models::ToolCall {
+                            id: tc.id.clone(),
+                            name,
+                            arguments: args,
+                        })
                     })
                     .collect()
             })
@@ -447,8 +471,8 @@ impl ProviderRegistry {
         }
 
         Ok(ModelCallResponse {
-            provider_id: request.provider_id,
-            model_id: request.model_id,
+            provider_id: request.provider_id.clone(),
+            model_id: request.model_id.clone(),
             output,
             tool_calls,
             finish_reason,
@@ -738,6 +762,18 @@ fn build_providers_json(view: &ProviderConfigView, root: &serde_json::Value) -> 
                 if let Some(v) = m.max_output_tokens {
                     mo.insert("max_output_tokens".into(), serde_json::json!(v));
                 }
+                if let Some(v) = &m.sampling {
+                    mo.insert(
+                        "sampling".into(),
+                        serde_json::to_value(v).unwrap_or_default(),
+                    );
+                }
+                if let Some(v) = &m.thinking {
+                    mo.insert(
+                        "thinking".into(),
+                        serde_json::to_value(v).unwrap_or_default(),
+                    );
+                }
                 if let Some(v) = m.pricing_input {
                     mo.insert("pricing_input".into(), serde_json::json!(v));
                 }
@@ -819,72 +855,194 @@ fn validate_provider_config(view: &ProviderConfigView) -> AppResult<()> {
     Ok(())
 }
 
-fn to_chat_message(message: &ModelMessage) -> AppResult<ChatCompletionRequestMessage> {
-    match message.role {
-        ModelMessageRole::System => ChatCompletionRequestSystemMessageArgs::default()
-            .content(message.content.clone())
-            .build()
-            .map(Into::into)
-            .map_err(|error| AppError::InvalidInput(error.to_string())),
-        ModelMessageRole::User => ChatCompletionRequestUserMessageArgs::default()
-            .content(message.content.clone())
-            .build()
-            .map(Into::into)
-            .map_err(|error| AppError::InvalidInput(error.to_string())),
-        ModelMessageRole::Assistant => {
-            let mut args = ChatCompletionRequestAssistantMessageArgs::default();
-            if !message.content.is_empty() {
-                args.content(ChatCompletionRequestAssistantMessageContent::Text(
-                    message.content.clone(),
-                ));
+/// 统一 `ModelMessage` → OpenAI 兼容消息（含 assistant 推理回传 `reasoning_content`）。
+fn to_chat_messages(messages: &[ModelMessage]) -> AppResult<Vec<ChatMessage>> {
+    messages
+        .iter()
+        .map(|message| match message.role {
+            ModelMessageRole::System => Ok(ChatMessage::system(&message.content)),
+            ModelMessageRole::User => Ok(ChatMessage::user(&message.content)),
+            ModelMessageRole::Assistant => {
+                let mut chat_msg = ChatMessage::assistant(
+                    if message.content.is_empty() {
+                        None
+                    } else {
+                        Some(message.content.clone())
+                    },
+                    message.tool_calls.as_ref().map(|tc| {
+                        tc.iter()
+                            .map(|t| ToolCallWire {
+                                id: t.id.clone(),
+                                r#type: "function".into(),
+                                function: FunctionCallWire {
+                                    name: t.name.clone(),
+                                    arguments: t.arguments.to_string(),
+                                },
+                            })
+                            .collect()
+                    }),
+                );
+                // 推理模型：有工具调用的多轮必须回传思维链，否则 DeepSeek 返回 400。
+                chat_msg = chat_msg.with_reasoning(message.reasoning_content.clone());
+                Ok(chat_msg)
             }
-            if let Some(tc) = &message.tool_calls {
-                let tool_calls: Vec<ChatCompletionMessageToolCalls> = tc
-                    .iter()
-                    .map(|t| {
-                        ChatCompletionMessageToolCalls::Function(ChatCompletionMessageToolCall {
-                            id: t.id.clone(),
-                            function: FunctionCall {
-                                name: t.name.clone(),
-                                arguments: t.arguments.to_string(),
-                            },
-                        })
-                    })
-                    .collect();
-                args.tool_calls(tool_calls);
+            ModelMessageRole::Tool => {
+                let tool_call_id = message.tool_call_id.clone().ok_or_else(|| {
+                    AppError::InvalidInput("Tool message missing tool_call_id".into())
+                })?;
+                Ok(ChatMessage::tool(tool_call_id, &message.content))
             }
-            args.build()
-                .map(Into::into)
-                .map_err(|error| AppError::InvalidInput(error.to_string()))
-        }
-        ModelMessageRole::Tool => {
-            let tool_call_id = message.tool_call_id.clone().ok_or_else(|| {
-                AppError::InvalidInput("Tool message missing tool_call_id".into())
-            })?;
-            ChatCompletionRequestToolMessageArgs::default()
-                .tool_call_id(tool_call_id)
-                .content(ChatCompletionRequestToolMessageContent::Text(
-                    message.content.clone(),
-                ))
-                .build()
-                .map(Into::into)
-                .map_err(|error| AppError::InvalidInput(error.to_string()))
-        }
-    }
-}
-
-fn build_openai_config(config: ResolvedProviderConfig) -> OpenAIConfig {
-    let mut openai_config = OpenAIConfig::new().with_api_key(config.api_key);
-    if let Some(api_base) = config.api_base {
-        openai_config = openai_config.with_api_base(api_base);
-    }
-    openai_config
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone)]
 struct ResolvedProviderConfig {
     api_key: String,
     api_base: Option<String>,
+}
+
+
+/// 采样参数逐级合并：调用级覆盖（更高）> 模型定义默认。未设置字段用低层值。
+fn resolve_sampling(model_default: Option<&SamplingParams>, call: Option<&SamplingParams>) -> SamplingParams {
+    let mut out = model_default.cloned().unwrap_or_default();
+    if let Some(c) = call {
+        if c.temperature.is_some() {
+            out.temperature = c.temperature;
+        }
+        if c.top_p.is_some() {
+            out.top_p = c.top_p;
+        }
+        if c.max_tokens.is_some() {
+            out.max_tokens = c.max_tokens;
+        }
+        if c.presence_penalty.is_some() {
+            out.presence_penalty = c.presence_penalty;
+        }
+        if c.frequency_penalty.is_some() {
+            out.frequency_penalty = c.frequency_penalty;
+        }
+        if c.stop.is_some() {
+            out.stop = c.stop.clone();
+        }
+        if c.seed.is_some() {
+            out.seed = c.seed;
+        }
+    }
+    out
+}
+
+/// 思考模式合并：调用级覆盖 > 模型定义默认。能力以模型定义声明为准（不支持则忽略）。
+fn resolve_thinking(
+    model_cap: Option<&ThinkingCapability>,
+    call: Option<&ThinkingConfig>,
+) -> Option<ThinkingConfig> {
+    // 模型不支持思考 → 一律关闭（providers 抹平）。
+    if !model_cap.map(|c| c.supported).unwrap_or(false) {
+        return None;
+    }
+    match call {
+        Some(c) => {
+            let mut out = c.clone();
+            if out.enabled.is_none() {
+                out.enabled = model_cap.and_then(|m| m.default_enabled);
+            }
+            if out.effort.is_none() {
+                out.effort = model_cap.and_then(|m| m.default_effort);
+            }
+            // 未开启思考则无需携带 effort。
+            if out.enabled == Some(false) {
+                out.effort = None;
+            }
+            Some(out)
+        }
+        // 无调用级配置：使用模型默认思考（若有声明）。
+        None => {
+            let enabled = model_cap.and_then(|m| m.default_enabled);
+            let effort = model_cap.and_then(|m| m.default_effort);
+            if enabled.is_some() || effort.is_some() {
+                Some(ThinkingConfig { enabled, effort })
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// 思考模式强度 → wire 字符串（providers 抹平：OpenAI/DeepSeek 均接受 lowercase 值）。
+fn thinking_effort_wire(effort: ThinkingEffort) -> &'static str {
+    match effort {
+        ThinkingEffort::Low => "low",
+        ThinkingEffort::High => "high",
+        ThinkingEffort::Max => "max",
+    }
+}
+
+/// 把统一采样规范应用到 OpenAI 兼容请求（providers 抹平：全字段透传，服务商差异交给 openai_compat）。
+fn apply_sampling(req: &mut ChatRequest, s: &SamplingParams) {
+    if let Some(t) = s.temperature {
+        req.temperature = Some(t);
+    }
+    if let Some(p) = s.top_p {
+        req.top_p = Some(p);
+    }
+    if let Some(m) = s.max_tokens {
+        req.max_tokens = Some(m);
+    }
+    if let Some(p) = s.presence_penalty {
+        req.presence_penalty = Some(p);
+    }
+    if let Some(p) = s.frequency_penalty {
+        req.frequency_penalty = Some(p);
+    }
+    if let Some(stop) = &s.stop {
+        if !stop.is_empty() {
+            req.stop = Some(stop.clone());
+        }
+    }
+    if let Some(seed) = s.seed {
+        req.seed = Some(seed);
+    }
+}
+
+/// 统一 `ToolDefinition` → OpenAI 工具定义（function schema）。
+fn apply_tools(req: &mut ChatRequest, tools: &Option<Vec<crate::core::models::ToolDefinition>>) {
+    if let Some(tools) = tools {
+        if !tools.is_empty() {
+            req.tools = Some(
+                tools
+                    .iter()
+                    .map(|t| ToolDef {
+                        type_: "function".into(),
+                        function: FunctionDef {
+                            name: t.name.clone(),
+                            description: Some(t.description.clone()),
+                            parameters: Some(t.parameters.clone()),
+                            strict: None,
+                        },
+                    })
+                    .collect(),
+            );
+        }
+    }
+}
+
+/// 思考模式 → extra 透传：`reasoning_effort`（OpenAI 标准）+ DeepSeek `thinking` 开关。
+/// providers 抹平：互斥（思考开启时采样参数失效）由服务商自行消化，本层不主动删采样。
+fn apply_thinking(req: &mut ChatRequest, thinking: Option<&ThinkingConfig>) {
+    let Some(th) = thinking else { return };
+    if let Some(effort) = th.effort {
+        req.extra.insert(
+            "reasoning_effort".to_string(),
+            serde_json::json!(thinking_effort_wire(effort)),
+        );
+    }
+    if let Some(enabled) = th.enabled {
+        req.extra.insert(
+            "thinking".to_string(),
+            serde_json::json!({ "type": if enabled { "enabled" } else { "disabled" } }),
+        );
+    }
 }
 
 fn default_providers() -> Vec<ProviderDefinition> {
@@ -999,6 +1157,8 @@ fn configured_models(
                     capabilities: model.capabilities.clone(),
                     context_window: model.context_window,
                     max_output_tokens: model.max_output_tokens,
+                    sampling: model.sampling.clone(),
+                    thinking: model.thinking.clone(),
                     pricing_input: model.pricing_input,
                     pricing_output: model.pricing_output,
                     pricing_cache_input: model.pricing_cache_input,
@@ -1022,6 +1182,8 @@ fn configured_models_edit(provider_config: Option<&ProviderConfig>) -> Vec<Model
                     capabilities: model.capabilities.clone(),
                     context_window: model.context_window,
                     max_output_tokens: model.max_output_tokens,
+                    sampling: model.sampling.clone(),
+                    thinking: model.thinking.clone(),
                     pricing_input: model.pricing_input,
                     pricing_output: model.pricing_output,
                     pricing_cache_input: model.pricing_cache_input,
@@ -1120,8 +1282,11 @@ mod tests {
                 content: "hello".to_string(),
                 tool_calls: None,
                 tool_call_id: None,
+                reasoning_content: None,
             }],
             tools: None,
+            params: None,
+            thinking: None,
         };
 
         let error = registry

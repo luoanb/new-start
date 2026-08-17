@@ -132,6 +132,8 @@ impl RoundExecutor {
                 model_id: model.model_id.clone(),
                 messages: model_messages,
                 tools,
+                params: model.params.clone(),
+                thinking: model.thinking.clone(),
             })
             .await?;
         tracing::info!(

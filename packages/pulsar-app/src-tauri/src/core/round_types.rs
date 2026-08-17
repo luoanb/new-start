@@ -10,9 +10,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::models::ToolCall;
+use super::models::{ChatModelSelection, ToolCall};
 
-/// 会话级运行态（`conversation.extra.session.state`）：仅保留选型锚点。
+/// 会话级运行态（`conversation.extra.session.state`）：仅保留选型锚点 + 会话级模型选择。
 ///
 /// 已废弃（由消息盖章推导替代）：`last_intervention_at` / `intervention_neuron_ids`
 /// 曾在会话态滚动累积"干预窗口"；现改为每条 assistant 产物落库盖章选中神经元
@@ -24,6 +24,10 @@ use super::models::ToolCall;
 pub struct SessionState {
     #[serde(default)]
     pub last_selected_neuron_id: Option<String>,
+    /// 会话级模型选择（`provider_id + model_id`）；`None` = 未指定，回退全局默认。
+    /// 由用户改选写入，随会话持久化；前端切换会话回显本值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<ChatModelSelection>,
 }
 
 /// 会话种子：决定首轮选型起点与推进规则。

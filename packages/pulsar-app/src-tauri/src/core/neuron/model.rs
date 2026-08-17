@@ -50,6 +50,8 @@ impl NeuronModelCaller for DefaultNeuronModelCaller {
                 model_id: model.model_id,
                 messages,
                 tools: None,
+                params: model.params,
+                thinking: model.thinking,
             })
             .await?;
         if response.output.trim().is_empty() {

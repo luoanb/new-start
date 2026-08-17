@@ -16,11 +16,11 @@ use crate::core::{
     storage,
     tool_config::ToolConfigView,
     topic_store::TopicStore,
-    ChatOptions, ChatResponse, Connection, Conversation, ConversationMode,
+    ChatModelSelection, ChatOptions, ChatResponse, Connection, Conversation, ConversationMode,
     Gateway, McpServerStatus, Message, ModelCallRequest, ModelCallResponse, ModelInfo, Neuron,
     NeuronCreate, NeuronKindFilter, NeuronPage, NeuronSubgraph, NeuronUpdate, PollerStatus,
-    ProviderInfo, RuntimeStatus, SessionBehavior, SessionSeed, SkillInfo, StateChange,
-     StateEmitter, ToolInfo, Topic, TopicStatus, TopicUpdate, STATE_CHANGED_EVENT,
+    ProviderInfo, RuntimeStatus, SamplingParams, SessionBehavior, SessionSeed, SkillInfo, StateChange,
+    StateEmitter, ThinkingConfig, ToolInfo, Topic, TopicStatus, TopicUpdate, STATE_CHANGED_EVENT,
 };
 use crate::net::{NetState, ServerConfig};
 use std::{
@@ -56,6 +56,8 @@ async fn send_chat_message(
     provider_id: String,
     model_id: String,
     conversation_id: Option<String>,
+    params: Option<SamplingParams>,
+    thinking: Option<ThinkingConfig>,
 ) -> TauriResult<ChatResponse> {
     // Gateway is shared via Tauri State (Arc); send_model_message is &self and
     // clone-outs before network await — no outer Mutex held across I/O.
@@ -67,6 +69,8 @@ async fn send_chat_message(
                 provider_id,
                 model_id,
                 conversation_id,
+                params,
+                thinking,
             },
         )
         .await
@@ -75,6 +79,24 @@ async fn send_chat_message(
         affected: vec![response.conversation_id.clone()],
     });
     Ok(response)
+}
+
+/// 持久化会话级模型选择（后端持有）：前端改选时调用，写 `extra.session.state.model`。
+#[tauri::command]
+async fn set_session_model(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    conversation_id: String,
+    selection: ChatModelSelection,
+) -> TauriResult<()> {
+    gateway
+        .inner()
+        .set_session_model(&conversation_id, &selection)
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Conversations {
+        affected: vec![conversation_id.clone()],
+    });
+    Ok(())
 }
 
 #[tauri::command]
@@ -873,6 +895,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             debug_storage_path,
             send_chat_message,
+            set_session_model,
             create_conversation,
             close_session,
             list_running_sessions,

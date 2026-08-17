@@ -248,6 +248,7 @@ impl ModelCallInput {
                 content: format!("[Previous conversation summary]: {content}"),
                 tool_calls: None,
                 tool_call_id: None,
+                reasoning_content: None,
             }),
             MessageBody::ToolResult {
                 tool_call_id,
@@ -258,6 +259,7 @@ impl ModelCallInput {
                 content: content.clone(),
                 tool_calls: None,
                 tool_call_id: Some(tool_call_id.clone()),
+                reasoning_content: None,
             }),
             MessageBody::ToolCall {
                 content,
@@ -267,18 +269,21 @@ impl ModelCallInput {
                 content: content.clone(),
                 tool_calls: Some(tool_calls.clone()),
                 tool_call_id: None,
+                reasoning_content: None,
             }),
             MessageBody::Nudge { content } => Some(ModelMessage {
                 role: ModelMessageRole::User,
                 content: content.clone(),
                 tool_calls: None,
                 tool_call_id: None,
+                reasoning_content: None,
             }),
             MessageBody::RoleContext { content } => Some(ModelMessage {
                 role: ModelMessageRole::User,
                 content: content.clone(),
                 tool_calls: None,
                 tool_call_id: None,
+                reasoning_content: None,
             }),
             MessageBody::Text { content } => {
                 let role = match message.role {
@@ -293,6 +298,7 @@ impl ModelCallInput {
                     content: content.clone(),
                     tool_calls: None,
                     tool_call_id: None,
+                    reasoning_content: None,
                 })
             }
         }
@@ -304,6 +310,7 @@ impl ModelCallInput {
             content: content.to_string(),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
         }
     }
 }
@@ -357,6 +364,7 @@ mod tests {
             content: content.to_string(),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
         }
     }
 
@@ -366,6 +374,7 @@ mod tests {
             content: content.to_string(),
             tool_calls: None,
             tool_call_id: Some(tool_call_id.to_string()),
+            reasoning_content: None,
         }
     }
 
@@ -383,6 +392,7 @@ mod tests {
                     .collect(),
             ),
             tool_call_id: None,
+            reasoning_content: None,
         }
     }
 

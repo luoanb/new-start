@@ -20,6 +20,7 @@
   import { hotkeyService } from "$lib/hotkey/hotkeyService";
   import { dataStore } from "$lib/stores/dataStore.svelte";
   import { isTauriEnv } from "$lib/api";
+  import type { SamplingParams, ThinkingConfig, ChatModelSelection } from "$lib/types";
 
   // ── 统一数据（dataStore 驱动：bootstrap + 事件订阅刷新）──
   let runtimeStatus = $derived(dataStore.state.runtimeStatus);
@@ -45,6 +46,8 @@
   let ui = $state({
     activeProviderId: persistedSelection("pulsar:providerId", "agent-app:providerId"),
     activeModelId: persistedSelection("pulsar:modelId", "agent-app:modelId"),
+    activeParams: undefined as SamplingParams | undefined,
+    activeThinking: undefined as ThinkingConfig | undefined,
     sendingIds: new Set<string>(),
   });
 
@@ -107,6 +110,8 @@
   onMount(async () => {
     await dataStore.bootstrap();
     await dataStore.subscribe();
+    // 首启默认会话回显后端持有的会话级模型选择（后端权威）。
+    echoSessionModel(dataStore.state.activeConversationId);
     setupHotkeys();
     void setWindowIcon();
   });
@@ -142,7 +147,13 @@
     error = "";
     ui.sendingIds = new Set(ui.sendingIds).add(conversationId);
     try {
-      await dataStore.sendMessage(text, ui.activeProviderId, ui.activeModelId);
+      await dataStore.sendMessage(
+        text,
+        ui.activeProviderId,
+        ui.activeModelId,
+        ui.activeParams,
+        ui.activeThinking,
+      );
     } catch (e) {
       error = `Send failed: ${formatInvokeError(e)}`;
     } finally {
@@ -155,7 +166,8 @@
   async function handleCreateSession(mode: string) {
     showCreateModal = false;
     try {
-      await dataStore.createConversation(mode);
+      const id = await dataStore.createConversation(mode);
+      echoSessionModel(id);
     } catch (e) {
       error = `Failed to create session: ${formatInvokeError(e)}`;
     }
@@ -172,16 +184,51 @@
 
   function handleSelectConversation(id: string) {
     void dataStore.selectConversation(id);
+    // 会话切换：回显后端持有的该会话模型选择（后端权威），未指定则保持现状。
+    echoSessionModel(id);
     // 保证会话面板存在（同一类型全局唯一，已存在则激活）
     layoutStore.insertPanel("chat");
     drawerSidebar = false;
   }
 
-  function handleModelChange(providerId: string, modelId: string) {
+  /** 从后端会话 state.model 回显模型选择到 ui（后端权威）；切换会话/创建后调用。 */
+  function echoSessionModel(conversationId: string | null) {
+    const conv = dataStore.state.conversations.find((c) => c.id === conversationId);
+    const model = conv?.extra?.session?.state?.model;
+    if (!model) return;
+    ui.activeProviderId = model.provider_id;
+    ui.activeModelId = model.model_id;
+    ui.activeParams = model.params ?? undefined;
+    ui.activeThinking = model.thinking ?? undefined;
+    localStorage.setItem("pulsar:providerId", model.provider_id);
+    localStorage.setItem("pulsar:modelId", model.model_id);
+  }
+
+  function handleModelChange(
+    providerId: string,
+    modelId: string,
+    params?: SamplingParams,
+    thinking?: ThinkingConfig,
+  ) {
     ui.activeProviderId = providerId;
     ui.activeModelId = modelId;
+    ui.activeParams = params;
+    ui.activeThinking = thinking;
     localStorage.setItem("pulsar:providerId", providerId);
     localStorage.setItem("pulsar:modelId", modelId);
+    // 后端持有会话级模型选择：改选即落库（存在激活会话时）。
+    const conversationId = dataStore.state.activeConversationId;
+    if (conversationId) {
+      const selection: ChatModelSelection = {
+        provider_id: providerId,
+        model_id: modelId,
+        params,
+        thinking,
+      };
+      void dataStore.setSessionModel(conversationId, selection).catch((e) => {
+        error = `Failed to persist model: ${formatInvokeError(e)}`;
+      });
+    }
   }
 
   // ── ViewContext：容器与内容解耦的边界（容器只消费注册表，视图组件自取 context）──

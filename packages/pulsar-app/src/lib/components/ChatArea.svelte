@@ -1,7 +1,7 @@
 <script lang="ts">
   import ChatMessage from "./ChatMessage.svelte";
   import ChatInput from "./ChatInput.svelte";
-  import type { Message } from "$lib/types";
+  import type { Message, SamplingParams, ThinkingConfig } from "$lib/types";
   import { t } from "$lib/i18n";
   import { errorMessage } from "$lib/errorMessage";
   import { useViewContext } from "$lib/layout/viewContext";
@@ -13,6 +13,8 @@
   let models = $derived(ctx.stores.data.state.models);
   let selectedProviderId = $derived(ctx.ui.activeProviderId);
   let selectedModelId = $derived(ctx.ui.activeModelId);
+  let selectedParams = $derived(ctx.ui.activeParams);
+  let selectedThinking = $derived(ctx.ui.activeThinking);
 
   // 会话级运行状态：单一真相源 = 后端 runningSessions（多会话并行互不影响）。
   // 发送按钮防抖锁 sendingIds 不参与运行状态判定，避免其残留导致永久"思考中"。
@@ -26,8 +28,12 @@
     pendingAlignTop = true;
     void ctx.commands.sendMessage(text);
   };
-  const onModelChange = (providerId: string, modelId: string) =>
-    ctx.commands.changeModel(providerId, modelId);
+  const onModelChange = (
+    providerId: string,
+    modelId: string,
+    params?: SamplingParams,
+    thinking?: ThinkingConfig,
+  ) => ctx.commands.changeModel(providerId, modelId, params, thinking);
 
   let containerEl: HTMLDivElement | undefined = $state();
   let ratingError = $state("");
@@ -245,6 +251,8 @@
     {models}
     {selectedProviderId}
     {selectedModelId}
+    params={selectedParams}
+    thinking={selectedThinking}
     {onModelChange}
   />
 </div>

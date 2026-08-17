@@ -1,6 +1,6 @@
 <script lang="ts">
   import ModelPicker from "./ModelPicker.svelte";
-  import type { ProviderInfo, ModelInfo } from "$lib/types";
+  import type { ProviderInfo, ModelInfo, SamplingParams, ThinkingConfig } from "$lib/types";
   import { t } from "$lib/i18n";
 
   let {
@@ -10,6 +10,8 @@
     models = [],
     selectedProviderId = "",
     selectedModelId = "",
+    params,
+    thinking,
     onModelChange,
   }: {
     onSend: (text: string) => void;
@@ -18,7 +20,9 @@
     models?: ModelInfo[];
     selectedProviderId?: string;
     selectedModelId?: string;
-    onModelChange?: (providerId: string, modelId: string) => void;
+    params?: SamplingParams;
+    thinking?: ThinkingConfig;
+    onModelChange?: (providerId: string, modelId: string, params?: SamplingParams, thinking?: ThinkingConfig) => void;
   } = $props();
 
   let text = $state("");
@@ -91,6 +95,8 @@
           {models}
           {selectedProviderId}
           {selectedModelId}
+          {params}
+          {thinking}
           onChange={onModelChange}
         />
       </div>
