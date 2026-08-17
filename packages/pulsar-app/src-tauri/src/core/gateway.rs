@@ -41,6 +41,10 @@ use super::{
     CompactionConfig,
 };
 
+use crate::fileops::fs::FileSystem;
+use crate::fileops::fs_tools::{register_file_tools, FileToolContext};
+use crate::fileops::workspace::WorkspaceStore;
+
 use super::events::{StateChange, StateEmitter};
 
 #[derive(Debug, Clone)]
@@ -66,6 +70,10 @@ pub struct Gateway {
     current_conversation_id: Arc<Mutex<String>>,
     /// MCP server 状态（装配期与运行期重装配均可更新，供前端 DockPane 展示）。
     mcp_server_statuses: Arc<RwLock<Vec<McpServerStatus>>>,
+    /// 文件管理：工作区存储（workspaces.json）+ 文件操作层（含「已读清单」护栏）。
+    /// 文件 AI 工具与前端文件视图共用同一实例，保证越界防护与已读状态一致。
+    workspace_store: Arc<WorkspaceStore>,
+    file_system: Arc<FileSystem>,
     /// 装配互斥：串行化启动期后台装配与运行期手动重装配，保证「以最后一次为准」。
     assemble_lock: Arc<tokio::sync::Mutex<()>>,
 }
@@ -141,13 +149,22 @@ impl Gateway {
             }));
         }
 
+        // 文件管理：工作区存储（workspaces.json 持久化）+ 文件操作层（含「已读清单」护栏）。
+        // 文件 AI 工具与前端文件视图共用，装配时注入 tool registry。
+        let workspace_store = Arc::new(WorkspaceStore::new(store.root())?);
+        let file_system = Arc::new(FileSystem::new());
+        let file_ctx = Arc::new(FileToolContext::new(
+            Arc::clone(&workspace_store),
+            Arc::clone(&file_system),
+        ));
+
         // 工具装配：本地通道（native + config）同步就绪、启动即可用；MCP 通道
         // 改为后台异步装配（不阻塞应用启动，连接完成自动登记并广播 Tools）。
         // 测试注入注册表时直接使用注入值（跳过本地/MCP 装配）。
         let tool_registry = match &test_tool_registry {
             Some(registry) => Arc::clone(registry),
             None => {
-                let local_registry = assemble_local_tools(&store.root())?;
+                let local_registry = assemble_local_tools(&store.root(), Arc::clone(&file_ctx))?;
                 Arc::new(RwLock::new(local_registry))
             }
         };
@@ -180,10 +197,14 @@ impl Gateway {
             let mcp_server_statuses = Arc::clone(&mcp_server_statuses);
             let assemble_lock = Arc::clone(&assemble_lock);
             let storage_root = store.root().to_path_buf();
+            let file_ctx_for_assembly = Arc::clone(&file_ctx);
             let neuron_manager_for_assembly = Arc::clone(&neuron_manager);
             tauri::async_runtime::spawn(async move {
                 let _guard = assemble_lock.lock().await;
-                let mut base_registry = match assemble_local_tools(&storage_root) {
+                let mut base_registry = match assemble_local_tools(
+                    &storage_root,
+                    Arc::clone(&file_ctx_for_assembly),
+                ) {
                     Ok(registry) => registry,
                     Err(error) => {
                         tracing::error!(phase = "tool_config", error = %error, "background mcp assembly: local tools failed");
@@ -297,6 +318,8 @@ impl Gateway {
             session_tracker,
             current_conversation_id: Arc::new(Mutex::new(current_conversation_id)),
             mcp_server_statuses,
+            workspace_store,
+            file_system,
             assemble_lock,
         })
     }
@@ -505,7 +528,11 @@ impl Gateway {
     /// 通过装配互斥与启动期后台装配串行化，保证「以最后一次为准」。
     async fn assemble_and_replace(&self) -> AppResult<()> {
         let _guard = self.assemble_lock.lock().await;
-        let mut base_registry = assemble_local_tools(&self.store.root())?;
+        let file_ctx = Arc::new(FileToolContext::new(
+            Arc::clone(&self.workspace_store),
+            Arc::clone(&self.file_system),
+        ));
+        let mut base_registry = assemble_local_tools(&self.store.root(), file_ctx)?;
         // base 装配统一含神经元 System 工具，保证保存配置后的重装配与启动装配一致。
         register_system_tools(&mut base_registry, Arc::clone(&self.neuron_manager));
         let (new_registry, new_statuses) = assemble_mcp_progressive(
@@ -845,6 +872,16 @@ impl Gateway {
         Arc::clone(&self.poller)
     }
 
+    /// 文件管理：工作区存储（Tauri 命令与文件 AI 工具共用）。
+    pub fn workspace_store(&self) -> Arc<WorkspaceStore> {
+        Arc::clone(&self.workspace_store)
+    }
+
+    /// 文件管理：文件操作层（Tauri 命令与文件 AI 工具共用，含「已读清单」）。
+    pub fn file_system(&self) -> Arc<FileSystem> {
+        Arc::clone(&self.file_system)
+    }
+
     pub fn providers(&self) -> ProviderRegistry {
         self.providers.clone()
     }
@@ -1016,13 +1053,20 @@ fn spawn_neuron_recycle_runtime(
 ///
 /// `execute_command` 是首个上架 native 工具（见 inserts/execute_command.md），
 /// `get_current_time` 为第二个（见 inserts/get_current_time.md）。
+/// 文件工具集（list_directory/read_file/write_file/search_replace/delete_file/glob/grep/
+/// file_info/create_directory/rename，各见 inserts/<name>.md）随后追加，共享
+/// `FileToolContext`（工作区存储 + 文件操作层）。
 /// 配置驱动通道：dynamic_tools.json（HttpTool / CommandTool）。声明即 schema，
 /// 豁免 insert 门禁；命令模板复用 cmd_exec 安全护栏。
-fn assemble_local_tools(storage_root: &std::path::Path) -> AppResult<ToolRegistry> {
+fn assemble_local_tools(
+    storage_root: &std::path::Path,
+    file_ctx: Arc<FileToolContext>,
+) -> AppResult<ToolRegistry> {
     let mut registry = ToolRegistry::new();
     // 内置工具全部打标 Core（用户决策）：任何对话都得带上。
     registry.register_core(ExecuteCommandTool::new());
     registry.register_core(GetCurrentTimeTool::new());
+    register_file_tools(&mut registry, file_ctx);
     let tool_config = ToolConfigReader::new(storage_root.to_path_buf());
     let dynamic = tool_config.dynamic_tools()?;
     for cfg in dynamic.http {

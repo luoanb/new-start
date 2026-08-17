@@ -384,3 +384,67 @@ export type SystemPromptStatus = {
   neuron_id?: string | null;
   behavior?: SessionBehavior | null;
 };
+
+// ── 工作区 / 文件管理（对齐后端 core/workspace.rs 与 core/fs.rs DTO）──
+
+export type WorkspaceEntry = {
+  id: string;
+  name: string;
+  /** 规范化后的绝对路径。 */
+  root: string;
+  /** 该工作区文件树过滤规则（glob/前缀语义）。 */
+  ignore: string[];
+  created_at: number;
+};
+
+export type WorkspaceView = {
+  workspaces: WorkspaceEntry[];
+  active_id: string | null;
+};
+
+export type FsEntry = {
+  name: string;
+  /** 相对 workspace 根（`/` 分隔，无前导斜杠）。 */
+  path: string;
+  is_dir: boolean;
+  size: number | null;
+  modified_ms: number | null;
+};
+
+export type FsReadResult = {
+  /** 分段读取的行内容（offset/limit 截断）。 */
+  content: string;
+  total_lines: number;
+  total_chars: number;
+  /** 读取时刻的文件 mtime（保存冲突检测的 base_mtime）。 */
+  mtime_ms: number;
+  truncated: boolean;
+};
+
+export type FsWriteResult = {
+  mtime_ms: number;
+};
+
+export type FsMatch = {
+  path: string;
+  modified_ms: number;
+};
+
+export type GrepMatch = {
+  path: string;
+  /** 1-based 行号。 */
+  line: number;
+  /** 行内列偏移（0-based）。 */
+  column: number;
+  text: string;
+  context_before?: string[];
+  context_after?: string[];
+};
+
+export type FsInfo = {
+  exists: boolean;
+  is_dir: boolean;
+  size: number;
+  modified_ms: number | null;
+  is_binary: boolean;
+};

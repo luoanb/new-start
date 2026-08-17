@@ -130,15 +130,17 @@ export const layoutStore = {
 
   /**
    * 插入/激活一个 main 区面板。
-   * - 同一类型全局唯一：已存在（任意分栏）则仅激活其所在分栏与该面板。
+   * - 默认同一类型全局唯一：已存在（任意分栏）则仅激活其所在分栏与该面板。
+   * - 多实例类型（如 file-editor）：传入 `instanceId` 时按实例 id 区分——
+   *   已存在同 instanceId 的面板则激活；否则新建面板并以其为 id。
    * - target：目标分栏索引（0 基）；"new" 或 >= 当前栏数 → 新增一栏；默认 0；非法值收敛。
    * - 插入到既有栏时追加到该栏 panels[] 并激活（同一分栏可 tab 切换多个面板）。
    * @returns 面板实例 id（供 closePanel 关闭）。
    */
-  insertPanel(type: MainPanelType, target?: number | "new"): string {
+  insertPanel(type: MainPanelType, target?: number | "new", instanceId?: string): string {
     const existing = state.main.panes
       .flatMap((p) => p.panels.map((x) => ({ pane: p, panel: x })))
-      .find((x) => x.panel.type === type);
+      .find((x) => (instanceId ? x.panel.id === instanceId : x.panel.type === type));
     if (existing) {
       state.main.activePaneId = existing.pane.id;
       existing.pane.activePanelId = existing.panel.id;
@@ -146,7 +148,7 @@ export const layoutStore = {
       return existing.panel.id;
     }
     const idx = normalizePaneTarget(target, state.main.panes.length);
-    const panel: MainPanel = { id: uuid(), type };
+    const panel: MainPanel = { id: instanceId ?? uuid(), type };
     let paneId: string;
     if (idx >= state.main.panes.length) {
       // 新增一栏（首个面板）

@@ -5,8 +5,9 @@ export type SplitOrientation = "horizontal" | "vertical";
 /** 可承载可移动视图的容器。main 是编辑器区域，有独立 split 语义，不参与视图拖拽。 */
 export type ViewContainerId = "sidebar" | "info" | "panel";
 
-/** main 区可插入的面板类型。同一类型全局唯一（多个会话共享同一个 chat 面板）。 */
-export type MainPanelType = "chat" | "neurons" | "tool-editor" | "provider-manager";
+/** main 区可插入的面板类型。多数类型全局唯一（多个会话共享同一个 chat 面板）；
+ * `file-editor` 例外：按文件路径多实例（实例 id = 文件 key，见 LayoutStore.insertPanel）。 */
+export type MainPanelType = "chat" | "neurons" | "tool-editor" | "provider-manager" | "file-editor";
 
 /** main 区面板实例（insertPanel 返回其 id，供外部关闭）。 */
 export type MainPanel = {
@@ -33,7 +34,7 @@ export type ViewContainerState = {
 };
 
 export type LayoutState = {
-  version: 9;
+  version: 10;
   sidebar: { visible: boolean; width: number };
   info: { visible: boolean; width: number };
   panel: { visible: boolean; height: number };
@@ -48,14 +49,15 @@ export type LayoutState = {
 };
 
 export const DEFAULT_LAYOUT: LayoutState = {
-  version: 9,
+  version: 10,
   sidebar: { visible: true, width: 260 },
   info: { visible: true, width: 280 },
   // v2/v3: 底部面板默认展开（对齐 VS Code 底部栏习惯）
   panel: { visible: true, height: 200 },
   containers: {
     // v5/v6: topics 曾默认在 panel/topics 位置演变；v7: topics 与 tools 默认归位左侧 sidebar
-    sidebar: { views: ["sessions", "topics", "tools"], activeView: "sessions" },
+    // v10: 新增 files（文件管理）默认归位左侧 sidebar（sessions 之后，VSCode 资源管理器语义）
+    sidebar: { views: ["sessions", "files", "topics", "tools"], activeView: "sessions" },
     // v10: providers+models 聚合为单个视图 providers-models（服务商分组 + 模型子项）
     info: { views: ["providers-models", "neurons-list"], activeView: "providers-models" },
     panel: { views: ["poller", "logs"], activeView: "poller" },

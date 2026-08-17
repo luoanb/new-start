@@ -34,6 +34,9 @@ pub enum StateChange {
     Tools,
     /// 服务商/模型配置变化（保存服务商配置后广播），前端应重新拉取 providers 与 models。
     Providers,
+    /// 工作区集合 / 文件树变化（添加/移除/切换工作区、ignore 编辑、fs 写操作），
+    /// 前端应重新拉取工作区列表与文件树。
+    Workspaces,
 }
 
 /// 状态事件发射器：由 `lib.rs` setup 构造（捕获 AppHandle），

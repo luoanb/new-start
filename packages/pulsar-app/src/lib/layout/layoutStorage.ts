@@ -18,7 +18,8 @@ export class LocalStorageLayoutStorage implements LayoutStorage {
       if (!raw) return null;
       const parsed = JSON.parse(raw) as Partial<LayoutState>;
       // 旧布局中的 providers/models 两个独立视图 → 聚合为 providers-models（任意版本兼容）
-      return mergeProvidersModels(normalize(parsed));
+      // 任意版本出口统一确保 sidebar 容器含 files（v10 新增文件管理视图）
+      return ensureFilesInSidebar(mergeProvidersModels(normalize(parsed)));
     } catch {
       return null;
     }
@@ -53,6 +54,13 @@ function normalize(parsed: Partial<LayoutState>): LayoutState {
 
   // v9+：merge 后仍确保 info 容器含 neurons-list（覆盖"v9 数据缺 neurons-list"的历史残留）
   if (parsed.version === DEFAULT_LAYOUT.version) {
+    const merged = merge(parsed);
+    if (migratedMain) merged.main = migratedMain;
+    return migrateV8ToV9(sanitizeLegacyInfo(merged));
+  }
+
+  // v9 → v10：结构与 v10 相同（仅 sidebar 补 files，已在 load 出口统一处理）
+  if (parsed.version === 9) {
     const merged = merge(parsed);
     if (migratedMain) merged.main = migratedMain;
     return migrateV8ToV9(sanitizeLegacyInfo(merged));
@@ -263,6 +271,27 @@ function placeToolsInSidebar(state: LayoutState): LayoutState {
   containers.sidebar = { views: sidebarViews, activeView: containers.sidebar.activeView };
 
   return { ...state, containers: containers as LayoutState["containers"] };
+}
+
+/** v10：sidebar 容器补 files 视图（文件管理，sessions 之后，VSCode 资源管理器语义）。
+ * 仅迁移"从未出现过 files"的布局；用户已自行拖拽归位的 files 不受影响。 */
+function ensureFilesInSidebar(state: LayoutState): LayoutState {
+  const containers = { ...state.containers } as Record<
+    string,
+    { views: string[]; activeView: string }
+  >;
+  const sidebar = containers.sidebar;
+  if (!sidebar.views.includes("files")) {
+    const idx = sidebar.views.indexOf("sessions");
+    const views = [...sidebar.views];
+    views.splice(idx >= 0 ? idx + 1 : views.length, 0, "files");
+    containers.sidebar = { views, activeView: sidebar.activeView };
+  }
+  return {
+    ...state,
+    containers: containers as LayoutState["containers"],
+    hiddenViews: state.hiddenViews.filter((v) => v !== "files"),
+  };
 }
 
 /** providers+models 聚合迁移：容器中出现的旧视图 id（providers/models）合并为

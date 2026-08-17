@@ -21,6 +21,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "time", "sync", "process"] }
@@ -42,6 +43,10 @@ axum = { version = "0.8", default-features = false, features = ["http1", "json",
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures-util = "0.3"
 mlua = { version = "0.12.0", features = ["vendored", "lua54"] }
+# 文件管理（core/fs.rs 与 core/workspace.rs）：glob/grep 语义与递归遍历，纯 Rust 无 C 依赖。
+regex = "1"
+globset = "0.4"
+walkdir = "2"
 
 [dev-dependencies]
 # 仅测试用：本地 mock MCP server（stdio 走 in-memory duplex；http 走 axum 暴露的 streamable-http server）。

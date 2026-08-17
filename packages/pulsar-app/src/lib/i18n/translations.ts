@@ -12,6 +12,8 @@ export type Translations = {
     copied: string;
     mainEmpty: string;
     newPane: string;
+    confirm: string;
+    cancel: string;
   };
   statusBar: {
     appName: string;
@@ -367,6 +369,60 @@ export type Translations = {
     neuronsList: string;
     providersModels: string;
     providerManager: string;
+    files: string;
+    fileEditor: string;
+  };
+  fileExplorer: {
+    addWorkspace: string;
+    addWorkspaceHint: string;
+    selectWorkspace: string;
+    addWorkspaceInputPlaceholder: string;
+    addWorkspaceInputConfirm: string;
+    workspaceActions: string;
+    editIgnore: string;
+    deleteWorkspace: string;
+    deleteWorkspaceConfirm: string;
+    ignoreTitle: string;
+    ignoreHint: string;
+    ignoreSave: string;
+    ignoreCancel: string;
+    refresh: string;
+    newFile: string;
+    newFolder: string;
+    rename: string;
+    delete: string;
+    move: string;
+    moveTargetHint: string;
+    moveConfirm: string;
+    copyPath: string;
+    open: string;
+    empty: string;
+    noWorkspace: string;
+    loading: string;
+    loadFailed: string;
+    invalidName: string;
+    operationFailed: string;
+    copied: string;
+  };
+  fileEditor: {
+    save: string;
+    saving: string;
+    saved: string;
+    saveFailed: string;
+    closeUnsavedTitle: string;
+    closeUnsavedBody: string;
+    discard: string;
+    conflictTitle: string;
+    conflictBody: string;
+    overwrite: string;
+    cancel: string;
+    fileMissing: string;
+    workspaceMismatch: string;
+    binaryRejected: string;
+    loadFailed: string;
+    loading: string;
+    loadedLines: string;
+    loadMore: string;
   };
   providersModelsPanel: {
     create: string;
@@ -431,6 +487,8 @@ export const en: Translations = {
     copied: "Copied",
     mainEmpty: "Open a panel from the activity bar to get started.",
     newPane: "New Pane",
+    confirm: "Confirm",
+    cancel: "Cancel",
   },
   statusBar: {
     appName: "Pulsar",
@@ -805,6 +863,60 @@ export const en: Translations = {
     neuronsList: "Neurons",
     providersModels: "Providers & Models",
     providerManager: "Provider Manager",
+    files: "Files",
+    fileEditor: "File Editor",
+  },
+  fileExplorer: {
+    addWorkspace: "Add Workspace",
+    addWorkspaceHint: "Pick a project folder to manage files",
+    selectWorkspace: "Select workspace",
+    addWorkspaceInputPlaceholder: "Enter absolute directory path",
+    addWorkspaceInputConfirm: "Add",
+    workspaceActions: "Workspace actions",
+    editIgnore: "Edit ignore rules",
+    deleteWorkspace: "Remove workspace",
+    deleteWorkspaceConfirm: "Only the config entry is removed; disk files are kept. Remove this workspace?",
+    ignoreTitle: "Ignore rules",
+    ignoreHint: "One per line (glob or name, e.g. node_modules, *.log). Defaults hide .git / node_modules / target / dist / .pulsar",
+    ignoreSave: "Save",
+    ignoreCancel: "Cancel",
+    refresh: "Refresh",
+    newFile: "New file",
+    newFolder: "New folder",
+    rename: "Rename",
+    delete: "Delete",
+    move: "Move…",
+    moveTargetHint: "Move to: pick a target folder",
+    moveConfirm: "Move",
+    copyPath: "Copy path",
+    open: "Open",
+    empty: "This folder is empty",
+    noWorkspace: "No workspace yet",
+    loading: "Loading…",
+    loadFailed: "Failed to load",
+    invalidName: "Invalid name",
+    operationFailed: "Operation failed: {error}",
+    copied: "Copied",
+  },
+  fileEditor: {
+    save: "Save",
+    saving: "Saving…",
+    saved: "Saved",
+    saveFailed: "Save failed: {error}",
+    closeUnsavedTitle: "Close unsaved file?",
+    closeUnsavedBody: "This file has unsaved changes. Close anyway?",
+    discard: "Discard changes",
+    conflictTitle: "File changed on disk",
+    conflictBody: "The file changed on disk since it was opened. Overwriting will lose external changes. Continue?",
+    overwrite: "Overwrite",
+    cancel: "Cancel",
+    fileMissing: "File missing or moved",
+    workspaceMismatch: "Workspace switched; switch back to its workspace to edit this file",
+    binaryRejected: "Cannot open binary file",
+    loadFailed: "Open failed: {error}",
+    loading: "Loading…",
+    loadedLines: "Loaded {loaded}/{total} lines",
+    loadMore: "Scroll to bottom to load more",
   },
   providersModelsPanel: {
     create: "New provider",
@@ -869,6 +981,8 @@ export const zh: Translations = {
     copied: "已复制",
     mainEmpty: "从左侧入口打开一个面板开始使用",
     newPane: "新建分栏",
+    confirm: "确认",
+    cancel: "取消",
   },
   statusBar: {
     appName: "星脉",
@@ -1243,6 +1357,60 @@ export const zh: Translations = {
     neuronsList: "神经元",
     providersModels: "服务商与模型",
     providerManager: "服务商管理",
+    files: "文件",
+    fileEditor: "文件编辑",
+  },
+  fileExplorer: {
+    addWorkspace: "添加工作区",
+    addWorkspaceHint: "选择项目目录开始管理文件",
+    selectWorkspace: "选择工作区",
+    addWorkspaceInputPlaceholder: "输入目录绝对路径",
+    addWorkspaceInputConfirm: "添加",
+    workspaceActions: "工作区操作",
+    editIgnore: "编辑过滤规则",
+    deleteWorkspace: "删除工作区",
+    deleteWorkspaceConfirm: "仅移除配置，不删除磁盘文件。确定移除该工作区？",
+    ignoreTitle: "过滤规则",
+    ignoreHint: "每行一条（glob 或名称，如 node_modules、*.log）；默认过滤 .git / node_modules / target / dist / .pulsar",
+    ignoreSave: "保存",
+    ignoreCancel: "取消",
+    refresh: "刷新",
+    newFile: "新建文件",
+    newFolder: "新建文件夹",
+    rename: "重命名",
+    delete: "删除",
+    move: "移动…",
+    moveTargetHint: "移动到：选择目标目录",
+    moveConfirm: "移动",
+    copyPath: "复制路径",
+    open: "打开",
+    empty: "此目录为空",
+    noWorkspace: "尚未添加工作区",
+    loading: "加载中…",
+    loadFailed: "加载失败",
+    invalidName: "名称不合法",
+    operationFailed: "操作失败：{error}",
+    copied: "已复制",
+  },
+  fileEditor: {
+    save: "保存",
+    saving: "保存中…",
+    saved: "已保存",
+    saveFailed: "保存失败：{error}",
+    closeUnsavedTitle: "关闭未保存文件",
+    closeUnsavedBody: "文件有未保存修改，确定关闭？",
+    discard: "不保存关闭",
+    conflictTitle: "文件已被外部修改",
+    conflictBody: "磁盘上的文件自打开后已被修改。覆盖将丢失外部改动，仍要继续？",
+    overwrite: "覆盖",
+    cancel: "取消",
+    fileMissing: "文件不存在或已被移动",
+    workspaceMismatch: "工作区已切换；切回该文件所在工作区后再编辑",
+    binaryRejected: "二进制文件无法打开",
+    loadFailed: "打开失败：{error}",
+    loading: "加载中…",
+    loadedLines: "已加载 {loaded}/{total} 行",
+    loadMore: "滚动到底部加载更多",
   },
   providersModelsPanel: {
     create: "新增服务商",

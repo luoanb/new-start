@@ -13,10 +13,12 @@ use std::path::PathBuf;
 
 use crate::core::{
     app_log, insert_catalog::InsertCatalog, providers::ProviderConfigView,
-    tool_config::ToolConfigView, AppError, AppResult, ChatOptions, ConversationMode,
+    tool_config::ToolConfigView,
+    AppError, AppResult, ChatOptions, ConversationMode,
     ModelCallRequest, NeuronCreate, NeuronKindFilter, NeuronUpdate, SessionBehavior, SessionSeed,
     StateChange, TopicStatus, TopicUpdate,
 };
+use crate::fileops::workspace::{WorkspaceEntry, WorkspaceStore};
 
 use super::NetState;
 
@@ -753,6 +755,179 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
         }
         "logs_dir" => value(app_log::log_dir().map(|path| path.display().to_string())),
 
+        // ── Workspace / Files ──
+        "list_workspaces" => {
+            let view = state
+                .gateway
+                .workspace_store()
+                .view()
+                .map_err(RpcErrorBody::from)?;
+            value(view)
+        }
+        "add_workspace" => {
+            let p: RootParams = from_params(params)?;
+            let view = state
+                .gateway
+                .workspace_store()
+                .add(&p.root)
+                .map_err(RpcErrorBody::from)?;
+            (state.state_emit)(StateChange::Workspaces);
+            value(view)
+        }
+        "remove_workspace" => {
+            let p: IdParams = from_params(params)?;
+            let view = state
+                .gateway
+                .workspace_store()
+                .remove(&p.id)
+                .map_err(RpcErrorBody::from)?;
+            (state.state_emit)(StateChange::Workspaces);
+            value(view)
+        }
+        "set_active_workspace" => {
+            let p: IdParams = from_params(params)?;
+            let view = state
+                .gateway
+                .workspace_store()
+                .set_active(&p.id)
+                .map_err(RpcErrorBody::from)?;
+            (state.state_emit)(StateChange::Workspaces);
+            value(view)
+        }
+        "update_workspace_ignore" => {
+            let p: IgnoreParams = from_params(params)?;
+            let view = state
+                .gateway
+                .workspace_store()
+                .update_ignore(&p.id, p.ignore)
+                .map_err(RpcErrorBody::from)?;
+            (state.state_emit)(StateChange::Workspaces);
+            value(view)
+        }
+        "fs_list" => {
+            let p: FsListParams = from_params(params)?;
+            let store = state.gateway.workspace_store();
+            let ws = require_active(&store)?;
+            let entries = state
+                .gateway
+                .file_system()
+                .list(&ws, p.path.as_deref(), p.ignore.as_deref())
+                .map_err(RpcErrorBody::from)?;
+            value(entries)
+        }
+        "fs_read" => {
+            let p: FsReadParams = from_params(params)?;
+            let store = state.gateway.workspace_store();
+            let ws = require_active(&store)?;
+            let result = state
+                .gateway
+                .file_system()
+                .read(&ws, &p.path, p.offset, p.limit)
+                .map_err(RpcErrorBody::from)?;
+            value(result)
+        }
+        "fs_write" => {
+            let p: FsWriteParams = from_params(params)?;
+            let store = state.gateway.workspace_store();
+            let ws = require_active(&store)?;
+            let result = state
+                .gateway
+                .file_system()
+                .write(&ws, &p.path, &p.content, p.base_mtime)
+                .map_err(RpcErrorBody::from)?;
+            (state.state_emit)(StateChange::Workspaces);
+            value(result)
+        }
+        "fs_create_dir" => {
+            let p: FsPathParams = from_params(params)?;
+            let store = state.gateway.workspace_store();
+            let ws = require_active(&store)?;
+            state
+                .gateway
+                .file_system()
+                .create_dir(&ws, &p.path)
+                .map_err(RpcErrorBody::from)?;
+            (state.state_emit)(StateChange::Workspaces);
+            value(())
+        }
+        "fs_delete" => {
+            let p: FsDeleteParams = from_params(params)?;
+            let store = state.gateway.workspace_store();
+            let ws = require_active(&store)?;
+            state
+                .gateway
+                .file_system()
+                .delete(&ws, &p.paths)
+                .map_err(RpcErrorBody::from)?;
+            (state.state_emit)(StateChange::Workspaces);
+            value(())
+        }
+        "fs_rename" => {
+            let p: FsMoveParams = from_params(params)?;
+            let store = state.gateway.workspace_store();
+            let ws = require_active(&store)?;
+            state
+                .gateway
+                .file_system()
+                .rename(&ws, &p.from, &p.to)
+                .map_err(RpcErrorBody::from)?;
+            (state.state_emit)(StateChange::Workspaces);
+            value(())
+        }
+        "fs_move" => {
+            let p: FsMoveParams = from_params(params)?;
+            let store = state.gateway.workspace_store();
+            let ws = require_active(&store)?;
+            state
+                .gateway
+                .file_system()
+                .rename(&ws, &p.from, &p.to)
+                .map_err(RpcErrorBody::from)?;
+            (state.state_emit)(StateChange::Workspaces);
+            value(())
+        }
+        "fs_glob" => {
+            let p: FsGlobParams = from_params(params)?;
+            let store = state.gateway.workspace_store();
+            let ws = require_active(&store)?;
+            let results = state
+                .gateway
+                .file_system()
+                .glob(&ws, &p.pattern, p.cwd.as_deref())
+                .map_err(RpcErrorBody::from)?;
+            value(results)
+        }
+        "fs_grep" => {
+            let p: FsGrepParams = from_params(params)?;
+            let store = state.gateway.workspace_store();
+            let ws = require_active(&store)?;
+            let matches = state
+                .gateway
+                .file_system()
+                .grep(
+                    &ws,
+                    &p.pattern,
+                    p.path.as_deref(),
+                    p.case_sensitive.unwrap_or(false),
+                    p.multiline.unwrap_or(false),
+                    p.glob.as_deref(),
+                    p.context.unwrap_or(0),
+                )
+                .map_err(RpcErrorBody::from)?;
+            value(matches)
+        }
+        "fs_info" => {
+            let p: FsPathParams = from_params(params)?;
+            let store = state.gateway.workspace_store();
+            let ws = require_active(&store)?;
+            let info = state
+                .gateway
+                .file_system()
+                .info(&ws, &p.path)
+                .map_err(RpcErrorBody::from)?;
+            value(info)
+        }
+
         _ => Err(RpcErrorBody {
             code: "unknown_command".into(),
             message: format!("unknown command: {cmd}"),
@@ -772,6 +947,89 @@ struct ModeParams {
 #[serde(rename_all = "camelCase")]
 struct ViewParams<T> {
     view: T,
+}
+
+// ── Workspace / Files 参数（字段名与前端 invoke 一致）──
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RootParams {
+    root: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IgnoreParams {
+    id: String,
+    ignore: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FsListParams {
+    path: Option<String>,
+    ignore: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FsReadParams {
+    path: String,
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FsWriteParams {
+    path: String,
+    content: String,
+    base_mtime: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FsPathParams {
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FsDeleteParams {
+    paths: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FsMoveParams {
+    from: String,
+    to: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FsGlobParams {
+    pattern: String,
+    cwd: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FsGrepParams {
+    pattern: String,
+    path: Option<String>,
+    case_sensitive: Option<bool>,
+    multiline: Option<bool>,
+    glob: Option<String>,
+    context: Option<usize>,
+}
+
+/// fs_* 命令统一以 active workspace 为根。
+fn require_active(store: &WorkspaceStore) -> Result<WorkspaceEntry, RpcErrorBody> {
+    store
+        .active()
+        .map_err(RpcErrorBody::from)?
+        .ok_or_else(|| bad_request("no active workspace; add one before using file commands"))
 }
 
 fn conv_mode(mode: &str) -> ConversationMode {

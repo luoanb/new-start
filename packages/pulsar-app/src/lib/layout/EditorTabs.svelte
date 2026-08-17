@@ -145,10 +145,13 @@
             class:tone-system={tab.iconTone === "system"}
           >{tab.icon}</span>
         {/if}
+        {#if tab.dirty}
+          <span class="dirty-dot" aria-label="unsaved"></span>
+        {/if}
         <span
           class="label"
           class:truncate={tab.truncate}
-          title={tab.truncate ? (tab.title ?? t(tab.label)) : undefined}
+          title={tab.tooltip ?? tab.title ?? t(tab.label)}
         >{tab.title ?? t(tab.label)}</span>
         <span
           class="close"
@@ -252,6 +255,14 @@
   .icon.tone-assistant { background: color-mix(in srgb, var(--color-warning) 15%, transparent); color: var(--color-warning); }
   .icon.tone-system { background: color-mix(in srgb, var(--color-danger, #e5484d) 15%, transparent); color: var(--color-danger, #e5484d); }
   .label { font-size: var(--fs-xs); font-weight: 500; }
+  /* 未保存 ● 标记：warning 色（对齐 visual-design 状态表） */
+  .dirty-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--color-warning);
+    flex: none;
+  }
   /* 动态标题（对话标题）截断：限制宽度，最多展示约 5 个字 */
   .label.truncate {
     max-width: 5em;

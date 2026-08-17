@@ -17,7 +17,9 @@ export type StateEventKind =
   | "poller"
   | "sessions"
   | "neurons"
-  | "providers";
+  | "providers"
+  | "tools"
+  | "workspaces";
 
 export type StateChangePayload =
   | { kind: "topics" }
@@ -26,7 +28,8 @@ export type StateChangePayload =
   | { kind: "sessions" }
   | { kind: "neurons" }
   | { kind: "providers" }
-  | { kind: "tools" };
+  | { kind: "tools" }
+  | { kind: "workspaces" };
 
 export interface ApiClient {
   /** 调用后端命令：本机走 Tauri invoke，远程走 POST /rpc。 */

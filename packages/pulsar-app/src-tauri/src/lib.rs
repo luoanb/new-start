@@ -1,4 +1,5 @@
 pub mod core;
+pub mod fileops;
 pub mod net;
 pub mod runtime;
 pub mod tui;
@@ -23,6 +24,8 @@ use crate::core::{
     ProviderInfo, RuntimeStatus, SamplingParams, SessionBehavior, SessionSeed, SkillInfo, StateChange,
     StateEmitter, ThinkingConfig, ToolInfo, Topic, TopicStatus, TopicUpdate, STATE_CHANGED_EVENT,
 };
+use crate::fileops::fs::{FsEntry, FsInfo, FsMatch, FsReadResult, FsWriteResult, GrepMatch};
+use crate::fileops::workspace::{WorkspaceEntry, WorkspaceView};
 use crate::net::{NetState, ServerConfig};
 use std::{
     path::PathBuf,
@@ -706,6 +709,269 @@ fn list_insert_catalog() -> Vec<InsertInfo> {
     InsertCatalog::catalog()
 }
 
+// ── Workspace / Files ──
+
+/// 当前 active 工作区（fs_* 命令统一以 active workspace 为根）。
+fn require_active_workspace(
+    store: &crate::fileops::workspace::WorkspaceStore,
+) -> TauriResult<WorkspaceEntry> {
+    store
+        .active()
+        .map_err(|error| error.payload())?
+        .ok_or_else(|| {
+            crate::core::AppError::InvalidInput(
+                "no active workspace; add one via the Files view before using file commands".into(),
+            )
+            .payload()
+        })
+}
+
+#[tauri::command]
+async fn list_workspaces(gateway: State<'_, Gateway>) -> TauriResult<WorkspaceView> {
+    gateway
+        .inner()
+        .workspace_store()
+        .view()
+        .map_err(|error| error.payload())
+}
+
+#[tauri::command]
+async fn add_workspace(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    root: String,
+) -> TauriResult<WorkspaceView> {
+    let view = gateway
+        .inner()
+        .workspace_store()
+        .add(&root)
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Workspaces);
+    Ok(view)
+}
+
+#[tauri::command]
+async fn remove_workspace(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    id: String,
+) -> TauriResult<WorkspaceView> {
+    let view = gateway
+        .inner()
+        .workspace_store()
+        .remove(&id)
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Workspaces);
+    Ok(view)
+}
+
+#[tauri::command]
+async fn set_active_workspace(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    id: String,
+) -> TauriResult<WorkspaceView> {
+    let view = gateway
+        .inner()
+        .workspace_store()
+        .set_active(&id)
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Workspaces);
+    Ok(view)
+}
+
+#[tauri::command]
+async fn update_workspace_ignore(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    id: String,
+    ignore: Vec<String>,
+) -> TauriResult<WorkspaceView> {
+    let view = gateway
+        .inner()
+        .workspace_store()
+        .update_ignore(&id, ignore)
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Workspaces);
+    Ok(view)
+}
+
+#[tauri::command]
+async fn fs_list(
+    gateway: State<'_, Gateway>,
+    path: Option<String>,
+    ignore: Option<Vec<String>>,
+) -> TauriResult<Vec<FsEntry>> {
+    let store = gateway.inner().workspace_store();
+    let ws = require_active_workspace(&store)?;
+    gateway
+        .inner()
+        .file_system()
+        .list(&ws, path.as_deref(), ignore.as_deref())
+        .map_err(|error| error.payload())
+}
+
+#[tauri::command]
+async fn fs_read(
+    gateway: State<'_, Gateway>,
+    path: String,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> TauriResult<FsReadResult> {
+    let store = gateway.inner().workspace_store();
+    let ws = require_active_workspace(&store)?;
+    gateway
+        .inner()
+        .file_system()
+        .read(&ws, &path, offset, limit)
+        .map_err(|error| error.payload())
+}
+
+#[tauri::command]
+async fn fs_write(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    path: String,
+    content: String,
+    base_mtime: Option<i64>,
+) -> TauriResult<FsWriteResult> {
+    let store = gateway.inner().workspace_store();
+    let ws = require_active_workspace(&store)?;
+    let result = gateway
+        .inner()
+        .file_system()
+        .write(&ws, &path, &content, base_mtime)
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Workspaces);
+    Ok(result)
+}
+
+#[tauri::command]
+async fn fs_create_dir(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    path: String,
+) -> TauriResult<()> {
+    let store = gateway.inner().workspace_store();
+    let ws = require_active_workspace(&store)?;
+    gateway
+        .inner()
+        .file_system()
+        .create_dir(&ws, &path)
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Workspaces);
+    Ok(())
+}
+
+#[tauri::command]
+async fn fs_delete(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    paths: Vec<String>,
+) -> TauriResult<()> {
+    let store = gateway.inner().workspace_store();
+    let ws = require_active_workspace(&store)?;
+    gateway
+        .inner()
+        .file_system()
+        .delete(&ws, &paths)
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Workspaces);
+    Ok(())
+}
+
+#[tauri::command]
+async fn fs_rename(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    from: String,
+    to: String,
+) -> TauriResult<()> {
+    let store = gateway.inner().workspace_store();
+    let ws = require_active_workspace(&store)?;
+    gateway
+        .inner()
+        .file_system()
+        .rename(&ws, &from, &to)
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Workspaces);
+    Ok(())
+}
+
+#[tauri::command]
+async fn fs_move(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    from: String,
+    to: String,
+) -> TauriResult<()> {
+    let store = gateway.inner().workspace_store();
+    let ws = require_active_workspace(&store)?;
+    gateway
+        .inner()
+        .file_system()
+        .rename(&ws, &from, &to)
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Workspaces);
+    Ok(())
+}
+
+#[tauri::command]
+async fn fs_glob(
+    gateway: State<'_, Gateway>,
+    pattern: String,
+    cwd: Option<String>,
+) -> TauriResult<Vec<FsMatch>> {
+    let store = gateway.inner().workspace_store();
+    let ws = require_active_workspace(&store)?;
+    gateway
+        .inner()
+        .file_system()
+        .glob(&ws, &pattern, cwd.as_deref())
+        .map_err(|error| error.payload())
+}
+
+#[tauri::command]
+async fn fs_grep(
+    gateway: State<'_, Gateway>,
+    pattern: String,
+    path: Option<String>,
+    case_sensitive: Option<bool>,
+    multiline: Option<bool>,
+    glob: Option<String>,
+    context: Option<usize>,
+) -> TauriResult<Vec<GrepMatch>> {
+    let store = gateway.inner().workspace_store();
+    let ws = require_active_workspace(&store)?;
+    gateway
+        .inner()
+        .file_system()
+        .grep(
+            &ws,
+            &pattern,
+            path.as_deref(),
+            case_sensitive.unwrap_or(false),
+            multiline.unwrap_or(false),
+            glob.as_deref(),
+            context.unwrap_or(0),
+        )
+        .map_err(|error| error.payload())
+}
+
+#[tauri::command]
+async fn fs_info(
+    gateway: State<'_, Gateway>,
+    path: String,
+) -> TauriResult<FsInfo> {
+    let store = gateway.inner().workspace_store();
+    let ws = require_active_workspace(&store)?;
+    gateway
+        .inner()
+        .file_system()
+        .info(&ws, &path)
+        .map_err(|error| error.payload())
+}
+
 // ── Logs ──
 
 #[tauri::command]
@@ -768,6 +1034,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             let handle = app.handle().clone();
             let emit_handle = handle.clone();
@@ -954,6 +1221,22 @@ pub fn run() {
             logs_set_level,
             logs_clear_buffer,
             logs_dir,
+            // Workspace / Files
+            list_workspaces,
+            add_workspace,
+            remove_workspace,
+            set_active_workspace,
+            update_workspace_ignore,
+            fs_list,
+            fs_read,
+            fs_write,
+            fs_create_dir,
+            fs_delete,
+            fs_rename,
+            fs_move,
+            fs_glob,
+            fs_grep,
+            fs_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

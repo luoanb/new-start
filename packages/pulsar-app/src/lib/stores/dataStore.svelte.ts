@@ -28,6 +28,7 @@ import type {
   SamplingParams,
   ThinkingConfig,
   ChatModelSelection,
+  WorkspaceView,
 } from "$lib/types";
 import { formatInvokeError } from "$lib/utils/formatInvokeError";
 
@@ -48,6 +49,9 @@ const state = $state({
   runningSessions: [] as RunningSession[],
   neuronsVersion: 0,
   toolsVersion: 0,
+  workspacesVersion: 0,
+  /** 工作区集合 + active（文件树/编辑器数据源）。 */
+  workspaces: null as WorkspaceView | null,
   // ── 神经元统一管理：列表 ←→ 画布共享状态 ──
   /** 画布核心（单选=1 项，多选=数组；列表行点击驱动）。 */
   neuronSelection: [] as string[],
@@ -106,6 +110,12 @@ async function refreshPoller(): Promise<void> {
   state.poller = await api.invoke<PollerStatus>("poll_status");
 }
 
+/** 工作区集合 + active：workspaces 事件（增删/切换/ignore 编辑/fs 写操作）后重拉。 */
+async function refreshWorkspaces(): Promise<void> {
+  state.workspaces = await api.invoke<WorkspaceView>("list_workspaces");
+  state.workspacesVersion++;
+}
+
 /** 服务商/模型配置变化（保存后广播）：重新拉取 providers 与 models。 */
 async function refreshProvidersModels(): Promise<void> {
   const [providersRes, modelsRes] = await Promise.all([
@@ -144,6 +154,8 @@ async function handleStateChanged(payload: StateChangePayload): Promise<void> {
       await refreshProvidersModels();
     } else if (payload.kind === "tools") {
       state.toolsVersion++;
+    } else if (payload.kind === "workspaces") {
+      await refreshWorkspaces();
     }
   } catch (e) {
     state.error = `State refresh failed: ${formatInvokeError(e)}`;
@@ -176,6 +188,7 @@ async function bootstrap(): Promise<void> {
       topicsRes,
       pollerRes,
       runningSessionsRes,
+      workspacesRes,
     ] = await Promise.all([
       api.invoke<ProviderInfo[]>("list_providers"),
       api.invoke<ModelInfo[]>("list_models"),
@@ -185,6 +198,7 @@ async function bootstrap(): Promise<void> {
       api.invoke<Topic[]>("list_topics"),
       api.invoke<PollerStatus>("poll_status"),
       api.invoke<RunningSession[]>("list_running_sessions"),
+      api.invoke<WorkspaceView>("list_workspaces"),
     ]);
 
     state.providers = providersRes;
@@ -195,6 +209,7 @@ async function bootstrap(): Promise<void> {
     state.topics = topicsRes;
     state.poller = pollerRes;
     state.runningSessions = runningSessionsRes;
+    state.workspaces = workspacesRes;
     state.error = "";
 
     // 默认选中第一个会话（若存在），并加载其消息。
@@ -438,6 +453,32 @@ async function setPollParallelism(n: number): Promise<void> {
   await refreshPoller();
 }
 
+// ── 工作区 actions（写操作后后端广播 workspaces 事件刷新 + 兜底 refresh）──
+
+/** 添加工作区：root 为目录绝对路径；后端校验存在/重复并 canonicalize。 */
+async function addWorkspace(root: string): Promise<void> {
+  await api.invoke<WorkspaceView>("add_workspace", { root });
+  await refreshWorkspaces();
+}
+
+/** 移除工作区条目（不删目录）；active 失效时后端自动清除。 */
+async function removeWorkspace(id: string): Promise<void> {
+  await api.invoke<WorkspaceView>("remove_workspace", { id });
+  await refreshWorkspaces();
+}
+
+/** 切换 active 工作区（文件树/编辑器数据源随之切换）。 */
+async function setActiveWorkspace(id: string): Promise<void> {
+  await api.invoke<WorkspaceView>("set_active_workspace", { id });
+  await refreshWorkspaces();
+}
+
+/** 更新工作区 ignore 过滤规则（写入 workspaces.json，立即生效）。 */
+async function updateWorkspaceIgnore(id: string, ignore: string[]): Promise<void> {
+  await api.invoke<WorkspaceView>("update_workspace_ignore", { id, ignore });
+  await refreshWorkspaces();
+}
+
 export const dataStore = {
   state,
   bootstrap,
@@ -448,6 +489,7 @@ export const dataStore = {
   refreshPoller,
   refreshRunningSessions,
   refreshProvidersModels,
+  refreshWorkspaces,
   // actions
   selectConversation,
   createConversation,
@@ -456,6 +498,11 @@ export const dataStore = {
   setSessionModel,
   clearConversation,
   scoreFeedback,
+  // 工作区（文件树/编辑器数据源）
+  addWorkspace,
+  removeWorkspace,
+  setActiveWorkspace,
+  updateWorkspaceIgnore,
   // 神经元统一管理（列表 ←→ 画布共享）
   setNeuronSelection,
   toggleNeuronSelection,

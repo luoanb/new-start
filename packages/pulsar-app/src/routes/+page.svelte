@@ -15,6 +15,8 @@
   import { layoutStore } from "$lib/layout/LayoutStore.svelte";
   import { mainViews, mainPanelMeta } from "$lib/layout/views";
   import { setViewContext, type ViewContext } from "$lib/layout/viewContext";
+  import { fileEditorStore } from "$lib/stores/fileEditorStore.svelte";
+  import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
   import { t } from "$lib/i18n";
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
   import { hotkeyService } from "$lib/hotkey/hotkeyService";
@@ -64,6 +66,14 @@
   let drawerPanel = $state(false);
   // 小屏导航栏（ActivityBar）显隐：默认隐藏，点击顶栏 logo 切换
   let activityOpen = $state(false);
+  // 关闭未保存文件 tab 前的确认请求（ConfirmDialog 消费后置 null）
+  let confirmReq = $state<{
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    danger?: boolean;
+    onConfirm: () => void;
+  } | null>(null);
 
   // ── Layout (store-driven) ──
   let mainRef = $state<HTMLElement | null>(null);
@@ -300,9 +310,25 @@
     if (id === "neurons") { toggleNeuronPanel(); return; }
   }
 
-  /** 分栏内 tab ✕ 关闭：关闭对应面板（分栏空则自动收缩）。 */
+  /** 分栏内 tab ✕ 关闭：关闭对应面板（分栏空则自动收缩）。
+   * 文件编辑器未保存时先弹确认；确认后释放编辑器实例元数据。 */
   function handleTabClose(panelId: string) {
+    const panel = mainPanes.flatMap((p) => p.panels).find((x) => x.id === panelId);
+    if (panel?.type === "file-editor" && fileEditorStore.isDirty(panelId)) {
+      confirmReq = {
+        title: t("fileEditor.closeUnsavedTitle"),
+        message: t("fileEditor.closeUnsavedBody"),
+        confirmLabel: t("fileEditor.discard"),
+        danger: true,
+        onConfirm: () => {
+          layoutStore.closePanel(panelId);
+          fileEditorStore.dispose(panelId);
+        },
+      };
+      return;
+    }
     layoutStore.closePanel(panelId);
+    fileEditorStore.dispose(panelId);
   }
 
   /** 对话标题：复用会话侧栏规则（首条 user/assistant 文本消息，无则占位）。 */
@@ -327,17 +353,23 @@
 
   /** 分栏内 tab 列表：由该分栏的面板动态生成。 */
   function paneTabs(pane: (typeof mainPanes)[number]) {
-    return pane.panels.map((p) => ({
-      id: p.id,
-      label: mainPanelMeta[p.type].label,
-      // 文字 icon：对话 tab 取当前对话模式首字母，其余取面板类型首字母
-      icon: (p.type === "chat" ? activeConversationMode : p.type).charAt(0).toUpperCase(),
-      // 对话 tab：色调跟随对话模式（对齐会话列表 mode-badge 色板）
-      iconTone: p.type === "chat" ? activeConversationMode : undefined,
-      // 对话 tab：展示对话标题（原始文本，截断显示）
-      title: p.type === "chat" ? activeConversationTitle : undefined,
-      truncate: p.type === "chat",
-    }));
+    return pane.panels.map((p) => {
+      const isFile = p.type === "file-editor";
+      return {
+        id: p.id,
+        label: mainPanelMeta[p.type].label,
+        // 文字 icon：对话 tab 取当前对话模式首字母，其余取面板类型首字母
+        icon: (p.type === "chat" ? activeConversationMode : p.type).charAt(0).toUpperCase(),
+        // 对话 tab：色调跟随对话模式（对齐会话列表 mode-badge 色板）
+        iconTone: p.type === "chat" ? activeConversationMode : undefined,
+        // 对话 tab：展示对话标题（原始文本，截断显示）；文件 tab：展示文件名 + 未保存 ●
+        title:
+          p.type === "chat" ? activeConversationTitle : isFile ? fileEditorStore.titleOf(p.id) : undefined,
+        truncate: p.type === "chat",
+        dirty: isFile ? fileEditorStore.isDirty(p.id) : false,
+        tooltip: isFile ? fileEditorStore.pathOf(p.id) : undefined,
+      };
+    });
   }
 
   /** 拖拽第 i 个分栏分隔条：调整相邻两栏 grow 权重。 */
@@ -528,7 +560,8 @@
                   <div class="pane-content">
                     {#each pane.panels as panel (panel.id)}
                       <div class="pane-view" class:visible={panel.id === pane.activePanelId}>
-                        <ViewHost registration={viewForType(panel.type)} />
+                        <!-- panel 传入 ViewHost：多实例面板（file-editor）经 context 获取自身实例 key -->
+                        <ViewHost registration={viewForType(panel.type)} panel={panel} />
                       </div>
                     {/each}
                   </div>
@@ -634,6 +667,19 @@
 <SettingsDialog
   open={showSettingsDialog}
   onClose={() => (showSettingsDialog = false)}
+/>
+
+<ConfirmDialog
+  open={!!confirmReq}
+  title={confirmReq?.title ?? ""}
+  message={confirmReq?.message ?? ""}
+  confirmLabel={confirmReq?.confirmLabel}
+  danger={confirmReq?.danger}
+  onConfirm={() => {
+    confirmReq?.onConfirm();
+    confirmReq = null;
+  }}
+  onCancel={() => (confirmReq = null)}
 />
 
 {#if isTauriEnv}

@@ -1,0 +1,19 @@
+{
+  "workspaces": [
+    {
+      "id": "ws-84cf149addcf3170",
+      "name": "packages",
+      "root": "/home/lab/Documents/trae_projects/new-start-wt/packages",
+      "ignore": [
+        ".git",
+        "node_modules",
+        "target",
+        "dist",
+        ".pulsar",
+        ".DS_Store"
+      ],
+      "created_at": 1786986420200
+    }
+  ],
+  "active_id": "ws-84cf149addcf3170"
+}

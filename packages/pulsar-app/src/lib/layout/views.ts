@@ -18,6 +18,8 @@ import ChatArea from "$lib/components/ChatArea.svelte";
 import NeuronManager from "$lib/components/NeuronManager.svelte";
 import NeuronListPanel from "$lib/components/NeuronListPanel.svelte";
 import ToolEditor from "$lib/components/ToolEditor.svelte";
+import FileEditor from "$lib/components/FileEditor.svelte";
+import FileExplorer from "$lib/components/FileExplorer.svelte";
 import type { MainPanelType } from "./layoutTypes";
 
 export type { ViewContainerId } from "./layoutTypes";
@@ -30,6 +32,10 @@ export type ViewMeta = {
   title?: string;
   /** 动态标题截断展示（限制宽度，如对话标题） */
   truncate?: boolean;
+  /** 未保存标记（●）：文件编辑器 tab 未保存时显示 */
+  dirty?: boolean;
+  /** 完整悬停提示（如文件 tab 的完整路径） */
+  tooltip?: string;
   /** icon 色调（对齐会话列表 mode-badge 色板）：chat/agent/assistant/system */
   iconTone?: string;
 };
@@ -96,6 +102,14 @@ export const viewRegistry: Record<string, ViewRegistration> = {
     component: LogPanel,
     movableTo: "*",
   },
+  // 文件管理：文件树（sidebar 默认挂载，VSCode 资源管理器语义）
+  files: {
+    id: "files",
+    title: "views.files",
+    icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
+    component: FileExplorer,
+    movableTo: "*",
+  },
 };
 
 /** main 区域（editor area）专用视图：走 EditorTabs + split 语义，不进入视图容器。 */
@@ -104,6 +118,7 @@ export const mainViews: ViewRegistration[] = [
   { id: "neurons", title: "views.neurons", component: NeuronManager },
   { id: "tool-editor", title: "views.toolEditor", component: ToolEditor },
   { id: "provider-manager", title: "views.providerManager", component: ProviderManager },
+  { id: "file-editor", title: "views.fileEditor", component: FileEditor },
 ];
 
 /** Activity Bar 入口（icon 轨）。chat 用于向 main 区插入会话面板。 */
@@ -140,6 +155,10 @@ export const mainPanelMeta: Record<MainPanelType, { label: string; icon: string 
   "provider-manager": {
     label: "views.providerManager",
     icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><line x1="6" y1="6.5" x2="6.01" y2="6.5"/><line x1="6" y1="17.5" x2="6.01" y2="17.5"/></svg>',
+  },
+  "file-editor": {
+    label: "views.fileEditor",
+    icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
   },
 };
 
