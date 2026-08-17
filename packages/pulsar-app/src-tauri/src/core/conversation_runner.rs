@@ -8,7 +8,7 @@ use super::{
     model_call_input::ModelCallInput,
     models::{
         ChatModelSelection, ChatResponse, Conversation, ConversationMode, Message, MessageBody,
-        MessageRole, ModelMessage, Neuron, ToolTag,
+        MessageRole, ModelCallResponse, ModelMessage, Neuron, ToolTag,
     },
     round_executor::RoundExecutor,
     round_resolver::RoundResolver,
@@ -168,16 +168,26 @@ impl ConversationRunner {
         // 发送前落输入增量：wire[old.len()..]（System / RoleContext / 输入 / Nudge）全落——
         // 模型调用失败/超时也不丢用户消息；产物在发送后落。
         self.persist_input(&ctx, old_len)?;
-        // ③ 执行：工具授权落点（override 优先 → neuron.tool_ids → 标签并入 ∩ 注册表）→
-        // 发送前投影 ModelMessage → 模型调用 → 单轮全部工具执行。
-        let outcome = self
+        // ③ 执行（独立落库两段式）：工具授权落点（override 优先 → neuron.tool_ids → 标签并入
+        // ∩ 注册表）→ 发送前投影 ModelMessage → 模型调用 → 先落「模型声明」（tool_calls）→
+        // 再执行工具 → 落「执行结果」。声明不依赖工具执行结果而存在。
+        let (model_response, _authorized_tool_ids) = self
             .executor
-            .execute(
+            .call_model(
                 ctx.selected_neuron.as_ref(),
                 &ctx.messages,
                 model,
                 ctx.tool_override.clone(),
                 ctx.mode.tool_tags(),
+            )
+            .await?;
+        // 模型已返回：若声明了工具调用，先落库声明（Assistant/ToolCall）。
+        self.persist_model_decl(&ctx, &model_response)?;
+        let outcome = self
+            .executor
+            .execute_tools(
+                model_response,
+                ctx.selected_neuron.as_ref().map(|n| n.id.clone()),
             )
             .await?;
         tracing::info!(
@@ -189,8 +199,8 @@ impl ConversationRunner {
             "execute done"
         );
         ctx.outcome = Some(outcome.clone());
-        // 发送后落产物（会话态已在发送前写回），再跑 after hooks：课题副作用
-        // （如 complete_scope 模型调用）失败只影响副作用本身，不丢失本轮模型产物。
+        // 发送后落产物（声明已在上一步落库；此处落执行结果或纯文本）。会话态已在发送前写回，
+        // 再跑 after hooks：课题副作用（如 complete_scope 模型调用）失败只影响副作用本身，不丢失本轮模型产物。
         self.persist_outcome(&ctx)?;
         tracing::info!(phase = "run_round", session_id = %ctx.session_id, "persist done");
         if let Some(hooks) = hooks {
@@ -350,18 +360,58 @@ impl ConversationRunner {
         Ok(())
     }
 
-    /// 落库（发送后）：产物（tool_call/tool_result 或 assistant text）+ 会话态。
+    /// 落库（模型返回后、工具执行前）：模型声明的工具调用（Assistant/ToolCall）。
+    ///
+    /// 独立落库第一步：声明先于工具执行持久化——工具失败/超时/中断也不丢模型曾调用的记录；
+    /// 结果随后由 `persist_outcome` 独立落库。无 tool_calls 时返回 `Ok(())`（纯文本产物稍后落）。
+    fn persist_model_decl(
+        &self,
+        ctx: &RoundContext,
+        model_response: &ModelCallResponse,
+    ) -> AppResult<()> {
+        let Some(tool_calls) = model_response.tool_calls.as_ref() else {
+            return Ok(());
+        };
+        if tool_calls.first().is_none() {
+            return Ok(());
+        }
+        let stamped = ctx.selected_neuron.as_ref().map(|n| n.id.clone());
+        tracing::info!(
+            phase = "run_round",
+            session_id = %ctx.session_id,
+            tool_calls = tool_calls.len(),
+            stamped = ?stamped,
+            "persisting tool declaration"
+        );
+        self.store.add_message(
+            &ctx.session_id,
+            Message {
+                role: MessageRole::Assistant,
+                body: MessageBody::ToolCall {
+                    content: model_response.output.clone(),
+                    tool_calls: tool_calls.clone(),
+                },
+                timestamp: now_ms(),
+                neuron_id: stamped,
+            },
+        )?;
+        Ok(())
+    }
+
+    /// 落库（发送后）：执行结果（Tool）或纯文本（Assistant）。
+    ///
+    /// 独立落库第二步：模型声明已由 `persist_model_decl` 在工具执行前落库，此处只落结果。
     fn persist_outcome(&self, ctx: &RoundContext) -> AppResult<()> {
         let Some(outcome) = &ctx.outcome else {
             return Ok(());
         };
         let stamped = outcome.selected_neuron_id.clone();
-        let stored_as = if let Some(tool_calls) = outcome.tool_calls.as_ref() {
-            if tool_calls.first().is_some() {
-                "tool_call + tool_result"
-            } else {
-                "assistant text"
-            }
+        let has_calls = outcome
+            .tool_calls
+            .as_ref()
+            .map_or(false, |c| c.first().is_some());
+        let stored_as = if has_calls {
+            "tool_result"
         } else {
             "assistant text"
         };
@@ -373,37 +423,21 @@ impl ConversationRunner {
             stored_as,
             "persisting messages"
         );
-        if let Some(tool_calls) = outcome.tool_calls.as_ref() {
-            if let Some(_first) = tool_calls.first() {
+        if has_calls {
+            for item in &outcome.tool_results {
                 self.store.add_message(
                     &ctx.session_id,
                     Message {
-                        role: MessageRole::Assistant,
-                        body: MessageBody::ToolCall {
-                            content: outcome.model_output.clone().unwrap_or_default(),
-                            tool_calls: tool_calls.clone(),
+                        role: MessageRole::Tool,
+                        body: MessageBody::ToolResult {
+                            tool_call_id: item.tool_call_id.clone(),
+                            tool_name: item.tool_name.clone(),
+                            content: item.content.clone(),
                         },
                         timestamp: now_ms(),
                         neuron_id: stamped.clone(),
                     },
                 )?;
-                // 每个声明的 tool_call 都执行过：逐条落 Tool 结果，与声明一一配对
-                // （sanitize 要求每个声明都有对应结果，否则声明被降级、tool 消息成孤儿）。
-                for item in &outcome.tool_results {
-                    self.store.add_message(
-                        &ctx.session_id,
-                        Message {
-                            role: MessageRole::Tool,
-                            body: MessageBody::ToolResult {
-                                tool_call_id: item.tool_call_id.clone(),
-                                tool_name: item.tool_name.clone(),
-                                content: item.content.clone(),
-                            },
-                            timestamp: now_ms(),
-                            neuron_id: stamped.clone(),
-                        },
-                    )?;
-                }
             }
         } else {
             self.store.add_message(

@@ -129,7 +129,19 @@ impl AssistantSession {
                 model,
             )
             .await?;
-        let decision = extract_json_object(&outcome.response)?;
+        let decision = extract_json_object(&outcome.response).map_err(|error| {
+            // 裁决调用要求模型只输出 JSON；解析失败时留痕原始输出（截断），便于定位
+            // 「LLM response missing JSON object」类问题（模型偶发输出散文而非 JSON）。
+            tracing::warn!(
+                phase = "call_judgement",
+                system_type,
+                response_len = outcome.response.len(),
+                response_preview = outcome.response.chars().take(500).collect::<String>(),
+                error = %error,
+                "judgement JSON parse failed; dumping raw model output"
+            );
+            error
+        })?;
         tracing::info!(
             phase = "call_judgement",
             system_type,

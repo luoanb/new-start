@@ -60,6 +60,7 @@ impl RoundExecutor {
     /// `None` 时取选中神经元 `neuron.tool_ids`（Assistant/System；Chat 无神经元 → 空）；
     /// `tool_tags` 并入（`ConversationMode::tool_tags()`），∩ 注册表。数据驱动——调用方按模式
     /// 算好 override 与标签，本函数不感知模式。
+    /// 组合执行：`call_model` + `execute_tools`（供无中间落库需求的调用方使用）。
     pub async fn execute(
         &self,
         neuron: Option<&Neuron>,
@@ -68,6 +69,25 @@ impl RoundExecutor {
         tool_override: Option<Vec<String>>,
         tool_tags: Vec<ToolTag>,
     ) -> AppResult<RoundOutcome> {
+        let (model_response, _authorized_tool_ids) = self
+            .call_model(neuron, messages, model, tool_override, tool_tags)
+            .await?;
+        self.execute_tools(model_response, neuron.map(|n| n.id.clone()))
+            .await
+    }
+
+    /// 第一步：工具授权 → 投影 → 模型调用 → 授权校验。
+    ///
+    /// 返回模型响应与授权工具 id。调用方可在两步之间落库「模型声明」（独立落库：
+    /// 声明先于工具执行持久化，工具失败/超时也不丢模型曾调用的记录）。
+    pub async fn call_model(
+        &self,
+        neuron: Option<&Neuron>,
+        messages: &[Message],
+        model: &ChatModelSelection,
+        tool_override: Option<Vec<String>>,
+        tool_tags: Vec<ToolTag>,
+    ) -> AppResult<(ModelCallResponse, Vec<String>)> {
         // 工具授权：override 优先；否则取选中神经元的 tool_ids（∩ 注册表）。
         let tool_ids = match tool_override {
             Some(ids) => ids,
@@ -144,14 +164,9 @@ impl RoundExecutor {
             tool_calls = model_response.tool_calls.as_ref().map_or(0, |c| c.len()),
             "model call done"
         );
-
-        let mut output = model_response.output.clone();
-        let mut tool_results: Vec<ToolResultItem> = Vec::new();
-        // 单轮单次工具阶段：模型可能一次声明多个 tool_calls（并行调用），引擎全部执行。
-        // 产物携带全部声明与全部结果；落库后 assistant 声明与 tool 结果一一配对
-        // （sanitize 要求每个声明都有对应结果，否则未应答声明会被降级、tool 消息成孤儿）。
-        let tool_calls = model_response.tool_calls.clone();
-        if let Some(calls) = tool_calls.as_ref() {
+        // 授权校验：模型声明的工具必须在本轮授权集合内（未授权属于契约异常，直接失败；
+        // 此时声明尚未落库，不会产生孤儿记录）。
+        if let Some(calls) = model_response.tool_calls.as_ref() {
             for call in calls {
                 if !authorized_tool_ids.iter().any(|id| id == &call.name) {
                     return Err(AppError::InvalidInput(format!(
@@ -159,6 +174,26 @@ impl RoundExecutor {
                         call.name
                     )));
                 }
+            }
+        }
+        Ok((model_response, authorized_tool_ids))
+    }
+
+    /// 第二步：执行全部 tool_calls + 响应拼接。工具执行失败不冒泡——
+    /// 失败信息作为 Tool 结果回传模型（见下方 match），保证声明与结果成对/独立落库。
+    pub async fn execute_tools(
+        &self,
+        model_response: ModelCallResponse,
+        neuron_id: Option<String>,
+    ) -> AppResult<RoundOutcome> {
+        let mut output = model_response.output.clone();
+        let mut tool_results: Vec<ToolResultItem> = Vec::new();
+        // 单轮单次工具阶段：模型可能一次声明多个 tool_calls（并行调用），引擎全部执行。
+        // 每个声明都会产生一条结果（成功或失败文本），供独立落库；孤儿的排除统一在
+        // 「消息 → 模型入参」投影时由 sanitize_tool_pairs 过滤（见 project_history）。
+        let tool_calls = model_response.tool_calls.clone();
+        if let Some(calls) = tool_calls.as_ref() {
+            for call in calls {
                 let tool = self
                     .tool_registry
                     .read()
@@ -171,7 +206,22 @@ impl RoundExecutor {
                     args_len = call.arguments.to_string().len(),
                     "executing tool"
                 );
-                let result = tool.execute(call.arguments.clone()).await?;
+                let result = match tool.execute(call.arguments.clone()).await {
+                    Ok(result) => result,
+                    Err(error) => {
+                        // 工具失败不阻塞整轮：把失败信息作为工具结果回传给模型，
+                        // 由模型决定重试、换工具或直接基于失败继续作答。
+                        let message =
+                            format!("[tool:{}] 工具调用失败：{error}", call.name);
+                        tracing::warn!(
+                            phase = "round_execute",
+                            tool = %call.name,
+                            error = %error,
+                            "tool failed; error passed back to model"
+                        );
+                        message
+                    }
+                };
                 tracing::info!(
                     phase = "round_execute",
                     tool = %call.name,
@@ -196,7 +246,7 @@ impl RoundExecutor {
             model_output: Some(model_response.output.clone()),
             tool_calls,
             tool_results,
-            selected_neuron_id: neuron.map(|n| n.id.clone()),
+            selected_neuron_id: neuron_id,
         })
     }
 }
