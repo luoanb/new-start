@@ -44,10 +44,12 @@
   <div class="toolbar">
     <span class="toolbar-title">{t("sidePanel.models")}</span>
     <button
-      class="btn btn-sm btn-primary"
+      class="icon-btn"
+      title={t("providersModelsPanel.create")}
+      aria-label={t("providersModelsPanel.create")}
       onclick={() => data.requestCreateProvider()}
     >
-      ＋ {t("providersModelsPanel.create")}
+      <svg class="icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
     </button>
   </div>
 
@@ -87,7 +89,7 @@
                 }}
                 onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); data.requestEditProvider(p.id); } }}
               >
-                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
                 </svg>
               </span>
@@ -114,7 +116,7 @@
                   }}
                   onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); deleteConfirmId = p.id; } }}
                 >
-                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                     <polyline points="3 6 5 6 21 6" />
                     <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
                   </svg>
@@ -173,6 +175,23 @@
     flex: 1;
     min-width: 0;
   }
+  /* 与全项目 icon-btn 词汇一致：无边框方形 + hover tint */
+  .icon-btn {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    width: 26px;
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-muted);
+    transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+  }
+  .icon-btn:hover { background: var(--color-hover); color: var(--color-text); }
+  .icon-btn .icon { display: block; }
 
   .btn {
     font-size: var(--fs-xs);
@@ -295,18 +314,26 @@
   .row-btn {
     display: inline-flex;
     align-items: center;
-    gap: 3px;
-    font-size: var(--fs-xs);
-    color: var(--color-primary);
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: var(--radius-sm);
+    color: var(--color-text-muted);
     cursor: pointer;
     user-select: none;
-    white-space: nowrap;
+    transition:
+      background var(--duration-fast) var(--ease-out),
+      color var(--duration-fast) var(--ease-out);
   }
   .row-btn:hover {
-    text-decoration: underline;
+    background: var(--color-hover);
+    color: var(--color-text);
   }
   .row-btn.danger {
     color: var(--color-error);
+  }
+  .row-btn.danger:hover {
+    background: var(--color-hover);
   }
   .delete-confirm {
     display: inline-flex;

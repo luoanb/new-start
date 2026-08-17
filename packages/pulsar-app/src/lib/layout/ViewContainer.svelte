@@ -66,6 +66,8 @@
   let dragStartX = 0;
   let dragStartY = 0;
   let dragging = false; // 是否已超过阈值进入拖拽态（否则视为普通点击）
+  /** 同容器内重排落点：悬停 tab + 插入方向（before = 左侧半区）。 */
+  let dropTarget = $state<{ tabId: string; before: boolean } | null>(null);
   // 拖拽预览：用 $state + Svelte 模板渲染（同 Select.svelte 的浮层模式，该环境已验证可靠），
   // 而非动态 DOM 上手动改 style。
   let preview = $state<{ title: string; x: number; y: number } | null>(null);
@@ -91,14 +93,23 @@
     }
     positionPreview(e.clientX, e.clientY);
     updateTarget(e.clientX, e.clientY);
+    updateDropTarget(e.clientX, e.clientY);
   }
 
   function handlePointerUp(e: PointerEvent) {
     if (e.pointerId !== dragPointerId) return;
+    const target = containerAt(e.clientX, e.clientY);
+    const drop = dropTarget;
     cleanupDrag();
-    if (dragging && dragViewId) {
-      const target = containerAt(e.clientX, e.clientY);
-      if (target && canMoveTo(dragViewId, target)) layout.moveView(dragViewId, target);
+    if (dragging && dragViewId && target && canMoveTo(dragViewId, target)) {
+      if (drop && target === containerId && drop.tabId !== dragViewId) {
+        // 同容器内重排：按落点计算插入索引（基于移动前顺序）
+        const views = layout.state.containers[target].views;
+        const idx = views.findIndex((v) => v === drop.tabId);
+        layout.reorderView(target, dragViewId, drop.before ? idx : idx + 1);
+      } else {
+        layout.moveView(dragViewId, target);
+      }
     }
     dragViewId = null;
     dragging = false;
@@ -115,6 +126,7 @@
     window.removeEventListener("pointerup", handlePointerUp);
     window.removeEventListener("pointercancel", handlePointerCancel);
     preview = null;
+    dropTarget = null;
     document.querySelectorAll(".view-container.dragging-target").forEach((el) =>
       el.classList.remove("dragging-target"),
     );
@@ -142,6 +154,19 @@
         .querySelector(`.view-container[data-container="${target}"]`)
         ?.classList.add("dragging-target");
     }
+  }
+
+  /** 解析同容器内拖拽落点：命中本容器 tab 左/右半区决定插入方向。 */
+  function updateDropTarget(x: number, y: number) {
+    const el = document.elementFromPoint(x, y) as HTMLElement | null;
+    const tabEl = el?.closest?.(".tab[data-view-id]") as HTMLElement | null;
+    const tabId = tabEl?.getAttribute("data-view-id") ?? null;
+    if (!tabEl || !tabId || !registrations.some((r) => r.id === tabId)) {
+      dropTarget = null;
+      return;
+    }
+    const rect = tabEl.getBoundingClientRect();
+    dropTarget = { tabId, before: x < rect.left + rect.width / 2 };
   }
 
   function createPreview() {
@@ -180,6 +205,9 @@
           <button
             class="tab"
             class:active={activeView?.id === reg.id}
+            class:drop-before={dropTarget?.tabId === reg.id && dropTarget.before}
+            class:drop-after={dropTarget?.tabId === reg.id && !dropTarget.before}
+            data-view-id={reg.id}
             onpointerdown={(e) => handleTabPointerDown(e, reg.id)}
             onclick={() => layout.setContainerView(containerId, reg.id)}
           >
@@ -300,6 +328,7 @@
   .container-tabs::-webkit-scrollbar { display: none; }
 
   .tab {
+    position: relative;
     display: flex;
     align-items: center;
     gap: var(--space-1);
@@ -321,6 +350,21 @@
   .tab:hover { color: var(--color-text); }
   .tab.active { color: var(--color-primary); border-bottom-color: var(--color-primary); }
   .title-tab { text-transform: uppercase; letter-spacing: 0.02em; font-weight: 600; cursor: grab; }
+
+  /* 同容器重排拖拽落点指示：目标 tab 左/右侧竖线 */
+  .tab.drop-before::before,
+  .tab.drop-after::after {
+    content: "";
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    width: 2px;
+    border-radius: 1px;
+    background: var(--color-primary);
+    pointer-events: none;
+  }
+  .tab.drop-before::before { left: 0; }
+  .tab.drop-after::after { right: 0; }
 
   .tab-icon { display: inline-flex; align-items: center; font-size: 12px; pointer-events: none; }
   .tab-label { font-size: var(--fs-xs); }

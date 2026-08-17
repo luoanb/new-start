@@ -130,7 +130,17 @@
 </script>
 
 <div class="neurons-list-panel">
-  <div class="toolbar">
+  <div class="panel-toolbar">
+    <span class="panel-title">{t("neuronListPanel.title")}</span>
+    <button
+      class="icon-btn"
+      title={t("neuronListPanel.create")}
+      onclick={() => data.requestCreateNeuron()}
+    >
+      <svg class="icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </button>
+  </div>
+  <div class="filter-bar">
     <input
       class="search"
       placeholder={t("neuronListPanel.search")}
@@ -153,9 +163,6 @@
       />
       {t("neuronListPanel.multiSelect")}
     </label>
-    <button class="btn btn-sm btn-primary" onclick={() => data.requestCreateNeuron()}>
-      ＋ {t("neuronListPanel.create")}
-    </button>
   </div>
 
   {#if errorMsg}
@@ -307,12 +314,40 @@
     overflow: hidden;
   }
 
-  .toolbar {
+  .panel-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    flex-shrink: 0;
+  }
+  .panel-title {
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    color: var(--color-text);
+    flex: 1;
+    min-width: 0;
+  }
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+  }
+  .icon-btn:hover { background: var(--color-hover); color: var(--color-text); }
+  .filter-bar {
     display: flex;
     align-items: center;
     gap: var(--space-1);
-    padding: var(--space-2) var(--space-3);
-    border-bottom: var(--border-width) solid var(--color-border);
+    padding: 0 var(--space-2) var(--space-2);
     flex-wrap: wrap;
   }
   .search {

@@ -112,6 +112,21 @@ export const layoutStore = {
     persist();
   },
 
+  /** 同一容器内重排视图（tab 拖拽落点插入）：先移除后按目标索引插入。 */
+  reorderView(containerId: ViewContainerId, viewId: string, targetIndex: number) {
+    const c = state.containers[containerId];
+    if (!c) return;
+    const idx = c.views.indexOf(viewId);
+    if (idx < 0) return;
+    const [view] = c.views.splice(idx, 1);
+    const insertAt = Math.max(
+      0,
+      Math.min(targetIndex > idx ? targetIndex - 1 : targetIndex, c.views.length),
+    );
+    c.views.splice(insertAt, 0, view);
+    persist();
+  },
+
   /** 隐藏视图（移入 hiddenViews，可从 ⋯ 菜单重新显示）。 */
   hideView(viewId: string) {
     detachView(viewId);
