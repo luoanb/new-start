@@ -331,7 +331,7 @@
     height: 16px;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
-    font-size: 11px;
+    font-size: var(--fs-xs);
     line-height: 1;
     color: transparent;
   }

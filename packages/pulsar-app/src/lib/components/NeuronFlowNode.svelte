@@ -51,7 +51,7 @@
     border: 1px solid var(--color-border, #444);
     background: var(--color-surface, #1e1e1e);
     color: var(--color-text, #eee);
-    font-size: 12px;
+    font-size: var(--fs-sm);
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
     box-sizing: border-box;
     transition: opacity 0.15s ease, filter 0.15s ease;
@@ -87,7 +87,7 @@
     gap: 6px;
     align-items: center;
     color: var(--color-text-muted, #999);
-    font-size: 10px;
+    font-size: var(--fs-xs);
   }
   .node-id {
     flex: 1;

@@ -179,18 +179,18 @@
     display: flex; align-items: center; justify-content: space-between;
     padding: 16px 20px; border-bottom: 1px solid var(--color-border);
   }
-  .modal-header h2 { margin: 0; font-size: 18px; font-weight: 600; }
+  .modal-header h2 { margin: 0; font-size: var(--fs-lg); font-weight: 600; }
   .close-btn {
     background: none; border: none; font-size: 22px; cursor: pointer;
     color: var(--color-text); padding: 0 4px; line-height: 1;
   }
   .modal-body { padding: 20px; display: flex; flex-direction: column; gap: 16px; }
   .field { display: flex; flex-direction: column; gap: 6px; }
-  .field-label { font-size: 13px; color: var(--color-text-muted); }
+  .field-label { font-size: var(--fs-sm); color: var(--color-text-muted); }
   input {
     width: 100%; padding: 8px 10px; border: 1px solid var(--color-border);
     border-radius: 8px; background: var(--color-bg); color: var(--color-text);
-    font-size: 14px; box-sizing: border-box;
+    font-size: var(--fs-sm); box-sizing: border-box;
   }
   input:focus { outline: none; border-color: var(--color-primary); }
   .mode-options { display: flex; gap: 8px; }
@@ -202,22 +202,22 @@
   }
   .mode-card:hover { border-color: var(--color-primary); background: var(--color-hover); }
   .mode-card.selected { border-color: var(--color-primary); }
-  .mode-desc { font-size: 12px; color: var(--color-text-muted); }
+  .mode-desc { font-size: var(--fs-sm); color: var(--color-text-muted); }
   .test-row { display: flex; align-items: center; gap: 12px; }
-  .test-result { font-size: 13px; }
-  .test-result.ok { color: var(--color-success, #2e7d32); }
-  .test-result.fail { color: var(--color-danger, #c62828); }
-  .error { margin: 0; font-size: 13px; color: var(--color-danger, #c62828); }
-  .locked-hint { margin: 0; font-size: 13px; color: var(--color-warning, #f59e0b); }
+  .test-result { font-size: var(--fs-sm); }
+  .test-result.ok { color: var(--color-success); }
+  .test-result.fail { color: var(--color-error); }
+  .error { margin: 0; font-size: var(--fs-sm); color: var(--color-error); }
+  .locked-hint { margin: 0; font-size: var(--fs-sm); color: var(--color-warning); }
   .modal-footer {
     display: flex; justify-content: flex-end; gap: 10px;
     padding: 14px 20px; border-top: 1px solid var(--color-border);
   }
   .btn {
     padding: 8px 16px; border-radius: 8px; border: 1px solid var(--color-border);
-    background: var(--color-bg); color: var(--color-text); font-size: 14px; cursor: pointer;
+    background: var(--color-bg); color: var(--color-text); font-size: var(--fs-sm); cursor: pointer;
   }
   .btn:hover { border-color: var(--color-primary); }
-  .btn.primary { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
+  .btn.primary { background: var(--color-primary); border-color: var(--color-primary); color: var(--color-on-primary); }
   .btn.primary:disabled, .btn:disabled { opacity: 0.6; cursor: default; }
 </style>

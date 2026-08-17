@@ -199,7 +199,7 @@
   }
   .nt-btn {
     padding: 4px 10px;
-    font-size: 12px;
+    font-size: var(--fs-sm);
     border-radius: var(--radius-sm);
     border: 1px solid var(--color-border);
     background: var(--color-surface);

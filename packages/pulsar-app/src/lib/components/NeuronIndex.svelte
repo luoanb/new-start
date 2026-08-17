@@ -94,7 +94,7 @@
 
   .index-empty {
     color: var(--color-text-muted);
-    font-size: 12px;
+    font-size: var(--fs-xs);
     padding: 16px 10px;
     text-align: center;
   }
@@ -113,7 +113,7 @@
     cursor: pointer;
     padding: 4px 6px;
     color: var(--color-text-muted);
-    font-size: 11px;
+    font-size: var(--fs-xs);
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
@@ -158,7 +158,7 @@
     background: var(--color-hover);
   }
   .index-row.selected {
-    background: var(--color-selected);
+    background: color-mix(in oklch, var(--color-primary) 8%, transparent);
   }
 
   .type-bar {
@@ -176,7 +176,7 @@
   }
 
   .row-name {
-    font-size: 12.5px;
+    font-size: var(--fs-xs);
     color: var(--color-text);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -186,7 +186,7 @@
   .row-meta {
     display: flex;
     gap: 8px;
-    font-size: 10.5px;
+    font-size: var(--fs-xs);
     color: var(--color-text-muted);
   }
   .row-meta .links {

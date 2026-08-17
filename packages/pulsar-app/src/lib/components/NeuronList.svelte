@@ -39,13 +39,13 @@
 
 <style>
   .neuron-list { display: flex; flex-direction: column; gap: var(--space-1); }
-  .empty { text-align: center; color: var(--color-text-muted); font-size: var(--fs-sm); padding: var(--space-4); }
+  .empty { text-align: center; color: var(--color-text-muted); font-size: var(--fs-xs); padding: var(--space-4); }
   .neuron-item { display: flex; flex-direction: column; gap: 2px; padding: var(--space-2); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg); text-align: left; cursor: pointer; width: 100%; color: var(--color-text); }
   .neuron-item:hover { border-color: var(--color-primary); }
   .item-top { display: flex; justify-content: space-between; align-items: center; }
-  .item-id { font-size: var(--fs-xs); font-family: monospace; color: var(--color-text-muted); }
+  .item-id { font-size: var(--fs-xs); font-family: var(--font-mono); color: var(--color-text-muted); }
   .item-weight { font-size: var(--fs-xs); font-weight: 600; }
-  .item-desc { font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item-desc { font-size: var(--fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .item-meta { display: flex; gap: var(--space-2); font-size: var(--fs-xs); color: var(--color-text-muted); align-items: center; }
-  .sys-tag { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: var(--radius-sm); background: var(--color-primary); color: var(--color-on-primary); }
+  .sys-tag { font-size: var(--fs-xs); font-weight: 600; padding: 1px 6px; border-radius: var(--radius-sm); background: var(--color-primary); color: var(--color-on-primary); }
 </style>

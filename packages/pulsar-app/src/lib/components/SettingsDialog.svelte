@@ -42,7 +42,7 @@
     display: flex; align-items: center; justify-content: space-between;
     padding: 16px 20px; border-bottom: 1px solid var(--color-border);
   }
-  .modal-header h2 { margin: 0; font-size: 18px; font-weight: 600; }
+  .modal-header h2 { margin: 0; font-size: var(--fs-lg); font-weight: 600; }
   .close-btn {
     background: none; border: none; font-size: 22px; cursor: pointer;
     color: var(--color-text); padding: 0 4px; line-height: 1;
@@ -51,5 +51,5 @@
     padding: 20px; display: flex; flex-direction: column; gap: 16px;
   }
   .field { display: flex; flex-direction: column; gap: 8px; }
-  .field-label { font-size: 13px; color: var(--color-text-muted); }
+  .field-label { font-size: var(--fs-sm); color: var(--color-text-muted); }
 </style>

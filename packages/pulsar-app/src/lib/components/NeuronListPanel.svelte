@@ -217,75 +217,74 @@
               {n.system_type ?? t("neuronListPanel.kindNormal")}
             </span>
             <span class="item-desc" title={n.desc}>{n.desc || n.id}</span>
-          </div>
-          <div class="item-meta">
-            <span class="mono">{n.id}</span>
-            <span class="weight">w{n.weight.toFixed(3)}</span>
-          </div>
-          <div class="item-actions">
-            <span
-              class="row-btn"
-              role="button"
-              tabindex="0"
-              onclick={(e) => {
-                e.stopPropagation();
-                handleEdit(n);
-              }}
-              onkeydown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  handleEdit(n);
-                }
-              }}
-            >
-              <svg
-                viewBox="0 0 24 24"
-                width="12"
-                height="12"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.8"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-              </svg>
-              {t("neuronListPanel.edit")}
-            </span>
-            {#if n.system_type}
+            <div class="item-actions">
               <span
-                class="row-btn launch"
+                class="row-btn"
                 role="button"
                 tabindex="0"
-                title={t("neuronListPanel.launchHint")}
+                title={t("neuronListPanel.edit")}
                 onclick={(e) => {
                   e.stopPropagation();
-                  handleLaunch(n);
+                  handleEdit(n);
                 }}
                 onkeydown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
                     e.stopPropagation();
-                    handleLaunch(n);
+                    handleEdit(n);
                   }
                 }}
               >
                 <svg
                   viewBox="0 0 24 24"
-                  width="12"
-                  height="12"
+                  width="13"
+                  height="13"
                   fill="none"
                   stroke="currentColor"
                   stroke-width="1.8"
                   stroke-linecap="round"
                   stroke-linejoin="round"
                 >
-                  <polygon points="5 3 19 12 5 21 5 3" />
+                  <path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
                 </svg>
-                {t("neuronListPanel.launch")}
               </span>
-            {/if}
+              {#if n.system_type}
+                <span
+                  class="row-btn launch"
+                  role="button"
+                  tabindex="0"
+                  title={t("neuronListPanel.launchHint")}
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    handleLaunch(n);
+                  }}
+                  onkeydown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleLaunch(n);
+                    }
+                  }}
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="13"
+                    height="13"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <polygon points="5 3 19 12 5 21 5 3" />
+                  </svg>
+                </span>
+              {/if}
+            </div>
+          </div>
+          <div class="item-meta">
+            <span class="mono">{n.id}</span>
+            <span class="weight">w{n.weight.toFixed(3)}</span>
           </div>
         </button>
       {/each}
@@ -312,7 +311,7 @@
     display: flex;
     align-items: center;
     gap: var(--space-1);
-    padding: var(--space-2);
+    padding: var(--space-2) var(--space-3);
     border-bottom: var(--border-width) solid var(--color-border);
     flex-wrap: wrap;
   }
@@ -345,13 +344,13 @@
 
   .error {
     font-size: var(--fs-xs);
-    color: var(--color-danger, #e5484d);
+    color: var(--color-error);
     padding: var(--space-2);
   }
   .empty {
     text-align: center;
     color: var(--color-text-muted);
-    font-size: var(--fs-sm);
+    font-size: var(--fs-xs);
     padding: var(--space-6) var(--space-2);
   }
 
@@ -360,7 +359,7 @@
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: var(--space-1);
+    gap: var(--space-2);
     padding: var(--space-2);
   }
   .item {
@@ -399,7 +398,7 @@
   }
   .type-badge {
     flex-shrink: 0;
-    font-size: 10px;
+    font-size: var(--fs-xs);
     font-weight: 600;
     padding: 1px 6px;
     border-radius: var(--radius-sm);
@@ -417,7 +416,7 @@
   .item-desc {
     flex: 1;
     min-width: 0;
-    font-size: var(--fs-sm);
+    font-size: var(--fs-xs);
     font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -433,29 +432,54 @@
   }
   .mono {
     font-family: var(--font-mono);
-    font-size: 10.5px;
+    font-size: var(--fs-xs);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .item-actions {
     display: flex;
-    gap: var(--space-2);
+    align-items: center;
+    gap: var(--space-1);
+    margin-left: auto;
+    flex-shrink: 0;
   }
   .row-btn {
     display: inline-flex;
     align-items: center;
-    gap: 3px;
-    font-size: var(--fs-xs);
-    color: var(--color-primary);
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: var(--radius-sm);
+    color: var(--color-text-muted);
     cursor: pointer;
     user-select: none;
+    transition:
+      background var(--duration-fast) var(--ease-out),
+      color var(--duration-fast) var(--ease-out);
   }
   .row-btn:hover {
-    text-decoration: underline;
+    background: var(--color-hover);
+    color: var(--color-text);
   }
   .row-btn.launch {
     color: var(--color-system-assistant);
+  }
+  .row-btn.launch:hover {
+    background: var(--color-hover);
+  }
+  /* 仅支持 hover 的设备隐藏行操作按钮（悬停/聚焦时显示）；
+     触屏（hover: none）始终可见，保证可发现性 */
+  @media (hover: hover) {
+    .item .item-actions {
+      opacity: 0;
+      visibility: hidden;
+    }
+    .item:hover .item-actions,
+    .item:focus-within .item-actions {
+      opacity: 1;
+      visibility: visible;
+    }
   }
   .load-more {
     border: var(--border-width) dashed var(--color-border);

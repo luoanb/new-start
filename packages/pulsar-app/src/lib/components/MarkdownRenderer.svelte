@@ -108,7 +108,7 @@
   .markdown-body :global(table) {
     border-collapse: collapse;
     margin: 0.4em 0;
-    font-size: 13px;
+    font-size: var(--fs-sm);
     max-width: 100%;
     overflow-x: auto;
     display: block;
@@ -136,7 +136,7 @@
   .markdown-body :global(.code-lang) {
     display: inline-block;
     padding: 2px 10px;
-    font-size: 11px;
+    font-size: var(--fs-xs);
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -151,8 +151,8 @@
   }
 
   .markdown-body :global(.code-block code) {
-    font-family: "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
-    font-size: 13px;
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
     line-height: 1.5;
     color: oklch(0.88 0.004 75);
     background: transparent;
@@ -160,8 +160,8 @@
   }
 
   .markdown-body :global(.inline-code) {
-    font-family: "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
-    font-size: 0.92em;
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
     padding: 1px 5px;
     border-radius: 4px;
     background: var(--color-surface);

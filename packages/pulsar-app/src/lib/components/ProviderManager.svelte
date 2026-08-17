@@ -509,7 +509,7 @@
     border-radius: var(--radius-md);
     background: var(--color-error-bg);
     color: var(--color-error);
-    font-size: var(--fs-sm);
+    font-size: var(--fs-xs);
     cursor: pointer;
   }
   .error-text {
@@ -526,7 +526,7 @@
   .empty {
     text-align: center;
     color: var(--color-text-muted);
-    font-size: var(--fs-sm);
+    font-size: var(--fs-xs);
     padding: var(--space-4) 0;
   }
 
@@ -554,7 +554,7 @@
     align-items: center;
     justify-content: space-between;
     padding: var(--space-2) var(--space-3);
-    font-size: var(--fs-sm);
+    font-size: var(--fs-xs);
     font-weight: 600;
     color: var(--color-text);
     border-bottom: var(--border-width) solid var(--color-border);
@@ -577,7 +577,7 @@
     border-radius: var(--radius-sm);
     background: transparent;
     color: var(--color-text);
-    font-size: var(--fs-sm);
+    font-size: var(--fs-xs);
     text-align: left;
     cursor: pointer;
     transition: background var(--duration-fast) var(--ease-out);
@@ -598,7 +598,7 @@
   }
   .badge {
     flex-shrink: 0;
-    font-size: 10px;
+    font-size: var(--fs-xs);
     font-weight: 600;
     padding: 0 6px;
     border-radius: var(--radius-sm);

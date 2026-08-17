@@ -120,7 +120,7 @@
     background: var(--color-hover);
   }
   .toggle-icon {
-    font-size: 11px;
+    font-size: var(--fs-xs);
     color: var(--color-text-muted);
     flex-shrink: 0;
   }

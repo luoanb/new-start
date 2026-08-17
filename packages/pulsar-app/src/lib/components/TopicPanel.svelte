@@ -388,8 +388,8 @@
     flex-direction: column;
     flex: 1;
     min-height: 0;
-    gap: var(--space-6);
-    padding: var(--space-3) var(--space-4);
+    gap: var(--space-2);
+    padding: var(--space-2);
     overflow: auto;
   }
   .error-banner { background: var(--color-error); color: #fff; padding: var(--space-1) var(--space-2); border-radius: var(--radius-md); font-size: var(--fs-xs); cursor: pointer; }
@@ -400,7 +400,7 @@
     justify-content: space-between;
   }
   .panel-title {
-    font-size: var(--fs-base);
+    font-size: var(--fs-sm);
     font-weight: 600;
     color: var(--color-text);
   }
@@ -453,8 +453,8 @@
   .icon-btn .icon { display: block; }
   .create-form { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-2); background: var(--color-surface); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-md); }
   .create-form input { font-size: var(--fs-sm); padding: var(--space-1) var(--space-2); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-bg); color: var(--color-text); }
-  .empty { text-align: center; color: var(--color-text-muted); font-size: var(--fs-sm); padding: var(--space-4); }
-  .topic-list { display: flex; flex-direction: column; gap: var(--space-1); }
+  .empty { text-align: center; color: var(--color-text-muted); font-size: var(--fs-xs); padding: var(--space-4); }
+  .topic-list { display: flex; flex-direction: column; gap: var(--space-2); }
   .topic-card { border: var(--border-width) solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg); overflow: hidden; }
   .topic-card.expanded { border-color: var(--color-primary); }
   .topic-summary { padding: var(--space-2); cursor: pointer; }
@@ -477,12 +477,12 @@
   .topic-header-actions .icon-btn {
     transition: opacity var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
   }
-  .topic-name { font-size: var(--fs-sm); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .topic-name { font-size: var(--fs-xs); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .status-badge {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: 10px;
+    font-size: var(--fs-xs);
     font-weight: 600;
     padding: 1px 8px;
     border-radius: var(--radius-sm);
@@ -519,7 +519,7 @@
   .scope-item.done { opacity: 0.6; }
   .scope-item-text { flex: 1; min-width: 0; }
   .scope-goal { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .scope-contract { color: var(--color-text-muted); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .scope-contract { color: var(--color-text-muted); font-size: var(--fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .scope-item-actions { display: flex; gap: 2px; align-items: center; }
   .delete-confirm { display: flex; gap: var(--space-1); align-items: center; font-size: var(--fs-xs); color: var(--color-error); }
 </style>

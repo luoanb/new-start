@@ -66,10 +66,14 @@ System font stack for performance and native fit.
 | `--fs-xs` | 11px | 500 | 1.3 | Labels, timestamps, badges |
 | `--fs-sm` | 13px | 400 | 1.4 | Secondary text, metadata |
 | `--fs-base` | 14px | 400 | 1.5 | Body text, message content |
-| `--fs-lg` | 16px | 500 | 1.4 | Section headings |
-| `--fs-xl` | 20px | 600 | 1.3 | Dialog titles, page headers |
+| `--fs-lg` | 16px | 500 | 1.4 | Section headings, dialog titles |
+| `--fs-xl` | 20px | 600 | 1.3 | Page headers, hero titles |
+
+> 注：弹窗/模态框标题统一使用 `--fs-lg`（16px）保持紧凑；`--fs-xl`（20px）仅用于页面级大标题。
 
 Ratio between steps: ~1.25 (musical fourth), ensuring clear hierarchy contrast.
+
+> 注：侧栏/面板（会话列表、神经元列表、服务商等）主文本统一使用 `--fs-xs`（11px）保持紧凑，与 main 区正文（`--fs-base`）形成密度对比。
 
 ## Spacing
 
@@ -124,6 +128,18 @@ Three-column layout with flexible center:
 - Chat area: fills remaining space, max content width ~720px
 - Status bar: full width, 40px height
 - Navigation: keyboard-first with Tab cycling between sidebar ↔ chat ↔ info
+
+### Panels
+
+统一面板标题与间距（ToolPanel 为参照实现）：
+
+| 元素 | 规范 |
+|---|---|
+| 面板主标题 | `--fs-sm`（13px）、weight 600 |
+| 工具栏式头部（带底边框） | `padding: var(--space-2) var(--space-3)`（8px 12px） |
+| 内容式面板容器 | `padding: var(--space-3) var(--space-4)`（12px 16px）、`gap: var(--space-6)` |
+| 列表内容区 | `padding: var(--space-2)`（8px） |
+| 小节/二级标题 | `--fs-xs`（11px）、weight 600 |
 
 ## Components
 

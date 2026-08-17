@@ -75,9 +75,9 @@
     display: flex; align-items: center; justify-content: space-between;
     padding: 16px 20px; border-bottom: 1px solid var(--color-border);
   }
-  .modal-header h2 { margin: 0; font-size: 16px; font-weight: 600; }
+  .modal-header h2 { margin: 0; font-size: var(--fs-lg); font-weight: 600; }
   .modal-body { padding: 20px; }
-  .message { font-size: 14px; color: var(--color-text-muted); line-height: 1.6; }
+  .message { font-size: var(--fs-base); color: var(--color-text-muted); line-height: 1.6; }
   .modal-footer {
     display: flex; justify-content: flex-end; gap: 8px;
     padding: 12px 20px; border-top: 1px solid var(--color-border);

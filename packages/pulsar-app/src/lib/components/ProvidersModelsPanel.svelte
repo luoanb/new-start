@@ -42,7 +42,7 @@
 
 <div class="providers-models-panel">
   <div class="toolbar">
-    <span class="toolbar-title">模型</span>
+    <span class="toolbar-title">{t("sidePanel.models")}</span>
     <button
       class="btn btn-sm btn-primary"
       onclick={() => data.requestCreateProvider()}
@@ -150,9 +150,12 @@
 
 <style>
   .providers-models-panel {
-    height: 100%;
     display: flex;
     flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    gap: var(--space-2);
+    padding: var(--space-2);
     overflow: hidden;
   }
 
@@ -161,8 +164,6 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--space-2);
-    padding: var(--space-2);
-    border-bottom: var(--border-width) solid var(--color-border);
     flex-shrink: 0;
   }
   .toolbar-title {
@@ -207,17 +208,17 @@
   .empty {
     text-align: center;
     color: var(--color-text-muted);
-    font-size: var(--fs-sm);
-    padding: var(--space-6) var(--space-2);
+    font-size: var(--fs-xs);
+    padding: var(--space-6) 0;
   }
 
   .list {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: var(--space-1);
-    padding: var(--space-2);
+    gap: var(--space-2);
   }
 
   .provider-group {
@@ -230,7 +231,7 @@
     display: flex;
     align-items: center;
     gap: var(--space-1);
-    padding: var(--space-1) var(--space-2);
+    padding: var(--space-2) var(--space-2);
     cursor: pointer;
   }
   .provider-row:hover {
@@ -254,7 +255,7 @@
   }
   .mono {
     font-family: var(--font-mono);
-    font-size: 10.5px;
+    font-size: var(--fs-xs);
     color: var(--color-text-muted);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -263,7 +264,7 @@
   }
   .model-count {
     flex-shrink: 0;
-    font-size: 10px;
+    font-size: var(--fs-xs);
     font-weight: 600;
     padding: 0 6px;
     border-radius: var(--radius-sm);
@@ -322,21 +323,23 @@
     display: flex;
     align-items: center;
     gap: var(--space-1);
-    padding: var(--space-1) var(--space-3);
+    padding: var(--space-2) var(--space-3);
     font-size: var(--fs-xs);
   }
   .model-row:hover {
     background: var(--color-hover);
   }
   .model-dot {
-    width: 5px;
-    height: 5px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
     background: var(--color-text-muted);
     opacity: 0.5;
     flex-shrink: 0;
   }
   .model-name {
+    font-size: var(--fs-sm);
+    font-weight: 500;
     color: var(--color-text);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -355,7 +358,7 @@
     display: flex;
   }
   .cap-tag {
-    font-size: 10px;
+    font-size: var(--fs-xs);
     font-weight: 600;
     padding: 1px 6px;
     border-radius: var(--radius-sm);

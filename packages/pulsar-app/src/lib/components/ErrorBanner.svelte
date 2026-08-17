@@ -53,7 +53,7 @@
     padding: 8px 16px;
     background: var(--color-error-bg);
     color: var(--color-error);
-    font-size: 13px;
+    font-size: var(--fs-sm);
     border-bottom: 1px solid var(--color-error-border);
   }
 
@@ -73,7 +73,7 @@
   .dismiss-btn {
     background: none;
     border: none;
-    font-size: 18px;
+    font-size: 22px;
     cursor: pointer;
     color: inherit;
     padding: 0 4px;

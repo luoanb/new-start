@@ -49,7 +49,7 @@
 {/if}
 
 <style>
-  .empty { text-align: center; color: var(--color-text-muted); font-size: var(--fs-sm); padding: var(--space-2); }
+  .empty { text-align: center; color: var(--color-text-muted); font-size: var(--fs-xs); padding: var(--space-2); }
   .network-tree { display: flex; flex-direction: column; gap: 2px; }
   .tree-node {
     display: flex; align-items: center; gap: var(--space-1);
@@ -60,14 +60,14 @@
   .depth-tag { font-family: monospace; color: var(--color-text-muted); min-width: 1.5rem; }
   .dir { color: var(--color-primary); font-weight: 700; width: 1rem; text-align: center; }
   .node-link {
-    font-size: var(--fs-sm); font-weight: 500; color: var(--color-primary);
+    font-size: var(--fs-xs); font-weight: 500; color: var(--color-primary);
     background: none; border: none; cursor: pointer; padding: 0; text-align: left;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%;
   }
   .node-link:hover { text-decoration: underline; }
-  .node-meta { font-size: 10px; color: var(--color-text-muted); white-space: nowrap; }
+  .node-meta { font-size: var(--fs-xs); color: var(--color-text-muted); white-space: nowrap; }
   .sys-tag {
-    font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: var(--radius-sm);
+    font-size: var(--fs-xs); font-weight: 600; padding: 1px 6px; border-radius: var(--radius-sm);
     background: var(--color-primary); color: var(--color-on-primary);
   }
 </style>

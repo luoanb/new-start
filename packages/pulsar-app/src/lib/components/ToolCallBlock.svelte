@@ -51,7 +51,7 @@
   .block-header { display: flex; align-items: center; gap: var(--space-1); padding-right: var(--space-1); }
   .summary { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; padding: var(--space-2) var(--space-3); border: none; background: transparent; color: var(--color-text); font-size: var(--fs-sm); cursor: pointer; text-align: left; transition: background var(--duration-fast) var(--ease-out); }
   .summary:hover { background: var(--color-hover); }
-  .toggle-icon { font-size: 11px; color: var(--color-text-muted); flex-shrink: 0; }
+  .toggle-icon { font-size: var(--fs-xs); color: var(--color-text-muted); flex-shrink: 0; }
   .label { font-family: var(--font-mono, monospace); font-size: var(--fs-xs); color: var(--color-text-muted); }
   .detail { border-top: var(--border-width) solid var(--color-border); padding: var(--space-2) var(--space-3); max-height: 400px; overflow-y: auto; }
   .call-item { margin-bottom: var(--space-2); }

@@ -197,8 +197,8 @@
     flex-direction: column;
     flex: 1;
     min-height: 0;
-    gap: var(--space-6);
-    padding: var(--space-3) var(--space-4);
+    gap: var(--space-2);
+    padding: var(--space-2);
     overflow: auto;
   }
 
@@ -208,7 +208,7 @@
     justify-content: space-between;
   }
   .panel-title {
-    font-size: var(--fs-base);
+    font-size: var(--fs-sm);
     font-weight: 600;
     color: var(--color-text);
   }
@@ -315,6 +315,7 @@
     padding: 0;
     display: flex;
     flex-direction: column;
+    gap: var(--space-2);
   }
   .server-item,
   .tool-item {
@@ -340,9 +341,8 @@
   }
   .server-name,
   .tool-name {
-    font-family: monospace;
     font-size: var(--fs-sm);
-    font-weight: 600;
+    font-weight: 500;
     color: var(--color-text);
     overflow: hidden;
     text-overflow: ellipsis;

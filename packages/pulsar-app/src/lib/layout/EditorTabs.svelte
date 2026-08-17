@@ -242,7 +242,7 @@
     min-width: 16px;
     height: 16px;
     padding: 0 3px;
-    font-size: 10px;
+    font-size: var(--fs-xs);
     font-weight: 600;
     line-height: 1;
     border-radius: var(--radius-sm);
@@ -253,7 +253,7 @@
   .icon.tone-chat { background: color-mix(in srgb, var(--color-primary) 15%, transparent); color: var(--color-primary); }
   .icon.tone-agent { background: color-mix(in srgb, var(--color-success) 15%, transparent); color: var(--color-success); }
   .icon.tone-assistant { background: color-mix(in srgb, var(--color-warning) 15%, transparent); color: var(--color-warning); }
-  .icon.tone-system { background: color-mix(in srgb, var(--color-danger, #e5484d) 15%, transparent); color: var(--color-danger, #e5484d); }
+  .icon.tone-system { background: color-mix(in srgb, var(--color-error) 15%, transparent); color: var(--color-error); }
   .label { font-size: var(--fs-xs); font-weight: 500; }
   /* 未保存 ● 标记：warning 色（对齐 visual-design 状态表） */
   .dirty-dot {
@@ -327,7 +327,7 @@
     pointer-events: auto;
     z-index: 5;
   }
-  .new-pane-icon { font-size: 11px; line-height: 1; }
+  .new-pane-icon { font-size: var(--fs-xs); line-height: 1; }
   .new-pane-drop.over {
     color: var(--color-on-primary);
     background: var(--color-primary);

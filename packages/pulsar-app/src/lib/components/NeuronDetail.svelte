@@ -172,11 +172,11 @@
   .back-btn { align-self: flex-start; font-size: var(--fs-sm); padding: var(--space-1) var(--space-2); border: none; background: transparent; color: var(--color-primary); cursor: pointer; }
   .back-btn:hover { text-decoration: underline; }
   .status-msg, .error-msg { text-align: center; color: var(--color-text-muted); font-size: var(--fs-sm); padding: var(--space-4); }
-  .error-msg { color: var(--color-danger, #ef4444); }
+  .error-msg { color: var(--color-error); }
   .detail-card { border: var(--border-width) solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-2); background: var(--color-bg); }
   .detail-header { display: flex; gap: var(--space-2); align-items: center; margin-bottom: var(--space-2); }
-  .neuron-id { font-family: monospace; font-size: var(--fs-xs); color: var(--color-text-muted); }
-  .sys-tag { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: var(--radius-sm); background: var(--color-primary); color: var(--color-on-primary); }
+  .neuron-id { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--color-text-muted); }
+  .sys-tag { font-size: var(--fs-xs); font-weight: 600; padding: 1px 6px; border-radius: var(--radius-sm); background: var(--color-primary); color: var(--color-on-primary); }
   .weight-bar { font-size: var(--fs-xs); color: var(--color-text-muted); margin-bottom: var(--space-2); }
   .weight-bg { height: 4px; background: var(--color-border); border-radius: 2px; margin-top: 2px; overflow: hidden; }
   .weight-fill { height: 100%; background: var(--color-primary); border-radius: 2px; }

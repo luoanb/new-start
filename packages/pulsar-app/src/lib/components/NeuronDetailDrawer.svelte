@@ -263,6 +263,53 @@
     <div class="drawer-head">
       <span class="type-bar" style:background={systemTypeColor(neuron.system_type)}></span>
       <span class="title">{t("neuronPanel.drawerTitle")}</span>
+      <div class="head-actions" class:editing>
+        {#if editing}
+          <button
+            class="head-btn"
+            onclick={handleSave}
+            disabled={saving}
+            title={saving ? t("neuronPanel.saving") : t("neuronPanel.save")}
+            aria-label={t("neuronPanel.save")}
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+              <path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="currentColor"/>
+            </svg>
+          </button>
+          <button
+            class="head-btn"
+            onclick={handleCancel}
+            disabled={saving}
+            title={t("neuronPanel.cancel")}
+            aria-label={t("neuronPanel.cancel")}
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+              <path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" fill="currentColor"/>
+            </svg>
+          </button>
+        {:else}
+          <button
+            class="head-btn"
+            onclick={() => (editing = true)}
+            title={t("neuronPanel.edit")}
+            aria-label={t("neuronPanel.edit")}
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+              <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.9959.9959 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" fill="currentColor"/>
+            </svg>
+          </button>
+          <button
+            class="head-btn"
+            onclick={() => onRequestCreateDownstream(neuron!.id)}
+            title={t("neuronPanel.createDownstreamFromHere")}
+            aria-label={t("neuronPanel.createDownstreamFromHere")}
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+              <path d="M14 4l2.29 2.29-2.88 2.88 1.42 1.42 2.88-2.88L20 10V4h-6zm-4 0H4v6l2.29-2.29 4.71 4.7V20h2v-8.41l-5.29-5.3z" fill="currentColor"/>
+            </svg>
+          </button>
+        {/if}
+      </div>
       <button
         class="pos-btn"
         onclick={togglePosition}
@@ -526,20 +573,6 @@
         </div>
       </div>
     {/if}
-
-    <div class="drawer-foot">
-      <button class="btn primary" onclick={() => onRequestCreateDownstream(neuron!.id)}>
-        {t("neuronPanel.createDownstreamFromHere")}
-      </button>
-      {#if editing}
-        <button class="btn primary" onclick={handleSave} disabled={saving}>
-          {saving ? t("neuronPanel.saving") : t("neuronPanel.save")}
-        </button>
-        <button class="btn" onclick={handleCancel}>{t("neuronPanel.cancel")}</button>
-      {:else}
-        <button class="btn" onclick={() => (editing = true)}>{t("neuronPanel.edit")}</button>
-      {/if}
-    </div>
   {/if}
 </div>
 
@@ -600,7 +633,7 @@
   .title {
     flex: 1;
     font-weight: 600;
-    font-size: 13px;
+    font-size: var(--fs-sm);
     color: var(--color-text);
   }
   .pos-btn {
@@ -619,6 +652,56 @@
     transition:
       color 0.15s ease,
       background 0.15s ease;
+  }
+  .head-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-left: auto;
+  }
+  .head-actions .head-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    background: none;
+    border: none;
+    border-radius: 6px;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    opacity: 0;
+    transition:
+      color 0.15s ease,
+      background 0.15s ease,
+      opacity 0.15s ease;
+  }
+  /* 编辑态操作常显；查看态编辑/发起仅在悬停标题栏或键盘聚焦时浮现 */
+  .head-actions.editing .head-btn {
+    opacity: 1;
+  }
+  .drawer-head:hover .head-actions .head-btn,
+  .drawer-head:focus-within .head-actions .head-btn {
+    opacity: 1;
+  }
+  .head-actions .head-btn:hover {
+    color: var(--color-text);
+    background: var(--color-hover);
+  }
+  .head-actions .head-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .head-actions .head-btn svg {
+    display: block;
+  }
+  /* 触屏（hover: none）常显，保证可发现性 */
+  @media (hover: none) {
+    .head-actions .head-btn {
+      opacity: 1;
+    }
   }
   .pos-btn:hover {
     color: var(--color-text);
@@ -670,20 +753,20 @@
     gap: 6px;
   }
   label {
-    font-size: 11px;
+    font-size: var(--fs-xs);
     color: var(--color-text-muted);
     text-transform: uppercase;
     letter-spacing: 0.03em;
   }
   .field-label {
-    font-size: 11px;
+    font-size: var(--fs-xs);
     font-weight: 600;
     color: var(--color-text-muted);
     text-transform: uppercase;
     letter-spacing: 0.03em;
   }
   .value {
-    font-size: 12.5px;
+    font-size: var(--fs-sm);
     color: var(--color-text);
     line-height: 1.5;
     word-break: break-word;
@@ -694,7 +777,7 @@
   .value.mono,
   .mono {
     font-family: var(--font-mono);
-    font-size: 11.5px;
+    font-size: var(--fs-xs);
   }
   .value.muted {
     color: var(--color-text-muted);
@@ -718,7 +801,7 @@
     color: var(--color-text-muted);
     border-radius: 6px;
     padding: 2px 8px;
-    font-size: 11px;
+    font-size: var(--fs-xs);
     cursor: pointer;
     transition:
       color 0.15s ease,
@@ -744,7 +827,7 @@
     align-items: flex-start;
     gap: 8px;
     cursor: pointer;
-    font-size: 12px;
+    font-size: var(--fs-sm);
     line-height: 1.4;
   }
   .tool-check input {
@@ -753,7 +836,7 @@
   }
   .tool-name {
     font-family: var(--font-mono);
-    font-size: 11.5px;
+    font-size: var(--fs-xs);
     color: var(--color-text);
     white-space: nowrap;
   }
@@ -771,7 +854,7 @@
     border: 1px solid var(--color-border);
     border-radius: 8px;
     padding: 6px 8px;
-    font-size: 12px;
+    font-size: var(--fs-sm);
     font-family: inherit;
     resize: vertical;
   }
@@ -806,7 +889,7 @@
     border-radius: 6px;
     width: 22px;
     height: 22px;
-    font-size: 13px;
+    font-size: var(--fs-sm);
     line-height: 1;
     cursor: pointer;
     display: inline-flex;
@@ -819,7 +902,7 @@
   .stepper.small .step-btn {
     width: 18px;
     height: 18px;
-    font-size: 11px;
+    font-size: var(--fs-xs);
   }
   .step-btn:hover:not(:disabled) {
     border-color: var(--color-primary);
@@ -840,8 +923,8 @@
     margin-top: 8px;
   }
   .delta-label {
-    font-size: 12px;
-    color: var(--color-muted);
+    font-size: var(--fs-sm);
+    color: var(--color-text-muted);
   }
   .delta-input {
     width: 72px;
@@ -850,7 +933,7 @@
     border-radius: 6px;
     background: var(--color-bg);
     color: var(--color-text);
-    font-size: 12px;
+    font-size: var(--fs-sm);
   }
   .delta-input.small {
     width: 56px;
@@ -859,12 +942,12 @@
     flex: 0 0 auto;
     height: 26px;
     padding: 0 10px;
-    font-size: 12px;
+    font-size: var(--fs-sm);
   }
   .btn.primary {
     border: 1px solid var(--color-primary);
     background: var(--color-primary);
-    color: #fff;
+    color: var(--color-on-primary);
     border-radius: 6px;
     cursor: pointer;
   }
@@ -876,7 +959,7 @@
     background: none;
     border: none;
     color: var(--color-primary);
-    font-size: 12px;
+    font-size: var(--fs-sm);
     cursor: pointer;
     text-align: left;
     overflow: hidden;
@@ -889,16 +972,10 @@
   }
   .conn-w {
     font-family: var(--font-mono);
-    font-size: 10.5px;
+    font-size: var(--fs-xs);
     color: var(--color-text-muted);
   }
 
-  .drawer-foot {
-    display: flex;
-    gap: 8px;
-    padding: 10px 14px;
-    border-top: 1px solid var(--color-border);
-  }
   .drawer-error {
     margin: 0 14px;
     padding: 8px 10px;
@@ -906,7 +983,7 @@
     border-radius: 8px;
     background: color-mix(in srgb, var(--color-error, #e5484d) 10%, transparent);
     color: var(--color-error, #e5484d);
-    font-size: 11.5px;
+    font-size: var(--fs-xs);
     line-height: 1.4;
     word-break: break-all;
   }
@@ -917,7 +994,7 @@
     border: 1px solid var(--color-border);
     background: var(--color-surface);
     color: var(--color-text);
-    font-size: 12px;
+    font-size: var(--fs-sm);
     cursor: pointer;
     transition: background 0.15s ease;
   }
@@ -941,7 +1018,7 @@
     flex-wrap: wrap;
   }
   .type-badge {
-    font-size: 11px;
+    font-size: var(--fs-xs);
     font-weight: 600;
     padding: 2px 8px;
     border-radius: 6px;
@@ -972,7 +1049,7 @@
     border: 1px solid var(--color-border);
     border-radius: 6px;
     padding: 4px 8px;
-    font-size: 12px;
+    font-size: var(--fs-sm);
     font-family: var(--font-mono);
   }
   .bind-row input:focus {
@@ -1009,12 +1086,12 @@
     gap: 10px;
   }
   .confirm-title {
-    font-size: 13px;
+    font-size: var(--fs-sm);
     font-weight: 600;
     color: var(--color-text);
   }
   .confirm-body {
-    font-size: 12px;
+    font-size: var(--fs-sm);
     line-height: 1.5;
     color: var(--color-text-muted);
     word-break: break-word;

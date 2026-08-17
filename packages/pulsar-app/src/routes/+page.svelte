@@ -696,9 +696,8 @@
 <style>
   :global(body) {
     margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
-      Arial, sans-serif;
-    font-size: 14px;
+    font-family: var(--font-body);
+    font-size: var(--fs-base);
     line-height: 1.5;
     background: var(--color-bg);
     color: var(--color-text);
@@ -853,7 +852,7 @@
     display: flex; align-items: center; justify-content: center;
     background: var(--color-bg); z-index: 200;
   }
-  .loading-overlay p { font-size: 16px; color: var(--color-text-muted); }
+  .loading-overlay p { font-size: var(--fs-lg); color: var(--color-text-muted); }
 
   /* ── Drawers ── */
   .drawer-backdrop {

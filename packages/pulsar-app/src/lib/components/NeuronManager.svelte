@@ -528,12 +528,12 @@
     gap: 6px;
   }
   .depth-label {
-    font-size: 11px;
+    font-size: var(--fs-xs);
     color: var(--color-text-muted);
   }
   .depth-val {
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: var(--fs-xs);
     color: var(--color-text);
     width: 10px;
     text-align: center;
@@ -557,7 +557,7 @@
     color: var(--color-on-primary);
     border-radius: 8px;
     padding: 5px 12px;
-    font-size: 12px;
+    font-size: var(--fs-xs);
     cursor: pointer;
     white-space: nowrap;
     transition:
@@ -590,7 +590,7 @@
     box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
   }
   .modal-title {
-    font-size: 15px;
+    font-size: var(--fs-lg);
     font-weight: 600;
     color: var(--color-text);
     margin-bottom: 14px;
@@ -609,7 +609,7 @@
     color: var(--color-text-muted);
     border-radius: 8px;
     padding: 7px 10px;
-    font-size: 12.5px;
+    font-size: var(--fs-sm);
     cursor: pointer;
     transition:
       background 0.15s ease,
@@ -623,7 +623,7 @@
   }
   .modal-label {
     display: block;
-    font-size: 11.5px;
+    font-size: var(--fs-xs);
     color: var(--color-text-muted);
     margin-bottom: 5px;
   }
@@ -635,7 +635,7 @@
     border-radius: 8px;
     padding: 7px 10px;
     color: var(--color-text);
-    font-size: 12.5px;
+    font-size: var(--fs-sm);
     font-family: inherit;
     resize: vertical;
   }
@@ -644,7 +644,7 @@
     border-color: var(--color-primary);
   }
   .modal-hint {
-    font-size: 12px;
+    font-size: var(--fs-sm);
     color: var(--color-text-muted);
   }
   .tool-checks {
@@ -663,7 +663,7 @@
     align-items: flex-start;
     gap: 8px;
     cursor: pointer;
-    font-size: 12.5px;
+    font-size: var(--fs-sm);
     line-height: 1.4;
   }
   .tool-check input {
@@ -683,7 +683,7 @@
   }
   .modal-error {
     color: var(--color-error);
-    font-size: 12px;
+    font-size: var(--fs-sm);
     margin-bottom: 10px;
   }
   .modal-actions {
@@ -698,7 +698,7 @@
     color: var(--color-text-muted);
     border-radius: 8px;
     padding: 6px 14px;
-    font-size: 12.5px;
+    font-size: var(--fs-sm);
     cursor: pointer;
   }
   .btn-ghost:hover {
@@ -710,7 +710,7 @@
     color: var(--color-on-primary);
     border-radius: 8px;
     padding: 6px 16px;
-    font-size: 12.5px;
+    font-size: var(--fs-sm);
     cursor: pointer;
   }
   .btn-primary:disabled {
@@ -745,7 +745,7 @@
     justify-content: center;
     gap: 8px;
     color: var(--color-text-muted);
-    font-size: 13px;
+    font-size: var(--fs-xs);
     text-align: center;
     padding: 24px;
   }
@@ -753,12 +753,12 @@
     color: var(--color-error);
   }
   .empty-title {
-    font-size: 15px;
+    font-size: var(--fs-lg);
     color: var(--color-text);
     font-weight: 600;
   }
   .empty-hint {
-    font-size: 12px;
+    font-size: var(--fs-xs);
     max-width: 280px;
     line-height: 1.5;
   }

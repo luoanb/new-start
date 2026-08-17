@@ -106,11 +106,11 @@
     margin-left: auto; display: flex; align-items: center; gap: var(--space-2);
   }
   .back-btn {
-    font-size: var(--fs-sm); padding: var(--space-1) var(--space-2);
+    font-size: var(--fs-xs); padding: var(--space-1) var(--space-2);
     border: none; background: transparent; color: var(--color-primary); cursor: pointer;
   }
   .back-btn:hover { text-decoration: underline; }
-  h3 { font-size: var(--fs-sm); font-weight: 600; margin: 0; }
+  h3 { font-size: var(--fs-xs); font-weight: 600; margin: 0; }
   .depth-ctrl {
     display: flex; align-items: center; gap: var(--space-1);
     font-size: var(--fs-xs); color: var(--color-text-muted);
@@ -124,7 +124,7 @@
     background: var(--color-primary); color: var(--color-on-primary, #fff); font-weight: 600;
   }
   .status-msg, .error-msg, .empty {
-    text-align: center; color: var(--color-text-muted); font-size: var(--fs-sm); padding: var(--space-2);
+    text-align: center; color: var(--color-text-muted); font-size: var(--fs-xs); padding: var(--space-2);
   }
-  .error-msg { color: var(--color-danger, #ef4444); }
+  .error-msg { color: var(--color-error); }
 </style>

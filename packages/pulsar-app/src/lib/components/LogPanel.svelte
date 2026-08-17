@@ -201,7 +201,7 @@
   }
   .toolbar button { cursor: pointer; height: 28px; }
   .meta {
-    font-size: 10px;
+    font-size: var(--fs-xs);
     color: var(--color-text-muted);
     word-break: break-all;
   }
@@ -210,7 +210,7 @@
     min-height: 0;
     overflow: auto;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    font-size: 11px;
+    font-size: var(--fs-xs);
     border: var(--border-width) solid var(--color-border);
     border-radius: var(--radius-sm);
     background: var(--color-bg);
@@ -229,7 +229,7 @@
     opacity: 0.9;
   }
   .ts { color: var(--color-text-muted); }
-  .level { font-weight: 700; text-transform: uppercase; }
+  .level { font-weight: 600; text-transform: uppercase; }
   .level-error .level { color: #c0392b; }
   .level-warn .level { color: #d68910; }
   .level-info .level { color: var(--color-primary); }
