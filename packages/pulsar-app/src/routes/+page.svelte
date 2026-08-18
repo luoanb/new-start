@@ -13,6 +13,7 @@
   import ViewHost from "$lib/layout/ViewHost.svelte";
   import ViewContainer from "$lib/layout/ViewContainer.svelte";
   import { layoutStore } from "$lib/layout/LayoutStore.svelte";
+  import { applyThemeOnBoot } from "$lib/theme";
   import { mainViews, mainPanelMeta } from "$lib/layout/views";
   import { setViewContext, type ViewContext } from "$lib/layout/viewContext";
   import { fileEditorStore } from "$lib/stores/fileEditorStore.svelte";
@@ -118,6 +119,8 @@
 
   // ── Bootstrap：统一拉取 + 订阅后端状态事件 ──
   onMount(async () => {
+    // 启动即应用已保存的主题偏好，避免等到打开设置弹窗（ThemeSwitcher 挂载）才生效造成跳变。
+    applyThemeOnBoot();
     await dataStore.bootstrap();
     await dataStore.subscribe();
     // 首启默认会话回显后端持有的会话级模型选择（后端权威）。

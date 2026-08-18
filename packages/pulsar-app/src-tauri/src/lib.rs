@@ -1079,6 +1079,21 @@ pub fn run() {
                 "pulsar logging initialized"
             );
 
+            // WebKitGTK 磁盘缓存不完全遵守 no-store（实测重启后仍按 URL 复用旧 CSS/JS，
+            // 导致整个 App 样式混搭）；每次启动在建窗前清掉 WebKitCache，保证加载最新 bundle。
+            if let Ok(data_dir) = app.path().app_data_dir() {
+                let webkit_cache = data_dir.join("WebKitCache");
+                if webkit_cache.exists() {
+                    match std::fs::remove_dir_all(&webkit_cache) {
+                        Ok(()) => tracing::info!("cleared stale webkit disk cache at startup"),
+                        Err(error) => tracing::warn!(
+                            error = %error,
+                            "failed to clear webkit disk cache at startup"
+                        ),
+                    }
+                }
+            }
+
             // 远程模式：内嵌 server 配置（config.json `server` 节）。缺省 / enabled=false 不启动，
             // 等价现状（本机 Tauri IPC 路径零改动）。
             let server_cfg = ConfigStore::new(storage_root.clone())

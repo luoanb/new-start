@@ -1,63 +1,29 @@
 <script lang="ts">
   import { t } from "$lib/i18n";
-  import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { applyTheme, readTheme, type Theme } from "$lib/theme";
 
-  const STORAGE_KEY = "theme-preference";
-
-  type Theme = "light" | "dark" | "system";
-
-  let current: Theme = $state(initTheme());
-
-  function initTheme(): Theme {
-    if (typeof localStorage === "undefined") return "system";
-    return (localStorage.getItem(STORAGE_KEY) as Theme) ?? "system";
-  }
-
-  function isTauri(): boolean {
-    return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-  }
-
-  function resolveOsTheme(theme: Theme): "light" | "dark" {
-    if (theme === "system") {
-      return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-    }
-    return theme;
-  }
+  let current: Theme = $state(readTheme());
 
   async function apply(theme: Theme) {
     current = theme;
-    localStorage.setItem(STORAGE_KEY, theme);
-    const el = document.documentElement;
-    if (theme === "system") {
-      el.removeAttribute("data-theme");
-    } else {
-      el.dataset.theme = theme;
-    }
-    // 让原生 OS 窗口标题栏跟随主题
-    if (isTauri()) {
-      try {
-        await getCurrentWindow().setTheme(resolveOsTheme(theme));
-      } catch {
-        /* 某些平台/版本不支持 setTheme，忽略 */
-      }
-    }
+    await applyTheme(theme);
   }
 
   $effect(() => {
+    // 挂载时应用当前偏好（与启动时的全局应用幂等），并跟随 current 变化。
+    void applyTheme(current);
+  });
+
+  $effect(() => {
     if (current !== "system") return;
+    // system 模式下 OS 主题切换时，同步原生窗口标题栏
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const handler = () => {
-      if (isTauri()) {
-        getCurrentWindow()
-          .setTheme(mq.matches ? "dark" : "light")
-          .catch(() => {});
-      }
+      void applyTheme("system");
     };
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
   });
-
-  $effect(() => { apply(current); });
 
   const themes: Theme[] = ["light", "dark", "system"];
   let label = $derived({
