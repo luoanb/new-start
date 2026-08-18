@@ -74,11 +74,11 @@
     if (presencePenalty !== "") next.presence_penalty = parseFloat(presencePenalty);
     if (frequencyPenalty !== "") next.frequency_penalty = parseFloat(frequencyPenalty);
     const empty = Object.keys(next).length === 0;
-    // 思考模式：仅当模型支持且用户显式开启/设置强度时携带；否则回落 undefined。
+    // 思考模式：仅当模型支持时携带；enabled 显式 true/false（避免不勾选回落 undefined，
+    // 被服务商当作"未设置"而默认开启深度思考，如 DeepSeek 默认 enabled）。
     let nextThinking: ThinkingConfig | undefined;
     if (thinkingSupported) {
-      const enabled = thinkingEnabled || undefined;
-      nextThinking = { enabled, effort };
+      nextThinking = { enabled: thinkingEnabled, effort };
     }
     onChange?.(
       selectedProviderId,
