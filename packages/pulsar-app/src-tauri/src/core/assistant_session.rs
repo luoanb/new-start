@@ -24,7 +24,7 @@ use super::{
     error::{AppError, AppResult},
     models::{
         ChatModelSelection, ChatResponse, EnsureSystemOpts, Message, MessageBody, MessageRole,
-        ScopeInItem, Topic, TopicStatus, TopicUpdate,
+        ScopeInItem, ThinkingConfig, Topic, TopicStatus, TopicUpdate,
     },
     neuron::model::extract_json_object,
     neuron_manager::NeuronManager,
@@ -127,6 +127,11 @@ impl AssistantSession {
                 Vec::new(),
                 true,
                 model,
+                // 裁决 hook：非对话调用，直接显式关闭深度思考。
+                Some(ThinkingConfig {
+                    enabled: Some(false),
+                    effort: None,
+                }),
             )
             .await?;
         let decision = extract_json_object(&outcome.response).map_err(|error| {
@@ -186,6 +191,7 @@ impl AssistantSession {
                 None,
                 model,
                 Some(&hooks),
+                None, // 用户聊天窗口发起：保留思考配置（跟随前端勾选）
             )
             .await?;
         tracing::info!(
@@ -207,7 +213,18 @@ impl AssistantSession {
         let hooks = AssistantHooks { assistant: self };
         let response = self
             .runner
-            .run_round(session_id, InputRecord::None, None, model, Some(&hooks))
+            .run_round(
+                session_id,
+                InputRecord::None,
+                None,
+                model,
+                Some(&hooks),
+                // 手动推进：非对话调用，直接显式关闭深度思考。
+                Some(ThinkingConfig {
+                    enabled: Some(false),
+                    effort: None,
+                }),
+            )
             .await?;
         tracing::info!(phase = "assistant_step", session_id, "step ok");
         Ok(response)
@@ -222,7 +239,18 @@ impl AssistantSession {
         tracing::info!(phase = "assistant_poller", session_id, "poller step start");
         let hooks = AssistantHooks { assistant: self };
         self.runner
-            .run_round(session_id, InputRecord::Nudge, None, model, Some(&hooks))
+            .run_round(
+                session_id,
+                InputRecord::Nudge,
+                None,
+                model,
+                Some(&hooks),
+                // 轮询推进：非对话调用，直接显式关闭深度思考。
+                Some(ThinkingConfig {
+                    enabled: Some(false),
+                    effort: None,
+                }),
+            )
             .await
     }
 

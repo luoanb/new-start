@@ -513,7 +513,7 @@ pub struct ModelCallRequest {
     /// 单次采样参数覆盖（最高优先级）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<SamplingParams>,
-    /// 单次思考模式覆盖（最高优先级）。
+    /// 单次思考模式配置覆盖（最高优先级）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ThinkingConfig>,
 }

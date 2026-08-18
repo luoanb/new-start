@@ -70,8 +70,8 @@ pub use models::{
     NeighborhoodPoolPolicy, Neuron, NeuronCreate, NeuronKindFilter, NeuronPage, NeuronSubgraph,
     NeuronUpdate, ProviderInfo, ProviderKind, RuntimeStatus, SamplingParams, ScopeInItem,
     SelectionPolicy, SessionBehavior, SkillInfo, SystemPromptStatus, ThinkingCapability,
-    ThinkingConfig, ThinkingEffort, ToolCall, ToolDefinition, ToolInfo, ToolPolicy, ToolSource,
-    Topic, TopicStatus, TopicUpdate, DEFAULT_ASSISTANT_GLOBAL_LIMIT,
+    ThinkingConfig, ThinkingEffort, ToolCall, ToolDefinition, ToolInfo, ToolPolicy,
+    ToolSource, Topic, TopicStatus, TopicUpdate, DEFAULT_ASSISTANT_GLOBAL_LIMIT,
 };
 pub use poller::{
     PollHandler, Poller, PollerConfigReader, PollerRunState, PollerSettings, PollerStatus,

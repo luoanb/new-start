@@ -8,7 +8,7 @@ use super::{
     model_call_input::ModelCallInput,
     models::{
         ChatModelSelection, ChatResponse, Conversation, ConversationMode, Message, MessageBody,
-        MessageRole, ModelCallResponse, ModelMessage, Neuron, ToolTag,
+        MessageRole, ModelCallResponse, ModelMessage, Neuron, ThinkingConfig, ToolTag,
     },
     round_executor::RoundExecutor,
     round_resolver::RoundResolver,
@@ -110,6 +110,8 @@ impl ConversationRunner {
         tool_override: Option<Vec<String>>,
         model: &ChatModelSelection,
         hooks: Option<&dyn RoundHooks>,
+        // 思考配置覆盖：Some = 调用方直接给定（后台调用传 disabled）；None = 跟随模型/会话配置。
+        thinking_override: Option<ThinkingConfig>,
     ) -> AppResult<ChatResponse> {
         let mut ctx = self.load_context(session_id, input, tool_override, model)?;
         tracing::info!(
@@ -179,6 +181,7 @@ impl ConversationRunner {
                 model,
                 ctx.tool_override.clone(),
                 ctx.mode.tool_tags(),
+                thinking_override,
             )
             .await?;
         // 模型已返回：若声明了工具调用，先落库声明（Assistant/ToolCall）。
@@ -228,6 +231,8 @@ impl ConversationRunner {
         tool_tags: Vec<ToolTag>,
         reselect: bool,
         model: &ChatModelSelection,
+        // 思考配置覆盖：Some = 调用方直接给定（hook 裁决等后台调用传 disabled）；None = 跟随模型/会话配置。
+        thinking_override: Option<ThinkingConfig>,
     ) -> AppResult<RoundOutcome> {
         let (with_role, neuron) = self
             .resolver
@@ -245,7 +250,14 @@ impl ConversationRunner {
             });
         }
         self.executor
-            .execute(neuron.as_ref(), &wire, model, tool_override, tool_tags)
+            .execute(
+                neuron.as_ref(),
+                &wire,
+                model,
+                tool_override,
+                tool_tags,
+                thinking_override,
+            )
             .await
     }
 
@@ -782,7 +794,17 @@ mod tests {
         }
         let outcome = h
             .executor
-            .execute(neuron.as_ref(), &wire, &model(), tool_override, tool_tags)
+            .execute(
+                neuron.as_ref(),
+                &wire,
+                &model(),
+                tool_override,
+                tool_tags,
+                Some(ThinkingConfig {
+                    enabled: Some(false),
+                    effort: None,
+                }),
+            )
             .await?;
         Ok((wire, neuron, outcome))
     }

@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use crate::core::{
     error::{AppError, AppResult},
     model_call_input::{ModelAppendTemplate, ModelCallInput},
-    models::{GeneratedNeuronDraft, ModelCallRequest, ModelMessage},
+    models::{GeneratedNeuronDraft, ModelCallRequest, ModelMessage, ThinkingConfig},
     providers::ProviderRegistry,
 };
 
@@ -51,7 +51,10 @@ impl NeuronModelCaller for DefaultNeuronModelCaller {
                 messages,
                 tools: None,
                 params: model.params,
-                thinking: model.thinking,
+                thinking: Some(ThinkingConfig {
+                    enabled: Some(false),
+                    effort: None,
+                }),
             })
             .await?;
         if response.output.trim().is_empty() {

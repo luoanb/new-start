@@ -1,7 +1,10 @@
 use super::{
     error::{AppError, AppResult},
     model_call_input::{ModelAppendTemplate, ModelCallInput},
-    models::{CompactionConfig, Conversation, Message, MessageBody, MessageRole, ModelCallRequest},
+    models::{
+        CompactionConfig, Conversation, Message, MessageBody, MessageRole, ModelCallRequest,
+        ThinkingConfig,
+    },
     providers::ProviderRegistry,
 };
 
@@ -206,7 +209,10 @@ impl Compactor {
                 messages: wire,
                 tools: None,
                 params: model.params.clone(),
-                thinking: model.thinking.clone(),
+                thinking: Some(ThinkingConfig {
+                    enabled: Some(false),
+                    effort: None,
+                }),
             })
             .await
             .map_err(|e| AppError::CompactionFailed(format!("LLM summary call failed: {e}")))?;

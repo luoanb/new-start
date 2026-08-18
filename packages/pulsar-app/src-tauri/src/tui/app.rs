@@ -5,6 +5,7 @@ use crate::core::{
     AppError, AppResult, CandidateQuery, ChatModelSelection, ChatOptions, Conversation,
     ConversationMode, CreateNeuronInput, EnsureSystemOpts, Gateway, MessageRole,
     ModelAppendTemplate, ModelCallInput, ModelInfo, NeuronUpdate, ProviderInfo, RuntimeStatus,
+    ThinkingConfig,
 };
 
 use super::commands::{self, Command};
@@ -549,7 +550,10 @@ impl TuiApp {
                         ),
                         tools: None,
                         params: None,
-                        thinking: None,
+                        thinking: Some(ThinkingConfig {
+                            enabled: Some(false),
+                            effort: None,
+                        }),
                     })
                     .await
                 {

@@ -12,7 +12,10 @@ use async_trait::async_trait;
 use super::{
     error::{AppError, AppResult},
     model_call_input::ModelCallInput,
-    models::{ChatModelSelection, Message, ModelCallRequest, ModelCallResponse, Neuron, ToolTag},
+    models::{
+        ChatModelSelection, Message, ModelCallRequest, ModelCallResponse, Neuron, ThinkingConfig,
+        ToolTag,
+    },
     round_types::{RoundOutcome, ToolResultItem},
     tool_registry::ToolRegistry,
 };
@@ -68,9 +71,18 @@ impl RoundExecutor {
         model: &ChatModelSelection,
         tool_override: Option<Vec<String>>,
         tool_tags: Vec<ToolTag>,
+        // 思考配置覆盖：Some = 调用方直接给定（后台调用传 disabled）；None = 跟随模型/会话配置。
+        thinking_override: Option<ThinkingConfig>,
     ) -> AppResult<RoundOutcome> {
         let (model_response, _authorized_tool_ids) = self
-            .call_model(neuron, messages, model, tool_override, tool_tags)
+            .call_model(
+                neuron,
+                messages,
+                model,
+                tool_override,
+                tool_tags,
+                thinking_override,
+            )
             .await?;
         self.execute_tools(model_response, neuron.map(|n| n.id.clone()))
             .await
@@ -87,6 +99,8 @@ impl RoundExecutor {
         model: &ChatModelSelection,
         tool_override: Option<Vec<String>>,
         tool_tags: Vec<ToolTag>,
+        // 思考配置覆盖：Some = 调用方直接给定（后台调用传 disabled）；None = 跟随模型/会话配置。
+        thinking_override: Option<ThinkingConfig>,
     ) -> AppResult<(ModelCallResponse, Vec<String>)> {
         // 工具授权：override 优先；否则取选中神经元的 tool_ids（∩ 注册表）。
         let tool_ids = match tool_override {
@@ -153,7 +167,8 @@ impl RoundExecutor {
                 messages: model_messages,
                 tools,
                 params: model.params.clone(),
-                thinking: model.thinking.clone(),
+                // 调用方给定覆盖优先；None = 用会话/模型自带配置。
+                thinking: thinking_override.or_else(|| model.thinking.clone()),
             })
             .await?;
         tracing::info!(

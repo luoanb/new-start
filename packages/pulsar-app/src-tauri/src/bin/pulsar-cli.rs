@@ -1,7 +1,7 @@
 use pulsar_app_lib::core::{
     app_log, storage, AppError, AppResult, Conversation, Gateway, Message, MessageRole,
     ModelAppendTemplate, ModelCallInput, ModelCallRequest, ModelInfo, ProviderInfo, RuntimeStatus,
-    SkillInfo,
+    SkillInfo, ThinkingConfig,
 };
 use std::{env, process};
 
@@ -64,7 +64,10 @@ async fn run() -> AppResult<()> {
                     ),
                     tools: None,
                     params: None,
-                    thinking: None,
+                    thinking: Some(ThinkingConfig {
+                        enabled: Some(false),
+                        effort: None,
+                    }),
                 })
                 .await?;
             println!("provider: {}", response.provider_id);

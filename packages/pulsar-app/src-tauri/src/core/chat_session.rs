@@ -28,6 +28,7 @@ impl ChatSession {
                 None,
                 model,
                 None,
+                None, // 用户聊天窗口发起：保留思考配置（跟随前端勾选）
             )
             .await
     }
