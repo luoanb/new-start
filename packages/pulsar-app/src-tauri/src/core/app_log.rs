@@ -172,6 +172,8 @@ pub fn init(
     let file_layer = fmt::layer()
         .with_ansi(false)
         .with_target(true)
+        // 默认 timer 为 UTC；用 chrono ChronoLocal 输出本地时间（RFC3339 带时区偏移）。
+        .with_timer(fmt::time::ChronoLocal::rfc_3339())
         .with_writer(move || file_writer.clone());
 
     let registry = Registry::default()
@@ -181,7 +183,12 @@ pub fn init(
 
     if to_stderr {
         registry
-            .with(fmt::layer().with_ansi(false).with_target(true))
+            .with(
+                fmt::layer()
+                    .with_ansi(false)
+                    .with_target(true)
+                    .with_timer(fmt::time::ChronoLocal::rfc_3339()),
+            )
             .try_init()
             .map_err(|error| error.to_string())?;
     } else {

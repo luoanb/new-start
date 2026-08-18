@@ -97,7 +97,18 @@
 
   function formatTime(tsMs: number): string {
     try {
-      return new Date(tsMs).toLocaleTimeString();
+      // 显式指定东八区：Tauri WebView（WebKitGTK）时区探测可能回退 UTC，
+      // toLocaleTimeString() 会按错误时区展示，这里强制国内时间并带日期。
+      return new Intl.DateTimeFormat("zh-CN", {
+        timeZone: "Asia/Shanghai",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      }).format(new Date(tsMs));
     } catch {
       return String(tsMs);
     }
