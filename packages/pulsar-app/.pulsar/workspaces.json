@@ -13,7 +13,21 @@
         ".DS_Store"
       ],
       "created_at": 1786986420200
+    },
+    {
+      "id": "ws-13703389a02e2b97",
+      "name": "new-start-wt",
+      "root": "/home/lab/Documents/trae_projects/new-start-wt",
+      "ignore": [
+        ".git",
+        "node_modules",
+        "target",
+        "dist",
+        ".pulsar",
+        ".DS_Store"
+      ],
+      "created_at": 1787064309217
     }
   ],
-  "active_id": "ws-84cf149addcf3170"
+  "active_id": "ws-13703389a02e2b97"
 }

@@ -123,6 +123,11 @@
     ondragover={handleBarDragOver}
     ondragleave={handleBarDragLeave}
     ondrop={handleBarDrop}
+    onwheel={(e) => {
+      // hover 时滚轮 → 左右滚动 tab 栏（阻止页面纵向滚动）
+      e.preventDefault();
+      e.currentTarget.scrollLeft += e.deltaY + e.deltaX;
+    }}
   >
     {#each tabs as tab}
       <button
@@ -213,6 +218,8 @@
     display: flex;
     align-items: center;
     gap: var(--space-1);
+    width: 120px;
+    flex: none;
     height: 32px;
     padding: 0 var(--space-2);
     border: none;
@@ -254,7 +261,16 @@
   .icon.tone-agent { background: color-mix(in srgb, var(--color-success) 15%, transparent); color: var(--color-success); }
   .icon.tone-assistant { background: color-mix(in srgb, var(--color-warning) 15%, transparent); color: var(--color-warning); }
   .icon.tone-system { background: color-mix(in srgb, var(--color-error) 15%, transparent); color: var(--color-error); }
-  .label { font-size: var(--fs-xs); font-weight: 500; }
+  /* 标题在固定宽度内省略；truncate 类不再需要额外限制 */
+  .label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--fs-xs);
+    font-weight: 500;
+  }
   /* 未保存 ● 标记：warning 色（对齐 visual-design 状态表） */
   .dirty-dot {
     width: 7px;
@@ -264,13 +280,6 @@
     flex: none;
   }
   /* 动态标题（对话标题）截断：限制宽度，最多展示约 5 个字 */
-  .label.truncate {
-    max-width: 5em;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
   .close {
     display: inline-flex;
     align-items: center;
