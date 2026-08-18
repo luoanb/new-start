@@ -14,6 +14,8 @@
   import { fileEditorStore, fileKey } from "$lib/stores/fileEditorStore.svelte";
   import ContextMenu, { type ContextMenuItem } from "./ContextMenu.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
+  import Select from "./Select.svelte";
+  import SuggestInput, { type SuggestItem } from "./SuggestInput.svelte";
   import type { FsEntry, WorkspaceEntry } from "$lib/types";
 
   // ── 派生：active 工作区 ──
@@ -405,8 +407,19 @@
 
   // ── 添加工作区：系统对话框 + 输入回退 ──
   function startAddWorkspace() {
-    if (isTauriEnv) void pickWorkspaceDir();
-    else wsInputOpen = true;
+    wsInputOpen = true;
+    wsInput = "";
+    void initWsInput();
+  }
+
+  /** 打开时默认填入用户主目录（App 模式也保留输入入口）；下拉由组件聚焦时自动拉取。 */
+  async function initWsInput() {
+    try {
+      const home = await api.invoke<string>("get_home_dir");
+      wsInput = home.endsWith("/") ? home : home + "/";
+    } catch {
+      wsInput = "";
+    }
   }
 
   async function pickWorkspaceDir() {
@@ -416,6 +429,7 @@
     } catch {
       // 对话框不可用（异常/降级环境）→ 输入回退
       wsInputOpen = true;
+      void initWsInput();
     }
   }
 
@@ -430,6 +444,58 @@
     } catch (e) {
       error = t("fileExplorer.operationFailed", { error: formatInvokeError(e) });
     }
+  }
+
+  // ── 路径补全（注入给 SuggestInput 的建议拉取）：列当前目录直接子项 + 前缀过滤（含 `.` / `..`）──
+
+  /** 拆分输入为「待列出目录 + 过滤前缀」（输入以 / 结尾视为纯目录）。 */
+  function splitPathInput(input: string): { parent: string; prefix: string } {
+    const hasTrailing = input.endsWith("/");
+    const lastSlash = input.lastIndexOf("/");
+    const parent = hasTrailing
+      ? input.slice(0, -1)
+      : lastSlash <= 0
+        ? "/"
+        : input.slice(0, lastSlash);
+    const prefix = hasTrailing ? "" : input.slice(lastSlash + 1);
+    return { parent: parent || "/", prefix };
+  }
+
+  async function fetchWsSuggest(input: string): Promise<SuggestItem[]> {
+    const text = input.trim();
+    if (!text.startsWith("/")) return [];
+    const { parent } = splitPathInput(text);
+    // 目标目录不存在/无权限时逐级向父目录回退，回退后过滤前缀变宽
+    let entries: FsEntry[] | null = null;
+    let dir = parent;
+    while (dir) {
+      try {
+        entries = await api.invoke<FsEntry[]>("fs_suggest_abs", { path: dir });
+        break;
+      } catch {
+        if (dir === "/") break;
+        dir = dir.slice(0, dir.lastIndexOf("/")) || "/";
+      }
+    }
+    if (!entries) return [];
+    // 过滤 key：text 中 dir 之后的部分，取第一段（跨层输入回退后仍能匹配）
+    const rest = dir === "/" ? text.slice(1) : text.slice(dir.length + 1);
+    const key = rest.split("/")[0].toLowerCase();
+    const dirs = entries.filter(
+      (e) => e.is_dir && e.name.toLowerCase().startsWith(key),
+    );
+    const files = entries.filter(
+      (e) => !e.is_dir && e.name.toLowerCase().startsWith(key),
+    );
+    const upPath = dir === "/" ? "/" : dir.slice(0, dir.lastIndexOf("/")) || "/";
+    // 工作区根须为目录：目录候选以 / 结尾（展示 + 填入），文件候选原样
+    const dirLabel = (p: string) => (p.endsWith("/") ? p : p + "/");
+    return [
+      { label: dirLabel(upPath), value: dirLabel(upPath), expand: true },
+      { label: dirLabel(dir), value: dirLabel(dir), expand: true },
+      ...dirs.map((e) => ({ label: dirLabel(e.path), value: dirLabel(e.path), expand: true })),
+      ...files.map((e) => ({ label: e.path, value: e.path })),
+    ];
   }
 
   async function saveIgnore() {
@@ -555,11 +621,12 @@
   <!-- 工作区栏 -->
   <div class="ws-bar">
     {#if workspaces.length > 0}
-      <select value={activeId ?? ""} onchange={(e) => activeId && dataStore.setActiveWorkspace(e.currentTarget.value)}>
-        {#each workspaces as ws (ws.id)}
-          <option value={ws.id}>{ws.name}</option>
-        {/each}
-      </select>
+      <Select
+        class="ws-select"
+        value={activeId ?? ""}
+        options={workspaces.map((ws) => ({ value: ws.id, label: ws.name }))}
+        onchange={(v) => dataStore.setActiveWorkspace(String(v))}
+      />
     {:else}
       <span class="no-ws">{t("fileExplorer.noWorkspace")}</span>
     {/if}
@@ -573,16 +640,17 @@
 
   {#if wsInputOpen}
     <div class="ws-input-row">
-      <input
-        class="row-input"
-        placeholder={t("fileExplorer.addWorkspaceInputPlaceholder")}
+      <SuggestInput
         bind:value={wsInput}
-        onkeydown={(e) => {
-          if (e.key === "Enter") void commitWsInput();
-          else if (e.key === "Escape") wsInputOpen = false;
-        }}
-        use:focusInput
+        placeholder={t("fileExplorer.addWorkspaceInputPlaceholder")}
+        fetchSuggest={fetchWsSuggest}
+        dropdownWidth={220}
+        onsubmit={() => void commitWsInput()}
+        onclose={() => (wsInputOpen = false)}
       />
+      {#if isTauriEnv}
+        <button class="btn btn-sm" onclick={() => void pickWorkspaceDir()}>{t("fileExplorer.addWorkspaceBrowse")}</button>
+      {/if}
       <button class="btn btn-sm btn-primary" onclick={() => void commitWsInput()}>{t("fileExplorer.addWorkspaceInputConfirm")}</button>
       <button class="btn btn-sm" onclick={() => (wsInputOpen = false)}>✕</button>
     </div>
@@ -778,15 +846,9 @@
     border-bottom: var(--border-width) solid var(--color-border);
     flex-shrink: 0;
   }
-  .ws-bar select {
+  .ws-bar :global(.ws-select) {
     flex: 1;
     min-width: 0;
-    padding: 3px 6px;
-    font-size: var(--fs-sm);
-    background: var(--color-elevated);
-    color: var(--color-text);
-    border: var(--border-width) solid var(--color-border);
-    border-radius: var(--radius-sm);
   }
   .no-ws {
     flex: 1;

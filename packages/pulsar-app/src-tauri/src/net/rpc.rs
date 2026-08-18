@@ -804,6 +804,20 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
             (state.state_emit)(StateChange::Workspaces);
             value(view)
         }
+        "get_home_dir" => {
+            crate::home_dir_path()
+                .map(|p| Value::String(p.to_string_lossy().into_owned()))
+                .ok_or_else(|| bad_request("无法获取用户主目录"))
+        }
+        "fs_suggest_abs" => {
+            let p: FsPathParams = from_params(params)?;
+            value(
+                crate::fileops::fs::list_suggest(&p.path).map_err(|m| RpcErrorBody {
+                    code: "fs_suggest_failed".into(),
+                    message: m,
+                })?,
+            )
+        }
         "fs_list" => {
             let p: FsListParams = from_params(params)?;
             let store = state.gateway.workspace_store();

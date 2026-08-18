@@ -378,6 +378,7 @@ export type Translations = {
     selectWorkspace: string;
     addWorkspaceInputPlaceholder: string;
     addWorkspaceInputConfirm: string;
+    addWorkspaceBrowse: string;
     workspaceActions: string;
     editIgnore: string;
     deleteWorkspace: string;
@@ -872,6 +873,7 @@ export const en: Translations = {
     selectWorkspace: "Select workspace",
     addWorkspaceInputPlaceholder: "Enter absolute directory path",
     addWorkspaceInputConfirm: "Add",
+    addWorkspaceBrowse: "Browse…",
     workspaceActions: "Workspace actions",
     editIgnore: "Edit ignore rules",
     deleteWorkspace: "Remove workspace",
@@ -1366,6 +1368,7 @@ export const zh: Translations = {
     selectWorkspace: "选择工作区",
     addWorkspaceInputPlaceholder: "输入目录绝对路径",
     addWorkspaceInputConfirm: "添加",
+    addWorkspaceBrowse: "浏览…",
     workspaceActions: "工作区操作",
     editIgnore: "编辑过滤规则",
     deleteWorkspace: "删除工作区",

@@ -24,7 +24,9 @@ use crate::core::{
     ProviderInfo, RuntimeStatus, SamplingParams, SessionBehavior, SessionSeed, SkillInfo, StateChange,
     StateEmitter, ThinkingConfig, ToolInfo, Topic, TopicStatus, TopicUpdate, STATE_CHANGED_EVENT,
 };
-use crate::fileops::fs::{FsEntry, FsInfo, FsMatch, FsReadResult, FsWriteResult, GrepMatch};
+use crate::fileops::fs::{
+    FsEntry, FsInfo, FsMatch, FsReadResult, FsSuggestEntry, FsWriteResult, GrepMatch,
+};
 use crate::fileops::workspace::{WorkspaceEntry, WorkspaceView};
 use crate::net::{NetState, ServerConfig};
 use std::{
@@ -811,6 +813,34 @@ async fn fs_list(
         .map_err(|error| error.payload())
 }
 
+// ── 路径补全（添加工作区输入框：绝对路径建议）──
+
+fn home_dir_path() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
+}
+
+#[tauri::command]
+fn get_home_dir() -> TauriResult<String> {
+    home_dir_path()
+        .map(|p| p.to_string_lossy().into_owned())
+        .ok_or_else(|| AppErrorPayload {
+            code: "no_home_dir",
+            message: "无法获取用户主目录".into(),
+        })
+}
+
+/// 列出绝对路径的直接子项（不递归）。目录不存在/无权限时返回错误，
+/// 前端逐级向父目录回退以继续给出候选。
+#[tauri::command]
+async fn fs_suggest_abs(path: String) -> TauriResult<Vec<FsSuggestEntry>> {
+    crate::fileops::fs::list_suggest(&path).map_err(|message| AppErrorPayload {
+        code: "fs_suggest_failed",
+        message,
+    })
+}
+
 #[tauri::command]
 async fn fs_read(
     gateway: State<'_, Gateway>,
@@ -1237,6 +1267,8 @@ pub fn run() {
             fs_glob,
             fs_grep,
             fs_info,
+            get_home_dir,
+            fs_suggest_abs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

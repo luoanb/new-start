@@ -40,6 +40,37 @@ pub struct FsEntry {
     pub modified_ms: Option<i64>,
 }
 
+/// 路径补全条目（添加工作区输入框的绝对路径下拉）：name + 完整路径。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FsSuggestEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+}
+
+/// 列出绝对路径的直接子项（供路径补全，不递归、不含 `.` / `..`）。
+/// 目录不存在或无权限时返回 Err，调用方可逐级向父目录回退。
+pub fn list_suggest(path: &str) -> Result<Vec<FsSuggestEntry>, String> {
+    let dir = PathBuf::from(path);
+    let mut entries = Vec::new();
+    for item in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        let item = item.map_err(|e| e.to_string())?;
+        let name = item.file_name().to_string_lossy().into_owned();
+        let is_dir = item.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        entries.push(FsSuggestEntry {
+            path: dir.join(&name).to_string_lossy().into_owned(),
+            name,
+            is_dir,
+        });
+    }
+    entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.name.cmp(&b.name),
+    });
+    Ok(entries)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FsReadResult {
     pub content: String,
