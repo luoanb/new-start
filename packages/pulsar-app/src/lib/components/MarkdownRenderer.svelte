@@ -1,6 +1,7 @@
 <script lang="ts">
   import { marked } from "marked";
   import DOMPurify from "dompurify";
+  import { onDestroy } from "svelte";
 
   let { content }: { content: string } = $props();
 
@@ -22,19 +23,66 @@
     },
   });
 
-  let rawHtml = $derived.by(() => {
-    try {
-      const parsed = marked.parse(content, { async: false });
-      return DOMPurify.sanitize(parsed as string);
-    } catch {
-      return content;
+  function escapeHtml(s: string): string {
+    return s
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  /**
+   * 流式兜底：中间态常出现未闭合的代码块 / 表格，marked 会渲染成残缺 HTML。
+   * 检测到未闭合结构时，完整部分照常解析，未闭合尾部以 <pre> 纯文本兜底。
+   */
+  function renderSafe(src: string): string {
+    const fences = src.match(/```/g)?.length ?? 0;
+    if (fences % 2 === 1) {
+      const idx = src.lastIndexOf("```");
+      // 剥离语言标注首行，剩余代码块内容作纯文本兜底。
+      const tail = src.slice(idx + 3).replace(/^\s*[^\n]*\n?/, "");
+      const headHtml = DOMPurify.sanitize(
+        marked.parse(src.slice(0, idx), { async: false }) as string
+      );
+      return `${headHtml}<div class="code-block"><pre><code>${escapeHtml(tail)}</code></pre></div>`;
     }
+    const lines = src.split("\n");
+    const last = lines[lines.length - 1];
+    if (lines.length > 1 && /^\s*\|.*\|\s*$/.test(last)) {
+      const headHtml = DOMPurify.sanitize(
+        marked.parse(lines.slice(0, -1).join("\n"), { async: false }) as string
+      );
+      return `${headHtml}<pre>${escapeHtml(last)}</pre>`;
+    }
+    return DOMPurify.sanitize(marked.parse(src, { async: false }) as string);
+  }
+
+  // 初始同步渲染（无首帧延迟）；后续流式高频更新走 ~150ms 批量合并。
+  // svelte-ignore state_referenced_locally -- 初始化刻意只捕获 content 初始值，后续更新由 $effect 节流接管。
+  let rendered = $state(renderSafe(content));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let pending = "";
+
+  $effect(() => {
+    if (content === pending) return;
+    pending = content;
+    if (timer) return;
+    timer = setTimeout(() => {
+      timer = undefined;
+      const next = renderSafe(pending);
+      if (next !== rendered) rendered = next;
+    }, 150);
+  });
+
+  onDestroy(() => {
+    if (timer) clearTimeout(timer);
+    timer = undefined;
   });
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="markdown-body">
-  {@html rawHtml}
+  {@html rendered}
 </div>
 
 <style>

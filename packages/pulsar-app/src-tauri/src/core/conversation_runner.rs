@@ -10,10 +10,26 @@ use super::{
         ChatModelSelection, ChatResponse, Conversation, ConversationMode, Message, MessageBody,
         MessageRole, ModelCallResponse, ModelMessage, Neuron, ThinkingConfig, ToolTag,
     },
+    openai_compat,
     round_executor::RoundExecutor,
     round_resolver::RoundResolver,
     round_types::{RoundOutcome, SessionSeed, SessionState},
 };
+
+/// 流式增量写盘 / 事件节流间隔（首块立即写，此后 ~150ms 一次；完成时最终写保证一致）。
+const STREAM_WRITE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// 流式增量载荷：调用方（gateway / rpc）决定如何转发（`StateChange::MessageDelta` 等）。
+/// `done: true` 表示本轮完成，前端应收敛为全量重拉。
+#[derive(Debug, Clone)]
+pub struct StreamDelta {
+    pub message_index: usize,
+    /// 该消息当前累积正文全文。
+    pub content: String,
+    /// 该消息当前累积思考全文（空串 = 无思考）。
+    pub reasoning: String,
+    pub done: bool,
+}
 
 /// 触发类型：仅业务编排感知（决定输入侧落库形态），管道不感知。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,6 +232,246 @@ impl ConversationRunner {
         })
     }
 
+    /// 流式一轮：准备阶段与 [`Self::run_round`] 完全一致；执行阶段走
+    /// `executor.call_model_stream`（on_chunk 内累积 content/reasoning、节流写盘、emit 增量），
+    /// 完成后收敛为最终落库 + `StreamDelta { done: true }`。
+    ///
+    /// 落库语义（统一类型后占位消息即最终产物消息）：
+    /// - 占位：模型调用前 append 一条空 assistant `Text`（记 `message_index`）。
+    /// - 流式期间：`update_last_assistant_message` 节流更新占位消息（~150ms，首块立即写）。
+    /// - 完成后：纯文本轮 → 占位消息收敛为最终形态（content + reasoning）；
+    ///   工具轮 → 占位消息额外写入 `tool_calls`，`execute_tools` 执行后落 `ToolResult`（独立消息）。
+    pub async fn run_round_stream(
+        &self,
+        session_id: &str,
+        input: InputRecord,
+        tool_override: Option<Vec<String>>,
+        model: &ChatModelSelection,
+        hooks: Option<&dyn RoundHooks>,
+        // 思考配置覆盖：Some = 调用方直接给定（后台调用传 disabled）；None = 跟随模型/会话配置。
+        thinking_override: Option<ThinkingConfig>,
+        on_delta: Option<Box<dyn FnMut(StreamDelta) + Send>>,
+    ) -> AppResult<ChatResponse> {
+        let mut ctx = self.load_context(session_id, input, tool_override, model)?;
+        tracing::info!(
+            phase = "run_round_stream",
+            session_id = %ctx.session_id,
+            trigger = ?ctx.trigger,
+            mode = ?ctx.mode,
+            seed = ?ctx.seed,
+            history = ctx.messages.len(),
+            input_len = ctx.model_input.len(),
+            "round start"
+        );
+        if let Some(hooks) = hooks {
+            hooks.before_round(&mut ctx).await?;
+            if ctx.session_id != session_id {
+                tracing::info!(
+                    phase = "run_round_stream",
+                    from_session = %session_id,
+                    to_session = %ctx.session_id,
+                    "session switched by before hook; reloading context"
+                );
+                self.reload(&mut ctx)?;
+            }
+        }
+        let old_len = ctx.messages.len();
+        let (with_role, neuron) = self
+            .resolver
+            .resolve(
+                ctx.seed.as_ref(),
+                ctx.state.last_selected_neuron_id.as_deref(),
+                &ctx.messages,
+                ctx.reselect,
+            )
+            .await?;
+        let anchor = neuron.as_ref().map(|n| n.id.clone());
+        if anchor != ctx.state.last_selected_neuron_id {
+            ctx.state.last_selected_neuron_id = anchor;
+            write_session_state(&self.store, &ctx.session_id, &ctx.state)?;
+        }
+        ctx.selected_neuron = neuron;
+        ctx.messages = with_role;
+        self.append_input_message(&mut ctx);
+        self.persist_input(&ctx, old_len)?;
+
+        // ── 占位落库：模型调用前 append 空 assistant Text（流式期间逐块更新此条）──
+        let placeholder_index = self
+            .store
+            .add_message(
+                &ctx.session_id,
+                Message {
+                    role: MessageRole::Assistant,
+                    body: MessageBody::Text {
+                        content: String::new(),
+                        reasoning: None,
+                        tool_calls: None,
+                    },
+                    timestamp: now_ms(),
+                    neuron_id: ctx.selected_neuron.as_ref().map(|n| n.id.clone()),
+                },
+            )?
+            .messages
+            .len()
+            .saturating_sub(1);
+
+        // ── 流式执行：on_chunk 累积 + 节流写盘 + emit 增量 ──
+        let on_delta_shared = Arc::new(std::sync::Mutex::new(on_delta));
+        let on_delta_for_chunk = Arc::clone(&on_delta_shared);
+        let stream_store = self.store.clone();
+        let stream_session_id = ctx.session_id.clone();
+        let mut content_accum = String::new();
+        let mut reasoning_accum = String::new();
+        let mut last_flush: Option<std::time::Instant> = None;
+        let on_chunk = Box::new(move |chunk: openai_compat::StreamChunk| {
+            if let Some(choice) = chunk.choices.first() {
+                if let Some(c) = &choice.delta.content {
+                    content_accum.push_str(c);
+                }
+                if let Some(r) = &choice.delta.reasoning_content {
+                    reasoning_accum.push_str(r);
+                }
+            }
+            let now = std::time::Instant::now();
+            let should_write = last_flush.map_or(true, |t| now.duration_since(t) >= STREAM_WRITE_INTERVAL);
+            if !should_write {
+                return;
+            }
+            last_flush = Some(now);
+            if let Err(error) = stream_store.update_last_assistant_message(&stream_session_id, |m| {
+                if let MessageBody::Text {
+                    content, reasoning, ..
+                } = &mut m.body
+                {
+                    *content = content_accum.clone();
+                    *reasoning = if reasoning_accum.is_empty() {
+                        None
+                    } else {
+                        Some(reasoning_accum.clone())
+                    };
+                }
+            }) {
+                tracing::warn!(
+                    phase = "run_round_stream",
+                    session_id = %stream_session_id,
+                    error = %error,
+                    "streaming write failed (kept in memory)"
+                );
+            }
+            if let Some(cb) = on_delta_for_chunk.lock().unwrap().as_mut() {
+                cb(StreamDelta {
+                    message_index: placeholder_index,
+                    content: content_accum.clone(),
+                    reasoning: reasoning_accum.clone(),
+                    done: false,
+                });
+            }
+        });
+        let (model_response, _authorized_tool_ids) = self
+            .executor
+            .call_model_stream(
+                ctx.selected_neuron.as_ref(),
+                &ctx.messages,
+                model,
+                ctx.tool_override.clone(),
+                ctx.mode.tool_tags(),
+                thinking_override,
+                on_chunk,
+            )
+            .await?;
+        tracing::info!(
+            phase = "run_round_stream",
+            session_id = %ctx.session_id,
+            output_len = model_response.output.len(),
+            reasoning_len = model_response.reasoning.as_deref().map_or(0, str::len),
+            tool_calls = model_response.tool_calls.as_ref().map_or(0, |c| c.len()),
+            "model stream returned"
+        );
+
+        // ── 完成后收敛：占位消息更新为权威最终形态（content + reasoning [+ tool_calls]）──
+        self.store.update_last_assistant_message(&ctx.session_id, |m| {
+            if let MessageBody::Text {
+                content,
+                reasoning,
+                tool_calls,
+            } = &mut m.body
+            {
+                *content = model_response.output.clone();
+                *reasoning = model_response.reasoning.clone();
+                *tool_calls = model_response.tool_calls.clone();
+            }
+        })?;
+
+        let has_calls = model_response
+            .tool_calls
+            .as_ref()
+            .map_or(false, |c| !c.is_empty());
+        let outcome = if has_calls {
+            self.executor
+                .execute_tools(
+                    model_response.clone(),
+                    ctx.selected_neuron.as_ref().map(|n| n.id.clone()),
+                )
+                .await?
+        } else {
+            RoundOutcome {
+                response: model_response.output.clone(),
+                model_output: Some(model_response.output.clone()),
+                tool_calls: None,
+                tool_results: Vec::new(),
+                reasoning: model_response.reasoning.clone(),
+                selected_neuron_id: ctx.selected_neuron.as_ref().map(|n| n.id.clone()),
+            }
+        };
+        // 工具轮：执行结果独立落库（ToolResult）；纯文本轮占位消息即产物，不重复落。
+        if has_calls {
+            for item in &outcome.tool_results {
+                self.store.add_message(
+                    &ctx.session_id,
+                    Message {
+                        role: MessageRole::Tool,
+                        body: MessageBody::ToolResult {
+                            tool_call_id: item.tool_call_id.clone(),
+                            tool_name: item.tool_name.clone(),
+                            content: item.content.clone(),
+                        },
+                        timestamp: now_ms(),
+                        neuron_id: outcome.selected_neuron_id.clone(),
+                    },
+                )?;
+            }
+        }
+        ctx.outcome = Some(outcome.clone());
+        tracing::info!(
+            phase = "run_round_stream",
+            session_id = %ctx.session_id,
+            response_len = outcome.response.len(),
+            tool_results = outcome.tool_results.len(),
+            "stream round execute done"
+        );
+        if let Some(hooks) = hooks {
+            hooks.after_round(&mut ctx).await?;
+        }
+        // 收敛事件：done=true，前端据此全量重拉（权威数据）。
+        if let Some(cb) = on_delta_shared.lock().unwrap().as_mut() {
+            cb(StreamDelta {
+                message_index: placeholder_index,
+                content: model_response.output.clone(),
+                reasoning: model_response.reasoning.clone().unwrap_or_default(),
+                done: true,
+            });
+        }
+        tracing::info!(
+            phase = "run_round_stream",
+            session_id = %ctx.session_id,
+            "stream round ok"
+        );
+        Ok(ChatResponse {
+            conversation_id: ctx.session_id.clone(),
+            response: outcome.response,
+        })
+    }
+
     /// 原始单轮管道（无会话）：① resolve（选型+角色拼接）→ 追加输入 → ② execute，
     /// 不读库、不落库、不跑 hooks、不写回锚点。
     ///
@@ -244,6 +500,8 @@ impl ConversationRunner {
                 role: MessageRole::User,
                 body: MessageBody::Text {
                     content: model_input.to_string(),
+                    reasoning: None,
+                    tool_calls: None,
                 },
                 timestamp: now_ms(),
                 neuron_id: None,
@@ -339,6 +597,8 @@ impl ConversationRunner {
                     role: MessageRole::User,
                     body: MessageBody::Text {
                         content: ctx.model_input.clone(),
+                        reasoning: None,
+                        tool_calls: None,
                     },
                     timestamp: now_ms(),
                     neuron_id: None,
@@ -399,9 +659,10 @@ impl ConversationRunner {
             &ctx.session_id,
             Message {
                 role: MessageRole::Assistant,
-                body: MessageBody::ToolCall {
+                body: MessageBody::Text {
                     content: model_response.output.clone(),
-                    tool_calls: tool_calls.clone(),
+                    reasoning: model_response.reasoning.clone(),
+                    tool_calls: Some(tool_calls.clone()),
                 },
                 timestamp: now_ms(),
                 neuron_id: stamped,
@@ -458,6 +719,8 @@ impl ConversationRunner {
                     role: MessageRole::Assistant,
                     body: MessageBody::Text {
                         content: outcome.response.clone(),
+                        reasoning: outcome.reasoning.clone(),
+                        tool_calls: None,
                     },
                     timestamp: now_ms(),
                     neuron_id: stamped.clone(),
@@ -655,6 +918,7 @@ mod tests {
                 output: format!("echo-{call}"),
                 tool_calls: self.tool_call.lock().unwrap().clone(),
                 finish_reason: "stop".into(),
+                reasoning: None,
             })
         }
     }
@@ -787,6 +1051,8 @@ mod tests {
                 role: MessageRole::User,
                 body: MessageBody::Text {
                     content: model_input.to_string(),
+                    reasoning: None,
+                    tool_calls: None,
                 },
                 timestamp: now_ms(),
                 neuron_id: None,
@@ -815,6 +1081,8 @@ mod tests {
             role: MessageRole::User,
             body: MessageBody::Text {
                 content: content.to_string(),
+                reasoning: None,
+                tool_calls: None,
             },
             timestamp: now_ms(),
             neuron_id: None,

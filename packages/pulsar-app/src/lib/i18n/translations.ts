@@ -162,6 +162,9 @@ export type Translations = {
   toolCall: {
     arguments: string;
   };
+  thinking: {
+    title: string;
+  };
   toolResult: {
     executed: string;
     timedOut: string;
@@ -643,6 +646,9 @@ export const en: Translations = {
   },
   toolCall: {
     arguments: "Arguments",
+  },
+  thinking: {
+    title: "Thinking",
   },
   toolResult: {
     executed: "Command executed",
@@ -1138,6 +1144,9 @@ export const zh: Translations = {
   },
   toolCall: {
     arguments: "参数",
+  },
+  thinking: {
+    title: "思考过程",
   },
   toolResult: {
     executed: "命令执行",

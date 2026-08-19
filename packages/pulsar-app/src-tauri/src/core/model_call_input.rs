@@ -261,16 +261,34 @@ impl ModelCallInput {
                 tool_call_id: Some(tool_call_id.clone()),
                 reasoning_content: None,
             }),
-            MessageBody::ToolCall {
+            MessageBody::Text {
                 content,
+                reasoning,
                 tool_calls,
-            } => Some(ModelMessage {
-                role: ModelMessageRole::Assistant,
-                content: content.clone(),
-                tool_calls: Some(tool_calls.clone()),
-                tool_call_id: None,
-                reasoning_content: None,
-            }),
+            } => {
+                let role = match message.role {
+                    MessageRole::User => ModelMessageRole::User,
+                    // Tool 角色不会携带 Text 正文（Tool 只对应 ToolResult），兜底按 Assistant 发送。
+                    MessageRole::Assistant | MessageRole::Tool => ModelMessageRole::Assistant,
+                    MessageRole::System => ModelMessageRole::System,
+                    MessageRole::Compaction => unreachable!("handled above"),
+                };
+                // B1 按需回灌：仅「有工具调用轮」注入 reasoning_content（DeepSeek 协议——
+                // 有工具调用轮缺失会 400；无工具调用轮传入会被忽略；OpenAI 等忽略未知字段无害）。
+                let has_tool_calls = tool_calls.as_ref().map_or(false, |c| !c.is_empty());
+                let reasoning_content = if has_tool_calls {
+                    reasoning.clone()
+                } else {
+                    None
+                };
+                Some(ModelMessage {
+                    role,
+                    content: content.clone(),
+                    tool_calls: tool_calls.clone(),
+                    tool_call_id: None,
+                    reasoning_content,
+                })
+            }
             MessageBody::Nudge { content } => Some(ModelMessage {
                 role: ModelMessageRole::User,
                 content: content.clone(),
@@ -285,22 +303,6 @@ impl ModelCallInput {
                 tool_call_id: None,
                 reasoning_content: None,
             }),
-            MessageBody::Text { content } => {
-                let role = match message.role {
-                    MessageRole::User => ModelMessageRole::User,
-                    // Tool 角色不会携带 Text 正文（Tool 只对应 ToolResult），兜底按 Assistant 发送。
-                    MessageRole::Assistant | MessageRole::Tool => ModelMessageRole::Assistant,
-                    MessageRole::System => ModelMessageRole::System,
-                    MessageRole::Compaction => unreachable!("handled above"),
-                };
-                Some(ModelMessage {
-                    role,
-                    content: content.clone(),
-                    tool_calls: None,
-                    tool_call_id: None,
-                    reasoning_content: None,
-                })
-            }
         }
     }
 

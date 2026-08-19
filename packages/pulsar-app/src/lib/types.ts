@@ -35,8 +35,14 @@ export type ToolCall = {
 export type MessageRole = "user" | "assistant" | "system" | "tool" | "compaction";
 
 export type MessageBody =
-  | { kind: "text"; content: string }
-  | { kind: "tool_call"; content: string; tool_calls: ToolCall[] }
+  | {
+      kind: "text";
+      content: string;
+      /** 推理模型的思考链（wire `reasoning_content` 同源投影；无思考时缺失）。 */
+      reasoning?: string;
+      /** 模型声明的一次性工具调用（wire 平级字段；存量 `kind:"tool_call"` 数据反序列化并入）。 */
+      tool_calls?: ToolCall[];
+    }
   | { kind: "tool_result"; tool_call_id: string; tool_name: string; content: string }
   | { kind: "compaction"; summary_of: string[]; content: string }
   | { kind: "nudge"; content: string }

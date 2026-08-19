@@ -9,7 +9,7 @@ use super::{
     assistant_session::AssistantSession,
     chat_session::ChatSession,
     cmd_exec::ExecuteCommandTool,
-    conversation_runner::ConversationRunner,
+    conversation_runner::{ConversationRunner, StreamDelta},
     compactor::Compactor,
     conversation_store::{now_ms, ConversationStore},
     current_time::GetCurrentTimeTool,
@@ -47,6 +47,19 @@ use crate::fileops::workspace::WorkspaceStore;
 
 use super::events::{StateChange, StateEmitter};
 
+/// `StateEmitter`（`Arc<dyn Fn>`）不实现 `Debug`，用此包装承载并手动实现占位 Debug，
+/// 使 `Gateway` 可继续 `#[derive(Debug)]`。
+#[derive(Clone, Default)]
+pub struct EmitterSlot(pub Option<StateEmitter>);
+
+impl std::fmt::Debug for EmitterSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("EmitterSlot")
+            .field(&self.0.is_some())
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Gateway {
     /// 手动压缩（/compact 命令）：Chat/Agent 会话过长时可显式触发；自动压缩已随
@@ -76,6 +89,9 @@ pub struct Gateway {
     file_system: Arc<FileSystem>,
     /// 装配互斥：串行化启动期后台装配与运行期手动重装配，保证「以最后一次为准」。
     assemble_lock: Arc<tokio::sync::Mutex<()>>,
+    /// 状态事件发射器：流式入口（`send_model_message_stream`）内部广播
+    /// `StateChange::MessageDelta` 增量与完成后的 `Conversations` 收敛；为 None（测试）时静默。
+    state_emit: EmitterSlot,
 }
 
 impl Gateway {
@@ -105,6 +121,18 @@ impl Gateway {
         tool_registry: Arc<RwLock<ToolRegistry>>,
     ) -> AppResult<Self> {
         Self::build(store, None, Some(model_caller), Some(tool_registry))
+    }
+
+    /// 测试专用构造（带事件发射器）：流式测试需要断言 `MessageDelta` 事件序列，
+    /// 注入收集型 emitter 以观察 Gateway 内部广播。
+    #[cfg(test)]
+    pub(crate) fn with_injected_for_test_emit(
+        store: ConversationStore,
+        model_caller: Arc<dyn ModelCaller>,
+        tool_registry: Arc<RwLock<ToolRegistry>>,
+        state_emit: Option<StateEmitter>,
+    ) -> AppResult<Self> {
+        Self::build(store, state_emit, Some(model_caller), Some(tool_registry))
     }
 
     /// 统一构造：`test_model_caller` / `test_tool_registry` 仅供测试注入。
@@ -321,6 +349,7 @@ impl Gateway {
             workspace_store,
             file_system,
             assemble_lock,
+            state_emit: EmitterSlot(state_emit),
         })
     }
 
@@ -339,6 +368,8 @@ impl Gateway {
             role: MessageRole::User,
             body: MessageBody::Text {
                 content: input.to_string(),
+                reasoning: None,
+                tool_calls: None,
             },
             timestamp: now_ms(),
             neuron_id: None,
@@ -376,7 +407,11 @@ impl Gateway {
 
         Ok(Message {
             role: MessageRole::Assistant,
-            body: MessageBody::Text { content: response },
+            body: MessageBody::Text {
+                content: response,
+                reasoning: None,
+                tool_calls: None,
+            },
             timestamp: now_ms(),
             neuron_id: None,
         })
@@ -665,6 +700,104 @@ impl Gateway {
             }
         };
         self.set_current_conversation_id(response.conversation_id.clone())?;
+        Ok(response)
+    }
+
+    /// 流式版 `send_model_message`：按 mode 路由到各业务 session 的流式入口
+    /// （`run_round_stream`），流式增量在 Gateway 内部转发为 `StateChange::MessageDelta`
+    /// 广播（`done: true` 收敛后再广播 `Conversations` 供前端全量重拉）。
+    ///
+    /// 事件完全由 Gateway 内部转发，调用方（lib.rs command / net rpc）无需感知；
+    /// `state_emit` 为 None（测试注入）时静默，仅返回最终 `ChatResponse`。
+    pub async fn send_model_message_stream(
+        &self,
+        input: impl AsRef<str>,
+        options: ChatOptions,
+    ) -> AppResult<ChatResponse> {
+        let input = input.as_ref().trim();
+        if input.is_empty() {
+            return Err(AppError::InvalidInput("Message cannot be empty".into()));
+        }
+
+        self.providers
+            .require_model(&options.provider_id, &options.model_id)?;
+
+        let conversation_id = self.resolve_conversation_id(options.conversation_id.clone())?;
+        let conversation = self.store.require_conversation(&conversation_id)?;
+        let mode = conversation.mode;
+        let model = ChatModelSelection {
+            provider_id: options.provider_id.clone(),
+            model_id: options.model_id.clone(),
+            params: options.params.clone(),
+            thinking: options.thinking.clone(),
+        };
+
+        // Clone handles before any network await — callers must not hold an outer Gateway lock.
+        let assistant = Arc::clone(&self.assistant);
+        let session_tracker = self.session_tracker.clone();
+        session_tracker.register(&conversation_id, None)?;
+
+        // 流式增量回调：conversation_id 在 resolve 后确定，闭包捕获之并转发为 MessageDelta。
+        let on_delta = self.state_emit.0.as_ref().map(|emitter| {
+            let emitter = Arc::clone(emitter);
+            let cid = conversation_id.clone();
+            Box::new(move |delta: StreamDelta| {
+                emitter(StateChange::MessageDelta {
+                    conversation_id: cid.clone(),
+                    message_index: delta.message_index,
+                    content: delta.content,
+                    reasoning: delta.reasoning,
+                    done: delta.done,
+                });
+            }) as Box<dyn FnMut(StreamDelta) + Send>
+        });
+
+        let result = match mode {
+            ConversationMode::Assistant => {
+                assistant
+                    .converse_stream(&conversation_id, input, &model, on_delta)
+                    .await
+            }
+            ConversationMode::Chat => {
+                self.chat
+                    .send_stream(&conversation_id, input, &model, on_delta)
+                    .await
+            }
+            ConversationMode::Agent => {
+                self.agent
+                    .agent_loop_stream(&conversation_id, input, &model, on_delta)
+                    .await
+            }
+            // 系统模式 = 助手模式附加系统工具：路由与 Assistant 一致。
+            ConversationMode::System => {
+                assistant
+                    .converse_stream(&conversation_id, input, &model, on_delta)
+                    .await
+            }
+        };
+
+        session_tracker.unregister(&conversation_id);
+
+        let response = match result {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::error!(
+                    phase = "send_model_message_stream",
+                    conversation_id = %conversation_id,
+                    error_code = error.code(),
+                    error = %error,
+                    "send_model_message_stream failed"
+                );
+                return Err(error);
+            }
+        };
+        self.set_current_conversation_id(response.conversation_id.clone())?;
+        // done 收敛后广播 Conversations：前端全量重拉（权威数据兜底）。
+        if let Some(emitter) = self.state_emit.0.as_ref() {
+            emitter(StateChange::Conversations {
+                affected: vec![response.conversation_id.clone()],
+            });
+        }
         Ok(response)
     }
 
@@ -1282,7 +1415,254 @@ mod tests {
                 arguments: serde_json::json!({"text": "hi"}),
             }]),
             finish_reason: "tool_calls".into(),
+            reasoning: None,
         }
+    }
+
+    // ── 流式替身：可编程多轮响应序列（每轮顺序推送 chunk 片段 + 返回配置响应）──
+
+    struct StreamingModelCaller {
+        chunks: Vec<Vec<crate::core::openai_compat::StreamChunk>>,
+        responses: Vec<ModelCallResponse>,
+        cursor: Arc<StdMutex<usize>>,
+    }
+
+    #[async_trait]
+    impl ModelCaller for StreamingModelCaller {
+        async fn call_model(&self, _request: ModelCallRequest) -> AppResult<ModelCallResponse> {
+            // 流式替身仅供 call_model_stream 使用；非流式路径不应触发。
+            Err(AppError::RuntimeError(
+                "StreamingModelCaller does not support call_model".into(),
+            ))
+        }
+
+        async fn call_model_stream(
+            &self,
+            _request: ModelCallRequest,
+            mut on_chunk: Box<dyn FnMut(crate::core::openai_compat::StreamChunk) + Send>,
+        ) -> AppResult<ModelCallResponse> {
+            let mut cursor = self.cursor.lock().unwrap();
+            let idx = *cursor;
+            *cursor += 1;
+            if let Some(chunks) = self.chunks.get(idx) {
+                for chunk in chunks {
+                    on_chunk(chunk.clone());
+                }
+            }
+            self.responses.get(idx).cloned().ok_or_else(|| {
+                AppError::RuntimeError("streaming model caller exhausted".into())
+            })
+        }
+    }
+
+    fn stream_chunk(
+        content: Option<&str>,
+        reasoning: Option<&str>,
+    ) -> crate::core::openai_compat::StreamChunk {
+        use crate::core::openai_compat::{StreamChoice, StreamChunk, StreamDelta};
+        StreamChunk {
+            id: "chunk".into(),
+            object: "chat.completion.chunk".into(),
+            created: 0,
+            model: "fake".into(),
+            choices: vec![StreamChoice {
+                index: 0,
+                delta: StreamDelta {
+                    role: None,
+                    content: content.map(Into::into),
+                    reasoning_content: reasoning.map(Into::into),
+                    tool_calls: None,
+                },
+                finish_reason: None,
+            }],
+            usage: None,
+        }
+    }
+
+    /// 构造带收集型 emitter 的测试 Gateway（流式测试断言 MessageDelta 事件序列）。
+    fn gateway_with_emitter(
+        name: &str,
+        caller: Arc<dyn ModelCaller>,
+    ) -> (Gateway, Arc<StdMutex<Vec<StateChange>>>) {
+        let store = ConversationStore::new(test_root(name)).expect("test store should initialize");
+        let mut registry = ToolRegistry::new();
+        registry.register_source(EchoTool, ToolSource::Config);
+        let received: Arc<StdMutex<Vec<StateChange>>> = Arc::new(StdMutex::new(Vec::new()));
+        let emit_received = Arc::clone(&received);
+        let emitter: StateEmitter = Arc::new(move |change| {
+            emit_received.lock().unwrap().push(change);
+        });
+        let gateway = Gateway::with_injected_for_test_emit(
+            store,
+            caller,
+            Arc::new(RwLock::new(registry)),
+            Some(emitter),
+        )
+        .expect("test gateway should initialize");
+        (gateway, received)
+    }
+
+    fn chat_options(conversation_id: Option<String>) -> ChatOptions {
+        ChatOptions {
+            // custom 内置 provider 允许未登记模型，测试无需写 config 定义。
+            provider_id: "custom".into(),
+            model_id: "test-model".into(),
+            conversation_id,
+            params: None,
+            thinking: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_pure_text_accumulates_content_and_emits_delta() {
+        let caller: Arc<dyn ModelCaller> = Arc::new(StreamingModelCaller {
+            chunks: vec![vec![
+                stream_chunk(Some("Hel"), None),
+                stream_chunk(Some("lo"), None),
+                stream_chunk(Some("!"), None),
+            ]],
+            responses: vec![ModelCallResponse {
+                provider_id: "fake".into(),
+                model_id: "fake".into(),
+                output: "Hello!".into(),
+                tool_calls: None,
+                finish_reason: "stop".into(),
+                reasoning: None,
+            }],
+            cursor: Arc::new(StdMutex::new(0)),
+        });
+        let (gateway, received) = gateway_with_emitter("stream_pure_text", caller);
+        let conv = gateway
+            .store
+            .create_conversation(None, ConversationMode::Chat)
+            .expect("conversation should be created");
+        let response = gateway
+            .send_model_message_stream("hi", chat_options(Some(conv.id.clone())))
+            .await
+            .expect("stream round should succeed");
+
+        assert_eq!(response.response, "Hello!");
+        // 落库：user + assistant("Hello!")，无思考。
+        let history = gateway.history(Some(conv.id)).expect("history should load");
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[1].role, MessageRole::Assistant);
+        assert_eq!(history[1].text(), "Hello!");
+        assert!(history[1].reasoning().is_none());
+        // 事件：至少一个 done:false 增量（首块立即发）+ 收敛 done:true（最终全文）。
+        let events = received.lock().unwrap().clone();
+        assert!(events.iter().any(|c| matches!(
+            c,
+            StateChange::MessageDelta { done: false, .. }
+        )));
+        assert!(events.iter().any(|c| matches!(
+            c,
+            StateChange::MessageDelta { done: true, content, .. } if content == "Hello!"
+        )));
+        assert!(events
+            .iter()
+            .any(|c| matches!(c, StateChange::Conversations { .. })));
+    }
+
+    #[tokio::test]
+    async fn stream_reasoning_accumulates_and_persists() {
+        let caller: Arc<dyn ModelCaller> = Arc::new(StreamingModelCaller {
+            chunks: vec![vec![
+                stream_chunk(None, Some("think A ")),
+                stream_chunk(Some("ans"), Some("think B")),
+            ]],
+            responses: vec![ModelCallResponse {
+                provider_id: "fake".into(),
+                model_id: "fake".into(),
+                output: "ans".into(),
+                tool_calls: None,
+                finish_reason: "stop".into(),
+                reasoning: Some("think A think B".into()),
+            }],
+            cursor: Arc::new(StdMutex::new(0)),
+        });
+        let (gateway, received) = gateway_with_emitter("stream_reasoning", caller);
+        let conv = gateway
+            .store
+            .create_conversation(None, ConversationMode::Chat)
+            .expect("conversation should be created");
+        let response = gateway
+            .send_model_message_stream("hi", chat_options(Some(conv.id.clone())))
+            .await
+            .expect("stream round should succeed");
+
+        assert_eq!(response.response, "ans");
+        let history = gateway.history(Some(conv.id)).expect("history should load");
+        assert_eq!(history[1].text(), "ans");
+        // 思考随正文一起落库（wire 同源投影）。
+        assert_eq!(history[1].reasoning(), Some("think A think B"));
+        // delta 事件携带 reasoning 增量（首块为思考片段）。
+        let events = received.lock().unwrap().clone();
+        assert!(events.iter().any(|c| matches!(
+            c,
+            StateChange::MessageDelta { reasoning, done: false, .. } if reasoning == "think A "
+        )));
+        assert!(events.iter().any(|c| matches!(
+            c,
+            StateChange::MessageDelta { reasoning, done: true, .. } if reasoning == "think A think B"
+        )));
+    }
+
+    #[tokio::test]
+    async fn stream_tool_round_executes_tools_and_persists_result() {
+        // Agent 模式：第一轮声明工具（echo 已注册，授权通过），第二轮纯文本收敛。
+        let caller: Arc<dyn ModelCaller> = Arc::new(StreamingModelCaller {
+            chunks: vec![
+                vec![stream_chunk(Some("calling echo"), Some("need echo"))],
+                vec![stream_chunk(Some("done"), None)],
+            ],
+            responses: vec![
+                ModelCallResponse {
+                    provider_id: "fake".into(),
+                    model_id: "fake".into(),
+                    output: "calling echo".into(),
+                    tool_calls: Some(vec![ToolCall {
+                        id: "call_1".into(),
+                        name: "echo".into(),
+                        arguments: serde_json::json!({"text": "hi"}),
+                    }]),
+                    finish_reason: "tool_calls".into(),
+                    reasoning: Some("need echo".into()),
+                },
+                ModelCallResponse {
+                    provider_id: "fake".into(),
+                    model_id: "fake".into(),
+                    output: "done".into(),
+                    tool_calls: None,
+                    finish_reason: "stop".into(),
+                    reasoning: None,
+                },
+            ],
+            cursor: Arc::new(StdMutex::new(0)),
+        });
+        let (gateway, _received) = gateway_with_emitter("stream_tool_round", caller);
+        let conv = gateway
+            .store
+            .create_conversation(None, ConversationMode::Agent)
+            .expect("conversation should be created");
+        let response = gateway
+            .send_model_message_stream("hi", chat_options(Some(conv.id.clone())))
+            .await
+            .expect("stream tool round should succeed");
+
+        // 两轮收敛：user + assistant(tool_calls+reasoning) + tool(result) + assistant(done)。
+        let history = gateway.history(Some(conv.id)).expect("history should load");
+        assert_eq!(history.len(), 4);
+        assert_eq!(history[0].role, MessageRole::User);
+        assert!(matches!(
+            history[1].body,
+            MessageBody::Text { tool_calls: Some(ref c), reasoning: Some(ref r), .. }
+                if !c.is_empty() && r == "need echo"
+        ));
+        assert!(matches!(history[2].body, MessageBody::ToolResult { .. }));
+        assert_eq!(history[2].role, MessageRole::Tool);
+        assert_eq!(history[3].role, MessageRole::Assistant);
+        assert_eq!(history[3].text(), "done");
+        assert_eq!(response.response, "done");
     }
 
     #[tokio::test]
@@ -1300,6 +1680,7 @@ mod tests {
                     output: "task done".into(),
                     tool_calls: None,
                     finish_reason: "stop".into(),
+                    reasoning: None,
                 },
             ])),
         });
@@ -1323,7 +1704,10 @@ mod tests {
         let history = gateway.history(Some(conv.id)).expect("history should load");
         assert_eq!(history.len(), 4);
         assert_eq!(history[0].role, MessageRole::User);
-        assert!(matches!(history[1].body, MessageBody::ToolCall { .. }));
+        assert!(matches!(
+            history[1].body,
+            MessageBody::Text { tool_calls: Some(_), .. }
+        ));
         assert!(matches!(history[2].body, MessageBody::ToolResult { .. }));
         assert_eq!(history[3].role, MessageRole::Assistant);
         assert_eq!(history[3].text(), "task done");

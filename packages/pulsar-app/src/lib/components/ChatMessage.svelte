@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Message } from "$lib/types";
   import MarkdownRenderer from "./MarkdownRenderer.svelte";
+  import ThinkingBlock from "./ThinkingBlock.svelte";
   import ToolCallBlock from "./ToolCallBlock.svelte";
   import ToolResultBlock from "./ToolResultBlock.svelte";
   import NudgeBlock from "./NudgeBlock.svelte";
@@ -27,11 +28,16 @@
   const isToolResult = $derived(message.body.kind === "tool_result");
   const isNudge = $derived(message.body.kind === "nudge");
   const isContext = $derived(message.body.kind === "role_context");
+  // Q1 统一类型后工具调用平级挂载于 text 变体（wire 同源投影）。
   const hasToolCalls = $derived(
-    message.body.kind === "tool_call" && message.body.tool_calls.length > 0
+    message.body.kind === "text" && (message.body.tool_calls?.length ?? 0) > 0
   );
   const toolCalls = $derived(
-    message.body.kind === "tool_call" ? message.body.tool_calls : []
+    message.body.kind === "text" && message.body.tool_calls ? message.body.tool_calls : []
+  );
+  /** 推理模型的思考链（wire `reasoning_content` 同源投影；无思考为空串，不渲染折叠块）。 */
+  const reasoning = $derived(
+    message.body.kind === "text" ? (message.body.reasoning ?? "") : ""
   );
 
   // 操作栏显隐：仅系统消息/压缩摘要无操作栏。
@@ -120,6 +126,9 @@
       {#if isToolResult}
         <ToolResultBlock {message} />
       {:else if hasToolCalls}
+        {#if reasoning}
+          <ThinkingBlock {reasoning} />
+        {/if}
         {#if message.body.content}
           <div class="content markdown-content">
             <MarkdownRenderer content={message.body.content} />
@@ -135,6 +144,9 @@
       {:else if isNudge || isContext}
         <NudgeBlock content={message.body.content} />
       {:else}
+        {#if reasoning}
+          <ThinkingBlock {reasoning} />
+        {/if}
         <div class="content markdown-content">
           <MarkdownRenderer content={message.body.content} />
         </div>

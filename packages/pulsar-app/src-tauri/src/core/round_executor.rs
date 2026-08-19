@@ -16,6 +16,7 @@ use super::{
         ChatModelSelection, Message, ModelCallRequest, ModelCallResponse, Neuron, ThinkingConfig,
         ToolTag,
     },
+    openai_compat,
     round_types::{RoundOutcome, ToolResultItem},
     tool_registry::ToolRegistry,
 };
@@ -24,12 +25,30 @@ use super::{
 #[async_trait]
 pub trait ModelCaller: Send + Sync {
     async fn call_model(&self, request: ModelCallRequest) -> AppResult<ModelCallResponse>;
+
+    /// 流式模型调用：on_chunk 每块增量回调（协议层 `StreamChunk`），聚合完成后返回完整响应。
+    /// 默认实现回退非流式 `call_model`（测试替身无需实现；生产 ProviderRegistry 覆盖为本实现）。
+    async fn call_model_stream(
+        &self,
+        request: ModelCallRequest,
+        _on_chunk: Box<dyn FnMut(openai_compat::StreamChunk) + Send>,
+    ) -> AppResult<ModelCallResponse> {
+        self.call_model(request).await
+    }
 }
 
 #[async_trait]
 impl ModelCaller for super::providers::ProviderRegistry {
     async fn call_model(&self, request: ModelCallRequest) -> AppResult<ModelCallResponse> {
         super::providers::ProviderRegistry::call_model(self, request).await
+    }
+
+    async fn call_model_stream(
+        &self,
+        request: ModelCallRequest,
+        on_chunk: Box<dyn FnMut(openai_compat::StreamChunk) + Send>,
+    ) -> AppResult<ModelCallResponse> {
+        super::providers::ProviderRegistry::call_model_stream(self, request, on_chunk).await
     }
 }
 
@@ -102,6 +121,71 @@ impl RoundExecutor {
         // 思考配置覆盖：Some = 调用方直接给定（后台调用传 disabled）；None = 跟随模型/会话配置。
         thinking_override: Option<ThinkingConfig>,
     ) -> AppResult<(ModelCallResponse, Vec<String>)> {
+        let (request, authorized_tool_ids) = self.build_model_call_request(
+            neuron,
+            messages,
+            model,
+            tool_override,
+            tool_tags,
+            thinking_override,
+        )?;
+        let model_response = self.model_caller.call_model(request).await?;
+        tracing::info!(
+            phase = "round_execute",
+            output_len = model_response.output.len(),
+            tool_calls = model_response.tool_calls.as_ref().map_or(0, |c| c.len()),
+            reasoning = model_response.reasoning.as_deref().map_or(0, str::len),
+            "model call done"
+        );
+        self.validate_authorized(&model_response, &authorized_tool_ids)?;
+        Ok((model_response, authorized_tool_ids))
+    }
+
+    /// 流式第一步：与 [`Self::call_model`] 相同（工具授权 / 投影 / 授权校验照旧），
+    /// 仅模型调用走流式 `call_model_stream`（on_chunk 每块增量回调，由 runner 决定落库/事件）。
+    pub async fn call_model_stream(
+        &self,
+        neuron: Option<&Neuron>,
+        messages: &[Message],
+        model: &ChatModelSelection,
+        tool_override: Option<Vec<String>>,
+        tool_tags: Vec<ToolTag>,
+        thinking_override: Option<ThinkingConfig>,
+        on_chunk: Box<dyn FnMut(openai_compat::StreamChunk) + Send>,
+    ) -> AppResult<(ModelCallResponse, Vec<String>)> {
+        let (request, authorized_tool_ids) = self.build_model_call_request(
+            neuron,
+            messages,
+            model,
+            tool_override,
+            tool_tags,
+            thinking_override,
+        )?;
+        let model_response = self
+            .model_caller
+            .call_model_stream(request, on_chunk)
+            .await?;
+        tracing::info!(
+            phase = "round_execute",
+            output_len = model_response.output.len(),
+            tool_calls = model_response.tool_calls.as_ref().map_or(0, |c| c.len()),
+            reasoning = model_response.reasoning.as_deref().map_or(0, str::len),
+            "model stream call done"
+        );
+        self.validate_authorized(&model_response, &authorized_tool_ids)?;
+        Ok((model_response, authorized_tool_ids))
+    }
+
+    /// 工具授权 + 发送前投影 → 构造 `ModelCallRequest`（`call_model` / `call_model_stream` 共用）。
+    fn build_model_call_request(
+        &self,
+        neuron: Option<&Neuron>,
+        messages: &[Message],
+        model: &ChatModelSelection,
+        tool_override: Option<Vec<String>>,
+        tool_tags: Vec<ToolTag>,
+        thinking_override: Option<ThinkingConfig>,
+    ) -> AppResult<(ModelCallRequest, Vec<String>)> {
         // 工具授权：override 优先；否则取选中神经元的 tool_ids（∩ 注册表）。
         let tool_ids = match tool_override {
             Some(ids) => ids,
@@ -159,9 +243,8 @@ impl RoundExecutor {
             messages = ?wire_view,
             "model input (final messages)"
         );
-        let model_response = self
-            .model_caller
-            .call_model(ModelCallRequest {
+        Ok((
+            ModelCallRequest {
                 provider_id: model.provider_id.clone(),
                 model_id: model.model_id.clone(),
                 messages: model_messages,
@@ -169,18 +252,18 @@ impl RoundExecutor {
                 params: model.params.clone(),
                 // 调用方给定覆盖优先；None = 用会话/模型自带配置。
                 thinking: thinking_override.or_else(|| model.thinking.clone()),
-            })
-            .await?;
-        tracing::info!(
-            phase = "round_execute",
-            provider = %model.provider_id,
-            model = %model.model_id,
-            output_len = model_response.output.len(),
-            tool_calls = model_response.tool_calls.as_ref().map_or(0, |c| c.len()),
-            "model call done"
-        );
-        // 授权校验：模型声明的工具必须在本轮授权集合内（未授权属于契约异常，直接失败；
-        // 此时声明尚未落库，不会产生孤儿记录）。
+            },
+            authorized_tool_ids,
+        ))
+    }
+
+    /// 授权校验：模型声明的工具必须在本轮授权集合内（未授权属于契约异常，直接失败；
+    /// 此时声明尚未落库，不会产生孤儿记录）。
+    fn validate_authorized(
+        &self,
+        model_response: &ModelCallResponse,
+        authorized_tool_ids: &[String],
+    ) -> AppResult<()> {
         if let Some(calls) = model_response.tool_calls.as_ref() {
             for call in calls {
                 if !authorized_tool_ids.iter().any(|id| id == &call.name) {
@@ -191,7 +274,7 @@ impl RoundExecutor {
                 }
             }
         }
-        Ok((model_response, authorized_tool_ids))
+        Ok(())
     }
 
     /// 第二步：执行全部 tool_calls + 响应拼接。工具执行失败不冒泡——
@@ -261,6 +344,7 @@ impl RoundExecutor {
             model_output: Some(model_response.output.clone()),
             tool_calls,
             tool_results,
+            reasoning: model_response.reasoning.clone(),
             selected_neuron_id: neuron_id,
         })
     }

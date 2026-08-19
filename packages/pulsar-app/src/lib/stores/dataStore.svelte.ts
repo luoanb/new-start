@@ -143,6 +143,28 @@ async function handleStateChanged(payload: StateChangePayload): Promise<void> {
       if (state.activeConversationId && affected.includes(state.activeConversationId)) {
         await refreshMessages();
       }
+    } else if (payload.kind === "message_delta") {
+      // 流式增量：仅处理当前激活会话。
+      // done=false 按 message_index 原地合并 content/reasoning（不重拉，避免滚动跳动）；
+      // done=true 全量重拉收敛为权威数据（兜底广播丢弃/积压）。
+      if (state.activeConversationId === payload.conversation_id) {
+        if (payload.done) {
+          await refreshMessages();
+        } else {
+          state.messages = state.messages.map((m, i) =>
+            i === payload.message_index && m.body.kind === "text"
+              ? {
+                  ...m,
+                  body: {
+                    ...m.body,
+                    content: payload.content,
+                    reasoning: payload.reasoning || undefined,
+                  },
+                }
+              : m
+          );
+        }
+      }
     } else if (payload.kind === "poller") {
       state.poller = payload.status;
     } else if (payload.kind === "sessions") {

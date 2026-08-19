@@ -238,6 +238,8 @@ mod tests {
             role,
             body: MessageBody::Text {
                 content: content.to_string(),
+                reasoning: None,
+                tool_calls: None,
             },
             timestamp: now_ms(),
             neuron_id: None,

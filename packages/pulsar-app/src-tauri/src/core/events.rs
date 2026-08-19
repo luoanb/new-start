@@ -22,6 +22,18 @@ pub enum StateChange {
     /// 会话/对话列表变化。`affected` 为实际发生写入的会话 id；
     /// 前端仅重拉受影响会话的消息，未受影响会话不重拉、不触发滚动。
     Conversations { affected: Vec<String> },
+    /// 流式增量：assistant 响应分块更新（正文 + 思考）。
+    /// `done: false` 前端原地合并不重拉；`done: true` 本轮完成，前端收敛为全量重拉。
+    MessageDelta {
+        conversation_id: String,
+        /// 该消息在会话消息列表中的索引（流式占位消息）。
+        message_index: usize,
+        /// 该消息当前累积正文全文。
+        content: String,
+        /// 该消息当前累积思考全文（空串 = 无思考）。
+        reasoning: String,
+        done: bool,
+    },
     /// 轮询状态变化，直接携带最新 PollerStatus。
     Poller { status: PollerStatus },
     /// 运行中会话集合变化（register/unregister/update_step/close），
@@ -60,5 +72,21 @@ mod tests {
     fn empty_affected_serializes_as_empty_array() {
         let json = serde_json::to_string(&StateChange::Conversations { affected: vec![] }).unwrap();
         assert_eq!(json, r#"{"kind":"conversations","affected":[]}"#);
+    }
+
+    #[test]
+    fn message_delta_serializes_snake_case() {
+        let json = serde_json::to_string(&StateChange::MessageDelta {
+            conversation_id: "c1".into(),
+            message_index: 3,
+            content: "hello".into(),
+            reasoning: "think".into(),
+            done: false,
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            r#"{"kind":"message_delta","conversation_id":"c1","message_index":3,"content":"hello","reasoning":"think","done":false}"#
+        );
     }
 }

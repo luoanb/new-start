@@ -54,6 +54,8 @@ pub struct RoundOutcome {
     pub tool_calls: Option<Vec<ToolCall>>,
     /// 本轮全部工具执行结果（一轮内多个 tool_calls 全部执行）。
     pub tool_results: Vec<ToolResultItem>,
+    /// 推理模型思维链（透传 `ModelCallResponse.reasoning`；非推理模型为 None）。
+    pub reasoning: Option<String>,
     /// 本轮选中神经元 id（产物落库盖章；未选中为 None）。
     pub selected_neuron_id: Option<String>,
 }

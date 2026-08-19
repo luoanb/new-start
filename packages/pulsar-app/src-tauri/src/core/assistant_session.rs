@@ -18,7 +18,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use super::{
     conversation_runner::{
-        ConversationRunner, InputRecord, RoundContext, RoundHooks, RoundTriggerKind,
+        ConversationRunner, InputRecord, RoundContext, RoundHooks, RoundTriggerKind, StreamDelta,
     },
     conversation_store::ConversationStore,
     error::{AppError, AppResult},
@@ -199,6 +199,45 @@ impl AssistantSession {
             session_id = %response.conversation_id,
             response_len = response.response.len(),
             "converse ok"
+        );
+        Ok(response)
+    }
+
+    /// 流式版 `converse`：逐块回调 `on_delta`（Gateway 转发为 `MessageDelta`），
+    /// 课题 hooks（score/match/complete）与阻塞版完全一致。
+    pub async fn converse_stream(
+        &self,
+        session_id: &str,
+        user_input: &str,
+        model: &ChatModelSelection,
+        on_delta: Option<Box<dyn FnMut(StreamDelta) + Send>>,
+    ) -> AppResult<ChatResponse> {
+        tracing::info!(
+            phase = "assistant_converse_stream",
+            session_id,
+            provider = %model.provider_id,
+            model = %model.model_id,
+            input_len = user_input.len(),
+            "converse stream start"
+        );
+        let hooks = AssistantHooks { assistant: self };
+        let response = self
+            .runner
+            .run_round_stream(
+                session_id,
+                InputRecord::User(user_input.to_string()),
+                None,
+                model,
+                Some(&hooks),
+                None, // 用户聊天窗口发起：保留思考配置（跟随前端勾选）
+                on_delta,
+            )
+            .await?;
+        tracing::info!(
+            phase = "assistant_converse_stream",
+            session_id = %response.conversation_id,
+            response_len = response.response.len(),
+            "converse stream ok"
         );
         Ok(response)
     }
@@ -1577,13 +1616,25 @@ mod tests {
     }
 
     fn user(text: &str) -> Message {
-        msg(MessageRole::User, MessageBody::Text { content: text.into() }, None)
+        msg(
+            MessageRole::User,
+            MessageBody::Text {
+                content: text.into(),
+                reasoning: None,
+                tool_calls: None,
+            },
+            None,
+        )
     }
 
     fn asst(text: &str, neuron: &str) -> Message {
         msg(
             MessageRole::Assistant,
-            MessageBody::Text { content: text.into() },
+            MessageBody::Text {
+                content: text.into(),
+                reasoning: None,
+                tool_calls: None,
+            },
             Some(neuron),
         )
     }
@@ -1628,7 +1679,15 @@ mod tests {
             asst("a1", "n1"),
             user("q1"),
             asst("a2", "n2"),
-            msg(MessageRole::Assistant, MessageBody::Text { content: "a3".into() }, None),
+            msg(
+                MessageRole::Assistant,
+                MessageBody::Text {
+                    content: "a3".into(),
+                    reasoning: None,
+                    tool_calls: None,
+                },
+                None,
+            ),
             asst("a4", "n3"),
         ];
         // anchor=a4(5)：区间 = m3..6 → n2,None,n3 → [n2, n3]

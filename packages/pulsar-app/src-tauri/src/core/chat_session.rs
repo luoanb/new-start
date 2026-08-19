@@ -1,5 +1,5 @@
 use super::{
-    conversation_runner::{ConversationRunner, InputRecord},
+    conversation_runner::{ConversationRunner, InputRecord, StreamDelta},
     error::AppResult,
     models::{ChatModelSelection, ChatResponse},
 };
@@ -29,6 +29,27 @@ impl ChatSession {
                 model,
                 None,
                 None, // 用户聊天窗口发起：保留思考配置（跟随前端勾选）
+            )
+            .await
+    }
+
+    /// 流式版 `send`：逐块回调 `on_delta`（Gateway 转发为 `MessageDelta`）。
+    pub async fn send_stream(
+        &self,
+        session_id: &str,
+        input: &str,
+        model: &ChatModelSelection,
+        on_delta: Option<Box<dyn FnMut(StreamDelta) + Send>>,
+    ) -> AppResult<ChatResponse> {
+        self.runner
+            .run_round_stream(
+                session_id,
+                InputRecord::User(input.to_string()),
+                None,
+                model,
+                None,
+                None, // 用户聊天窗口发起：保留思考配置（跟随前端勾选）
+                on_delta,
             )
             .await
     }

@@ -332,12 +332,11 @@ impl ProviderRegistry {
         self.parse_chat_response(response, &request)
     }
 
-    /// 流式调用入口（协议层已实现 SSE；round_executor 尚未接入增量渲染，暂保留供后续使用）。
-    #[allow(dead_code)]
+    /// 流式调用入口（协议层已实现 SSE；on_chunk 每块增量回调，由调用方决定节流/落库/事件）。
     pub async fn call_model_stream(
         &self,
         request: ModelCallRequest,
-        on_chunk: impl FnMut(openai_compat::StreamChunk),
+        on_chunk: Box<dyn FnMut(openai_compat::StreamChunk) + Send>,
     ) -> AppResult<ModelCallResponse> {
         self.validate_request(&request)?;
         self.require_model(&request.provider_id, &request.model_id)?;
@@ -400,9 +399,14 @@ impl ProviderRegistry {
         // Extract text output (may be None when tool_calls is present)
         let output = choice.message.content.clone().unwrap_or_default();
 
-        // 空响应防御：模型返回 HTTP 200 但无文本且无 tool_calls 时视为异常，
+        // 出参提取：推理模型思维链（非流式 / 流式协议层已聚合进同一 ChatResponse）。
+        let reasoning = choice.message.reasoning_content.clone();
+
+        // 空响应防御：模型返回 HTTP 200 但无文本且无 tool_calls 且无 reasoning 时视为异常，
         // 避免空消息落库后污染历史（providers 校验会拒绝空 assistant 消息锁死会话）。
-        if output.trim().is_empty() && tool_calls.is_none() {
+        // 推理模型「只出 reasoning 不出正文」属正常行为，豁免（思考块完整展示，不误报）。
+        let has_reasoning = reasoning.as_deref().map_or(false, |r| !r.trim().is_empty());
+        if output.trim().is_empty() && tool_calls.is_none() && !has_reasoning {
             // 诊断日志：dump 响应元信息，区分「推理模型 content=null 仅 reasoning」、
             // 「refusal 拒绝回答」、「finish_reason=length 截断」等上游原因。
             let refusal = choice
@@ -476,6 +480,7 @@ impl ProviderRegistry {
             output,
             tool_calls,
             finish_reason,
+            reasoning,
         })
     }
 

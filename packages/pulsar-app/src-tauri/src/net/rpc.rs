@@ -314,9 +314,11 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
         // ── Chat ──
         "send_chat_message" => {
             let p: SendChatParams = from_params(params)?;
+            // 流式入口：MessageDelta 增量 + 完成后的 Conversations 收敛均由 Gateway 内部广播
+            //（SSE 复用同一 StateChange 通道自动推送）。
             let response = state
                 .gateway
-                .send_model_message(
+                .send_model_message_stream(
                     p.message,
                     ChatOptions {
                         provider_id: p.provider_id,
@@ -328,9 +330,6 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
                 )
                 .await
                 .map_err(RpcErrorBody::from)?;
-            (state.state_emit)(StateChange::Conversations {
-                affected: vec![response.conversation_id.clone()],
-            });
             value(response)
         }
         "create_conversation" => {

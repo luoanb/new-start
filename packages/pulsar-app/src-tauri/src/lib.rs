@@ -57,7 +57,7 @@ fn debug_storage_path() -> String {
 #[tauri::command]
 async fn send_chat_message(
     gateway: State<'_, Gateway>,
-    state_emit: State<'_, StateEmitter>,
+    _state_emit: State<'_, StateEmitter>,
     message: String,
     provider_id: String,
     model_id: String,
@@ -65,11 +65,12 @@ async fn send_chat_message(
     params: Option<SamplingParams>,
     thinking: Option<ThinkingConfig>,
 ) -> TauriResult<ChatResponse> {
-    // Gateway is shared via Tauri State (Arc); send_model_message is &self and
+    // Gateway is shared via Tauri State (Arc); send_model_message_stream is &self and
     // clone-outs before network await — no outer Mutex held across I/O.
-    let response = gateway
+    // 流式增量（MessageDelta）与完成后的收敛（Conversations）均由 Gateway 内部广播。
+    gateway
         .inner()
-        .send_model_message(
+        .send_model_message_stream(
             message,
             ChatOptions {
                 provider_id,
@@ -80,11 +81,7 @@ async fn send_chat_message(
             },
         )
         .await
-        .map_err(|error| error.payload())?;
-    state_emit.inner()(StateChange::Conversations {
-        affected: vec![response.conversation_id.clone()],
-    });
-    Ok(response)
+        .map_err(|error| error.payload())
 }
 
 /// 持久化会话级模型选择（后端持有）：前端改选时调用，写 `extra.session.state.model`。

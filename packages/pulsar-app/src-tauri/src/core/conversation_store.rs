@@ -1,6 +1,6 @@
 use super::{
     error::{AppError, AppResult},
-    models::{Conversation, ConversationMode, Message},
+    models::{Conversation, ConversationMode, Message, MessageRole},
     storage,
 };
 use std::{
@@ -121,6 +121,30 @@ impl ConversationStore {
         Ok(conversation)
     }
 
+    /// 增量落库：定位最后一条 assistant 消息并应用 `patch`（流式场景单会话唯一），读改写后全量写盘。
+    ///
+    /// - 找不到 assistant 消息时返回 `Ok(conversation)` 不变更（容错，不中断流式）。
+    /// - 写盘频率由调用方节流控制（首 chunk 立即写 → ~150ms 节流 → 完成时最终写）。
+    pub fn update_last_assistant_message(
+        &self,
+        conversation_id: &str,
+        patch: impl FnOnce(&mut Message),
+    ) -> AppResult<Conversation> {
+        let mut conversation = self.require_conversation(conversation_id)?;
+        let Some(message) = conversation
+            .messages
+            .iter_mut()
+            .rev()
+            .find(|m| m.role == MessageRole::Assistant)
+        else {
+            return Ok(conversation);
+        };
+        patch(message);
+        conversation.updated_at = now_ms();
+        self.save_conversation(&conversation)?;
+        Ok(conversation)
+    }
+
     pub fn save_conversation(&self, conversation: &Conversation) -> AppResult<()> {
         let path = self.conversation_path(&conversation.id);
         let content = serde_json::to_string_pretty(conversation)?;
@@ -162,4 +186,101 @@ fn new_conversation_id() -> String {
         .expect("system time should be after unix epoch")
         .as_nanos();
     format!("conv_{nanos}")
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::core::models::MessageBody;
+    use super::*;
+
+    fn text_message(role: MessageRole, content: &str) -> Message {
+        Message {
+            role,
+            body: MessageBody::Text {
+                content: content.to_string(),
+                reasoning: None,
+                tool_calls: None,
+            },
+            timestamp: now_ms(),
+            neuron_id: None,
+        }
+    }
+
+    fn test_root(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir()
+            .join("pulsar-app-tests")
+            .join(name)
+            .join(format!("{}", now_ms()))
+    }
+
+    #[test]
+    fn update_last_assistant_message_patches_text() {
+        let store = ConversationStore::new(test_root("update_assistant_patches")).unwrap();
+        let conv = store
+            .create_conversation(None, ConversationMode::Chat)
+            .unwrap();
+        store
+            .add_message(&conv.id, text_message(MessageRole::User, "hi"))
+            .unwrap();
+        store
+            .add_message(
+                &conv.id,
+                Message {
+                    role: MessageRole::Assistant,
+                    body: MessageBody::Text {
+                        content: String::new(),
+                        reasoning: Some("think".into()),
+                        tool_calls: None,
+                    },
+                    timestamp: now_ms(),
+                    neuron_id: None,
+                },
+            )
+            .unwrap();
+
+        let updated = store
+            .update_last_assistant_message(&conv.id, |m| {
+                if let MessageBody::Text { content, .. } = &mut m.body {
+                    content.push_str("hello");
+                }
+            })
+            .unwrap();
+        let last = updated.messages.last().unwrap();
+        assert_eq!(last.text(), "hello");
+        assert_eq!(last.reasoning(), Some("think"));
+    }
+
+    #[test]
+    fn update_last_assistant_message_no_assistant_is_noop() {
+        let store = ConversationStore::new(test_root("update_assistant_noop")).unwrap();
+        let conv = store
+            .create_conversation(None, ConversationMode::Chat)
+            .unwrap();
+        store
+            .add_message(&conv.id, text_message(MessageRole::User, "hi"))
+            .unwrap();
+
+        let updated = store
+            .update_last_assistant_message(&conv.id, |m| {
+                if let MessageBody::Text { content, .. } = &mut m.body {
+                    content.push_str("x");
+                }
+            })
+            .unwrap();
+        // 无 assistant 消息：不变更，不误伤 user 消息。
+        assert_eq!(updated.messages.last().unwrap().text(), "hi");
+        assert_eq!(updated.messages.len(), 1);
+    }
+
+    #[test]
+    fn update_last_assistant_message_empty_conversation_is_noop() {
+        let store = ConversationStore::new(test_root("update_assistant_empty")).unwrap();
+        let conv = store
+            .create_conversation(None, ConversationMode::Chat)
+            .unwrap();
+        let updated = store
+            .update_last_assistant_message(&conv.id, |_| {})
+            .unwrap();
+        assert!(updated.messages.is_empty());
+    }
 }

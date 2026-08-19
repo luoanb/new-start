@@ -234,7 +234,7 @@ impl RoundResolver {
             .map(InsertCatalog::require);
         let already_has_contract = contract.map_or(false, |c| {
             old_messages.iter().any(|m| match &m.body {
-                MessageBody::Text { content } | MessageBody::RoleContext { content } => {
+                MessageBody::Text { content, .. } | MessageBody::RoleContext { content } => {
                     content.contains(c)
                 }
                 _ => false,
@@ -247,6 +247,8 @@ impl RoundResolver {
                 role: MessageRole::System,
                 body: MessageBody::Text {
                     content: Self::join_contract(&neuron.content, contract, already_has_contract),
+                    reasoning: None,
+                    tool_calls: None,
                 },
                 timestamp: now_ms(),
                 neuron_id: None,
@@ -336,6 +338,8 @@ mod tests {
             out[0].body,
             MessageBody::Text {
                 content: format!("ROLE CONTENT\n\n{}", contract_text()),
+                reasoning: None,
+                tool_calls: None,
             }
         );
     }
@@ -346,7 +350,7 @@ mod tests {
         let out = RoundResolver::attach_role(&[], Some(&neuron_with_insert(None)));
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].role, MessageRole::System);
-        assert_eq!(out[0].body, MessageBody::Text { content: "ROLE CONTENT".into() });
+        assert_eq!(out[0].body, MessageBody::Text { content: "ROLE CONTENT".into(), reasoning: None, tool_calls: None });
     }
 
     #[test]
@@ -354,7 +358,11 @@ mod tests {
         // 非首轮 + 带 insert_id + 历史无契约段（裁决调用场景）：RoleContext 内容拼契约段。
         let history = vec![Message {
             role: MessageRole::User,
-            body: MessageBody::Text { content: "用户输入".into() },
+            body: MessageBody::Text {
+                content: "用户输入".into(),
+                reasoning: None,
+                tool_calls: None,
+            },
             timestamp: 0,
             neuron_id: None,
         }];
@@ -376,6 +384,8 @@ mod tests {
             role: MessageRole::System,
             body: MessageBody::Text {
                 content: format!("prev system\n\n{}", contract_text()),
+                reasoning: None,
+                tool_calls: None,
             },
             timestamp: 0,
             neuron_id: None,
@@ -394,12 +404,16 @@ mod tests {
     fn attach_role_unselected_returns_old_untouched() {
         let history = vec![Message {
             role: MessageRole::User,
-            body: MessageBody::Text { content: "hi".into() },
+            body: MessageBody::Text {
+                content: "hi".into(),
+                reasoning: None,
+                tool_calls: None,
+            },
             timestamp: 0,
             neuron_id: None,
         }];
         let out = RoundResolver::attach_role(&history, None);
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].body, MessageBody::Text { content: "hi".into() });
+        assert_eq!(out[0].body, MessageBody::Text { content: "hi".into(), reasoning: None, tool_calls: None });
     }
 }

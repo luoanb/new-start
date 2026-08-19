@@ -14,6 +14,7 @@ export const STATE_CHANGED_EVENT = "app://state-changed";
 export type StateEventKind =
   | "topics"
   | "conversations"
+  | "message_delta"
   | "poller"
   | "sessions"
   | "neurons"
@@ -24,6 +25,18 @@ export type StateEventKind =
 export type StateChangePayload =
   | { kind: "topics" }
   | { kind: "conversations"; affected?: string[] }
+  | {
+      kind: "message_delta";
+      conversation_id: string;
+      /** 该消息在会话消息列表中的索引（流式占位消息）。 */
+      message_index: number;
+      /** 该消息当前累积正文全文。 */
+      content: string;
+      /** 该消息当前累积思考全文（空串 = 无思考）。 */
+      reasoning: string;
+      /** true = 本轮完成，前端收敛为全量重拉。 */
+      done: boolean;
+    }
   | { kind: "poller"; status: PollerStatus }
   | { kind: "sessions" }
   | { kind: "neurons" }

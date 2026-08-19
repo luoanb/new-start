@@ -18,11 +18,17 @@ pub enum MessageRole {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MessageBody {
     /// 普通文本（user / assistant / system 正文）。
-    Text { content: String },
-    /// 工具调用（模型发起）：content 可为模型的说明文字。
-    ToolCall {
+    /// 统一为 wire `ResponseMessage` 的完整镜像：`content` / `reasoning_content` / `tool_calls` 平级。
+    /// `#[serde(alias = "tool_call")]` 兼容存量 `kind="tool_call"` 数据映射进本变体。
+    #[serde(alias = "tool_call")]
+    Text {
         content: String,
-        tool_calls: Vec<ToolCall>,
+        /// 推理模型思维链（落库与 wire 同源；存量 JSON 缺键 → None）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning: Option<String>,
+        /// 模型发起的工具调用（同一轮响应的平级字段）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_calls: Option<Vec<ToolCall>>,
     },
     /// 工具返回：携带关联的调用 id 与工具名。
     ToolResult {
@@ -54,10 +60,10 @@ pub struct Message {
 
 impl Message {
     /// 返回消息正文文本（各 body 变体共有的 content），用于展示 / 统计。
+    /// reasoning 属过程信息，不参与正文统计。
     pub fn text(&self) -> &str {
         match &self.body {
-            MessageBody::Text { content }
-            | MessageBody::ToolCall { content, .. }
+            MessageBody::Text { content, .. }
             | MessageBody::ToolResult { content, .. }
             | MessageBody::Compaction { content, .. }
             | MessageBody::Nudge { content }
@@ -66,11 +72,16 @@ impl Message {
     }
 
     /// 是否为工具相关消息（调用或返回）。
+    /// 统一类型后：`Text.tool_calls` 非空即工具调用，或 `ToolResult`。
     pub fn is_tool(&self) -> bool {
-        matches!(
-            self.body,
-            MessageBody::ToolCall { .. } | MessageBody::ToolResult { .. }
-        )
+        match &self.body {
+            MessageBody::Text {
+                tool_calls: Some(calls),
+                ..
+            } => !calls.is_empty(),
+            MessageBody::ToolResult { .. } => true,
+            _ => false,
+        }
     }
 
     /// Compaction 摘要覆盖的消息时间戳集合。
@@ -84,7 +95,15 @@ impl Message {
     /// 工具调用消息的 tool_calls 数组。
     pub fn tool_calls(&self) -> Option<&[ToolCall]> {
         match &self.body {
-            MessageBody::ToolCall { tool_calls, .. } => Some(tool_calls),
+            MessageBody::Text { tool_calls, .. } => tool_calls.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// 推理模型思维链（Text 分支返回；其余变体 None）。
+    pub fn reasoning(&self) -> Option<&str> {
+        match &self.body {
+            MessageBody::Text { reasoning, .. } => reasoning.as_deref(),
             _ => None,
         }
     }
@@ -527,6 +546,9 @@ pub struct ModelCallResponse {
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(default)]
     pub finish_reason: String,
+    /// 推理模型思维链（非流式 / 流式聚合后同源；存量 / 非推理模型为 None）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
 }
 
 // ── Topic / Project Management ─────────────────────────────────────
