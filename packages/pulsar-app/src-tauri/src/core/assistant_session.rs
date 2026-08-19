@@ -462,7 +462,10 @@ impl AssistantSession {
             }
             // Lineage attribution: the score also flows back to the creator
             // variant that generated this neuron, feeding the self-iteration pool.
-            if let Some(parent_id) = self.neurons()?.lineage_parent_id_of(neuron_id)? {
+            // 注意：先解绑再 if let——if let scrutinee 里的临时 MutexGuard 会
+            // 因 temporary lifetime extension 存活到块结束，块内再锁同一 store 会重入死锁。
+            let parent_id = self.neurons()?.lineage_parent_id_of(neuron_id)?;
+            if let Some(parent_id) = parent_id {
                 let _ = self
                     .neuron_manager
                     .accumulate_variant_delta(&parent_id, delta)?;
@@ -470,6 +473,7 @@ impl AssistantSession {
         }
         // Creator pool self-iteration after a scoring round. Never allowed to
         // break the feedback flow: failures keep the pool unchanged.
+        tracing::info!(phase = "apply_score_feedback", "calling maybe_evolve_creator_variants");
         if let Err(error) = self.neuron_manager.maybe_evolve_creator_variants().await {
             tracing::warn!(
                 phase = "apply_score_feedback",
@@ -477,6 +481,7 @@ impl AssistantSession {
                 "maybe_evolve_creator_variants failed; keeping pool unchanged"
             );
         }
+        tracing::info!(phase = "apply_score_feedback", "apply score feedback done");
         Ok(())
     }
 

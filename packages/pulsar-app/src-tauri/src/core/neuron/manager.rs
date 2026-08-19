@@ -424,6 +424,12 @@ impl NeuronManager {
         messages: &[ModelMessage],
         scope: AssistantCandidateScope,
     ) -> AppResult<Neuron> {
+        tracing::info!(
+            phase = "select_role",
+            scope = ?scope,
+            history_len = messages.len(),
+            "select_role entry"
+        );
         // 回挂边锚点 = 候选池锚点：Neighborhood 的 self_id（非首轮 = last_selected / 首轮 = 发起神经元）；Global 无锚点 → None。
         let link_source = match &scope {
             AssistantCandidateScope::Neighborhood { self_id, .. } => Some(self_id.clone()),

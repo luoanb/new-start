@@ -62,8 +62,15 @@ impl NeuronEvolution {
     /// 2. Elimination candidates (delta <= -3, or use_count >= 10 with delta < 0).
     /// 3. Rewrite candidates (use_count >= 3 and |delta| >= 2): differential rewrite.
     pub(crate) async fn maybe_evolve_creator_variants(&self) -> AppResult<()> {
+        tracing::info!(phase = "maybe_evolve_creator_variants", "entry: ensure_creator");
         let creator = self.selection.ensure_creator()?;
         let variants = self.store()?.get_variants(&creator.id, false)?;
+        tracing::info!(
+            phase = "maybe_evolve_creator_variants",
+            creator_id = %creator.id,
+            variant_count = variants.len(),
+            "variants loaded"
+        );
         if variants.is_empty() {
             return Ok(());
         }
@@ -183,6 +190,13 @@ impl NeuronEvolution {
     /// On success the variant is updated with the new content and moved to the
     /// observing slot; the previous content is archived in `neuron_versions`.
     async fn rewrite_variant(&self, creator: &Neuron, variant: &NeuronVariant) -> AppResult<()> {
+        tracing::info!(
+            phase = "rewrite_variant",
+            variant_id = %variant.neuron.id,
+            use_count = variant.use_count,
+            accumulated_delta = variant.accumulated_delta,
+            "rewrite variant entry"
+        );
         let payload = serde_json::json!({
             "current_desc": variant.neuron.desc,
             "current_content": variant.neuron.content,

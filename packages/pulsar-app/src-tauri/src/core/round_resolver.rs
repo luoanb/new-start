@@ -36,8 +36,9 @@ impl RoundResolver {
     /// （落库历史真相源）、`reselect`（是否本轮重新选型；false 且有锚点 → 沿用锚点）。
     ///
     /// 输出：`(new_messages, selected_neuron)`——`new_messages` = old + 角色上下文
-    /// （选中神经元且首轮 → `System(neuron.content)`；非首轮 → `RoleContext("[当前角色]\n" + content)`；
-    /// 未选中 → 原样返回 old），不含本轮输入消息（由 runner 构造追加）。
+    /// （选中神经元且首轮 → `System(neuron.content)`；非首轮且角色切换（`neuron.id != last_selected`）
+    /// → `RoleContext("[当前角色]\n" + content)`；角色未变 / 未选中 → 原样返回 old），
+    /// 不含本轮输入消息（由 runner 构造追加）。
     ///
     /// - `None`（直连）：不选型、无角色上下文。
     /// - `Global`：无历史全域池选 1；有锚点且复用轮沿用；LLM 选型后推进。
@@ -51,6 +52,14 @@ impl RoundResolver {
         old_messages: &[Message],
         reselect: bool,
     ) -> AppResult<(Vec<Message>, Option<Neuron>)> {
+        tracing::info!(
+            phase = "resolve",
+            seed = ?seed,
+            last_selected,
+            reselect,
+            history_len = old_messages.len(),
+            "resolve entry"
+        );
         let Some(seed) = seed else {
             // 直连（Chat 等）：不选型、无角色上下文，原样返回历史。
             return Ok((old_messages.to_vec(), None));
@@ -80,6 +89,11 @@ impl RoundResolver {
                     );
                     Some(role)
                 } else {
+                    tracing::info!(
+                        phase = "resolve",
+                        seed = ?SessionSeed::Global,
+                        "calling select_role (LLM selection)"
+                    );
                     let role = self
                         .neuron_manager
                         .select_role(&ModelCallInput::project_history(old_messages), scope)
@@ -207,20 +221,26 @@ impl RoundResolver {
                 }
             }
         };
-        let messages = Self::attach_role(old_messages, neuron.as_ref());
+        let messages = Self::attach_role(old_messages, neuron.as_ref(), last_selected);
         Ok((messages, neuron))
     }
 
     /// 角色上下文拼接（v2）：选中神经元时——首轮（old 为空）追加 `System(neuron.content)`，
     /// 若神经元带 `behavior.insert_id` 再追加**独立第二条 System 消息**（契约段，形态 B/D4a；
     /// v1 由 `assemble_with_context` 注入，随重构误删，裁决模型需此硬契约如 action/scope_in）；
-    /// 后续轮追加 `RoleContext("[当前角色]\n" + content)`（契约段不重复，历史回灌自带）；
-    /// 未选中神经元原样返回 old。输入消息不在此拼接（runner 追加）。
+    /// 后续轮**仅角色实际切换时**（本轮选中 `neuron.id` ≠ 上一轮锚点 `last_selected`，锚点缺失视为
+    /// 切换）追加 `RoleContext("[当前角色]\n" + content)`（契约段不重复，历史回灌自带）；
+    /// 角色未变（复用锚点 / 选型结果相同）不注入，历史回灌自带角色声明；未选中神经元原样返回 old。
+    /// 输入消息不在此拼接（runner 追加）。
     ///
     /// 契约段拼接（D4a 方案 1，不改追加流程）：带 `behavior.insert_id` 时契约段并入角色内容
     /// `format!("{}\n\n{}", 角色内容, 契约段)`；注入条件 = `old_messages` 无消息内容包含该契约段
     /// （主对话首轮拼、后续轮历史回灌自带不重复；裁决调用历史无契约 → 每轮拼）。
-    fn attach_role(old_messages: &[Message], neuron: Option<&Neuron>) -> Vec<Message> {
+    fn attach_role(
+        old_messages: &[Message],
+        neuron: Option<&Neuron>,
+        last_selected: Option<&str>,
+    ) -> Vec<Message> {
         let Some(neuron) = neuron else {
             return old_messages.to_vec();
         };
@@ -253,6 +273,9 @@ impl RoundResolver {
                 timestamp: now_ms(),
                 neuron_id: None,
             });
+        } else if Some(neuron.id.as_str()) == last_selected {
+            // 角色未变（复用锚点 / 选型结果相同）：不重复注入，历史回灌自带角色声明。
+            return out;
         } else {
             out.push(Message {
                 role: MessageRole::User,
@@ -331,7 +354,7 @@ mod tests {
     #[test]
     fn attach_role_first_round_with_insert_merges_contract_into_system() {
         // 首轮 + 带 insert_id（方案 1）：单条 System，内容 = 角色 + "\n\n" + 契约段。
-        let out = RoundResolver::attach_role(&[], Some(&neuron_with_insert(Some("assistant.match_topic"))));
+        let out = RoundResolver::attach_role(&[], Some(&neuron_with_insert(Some("assistant.match_topic"))), None);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].role, MessageRole::System);
         assert_eq!(
@@ -347,7 +370,7 @@ mod tests {
     #[test]
     fn attach_role_first_round_without_insert_appends_single_system() {
         // 首轮 + 无 insert_id（普通神经元 / behavior=None）：仅 System(ROLE)，无契约段。
-        let out = RoundResolver::attach_role(&[], Some(&neuron_with_insert(None)));
+        let out = RoundResolver::attach_role(&[], Some(&neuron_with_insert(None)), None);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].role, MessageRole::System);
         assert_eq!(out[0].body, MessageBody::Text { content: "ROLE CONTENT".into(), reasoning: None, tool_calls: None });
@@ -366,7 +389,7 @@ mod tests {
             timestamp: 0,
             neuron_id: None,
         }];
-        let out = RoundResolver::attach_role(&history, Some(&neuron_with_insert(Some("assistant.match_topic"))));
+        let out = RoundResolver::attach_role(&history, Some(&neuron_with_insert(Some("assistant.match_topic"))), None);
         assert_eq!(out.len(), 2);
         assert_eq!(out[1].role, MessageRole::User);
         assert_eq!(
@@ -390,7 +413,7 @@ mod tests {
             timestamp: 0,
             neuron_id: None,
         }];
-        let out = RoundResolver::attach_role(&history, Some(&neuron_with_insert(Some("assistant.match_topic"))));
+        let out = RoundResolver::attach_role(&history, Some(&neuron_with_insert(Some("assistant.match_topic"))), Some("prev-anchor-id"));
         assert_eq!(out.len(), 2);
         assert_eq!(
             out[1].body,
@@ -398,6 +421,24 @@ mod tests {
                 content: "[当前角色]\nROLE CONTENT".into(),
             }
         );
+    }
+
+    #[test]
+    fn attach_role_later_round_same_role_skips_injection() {
+        // 角色未变（复用锚点 / 选型结果相同，last_selected == 本轮 neuron.id）：不注入，原样返回历史。
+        let history = vec![Message {
+            role: MessageRole::System,
+            body: MessageBody::Text {
+                content: "prev system".into(),
+                reasoning: None,
+                tool_calls: None,
+            },
+            timestamp: 0,
+            neuron_id: None,
+        }];
+        let out = RoundResolver::attach_role(&history, Some(&neuron_with_insert(None)), Some("n_test"));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].body, MessageBody::Text { content: "prev system".into(), reasoning: None, tool_calls: None });
     }
 
     #[test]
@@ -412,7 +453,7 @@ mod tests {
             timestamp: 0,
             neuron_id: None,
         }];
-        let out = RoundResolver::attach_role(&history, None);
+        let out = RoundResolver::attach_role(&history, None, None);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].body, MessageBody::Text { content: "hi".into(), reasoning: None, tool_calls: None });
     }

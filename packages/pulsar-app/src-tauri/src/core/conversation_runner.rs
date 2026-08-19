@@ -154,7 +154,7 @@ impl ConversationRunner {
             }
         }
         // ① 选型 + 角色上下文拼接（resolve 目标单一：获取角色神经元）。
-        // 输出 = old + 角色上下文（首轮 System / 后续 RoleContext），不含本轮输入消息。
+        // 输出 = old + 角色上下文（首轮 System / 后续仅角色切换时 RoleContext），不含本轮输入消息。
         let old_len = ctx.messages.len();
         let (with_role, neuron) = self
             .resolver
@@ -274,8 +274,20 @@ impl ConversationRunner {
                 );
                 self.reload(&mut ctx)?;
             }
+            tracing::info!(
+                phase = "run_round_stream",
+                session_id = %ctx.session_id,
+                "before hook done"
+            );
         }
         let old_len = ctx.messages.len();
+        tracing::info!(
+            phase = "run_round_stream",
+            session_id = %ctx.session_id,
+            last_selected = ?ctx.state.last_selected_neuron_id,
+            reselect = ctx.reselect,
+            "calling resolver.resolve"
+        );
         let (with_role, neuron) = self
             .resolver
             .resolve(
@@ -285,6 +297,13 @@ impl ConversationRunner {
                 ctx.reselect,
             )
             .await?;
+        tracing::info!(
+            phase = "run_round_stream",
+            session_id = %ctx.session_id,
+            neuron_id = neuron.as_ref().map(|n| n.id.as_str()),
+            messages_len = with_role.len(),
+            "resolver.resolve done"
+        );
         let anchor = neuron.as_ref().map(|n| n.id.clone());
         if anchor != ctx.state.last_selected_neuron_id {
             ctx.state.last_selected_neuron_id = anchor;
@@ -294,6 +313,11 @@ impl ConversationRunner {
         ctx.messages = with_role;
         self.append_input_message(&mut ctx);
         self.persist_input(&ctx, old_len)?;
+        tracing::info!(
+            phase = "run_round_stream",
+            session_id = %ctx.session_id,
+            "input appended and persisted"
+        );
 
         // ── 占位落库：模型调用前 append 空 assistant Text（流式期间逐块更新此条）──
         let placeholder_index = self
@@ -314,6 +338,12 @@ impl ConversationRunner {
             .messages
             .len()
             .saturating_sub(1);
+        tracing::info!(
+            phase = "run_round_stream",
+            session_id = %ctx.session_id,
+            placeholder_index,
+            "placeholder appended"
+        );
 
         // ── 流式执行：on_chunk 累积 + 节流写盘 + emit 增量 ──
         let on_delta_shared = Arc::new(std::sync::Mutex::new(on_delta));
@@ -367,6 +397,11 @@ impl ConversationRunner {
                 });
             }
         });
+        tracing::info!(
+            phase = "run_round_stream",
+            session_id = %ctx.session_id,
+            "calling main model stream"
+        );
         let (model_response, _authorized_tool_ids) = self
             .executor
             .call_model_stream(
@@ -1244,7 +1279,7 @@ mod tests {
         assert_eq!(first.role, MessageRole::System);
         assert_eq!(first.neuron_id, None);
         let anchor = first_neuron.expect("first round selects").id.clone();
-        // 第二轮（有历史 + 复用轮）：选中神经元以 [当前角色] 前缀带出 RoleContext。
+        // 第二轮（有历史 + 复用轮）：角色未变（锚点 == 选中神经元），不注入 RoleContext（历史回灌自带角色声明）。
         let (second_wire, _, _) = run_pipeline(
             &h,
             Some(SessionSeed::Neuron(iso.id.clone())),
@@ -1258,10 +1293,29 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(second_wire.first().unwrap().role, MessageRole::User);
-        let ctx = second_wire
+        assert!(
+            !second_wire
+                .iter()
+                .any(|m| matches!(m.body, MessageBody::RoleContext { .. })),
+            "reuse round must not carry role context"
+        );
+        // 第三轮（有历史 + 选型轮，锚点缺失视为切换）：重新注入 RoleContext。
+        let (third_wire, _, _) = run_pipeline(
+            &h,
+            Some(SessionSeed::Neuron(iso.id.clone())),
+            None,
+            vec![user_msg("another turn")],
+            "again2",
+            None,
+            Vec::new(),
+            true,
+        )
+        .await
+        .unwrap();
+        let ctx = third_wire
             .iter()
             .find(|m| matches!(m.body, MessageBody::RoleContext { .. }))
-            .expect("non-first round carries role context");
+            .expect("switch round carries role context");
         assert!(ctx.text().starts_with("[当前角色]\n"), "ctx: {}", ctx.text());
     }
 

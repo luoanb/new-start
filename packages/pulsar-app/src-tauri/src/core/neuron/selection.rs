@@ -267,6 +267,11 @@ impl NeuronSelection {
         &self,
         scope: AssistantCandidateScope,
     ) -> AppResult<Vec<Neuron>> {
+        tracing::info!(
+            phase = "select_assistant_candidates",
+            scope = ?scope,
+            "select_assistant_candidates entry"
+        );
         match scope {
             AssistantCandidateScope::Global { limit } => {
                 if limit == 0 {

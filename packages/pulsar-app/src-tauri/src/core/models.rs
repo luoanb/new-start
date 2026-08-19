@@ -43,7 +43,8 @@ pub enum MessageBody {
     },
     /// 轮询推进简报：机器人自发推进时记录的模型输入（落库与 wire 同源，回灌进后续模型输入）。
     Nudge { content: String },
-    /// B2 角色 RoleContext：冻结后每轮注入的选中神经元（`[当前角色]` 前缀，与 wire 一致）。
+    /// B2 角色 RoleContext：角色实际切换（与上一轮锚点不同）时注入的选中神经元
+    /// （`[当前角色]` 前缀，与 wire 一致）。
     /// 落库顺序与 wire 注入顺序一致，回灌进后续模型输入（历史 = wire）。
     RoleContext { content: String },
 }
