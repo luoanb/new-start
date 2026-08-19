@@ -10,11 +10,13 @@
 
   let {
     message,
+    streaming = false,
     onCopy,
     onRate,
     canRate,
   }: {
     message: Message;
+    streaming?: boolean;
     onCopy?: (msg: Message) => void;
     onRate?: (score: number) => void;
     canRate?: boolean;
@@ -127,7 +129,7 @@
         <ToolResultBlock {message} />
       {:else if hasToolCalls}
         {#if reasoning}
-          <ThinkingBlock {reasoning} />
+          <ThinkingBlock {reasoning} {streaming} />
         {/if}
         {#if message.body.content}
           <div class="content markdown-content">
@@ -145,7 +147,7 @@
         <NudgeBlock content={message.body.content} />
       {:else}
         {#if reasoning}
-          <ThinkingBlock {reasoning} />
+          <ThinkingBlock {reasoning} {streaming} />
         {/if}
         <div class="content markdown-content">
           <MarkdownRenderer content={message.body.content} />

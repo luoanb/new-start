@@ -215,6 +215,7 @@
           {#each round.messages as msg, mi}
             <ChatMessage
               message={msg}
+              streaming={ctx.stores.data.state.streamingIndex === round.startIndex + mi}
               canRate={rateable}
               onCopy={handleCopy}
               onRate={(score) => handleRate(round.startIndex + mi, score)}

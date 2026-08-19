@@ -43,6 +43,8 @@ const state = $state({
   conversations: [] as Conversation[],
   activeConversationId: null as string | null,
   messages: [] as Message[],
+  /** 当前流式占位消息在 `messages` 中的 index（无流式进行中为 null）。 */
+  streamingIndex: null as number | null,
   runtimeStatus: null as RuntimeStatus | null,
   topics: [] as Topic[],
   poller: null as PollerStatus | null,
@@ -145,14 +147,35 @@ async function handleStateChanged(payload: StateChangePayload): Promise<void> {
       }
     } else if (payload.kind === "message_delta") {
       // 流式增量：仅处理当前激活会话。
-      // done=false 按 message_index 原地合并 content/reasoning（不重拉，避免滚动跳动）；
+      // done=false 增量合并到「最后一条 assistant text」（流式占位消息）——不用绝对
+      // message_index：resolve 阶段角色切换会额外落库 RoleContext/System，后端占位 index
+      // 比前端乐观数组偏移，绝对 index 无法对齐；占位始终是「本轮最后落库的 assistant」，
+      // 工具轮 ToolResult 追加在占位之后，从尾部倒数定位依然正确。
       // done=true 全量重拉收敛为权威数据（兜底广播丢弃/积压）。
       if (state.activeConversationId === payload.conversation_id) {
         if (payload.done) {
+          state.streamingIndex = null;
           await refreshMessages();
         } else {
+          let target = -1;
+          for (let i = state.messages.length - 1; i >= 0; i--) {
+            const m = state.messages[i];
+            if (m.role === "assistant" && m.body.kind === "text") {
+              target = i;
+              break;
+            }
+          }
+          // 兜底：无占位（乐观占位未生效/被覆盖）时补一条再合并。
+          if (target === -1) {
+            state.messages = [
+              ...state.messages,
+              { role: "assistant", body: { kind: "text", content: "" }, timestamp: Date.now() },
+            ];
+            target = state.messages.length - 1;
+          }
+          state.streamingIndex = target;
           state.messages = state.messages.map((m, i) =>
-            i === payload.message_index && m.body.kind === "text"
+            i === target && m.body.kind === "text"
               ? {
                   ...m,
                   body: {
@@ -250,6 +273,7 @@ async function bootstrap(): Promise<void> {
 
 async function selectConversation(id: string): Promise<void> {
   state.activeConversationId = id;
+  state.streamingIndex = null;
   await refreshMessages();
 }
 
@@ -280,30 +304,42 @@ async function sendMessage(
   if (!state.activeConversationId) {
     throw new Error("No active session. Create a new session first.");
   }
+  const conversationId = state.activeConversationId;
+  state.streamingIndex = null; // 新轮开始：清除上一轮流式标记
   const userMsg: Message = {
     role: "user",
     body: { kind: "text", content: text },
     timestamp: Date.now(),
   };
-  state.messages = [...state.messages, userMsg];
-  const res = await api.invoke<ChatResponse>("send_chat_message", {
-    message: text,
-    providerId,
-    modelId,
-    conversationId: state.activeConversationId,
-    params,
-    thinking,
-  });
-  // 乐观追加 assistant 回复；后端 emit 会再触发一次权威刷新（幂等）。
+  // 乐观追加 user + 空 assistant 占位：与后端落库顺序（user → assistant 占位）对齐，
+  // 保证流式 MessageDelta.message_index 与本地数组 index 一致（增量原地合并）。
+  // 仅追加 user 会使本地数组比后端少一条占位，index 越界 → 增量被丢弃、回答整块出现。
   state.messages = [
     ...state.messages,
+    userMsg,
     {
       role: "assistant",
-      body: { kind: "text", content: res.response },
+      body: { kind: "text", content: "" },
       timestamp: Date.now(),
     },
   ];
-  return res;
+  try {
+    const res = await api.invoke<ChatResponse>("send_chat_message", {
+      message: text,
+      providerId,
+      modelId,
+      conversationId,
+      params,
+      thinking,
+    });
+    return res;
+  } finally {
+    // 收敛/回滚统一走权威重拉：成功时兜底事件丢失（done:true / Conversations），
+    // 失败时回滚乐观占位；不在本地追加 assistant——避免与 done:true 重拉竞态重复。
+    if (state.activeConversationId === conversationId) {
+      await refreshMessages();
+    }
+  }
 }
 
 /** 持久化会话级模型选择到后端（后端持有）；写成功依赖 Conversations 事件刷新列表回显。 */
