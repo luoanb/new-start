@@ -218,6 +218,8 @@
           {#each round.messages as msg, mi}
             <ChatMessage
               message={msg}
+              // 紧邻上一条工具回复时压缩纵向间距，让一轮内的多条工具结果更像连续列表
+              compactTool={mi > 0 && round.messages[mi - 1].body.kind === "tool_result"}
               streaming={ctx.stores.data.state.streamingIndex === round.startIndex + mi}
               canRate={rateable}
               onCopy={handleCopy}

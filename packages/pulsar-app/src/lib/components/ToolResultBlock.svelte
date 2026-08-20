@@ -57,7 +57,11 @@
         {/if}
         <span class="exit" class:error={!isSuccess}>{result!.exit_code}</span>
       {/if}
-      <span class="toggle-icon" aria-hidden="true">></span>
+      <span class="toggle-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m9 18 6-6-6-6" />
+        </svg>
+      </span>
     </button>
     <!-- 工具结果的复制：仅复制工具输出（content） -->
     <CopyButton text={content} />
@@ -94,7 +98,7 @@
   .summary {
     display: inline-flex;
     align-items: center;
-    gap: 2px;
+    gap: 6px;
     max-width: 100%;
     min-width: 0;
     padding: var(--space-1) var(--space-1);
@@ -116,13 +120,15 @@
     justify-content: center;
     width: 14px;
     height: 14px;
-    font-size: 12px;
-    font-weight: 700;
-    line-height: 1;
     color: var(--color-text-muted);
     flex-shrink: 0;
     transition: transform var(--duration-fast) var(--ease-out);
     transform-origin: center;
+  }
+  .toggle-icon svg {
+    width: 12px;
+    height: 12px;
+    display: block;
   }
   .expanded .toggle-icon { transform: rotate(90deg); }
   .label {

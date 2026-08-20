@@ -4,6 +4,7 @@
   import { FitAddon } from "@xterm/addon-fit";
   import "@xterm/xterm/css/xterm.css";
   import { isTauriEnv, readConnConfig, DEFAULT_REMOTE_URL } from "$lib/api";
+  import { t } from "$lib/i18n";
   import {
     ipcTransport,
     wsTransport,
@@ -31,8 +32,8 @@
     exited: boolean;
   };
 
-  // VS Code 风格深色主题；浅色模式适配留到 M4 打磨（终端固定深色语义）。
-  const TERMINAL_THEME = {
+  // VS Code 风格深色主题（跟随应用主题；light/dark 双套，动态切换）。
+  const DARK_TERMINAL_THEME = {
     background: "#1e1e1e",
     foreground: "#d4d4d4",
     cursor: "#aeafad",
@@ -55,6 +56,42 @@
     brightCyan: "#29b8db",
     brightWhite: "#e5e5e5",
   };
+  // VS Code 风格浅色主题：背景白、前景深灰，配合浅色应用主题。
+  const LIGHT_TERMINAL_THEME = {
+    background: "#ffffff",
+    foreground: "#333333",
+    cursor: "#333333",
+    cursorAccent: "#ffffff",
+    selectionBackground: "#add6ff",
+    black: "#000000",
+    red: "#cd3131",
+    green: "#107c10",
+    yellow: "#795e26",
+    blue: "#0451a5",
+    magenta: "#bc3fbc",
+    cyan: "#0598bc",
+    white: "#808080",
+    brightBlack: "#666666",
+    brightRed: "#f14c4c",
+    brightGreen: "#107c10",
+    brightYellow: "#795e26",
+    brightBlue: "#0451a5",
+    brightMagenta: "#bc3fbc",
+    brightCyan: "#0598bc",
+    brightWhite: "#a5a5a5",
+  };
+
+  /** 应用当前主题：html[data-theme] 显式设置优先，否则跟随系统 prefers-color-scheme。 */
+  function resolveAppTheme(): "dark" | "light" {
+    const explicit = document.documentElement.dataset.theme;
+    if (explicit === "light" || explicit === "dark") return explicit;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  function terminalTheme(name: "dark" | "light") {
+    return name === "light" ? LIGHT_TERMINAL_THEME : DARK_TERMINAL_THEME;
+  }
+
+  let themeName = $state<"dark" | "light">("dark");
 
   let tabs = $state<TerminalTab[]>([]);
   let activeId = $state<string | null>(null);
@@ -68,6 +105,18 @@
   let unsubscribes: (() => void)[] = [];
 
   onMount(() => {
+    themeName = resolveAppTheme();
+    // 监听应用主题变化（ThemeSwitcher 写入 html[data-theme] / 启动 applyThemeOnBoot）
+    const themeObserver = new MutationObserver(() => (themeName = resolveAppTheme()));
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
+    // system 模式下跟随 OS 深浅色切换
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onMqChange = () => (themeName = resolveAppTheme());
+    mq.addEventListener("change", onMqChange);
+
     transport = isTauriEnv ? ipcTransport() : wsTransport(WS_URL);
     unsubscribes = [
       transport.onStatusChange((s) => (connStatus = s)),
@@ -88,8 +137,21 @@
         activeId = tabs.at(-1)?.sessionId ?? null;
       })
       .catch((e) => {
-        errorMsg = `Terminal init failed: ${e}`;
+        errorMsg = t("terminal.initFailed", { error: `${e}` });
       });
+
+    return () => {
+      themeObserver.disconnect();
+      mq.removeEventListener("change", onMqChange);
+    };
+  });
+
+  // 主题变化时同步所有存活终端实例的配色（xterm 支持动态替换 options.theme）。
+  $effect(() => {
+    const theme = terminalTheme(themeName);
+    for (const term of terms.values()) {
+      term.options.theme = theme;
+    }
   });
 
   onDestroy(() => {
@@ -105,7 +167,7 @@
   function handleExit(sessionId: string, exitCode: number) {
     terms
       .get(sessionId)
-      ?.write(`\r\n\x1b[90m[process exited with code ${exitCode}]\x1b[0m\r\n`);
+      ?.write(`\r\n\x1b[90m[${t("terminal.exitCode", { code: exitCode })}]\x1b[0m\r\n`);
     tabs = tabs.map((t) => (t.sessionId === sessionId ? { ...t, exited: true } : t));
   }
 
@@ -116,7 +178,7 @@
       tabs = [...tabs, { sessionId, title: sessionId, exited: false }];
       activeId = sessionId;
     } catch (e) {
-      errorMsg = `Spawn failed: ${e}`;
+      errorMsg = t("terminal.spawnFailed", { error: `${e}` });
     }
   }
 
@@ -138,7 +200,7 @@
    * 再 open + fit，确保按真实等宽字体度量渲染。 */
   function mountTerminal(node: HTMLDivElement, sessionId: string) {
     const term = new Terminal({
-      theme: TERMINAL_THEME,
+      theme: terminalTheme(themeName),
       // 等宽栈：Linux(WebKitGTK) 不识别 ui-monospace/Menlo/Consolas。
       // Ubuntu Mono / Liberation Mono 字形比 DejaVu Sans Mono 更紧凑，优先命中。
       fontFamily:
@@ -163,7 +225,7 @@
         // 已退出会话（如 agent 的一次性命令）不再回写输入，避免往已死 PTY 写数据报错。
         if (tabs.find((t) => t.sessionId === sessionId)?.exited) return;
         transport.write(sessionId, data).catch((e) => {
-          errorMsg = `Write failed: ${e}`;
+          errorMsg = t("terminal.writeFailed", { error: `${e}` });
         });
       });
       term.focus();
@@ -215,8 +277,8 @@
   {#if connStatus !== "connected"}
     <p class="conn-banner" class:disconnected={connStatus === "disconnected"}>
       {connStatus === "connecting"
-        ? "Connecting to terminal server…"
-        : "Terminal connection lost. Retrying…"}
+        ? t("terminal.connecting")
+        : t("terminal.disconnected")}
     </p>
   {/if}
 
@@ -228,11 +290,12 @@
         onclick={() => (activeId = tab.sessionId)}
       >
         <span class="tab-title">{tab.title}</span>
-        {#if tab.exited}<span class="tab-exited" title="exited">●</span>{/if}
+        {#if tab.exited}<span class="tab-exited" title={t("terminal.exited")}>●</span>{/if}
         <span
           class="tab-close"
           role="button"
           tabindex="0"
+          title={t("terminal.closeTab")}
           onkeydown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
               e.stopPropagation();
@@ -246,12 +309,20 @@
         >×</span>
       </button>
     {/each}
-    <button type="button" class="tab-new" onclick={newTab} title="New terminal">+</button>
+    <button
+      type="button"
+      class="tab-new"
+      onclick={newTab}
+      title={t("terminal.newTab")}
+      aria-label={t("terminal.newTab")}
+    >
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </button>
   </div>
 
   <div class="term-host-wrap">
     {#if tabs.length === 0}
-      <p class="empty">No terminal. Click + to create one.</p>
+      <p class="empty">{t("terminal.empty")}</p>
     {:else if activeId}
       {#key activeId}
         <div class="term-host" use:mountTerminal={activeId}></div>
@@ -309,7 +380,17 @@
     border-radius: 2px;
   }
   .tab-close:hover { background: var(--color-border); }
-  .tab-new { font-size: 14px; padding: 2px 8px !important; }
+  .tab-new {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 8px !important;
+    align-self: flex-start;
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    color: var(--color-text-muted);
+  }
+  .tab-new:hover { color: var(--color-text); background: var(--color-hover); }
+  .tab-new svg { display: block; }
   .term-host-wrap {
     flex: 1;
     min-height: 0;

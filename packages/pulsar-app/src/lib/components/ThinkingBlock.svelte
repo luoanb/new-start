@@ -19,7 +19,11 @@
 <div class="thinking-block" class:expanded>
   <div class="block-header">
     <button class="summary" onclick={toggle}>
-      <span class="toggle-icon">{expanded ? "▾" : "▸"}</span>
+      <span class="toggle-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m9 18 6-6-6-6" />
+        </svg>
+      </span>
       <span class="label">🧠 {t("thinking.title")}</span>
       {#if streaming}
         <span class="streaming-dot"></span>
@@ -47,7 +51,23 @@
   .block-header { display: flex; align-items: center; gap: var(--space-1); padding-right: var(--space-1); }
   .summary { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; padding: var(--space-2) var(--space-3); border: none; background: transparent; color: var(--color-text); font-size: var(--fs-sm); cursor: pointer; text-align: left; transition: background var(--duration-fast) var(--ease-out); }
   .summary:hover { background: var(--color-hover); }
-  .toggle-icon { font-size: var(--fs-xs); color: var(--color-text-muted); flex-shrink: 0; }
+  .toggle-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+    transition: transform var(--duration-fast) var(--ease-out);
+    transform-origin: center;
+  }
+  .toggle-icon svg {
+    width: 12px;
+    height: 12px;
+    display: block;
+  }
+  .expanded .toggle-icon { transform: rotate(90deg); }
   .label { font-family: var(--font-mono, monospace); font-size: var(--fs-xs); color: var(--color-text-muted); }
   .streaming-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-primary); animation: thinking-pulse 1.2s ease-in-out infinite; }
   .detail { border-top: var(--border-width) solid var(--color-border); padding: var(--space-2) var(--space-3); max-height: 400px; overflow-y: auto; }

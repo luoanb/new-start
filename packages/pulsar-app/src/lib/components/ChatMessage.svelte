@@ -11,12 +11,14 @@
   let {
     message,
     streaming = false,
+    compactTool = false,
     onCopy,
     onRate,
     canRate,
   }: {
     message: Message;
     streaming?: boolean;
+    compactTool?: boolean;
     onCopy?: (msg: Message) => void;
     onRate?: (score: number) => void;
     canRate?: boolean;
@@ -99,6 +101,8 @@
   class:system={isSystem}
   class:nudge={isNudge}
   class:roleContext={isContext}
+  class:tool={isTool}
+  class:compact-tool={isTool && isToolResult && compactTool}
 >
   <div class="msg-col">
     <div class="bubble">
@@ -243,6 +247,10 @@
 
 <style>
   .message { display: flex; padding: var(--space-1) var(--space-4); animation: msg-fadein var(--duration-normal) var(--ease-out); }
+  /* 工具回复去掉消息级上下内边距，纵向间距由块内 margin-top 统一控制；
+     连续工具回复再进一步压缩为 --space-1，让一轮内多条工具结果形成紧凑列表 */
+  .message.tool { padding-top: 0; padding-bottom: 0; }
+  .message.compact-tool :global(.toolresult-block) { margin-top: var(--space-1); }
   @keyframes msg-fadein { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
   .message.user { justify-content: flex-end; }
   .message.assistant, .message.system { justify-content: flex-start; }

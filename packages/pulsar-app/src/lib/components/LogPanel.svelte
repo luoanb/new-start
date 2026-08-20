@@ -3,6 +3,7 @@
   import { api, isTauriEnv } from "$lib/api";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import type { LogEntry, LogLevel } from "$lib/types";
+  import { t } from "$lib/i18n";
   import Select from "./Select.svelte";
 
   const LEVELS: LogLevel[] = ["error", "warn", "info", "debug", "trace"];
@@ -64,7 +65,7 @@
         });
       }
     } catch (e) {
-      errorMsg = `Logs init failed: ${e}`;
+      errorMsg = t("logPanel.initFailed", { error: `${e}` });
     }
   });
 
@@ -81,7 +82,7 @@
       const next = await api.invoke<string>("logs_set_level", { level });
       verbosity = (LEVELS.includes(next as LogLevel) ? next : level) as LogLevel;
     } catch (e) {
-      errorMsg = `Set level failed: ${e}`;
+      errorMsg = t("logPanel.setLevelFailed", { error: `${e}` });
     }
   }
 
@@ -91,7 +92,7 @@
       await api.invoke("logs_clear_buffer");
       entries = [];
     } catch (e) {
-      errorMsg = `Clear failed: ${e}`;
+      errorMsg = t("logPanel.clearFailed", { error: `${e}` });
     }
   }
 
@@ -129,7 +130,7 @@
 
   <div class="toolbar">
     <label>
-      Verbosity
+      {t("logPanel.verbosity")}
       <Select
         value={verbosity}
         options={LEVELS.map((level) => ({ value: level, label: level }))}
@@ -137,30 +138,30 @@
       />
     </label>
     <label>
-      Min level
+      {t("logPanel.minLevel")}
       <Select
         bind:value={filterLevel}
         options={LEVELS.map((level) => ({ value: level, label: level }))}
       />
     </label>
     <label class="grow">
-      Target
-      <input type="text" placeholder="neuron / gateway…" bind:value={filterTarget} />
+      {t("logPanel.target")}
+      <input type="text" placeholder={t("logPanel.targetPlaceholder")} bind:value={filterTarget} />
     </label>
     <label class="grow">
-      Keyword
-      <input type="text" placeholder="phase / error_code…" bind:value={filterKeyword} />
+      {t("logPanel.keyword")}
+      <input type="text" placeholder={t("logPanel.keywordPlaceholder")} bind:value={filterKeyword} />
     </label>
-    <button type="button" onclick={clearBuffer}>Clear</button>
+    <button type="button" onclick={clearBuffer}>{t("logPanel.clear")}</button>
   </div>
 
   {#if logDir}
-    <div class="meta">file: {logDir}</div>
+    <div class="meta">{t("logPanel.file")}: {logDir}</div>
   {/if}
 
   <div class="list">
     {#if filtered.length === 0}
-      <p class="empty">No log entries match the current filters.</p>
+      <p class="empty">{t("logPanel.empty")}</p>
     {:else}
       {#each filtered as entry}
         <div class="row level-{entry.level}">

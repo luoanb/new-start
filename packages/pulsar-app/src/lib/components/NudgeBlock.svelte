@@ -18,7 +18,11 @@
 <div class="nudge-block" class:expanded>
   <div class="block-header">
     <button class="summary" onclick={toggle}>
-      <span class="toggle-icon">{expanded ? "▾" : "▸"}</span>
+      <span class="toggle-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m9 18 6-6-6-6" />
+        </svg>
+      </span>
       <span class="preview">{preview}</span>
     </button>
     <!-- 轮询简报的复制：仅复制简报全文（content） -->
@@ -61,10 +65,22 @@
     background: var(--color-hover);
   }
   .toggle-icon {
-    font-size: var(--fs-xs);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
     color: var(--color-text-muted);
     flex-shrink: 0;
+    transition: transform var(--duration-fast) var(--ease-out);
+    transform-origin: center;
   }
+  .toggle-icon svg {
+    width: 12px;
+    height: 12px;
+    display: block;
+  }
+  .expanded .toggle-icon { transform: rotate(90deg); }
   .preview {
     font-size: var(--fs-xs);
     color: var(--color-text-muted);

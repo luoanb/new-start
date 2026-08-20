@@ -173,6 +173,32 @@ export type Translations = {
     stdout: string;
     stderr: string;
   };
+  terminal: {
+    newTab: string;
+    closeTab: string;
+    exited: string;
+    connecting: string;
+    disconnected: string;
+    empty: string;
+    exitCode: string;
+    initFailed: string;
+    spawnFailed: string;
+    writeFailed: string;
+  };
+  logPanel: {
+    verbosity: string;
+    minLevel: string;
+    target: string;
+    keyword: string;
+    clear: string;
+    file: string;
+    empty: string;
+    targetPlaceholder: string;
+    keywordPlaceholder: string;
+    initFailed: string;
+    setLevelFailed: string;
+    clearFailed: string;
+  };
   drawer: {
     sessions: string;
     info: string;
@@ -722,6 +748,32 @@ export const en: Translations = {
     empty: "No output",
     stdout: "stdout",
     stderr: "stderr",
+  },
+  terminal: {
+    newTab: "New terminal",
+    closeTab: "Close terminal",
+    exited: "Exited",
+    connecting: "Connecting to terminal server…",
+    disconnected: "Terminal connection lost. Retrying…",
+    empty: "No terminal. Click + to create one.",
+    exitCode: "process exited with code {code}",
+    initFailed: "Terminal init failed: {error}",
+    spawnFailed: "Spawn failed: {error}",
+    writeFailed: "Write failed: {error}",
+  },
+  logPanel: {
+    verbosity: "Verbosity",
+    minLevel: "Min level",
+    target: "Target",
+    keyword: "Keyword",
+    clear: "Clear",
+    file: "file",
+    empty: "No log entries match the current filters.",
+    targetPlaceholder: "neuron / gateway…",
+    keywordPlaceholder: "phase / error_code…",
+    initFailed: "Logs init failed: {error}",
+    setLevelFailed: "Set level failed: {error}",
+    clearFailed: "Clear failed: {error}",
   },
   drawer: {
     sessions: "Sessions",
@@ -1285,6 +1337,32 @@ export const zh: Translations = {
     empty: "无输出",
     stdout: "标准输出",
     stderr: "标准错误",
+  },
+  terminal: {
+    newTab: "新建终端",
+    closeTab: "关闭终端",
+    exited: "已退出",
+    connecting: "正在连接终端服务…",
+    disconnected: "终端连接已断开，正在重试…",
+    empty: "暂无终端，点击 + 新建",
+    exitCode: "进程已退出，退出码 {code}",
+    initFailed: "终端初始化失败：{error}",
+    spawnFailed: "新建失败：{error}",
+    writeFailed: "写入失败：{error}",
+  },
+  logPanel: {
+    verbosity: "日志级别",
+    minLevel: "最小级别",
+    target: "目标",
+    keyword: "关键字",
+    clear: "清空",
+    file: "文件",
+    empty: "没有符合当前筛选条件的日志。",
+    targetPlaceholder: "neuron / gateway…",
+    keywordPlaceholder: "phase / error_code…",
+    initFailed: "日志初始化失败：{error}",
+    setLevelFailed: "设置级别失败：{error}",
+    clearFailed: "清空失败：{error}",
   },
   drawer: {
     sessions: "会话列表",

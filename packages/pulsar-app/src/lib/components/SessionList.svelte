@@ -113,7 +113,9 @@
                 tabindex="-1"
                 onclick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(conv.id); }}
                 title={t("sessionList.copyId")}
-              >⧉</span>
+              >
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+              </span>
               {#if runningSessionIds.has(conv.id)}
                 <!-- svelte-ignore a11y_click_events_have_key_events -->
                 <span
