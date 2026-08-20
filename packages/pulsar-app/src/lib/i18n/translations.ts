@@ -471,6 +471,7 @@ export type Translations = {
     pullConfirmBody: string;
     discardConfirmTitle: string;
     discardConfirmBody: string;
+    checkoutConfirmBody: string;
     stashApplyConfirmTitle: string;
     stashApplyConfirmBody: string;
     stashDropConfirmTitle: string;

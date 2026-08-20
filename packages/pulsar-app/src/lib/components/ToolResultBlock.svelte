@@ -50,7 +50,6 @@
 <div class="toolresult-block" class:expanded class:cmd-shape={isCmdShape}>
   <div class="block-header">
     <button class="summary" onclick={toggle}>
-      <span class="toggle-icon">{expanded ? "▾" : "▸"}</span>
       <span class="label">🖥 {label}</span>
       {#if isCmdShape}
         {#if result!.timed_out}
@@ -58,6 +57,7 @@
         {/if}
         <span class="exit" class:error={!isSuccess}>{result!.exit_code}</span>
       {/if}
+      <span class="toggle-icon" aria-hidden="true">></span>
     </button>
     <!-- 工具结果的复制：仅复制工具输出（content） -->
     <CopyButton text={content} />
@@ -89,46 +89,49 @@
 </div>
 
 <style>
-  .toolresult-block {
-    margin-top: var(--space-2);
-    border-radius: var(--radius-md);
-    background: color-mix(in srgb, var(--color-surface) 45%, var(--color-bg));
-    border: var(--border-width) solid color-mix(in srgb, var(--color-border) 45%, transparent);
-    border-left: 3px solid color-mix(in srgb, var(--color-success) 55%, transparent);
-    overflow: hidden;
-  }
-  .toolresult-block:has(.timeout) {
-    border-left-color: color-mix(in srgb, var(--color-warning) 55%, transparent);
-  }
-  .block-header { display: flex; align-items: center; gap: var(--space-1); padding-right: var(--space-1); }
+  .toolresult-block { margin-top: var(--space-2); }
+  .block-header { display: inline-flex; align-items: center; gap: 2px; }
   .summary {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 6px;
-    flex: 1;
+    gap: 2px;
+    max-width: 100%;
     min-width: 0;
-    padding: var(--space-2) var(--space-3);
+    padding: var(--space-1) var(--space-1);
     border: none;
     background: transparent;
     color: var(--color-text);
     font-size: var(--fs-sm);
     cursor: pointer;
     text-align: left;
+    border-radius: var(--radius-sm);
     transition: background var(--duration-fast) var(--ease-out);
   }
   .summary:hover {
     background: var(--color-hover);
   }
   .toggle-icon {
-    font-size: var(--fs-xs);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
     color: var(--color-text-muted);
     flex-shrink: 0;
+    transition: transform var(--duration-fast) var(--ease-out);
+    transform-origin: center;
   }
+  .expanded .toggle-icon { transform: rotate(90deg); }
   .label {
     font-family: var(--font-mono, monospace);
     font-size: var(--fs-xs);
     color: var(--color-text-muted);
-    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .badge {
     font-size: var(--fs-xs);
@@ -151,8 +154,7 @@
     color: oklch(0.85 0.1 25);
   }
   .detail {
-    border-top: var(--border-width) solid var(--color-border);
-    padding: var(--space-2) var(--space-3);
+    padding: var(--space-1) var(--space-3) var(--space-2);
     max-height: 400px;
     overflow-y: auto;
   }
