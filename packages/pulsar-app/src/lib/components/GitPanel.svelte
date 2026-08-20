@@ -105,6 +105,15 @@
   function unstagePath(e: GitStatusEntry) {
     void run(() => dataStore.gitUnstage([e.path]));
   }
+  /** 批量：全部暂存（git add -A）／全部取消暂存（git restore --staged -- .）。 */
+  function stageAllChanges() {
+    if (allChanges.length === 0) return;
+    void run(() => dataStore.gitAdd([], true));
+  }
+  function unstageAllChanges() {
+    if (staged.length === 0) return;
+    void run(() => dataStore.gitUnstage([]));
+  }
   function discardAll() {
     if (unstaged.length === 0) return;
     void run(() => dataStore.gitRestore(unstaged.map((x) => x.path)));
@@ -235,10 +244,24 @@
     {/if}
 
     <!-- 暂存区 -->
-    <button class="group-head" onclick={() => toggleColl("staged")}>
-      <span class="chevron" class:open={coll.staged}>▸</span>
-      {t("git.groupStaged")} ({staged.length})
-    </button>
+    <div class="group-row">
+      <button class="group-head" onclick={() => toggleColl("staged")}>
+        <span class="chevron" class:open={coll.staged}>▸</span>
+        {t("git.groupStaged")} ({staged.length})
+      </button>
+      <button
+        class="op group-act"
+        title={t("git.unstageAll")}
+        aria-label={t("git.unstageAll")}
+        disabled={staged.length === 0}
+        onclick={() => unstageAllChanges()}
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+          <path d="M3 8h4" />
+          <path d="M9 8h4" />
+        </svg>
+      </button>
+    </div>
     {#if coll.staged}
       {#each staged as e (e.path)}
         <div class="item" class:staged title={e.path}>
@@ -254,10 +277,24 @@
     {/if}
 
     <!-- 更改（未暂存 + 未跟踪） -->
-    <button class="group-head" onclick={() => toggleColl("changes")}>
-      <span class="chevron" class:open={coll.changes}>▸</span>
-      {t("git.groupChanges")} ({allChanges.length})
-    </button>
+    <div class="group-row">
+      <button class="group-head" onclick={() => toggleColl("changes")}>
+        <span class="chevron" class:open={coll.changes}>▸</span>
+        {t("git.groupChanges")} ({allChanges.length})
+      </button>
+      <button
+        class="op group-act"
+        title={t("git.stageAll")}
+        aria-label={t("git.stageAll")}
+        disabled={allChanges.length === 0}
+        onclick={() => stageAllChanges()}
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+          <path d="M3 8h4M5 6v4" />
+          <path d="M9 8h4M11 6v4" />
+        </svg>
+      </button>
+    </div>
     {#if coll.changes}
       {#each allChanges as e (e.path)}
         <div class="item" title={e.path}>
@@ -467,6 +504,14 @@
   }
 
   /* 分组头 */
+  .group-row {
+    display: flex;
+    align-items: center;
+  }
+  .group-row .group-head {
+    flex: 1 1 auto;
+    width: auto;
+  }
   .group-head {
     display: flex;
     align-items: center;
@@ -493,6 +538,11 @@
   }
   .chevron.open {
     transform: rotate(90deg);
+  }
+
+  /* 分组批量操作按钮（复用 .op 图标按钮样式，仅补间距） */
+  .group-act {
+    margin-right: var(--space-2);
   }
 
   /* 条目行 */

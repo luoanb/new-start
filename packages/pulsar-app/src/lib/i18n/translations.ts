@@ -469,6 +469,8 @@ export type Translations = {
     groupConflicted: string;
     stage: string;
     unstage: string;
+    stageAll: string;
+    unstageAll: string;
     filesCount: string;
     commitPlaceholder: string;
     commit: string;
@@ -1058,6 +1060,8 @@ export const en: Translations = {
     groupConflicted: "Conflicts",
     stage: "Stage",
     unstage: "Unstage",
+    stageAll: "Stage All",
+    unstageAll: "Unstage All",
     filesCount: "{n} files",
     commitPlaceholder: "Commit message…",
     commit: "Commit",
@@ -1647,6 +1651,8 @@ export const zh: Translations = {
     groupConflicted: "冲突",
     stage: "暂存",
     unstage: "取消暂存",
+    stageAll: "全部暂存",
+    unstageAll: "全部取消暂存",
     filesCount: "{n} 个文件",
     commitPlaceholder: "提交信息…",
     commit: "提交",
