@@ -102,28 +102,28 @@
 >
   <div class="msg-col">
     <div class="bubble">
-      <div class="role-bar">
-        <span class="role-label">
-          {#if isSystem}
-            {t("chatMessage.system")}
-          {:else if isCompaction}
-            {t("chatMessage.compaction")}
-          {:else if isNudge}
-            {t("chatMessage.nudge")}
-          {:else if isContext}
-            {t("chatMessage.context")}
-          {:else if isTool}
-            {t("chatMessage.tool")}
-          {:else if isAssistant}
-            {t("chatMessage.assistant")}
-          {:else}
-            {t("chatMessage.you")}
+      {#if !isTool}
+        <div class="role-bar">
+          <span class="role-label">
+            {#if isSystem}
+              {t("chatMessage.system")}
+            {:else if isCompaction}
+              {t("chatMessage.compaction")}
+            {:else if isNudge}
+              {t("chatMessage.nudge")}
+            {:else if isContext}
+              {t("chatMessage.context")}
+            {:else if isAssistant}
+              {t("chatMessage.assistant")}
+            {:else}
+              {t("chatMessage.you")}
+            {/if}
+          </span>
+          {#if !isSystem}
+            <span class="timestamp">{formatTime(message.timestamp)}</span>
           {/if}
-        </span>
-        {#if !isSystem}
-          <span class="timestamp">{formatTime(message.timestamp)}</span>
-        {/if}
-      </div>
+        </div>
+      {/if}
 
       {#if isToolResult}
         <ToolResultBlock {message} />

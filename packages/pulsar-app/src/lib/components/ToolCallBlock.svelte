@@ -11,9 +11,7 @@
     expanded = !expanded;
   }
 
-  let summary = $derived(
-    toolCalls.map((tc) => tc.name).join(", ")
-  );
+  let summary = $derived(toolCalls.map((tc) => tc.name).join(", "));
 
   // 复制内容 = 完整的工具调用信息（工具名 + 参数），不含思考文本。
   let copyText = $derived(JSON.stringify(toolCalls, null, 2));
@@ -22,8 +20,8 @@
 <div class="toolcall-block" class:expanded>
   <div class="block-header">
     <button class="summary" onclick={toggle}>
-      <span class="toggle-icon">{expanded ? "▾" : "▸"}</span>
       <span class="label">🛠 {summary}</span>
+      <span class="toggle-icon" aria-hidden="true">></span>
     </button>
     <CopyButton text={copyText} />
   </div>
@@ -47,13 +45,49 @@
 </div>
 
 <style>
-  .toolcall-block { margin-top: var(--space-2); border-radius: var(--radius-md); background: color-mix(in srgb, var(--color-surface) 45%, var(--color-bg)); border: var(--border-width) solid color-mix(in srgb, var(--color-border) 45%, transparent); border-left: 3px solid color-mix(in srgb, var(--color-primary) 55%, transparent); overflow: hidden; }
-  .block-header { display: flex; align-items: center; gap: var(--space-1); padding-right: var(--space-1); }
-  .summary { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; padding: var(--space-2) var(--space-3); border: none; background: transparent; color: var(--color-text); font-size: var(--fs-sm); cursor: pointer; text-align: left; transition: background var(--duration-fast) var(--ease-out); }
+  .toolcall-block { margin-top: var(--space-2); }
+  .block-header { display: inline-flex; align-items: center; gap: 2px; }
+  .summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    max-width: 100%;
+    min-width: 0;
+    padding: var(--space-1) var(--space-1);
+    border: none;
+    background: transparent;
+    color: var(--color-text);
+    font-size: var(--fs-sm);
+    cursor: pointer;
+    text-align: left;
+    border-radius: var(--radius-sm);
+    transition: background var(--duration-fast) var(--ease-out);
+  }
   .summary:hover { background: var(--color-hover); }
-  .toggle-icon { font-size: var(--fs-xs); color: var(--color-text-muted); flex-shrink: 0; }
-  .label { font-family: var(--font-mono, monospace); font-size: var(--fs-xs); color: var(--color-text-muted); }
-  .detail { border-top: var(--border-width) solid var(--color-border); padding: var(--space-2) var(--space-3); max-height: 400px; overflow-y: auto; }
+  .toggle-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+    transition: transform var(--duration-fast) var(--ease-out);
+    transform-origin: center;
+  }
+  .expanded .toggle-icon { transform: rotate(90deg); }
+  .label {
+    font-family: var(--font-mono, monospace);
+    font-size: var(--fs-xs);
+    color: var(--color-text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .detail { padding: var(--space-1) var(--space-3) var(--space-2); max-height: 400px; overflow-y: auto; }
   .call-item { margin-bottom: var(--space-2); }
   .call-item:last-child { margin-bottom: 0; }
   .call-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-1); }
