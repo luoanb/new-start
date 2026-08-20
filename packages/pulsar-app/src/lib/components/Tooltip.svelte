@@ -1,18 +1,39 @@
 <script lang="ts">
-  // Tooltip：跟随目标元素的浮动提示（Popper 语义）。
-  // - target 非 null 时显示，自动定位到目标旁（默认右侧，视口右缘不足翻到左侧）
-  // - portal 到 body，规避 overflow / transform 祖先裁切；滚动（含子元素滚动）与缩放时重算位置
+  import type { Snippet } from "svelte";
+
+  // Tooltip：浮动提示，支持两种用法：
+  // 1) 包装用法：<Tooltip label="提示" position="top"><button/></Tooltip>
+  //    悬停 / 键盘聚焦子元素时，在其旁显示浮动提示。
+  // 2) Popper 用法：<Tooltip target={el} content="提示" placement="right" />
+  //    由外部控制目标元素（target 非 null 时显示），滚动/缩放自动重算位置。
+  // 提示层 portal 到 body，规避 overflow / transform 祖先裁切。
   let {
-    content,
+    children,
+    label,
+    position = "top",
     target,
+    content,
     placement = "right",
     offset = 8,
   }: {
-    content: string;
-    target: HTMLElement | null;
-    placement?: "right" | "left" | "top" | "bottom";
+    children?: Snippet;
+    label?: string;
+    position?: "top" | "bottom" | "left" | "right";
+    target?: HTMLElement | null;
+    content?: string;
+    placement?: "top" | "bottom" | "left" | "right";
     offset?: number;
   } = $props();
+
+  // 包装用法：由 hover / focus 驱动；Popper 用法：由外部 target 驱动
+  const isWrap = $derived(label != null);
+
+  let show = $state(false);
+  let wrapEl = $state<HTMLElement>();
+
+  const effTarget = $derived(isWrap ? (show ? wrapEl : null) : (target ?? null));
+  const effContent = $derived(isWrap ? (label ?? "") : (content ?? ""));
+  const effPlacement = $derived(isWrap ? position : placement);
 
   let pos = $state<{ top: number; left: number } | null>(null);
 
@@ -24,26 +45,27 @@
   }
 
   function update() {
-    if (!target) {
+    const el = effTarget;
+    if (!el) {
       pos = null;
       return;
     }
-    const r = target.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
     const vw = window.innerWidth;
     const vh = window.innerHeight;
     const estW = Math.min(320, vw - 16);
     const estH = 28;
     let top = 0;
     let left = 0;
-    if (placement === "right") {
+    if (effPlacement === "right") {
       left = r.right + offset;
       if (left + estW > vw - 8) left = Math.max(8, r.left - estW - offset);
       top = r.top;
-    } else if (placement === "left") {
+    } else if (effPlacement === "left") {
       left = r.left - estW - offset;
       if (left < 8) left = r.right + offset;
       top = r.top;
-    } else if (placement === "bottom") {
+    } else if (effPlacement === "bottom") {
       left = r.left;
       top = r.bottom + offset;
     } else {
@@ -68,6 +90,19 @@
   });
 </script>
 
+{#if isWrap}
+  <span
+    class="tooltip-wrap"
+    bind:this={wrapEl}
+    onmouseenter={() => (show = true)}
+    onmouseleave={() => (show = false)}
+    onfocusin={() => (show = true)}
+    onfocusout={() => (show = false)}
+  >
+    {@render children?.()}
+  </span>
+{/if}
+
 {#if pos}
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
   <div
@@ -75,10 +110,11 @@
     class="tooltip"
     role="presentation"
     style="top: {pos.top}px; left: {pos.left}px;"
-  >{content}</div>
+  >{effContent}</div>
 {/if}
 
 <style>
+  .tooltip-wrap { display: inline-flex; }
   .tooltip {
     position: fixed;
     /* 覆盖 app.html 全局 `html > body > div { inset: 0 }`：tooltip portal 到 body 后是

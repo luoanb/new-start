@@ -8,7 +8,7 @@
   import Tooltip from "./Tooltip.svelte";
 
   let {
-    value = $bindable(),
+    value = $bindable(""),
     placeholder = "",
     fetchSuggest,
     onsubmit,
@@ -17,7 +17,7 @@
     focusOnMount = true,
     class: className = "",
   }: {
-    value?: string;
+    value: string;
     placeholder?: string;
     fetchSuggest: (input: string) => Promise<SuggestItem[]>;
     onsubmit?: (value: string) => void;

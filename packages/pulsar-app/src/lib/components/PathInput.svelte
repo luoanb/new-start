@@ -11,13 +11,13 @@
     | { kind: "file"; path: string };
 
   let {
-    value = $bindable(),
+    value = $bindable(""),
     placeholder = "",
     onsubmit,
     onclose,
     class: className = "",
   }: {
-    value?: string;
+    value: string;
     placeholder?: string;
     /** Enter 提交（无高亮候选时）或外部提交按钮调用 */
     onsubmit?: (v: string) => void;
