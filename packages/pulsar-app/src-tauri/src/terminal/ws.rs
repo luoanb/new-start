@@ -1,31 +1,27 @@
-//! WebSocket PTY 网关：让浏览器（非 Tauri）前端也能操作终端会话。
+//! 终端 WS 业务 handler：帧协议解析与命令执行（axum `/ws` 公共服务的一个 topic）。
 //!
-//! - 绑定 `127.0.0.1:<port>`（回环；端口 `PULSAR_TERMINAL_WS_PORT`，默认 43110）。
-//! - 与桌面 IPC 共用同一 `TerminalManager` 会话集与 `TerminalEventHub` 输出流。
+//! - 不持有 TcpListener / tungstenite：连接接入、topic 信封分发、事件转发由
+//!   `crate::net::ws` 统一负责；本模块只处理 `topic: "terminal"` 的载荷帧。
 //! - 帧协议见 spec `docs/specs/2026-08-20_11-30_terminal-browser-ws.md`：
 //!   client→server `spawn / write / resize / kill / list`；
 //!   server→client `spawned / output / exit / list / error`；
-//!   二进制输出以 base64 编码于 JSON 文本帧。
-//! - v1 无鉴权（同机回环等价本机终端风险），协议预留 `token` 字段供 v2。
+//!   二进制输出以 base64 编码于 JSON 文本帧；所有帧带 `topic: "terminal"` 信封。
+//! - 与桌面 IPC 共用同一 `TerminalManager` 会话集与 `TerminalEventHub` 输出流。
 
 use std::sync::Arc;
 
 use base64::Engine;
-use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
-use tokio::net::{TcpListener, TcpStream};
-use tokio_tungstenite::tungstenite::Message;
 
 use super::events::{pump_session_events, TerminalEventHub};
 use super::manager::TerminalManager;
 use super::session::{SessionInfo, TerminalSession};
-use crate::core::{AppError, AppResult};
 
-/// 默认 WS 网关端口（`PULSAR_TERMINAL_WS_PORT` 可覆盖）。
-pub const DEFAULT_WS_PORT: u16 = 43110;
+/// 本业务的 topic 标识（net::ws 按此分发）。
+pub const TOPIC: &str = "terminal";
 
-/// client→server 请求帧。
+/// client→server 请求帧（载荷层，不含 topic 信封）。
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum WsRequest {
@@ -54,107 +50,13 @@ enum WsRequest {
     List,
 }
 
-/// 启动 WS 网关（阻塞运行，直到监听失败返回）。
-pub async fn run(manager: Arc<TerminalManager>, hub: TerminalEventHub) -> AppResult<()> {
-    let port: u16 = std::env::var("PULSAR_TERMINAL_WS_PORT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(DEFAULT_WS_PORT);
-    let addr = format!("127.0.0.1:{port}");
-    let listener = TcpListener::bind(&addr)
-        .await
-        .map_err(|e| AppError::RuntimeError(format!("terminal ws: bind {addr} failed: {e}")))?;
-    tracing::info!(addr = %addr, "terminal ws gateway listening");
-
-    loop {
-        let (stream, _peer) = match listener.accept().await {
-            Ok(ok) => ok,
-            Err(e) => {
-                tracing::warn!(error = %e, "terminal ws: accept failed");
-                continue;
-            }
-        };
-        let conn_manager = Arc::clone(&manager);
-        let conn_hub = hub.clone();
-        tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, conn_manager, conn_hub).await {
-                tracing::debug!(error = %e, "terminal ws connection closed");
-            }
-        });
-    }
-}
-
-async fn handle_connection(
-    stream: TcpStream,
-    manager: Arc<TerminalManager>,
-    hub: TerminalEventHub,
-) -> Result<(), String> {
-    let ws = tokio_tungstenite::accept_async(stream)
-        .await
-        .map_err(|e| format!("terminal ws: handshake failed: {e}"))?;
-    let (mut sink, mut source) = ws.split();
-
-    // 订阅会话事件：本连接收到的输出与桌面 IPC 一致（同一 hub 广播）。
-    let mut output_rx = hub.subscribe_output();
-    let mut exit_rx = hub.subscribe_exit();
-
-    loop {
-        tokio::select! {
-            msg = source.next() => {
-                match msg {
-                    Some(Ok(Message::Text(text))) => {
-                        let response = handle_request(&text, &manager, &hub).await;
-                        send_text(&mut sink, &response).await?;
-                    }
-                    Some(Ok(Message::Close(_))) | None => break,
-                    // Ping/Pong 由 tungstenite 自动处理；二进制帧 v1 不使用。
-                    _ => {}
-                }
-            }
-            result = output_rx.recv() => {
-                if let Ok(payload) = result {
-                    let frame = json!({
-                        "type": "output",
-                        "sessionId": payload.session_id,
-                        "data": base64::engine::general_purpose::STANDARD.encode(&payload.data),
-                    })
-                    .to_string();
-                    send_text(&mut sink, &frame).await?;
-                }
-            }
-            result = exit_rx.recv() => {
-                if let Ok(payload) = result {
-                    let frame = json!({
-                        "type": "exit",
-                        "sessionId": payload.session_id,
-                        "exitCode": payload.exit_code,
-                    })
-                    .to_string();
-                    send_text(&mut sink, &frame).await?;
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-async fn send_text<S>(sink: &mut S, text: &str) -> Result<(), String>
-where
-    S: SinkExt<Message> + Unpin,
-    S::Error: std::fmt::Display,
-{
-    sink.send(Message::Text(text.to_string()))
-        .await
-        .map_err(|e| format!("terminal ws: send failed: {e}"))
-}
-
-/// 处理单个请求帧并返回响应帧（含 error 帧，不中断连接）。
-async fn handle_request(
-    text: &str,
+/// 处理单个终端请求载荷，返回带 topic 信封的响应帧（含 error 帧，不中断连接）。
+pub async fn handle_frame(
+    payload: &str,
     manager: &Arc<TerminalManager>,
     hub: &TerminalEventHub,
 ) -> String {
-    let request: WsRequest = match serde_json::from_str(text) {
+    let request: WsRequest = match serde_json::from_str(payload) {
         Ok(req) => req,
         Err(e) => return error_frame(format!("invalid request frame: {e}")),
     };
@@ -165,7 +67,7 @@ async fn handle_request(
                     let session_id = session.session_id().to_string();
                     manager.insert(Arc::clone(&session));
                     pump_session_events(hub.clone(), session_id.clone(), output_rx, exit_rx);
-                    json!({ "type": "spawned", "sessionId": session_id }).to_string()
+                    json!({ "topic": TOPIC, "type": "spawned", "sessionId": session_id }).to_string()
                 }
                 Err(e) => error_frame(format!("spawn failed: {e}")),
             }
@@ -177,7 +79,7 @@ async fn handle_request(
             };
             match manager.get(&session_id) {
                 Some(session) => match session.write(&bytes) {
-                    Ok(()) => json!({ "type": "ok" }).to_string(),
+                    Ok(()) => json!({ "topic": TOPIC, "type": "ok" }).to_string(),
                     Err(e) => error_frame(format!("write failed: {e}")),
                 },
                 None => error_frame(format!("session not found: {session_id}")),
@@ -186,7 +88,7 @@ async fn handle_request(
         WsRequest::Resize { session_id, cols, rows } => {
             match manager.get(&session_id) {
                 Some(session) => match session.resize(cols, rows) {
-                    Ok(()) => json!({ "type": "ok" }).to_string(),
+                    Ok(()) => json!({ "topic": TOPIC, "type": "ok" }).to_string(),
                     Err(e) => error_frame(format!("resize failed: {e}")),
                 },
                 None => error_frame(format!("session not found: {session_id}")),
@@ -194,20 +96,43 @@ async fn handle_request(
         }
         WsRequest::Kill { session_id } => match manager.get(&session_id) {
             Some(session) => match session.kill() {
-                Ok(()) => json!({ "type": "ok" }).to_string(),
+                Ok(()) => json!({ "topic": TOPIC, "type": "ok" }).to_string(),
                 Err(e) => error_frame(format!("kill failed: {e}")),
             },
             None => error_frame(format!("session not found: {session_id}")),
         },
         WsRequest::List => {
             let sessions: Vec<SessionInfo> = manager.list();
-            json!({ "type": "list", "sessions": sessions }).to_string()
+            json!({ "topic": TOPIC, "type": "list", "sessions": sessions }).to_string()
         }
     }
 }
 
+/// 错误帧（带 topic 信封）。
 fn error_frame(message: String) -> String {
-    json!({ "type": "error", "message": message }).to_string()
+    json!({ "topic": TOPIC, "type": "error", "message": message }).to_string()
+}
+
+/// 会话输出事件帧（带 topic 信封；由 net::ws 推送给订阅连接）。
+pub fn output_frame(session_id: &str, data: &[u8]) -> String {
+    json!({
+        "topic": TOPIC,
+        "type": "output",
+        "sessionId": session_id,
+        "data": base64::engine::general_purpose::STANDARD.encode(data),
+    })
+    .to_string()
+}
+
+/// 会话退出事件帧（带 topic 信封；由 net::ws 推送给订阅连接）。
+pub fn exit_frame(session_id: &str, exit_code: i32) -> String {
+    json!({
+        "topic": TOPIC,
+        "type": "exit",
+        "sessionId": session_id,
+        "exitCode": exit_code,
+    })
+    .to_string()
 }
 
 #[cfg(test)]
@@ -248,117 +173,31 @@ mod tests {
     }
 
     #[test]
-    fn error_frame_is_valid_json() {
+    fn error_frame_carries_topic_envelope() {
         let frame = error_frame("boom".into());
         let value: Value = serde_json::from_str(&frame).unwrap();
+        assert_eq!(value["topic"], TOPIC);
         assert_eq!(value["type"], "error");
         assert_eq!(value["message"], "boom");
     }
 
-    /// 端到端网关测试：真实 TCP + WS 客户端，验证
-    /// spawn → spawned → write(echo) → output → kill → exit 全链路帧协议。
-    #[tokio::test]
-    async fn ws_gateway_roundtrip_spawn_write_output_kill_exit() {
-        use std::time::Duration;
+    #[test]
+    fn output_frame_carries_topic_envelope_and_base64() {
+        let frame = output_frame("term-0001", b"hi");
+        let value: Value = serde_json::from_str(&frame).unwrap();
+        assert_eq!(value["topic"], TOPIC);
+        assert_eq!(value["type"], "output");
+        assert_eq!(value["sessionId"], "term-0001");
+        assert_eq!(value["data"], "aGk=");
+    }
 
-        use tokio_tungstenite::tungstenite::Message;
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let manager = Arc::new(TerminalManager::default());
-        let hub = TerminalEventHub::new_for_test();
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            handle_connection(stream, manager, hub).await.unwrap();
-        });
-
-        let (ws, _resp) = tokio_tungstenite::connect_async(format!("ws://{addr}"))
-            .await
-            .expect("ws connect should succeed");
-        let (mut sink, mut source) = ws.split();
-
-        // 1) spawn
-        sink.send(Message::Text(r#"{"type":"spawn","shell":"sh"}"#.into()))
-            .await
-            .unwrap();
-        let spawned = tokio::time::timeout(Duration::from_secs(3), source.next())
-            .await
-            .expect("spawned frame within 3s")
-            .expect("stream alive")
-            .expect("text frame");
-        let spawned: Value = serde_json::from_str(spawned.to_text().unwrap()).unwrap();
-        assert_eq!(spawned["type"], "spawned");
-        let session_id = spawned["sessionId"].as_str().unwrap().to_string();
-
-        // 2) write：echo 一行文本
-        let data = base64::engine::general_purpose::STANDARD.encode(b"echo ws-roundtrip\n");
-        sink.send(
-            Message::Text(
-                json!({"type":"write","sessionId":session_id,"data":data})
-                    .to_string()
-                    .into(),
-            ),
-        )
-        .await
-        .unwrap();
-
-        // 3) 收输出帧，直到看到 echo 内容
-        let mut saw_output = false;
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        while !saw_output {
-            let remaining = deadline - tokio::time::Instant::now();
-            let frame = tokio::time::timeout(remaining, source.next())
-                .await
-                .expect("output frame within deadline")
-                .expect("stream alive")
-                .expect("text frame");
-            let value: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
-            match value["type"].as_str().unwrap() {
-                "output" => {
-                    let bytes = base64::engine::general_purpose::STANDARD
-                        .decode(value["data"].as_str().unwrap())
-                        .unwrap();
-                    if String::from_utf8_lossy(&bytes).contains("ws-roundtrip") {
-                        saw_output = true;
-                    }
-                }
-                // write 的响应帧（ok）先于输出帧到达，属预期
-                "ok" => {}
-                other => panic!("unexpected frame before output: {other}"),
-            }
-        }
-
-        // 4) kill：交互 shell 不会自然退出，kill 后应收到 exit 帧
-        sink.send(
-            Message::Text(
-                json!({"type":"kill","sessionId":session_id}).to_string().into(),
-            ),
-        )
-        .await
-        .unwrap();
-        let mut saw_exit = false;
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        while !saw_exit {
-            let remaining = deadline - tokio::time::Instant::now();
-            let frame = tokio::time::timeout(remaining, source.next())
-                .await
-                .expect("exit frame within deadline")
-                .expect("stream alive")
-                .expect("text frame");
-            let value: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
-            match value["type"].as_str().unwrap() {
-                "exit" => {
-                    assert_eq!(value["sessionId"], session_id, "exit frame session id");
-                    saw_exit = true;
-                }
-                // kill 后可能还有残余输出帧，忽略
-                other => assert!(
-                    other == "output" || other == "ok",
-                    "unexpected frame before exit: {other}"
-                ),
-            }
-        }
-
-        server.await.unwrap();
+    #[test]
+    fn exit_frame_carries_topic_envelope() {
+        let frame = exit_frame("term-0001", 3);
+        let value: Value = serde_json::from_str(&frame).unwrap();
+        assert_eq!(value["topic"], TOPIC);
+        assert_eq!(value["type"], "exit");
+        assert_eq!(value["sessionId"], "term-0001");
+        assert_eq!(value["exitCode"], 3);
     }
 }

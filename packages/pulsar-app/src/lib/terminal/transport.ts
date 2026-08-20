@@ -182,6 +182,7 @@ export function wsTransport(url: string): TerminalTransport {
     };
     ws.onmessage = (ev) => {
       let frame: {
+        topic?: string;
         type: string;
         sessionId?: string;
         data?: string;
@@ -194,6 +195,9 @@ export function wsTransport(url: string): TerminalTransport {
       } catch {
         return;
       }
+      // 仅处理终端业务帧（topic: "terminal"）；连接级 error 帧（topic: "_error"）等
+      // 其他业务帧不属于本传输，忽略。
+      if (frame.topic !== "terminal") return;
       switch (frame.type) {
         case "output":
           if (frame.sessionId && frame.data != null) {
@@ -237,7 +241,8 @@ export function wsTransport(url: string): TerminalTransport {
     if (closed) throw new Error("terminal ws: disposed");
     return new Promise<T>((resolve, reject) => {
       pending.push({ resolve: resolve as (v: unknown) => void, reject });
-      ws!.send(JSON.stringify(frame));
+      // WS 为公共服务：请求帧统一带 topic 信封，路由到终端业务。
+      ws!.send(JSON.stringify({ topic: "terminal", ...frame }));
     });
   };
 

@@ -1154,30 +1154,27 @@ pub fn run() {
             app.manage(sessions);
             app.manage(providers);
             app.manage(conversation_store);
-            // 终端事件 hub：IPC 命令与 WS 网关共享的会话事件广播器。
+            // 终端事件 hub：IPC 命令与 WS 公共通道（net/ws.rs）共享的会话事件广播器。
             app.manage(terminal_hub.clone());
-            // 终端浏览器支持：内嵌 WebSocket 网关（绑定 127.0.0.1，
-            // 端口 PULSAR_TERMINAL_WS_PORT，默认 43110），浏览器前端经 ws 直连。
+            // 终端浏览器支持：随内嵌 server 的 `/ws` 端点启动（net::NetState 注入
+            // terminal manager 与 hub，见下方远程模式分支）；不再独立监听端口。
             let ws_manager = Arc::clone(&terminal_manager);
             app.manage(terminal_manager);
-            let ws_hub = terminal_hub.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(error) = terminal::ws::run(ws_manager, ws_hub).await {
-                    tracing::error!(error = %error, "terminal ws gateway exited");
-                }
-            });
             let gateway_for_server = gateway.clone();
             app.manage(gateway);
             let state_emit_for_server = state_emit.clone();
             app.manage(state_emit);
 
-            // 远程模式：条件启动内嵌 server（持有 Gateway / StateEmitter 克隆与 SSE 广播通道）。
+            // 远程模式：条件启动内嵌 server（持有 Gateway / StateEmitter 克隆、SSE 广播
+            // 通道与终端会话；`/ws` 终端业务随 server 一并启用）。
             if let Some(cfg) = server_cfg {
                 let net_state = NetState {
                     gateway: gateway_for_server,
                     state_emit: state_emit_for_server,
                     events_tx: events_tx.clone(),
                     tokens: cfg.tokens.clone(),
+                    terminal: ws_manager,
+                    terminal_hub: terminal_hub.clone(),
                 };
                 tauri::async_runtime::spawn(async move {
                     if let Err(error) = net::run_server(cfg, net_state).await {

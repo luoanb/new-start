@@ -3,7 +3,7 @@
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import "@xterm/xterm/css/xterm.css";
-  import { isTauriEnv } from "$lib/api";
+  import { isTauriEnv, readConnConfig, DEFAULT_REMOTE_URL } from "$lib/api";
   import {
     ipcTransport,
     wsTransport,
@@ -11,8 +11,19 @@
     type TerminalTransport,
   } from "$lib/terminal/transport";
 
-  /** 浏览器模式直连 Tauri 进程内嵌的 WS PTY 网关（见 spec terminal-browser-ws）。 */
-  const WS_URL = import.meta.env.VITE_TERMINAL_WS_URL ?? "ws://127.0.0.1:43110";
+  /**
+   * 浏览器模式直连 Tauri 进程内嵌的 WS 公共通道（见 spec terminal-browser-ws）。
+   * 地址从远程连接配置（pulsar:remoteUrl）自动推导：http(s)://host:port → ws(s)://host:port/ws，
+   * 配置了 token 时追加 ?token=；未配置时回落默认地址。WS 与 HTTP RPC 同端口同监听。
+   */
+  function deriveWsUrl(): string {
+    const cfg = readConnConfig();
+    const base = cfg.url || DEFAULT_REMOTE_URL;
+    const scheme = base.replace(/^http/, "ws"); // http→ws / https→wss
+    const query = cfg.token ? `?token=${encodeURIComponent(cfg.token)}` : "";
+    return `${scheme}/ws${query}`;
+  }
+  const WS_URL = typeof window !== "undefined" ? deriveWsUrl() : "";
 
   type TerminalTab = {
     sessionId: string;

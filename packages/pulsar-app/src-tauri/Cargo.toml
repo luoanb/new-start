@@ -38,8 +38,8 @@ rust-embed = "8"
 rmcp = { version = "3", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 http = "1"
-# 内嵌网络服务（远程模式）：统一 RPC 端点 + SSE 状态推送。
-axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+# 内嵌网络服务（远程模式）：统一 RPC 端点 + SSE 状态推送 + WebSocket 公共服务（/ws）。
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "ws"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures-util = "0.3"
 mlua = { version = "0.12.0", features = ["vendored", "lua54"] }
@@ -49,8 +49,6 @@ globset = "0.4"
 walkdir = "2"
 # 终端面板：跨平台 PTY（Unix pty / Windows ConPTY），对标 VS Code 集成终端。
 portable-pty = "0.9"
-# 终端浏览器支持：WebSocket PTY 网关（本地回环，桌面内嵌），浏览器前端经 ws 直连。
-tokio-tungstenite = "0.24"
 # WS 帧内二进制载荷（终端输出字节流）base64 编码。
 base64 = "0.22"
 
@@ -61,4 +59,6 @@ rmcp = { version = "3", features = ["server", "transport-streamable-http-server"
 tokio = { version = "1.53.1", features = ["io-util"] }
 # 仅测试用：net 模块冒烟（tower::ServiceExt::oneshot 直呼 router）。
 tower = { version = "0.5", features = ["util"] }
+# 仅测试用：/ws 端到端用例的 WebSocket 客户端（握手 + 帧收发）。
+tokio-tungstenite = "0.24"
 
