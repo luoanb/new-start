@@ -18,6 +18,7 @@
   import { setViewContext, type ViewContext } from "$lib/layout/viewContext";
   import { fileEditorStore } from "$lib/stores/fileEditorStore.svelte";
   import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
+  import GitConfirmHost from "$lib/components/GitConfirmHost.svelte";
   import { t } from "$lib/i18n";
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
   import { hotkeyService } from "$lib/hotkey/hotkeyService";
@@ -368,6 +369,10 @@
   function paneTabs(pane: (typeof mainPanes)[number]) {
     return pane.panels.map((p) => {
       const isFile = p.type === "file-editor";
+      const isGitDiff = p.type === "git-diff";
+      // git-diff 实例 key = `git-diff:${repoId}:${relPath}`；title = 文件名，tooltip = 相对路径
+      const gitRelPath = isGitDiff ? p.id.slice("git-diff:".length).split(":").slice(1).join(":") : "";
+      const gitTitle = isGitDiff ? (gitRelPath.split("/").pop() || gitRelPath) : undefined;
       return {
         id: p.id,
         label: mainPanelMeta[p.type].label,
@@ -377,10 +382,16 @@
         iconTone: p.type === "chat" ? activeConversationMode : undefined,
         // 对话 tab：展示对话标题（原始文本，截断显示）；文件 tab：展示文件名 + 未保存 ●
         title:
-          p.type === "chat" ? activeConversationTitle : isFile ? fileEditorStore.titleOf(p.id) : undefined,
+          p.type === "chat"
+            ? activeConversationTitle
+            : isFile
+              ? fileEditorStore.titleOf(p.id)
+              : isGitDiff
+                ? gitTitle
+                : undefined,
         truncate: p.type === "chat",
         dirty: isFile ? fileEditorStore.isDirty(p.id) : false,
-        tooltip: isFile ? fileEditorStore.pathOf(p.id) : undefined,
+        tooltip: isFile ? fileEditorStore.pathOf(p.id) : isGitDiff ? gitRelPath : undefined,
       };
     });
   }
@@ -694,6 +705,9 @@
   }}
   onCancel={() => (confirmReq = null)}
 />
+
+<!-- 全局 git 写操作确认消费器（后端确认服务入队 → 跨面板常驻弹窗） -->
+<GitConfirmHost />
 
 {#if isTauriEnv}
   <!-- 无边框窗口边缘 resize 光标提示（Linux/WebKitGTK 下系统不渲染，见 spec window-edge-resize-cursor） -->

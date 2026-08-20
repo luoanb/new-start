@@ -24,6 +24,86 @@
   let activeId = $derived(wsView?.active_id ?? null);
   let activeWs = $derived(workspaces.find((w) => w.id === activeId) ?? null);
 
+  // ── Git 徽标：按文件归属 repo 从 statusByRepo 取数（不依赖 active repo）──
+  const gitRepos = $derived(dataStore.state.git?.repos ?? []);
+
+  /** 绝对路径（拼接工作区根 + 相对路径，统一 `/`）。 */
+  function absPath(relPath: string): string {
+    const root = (activeWs?.root ?? "").replaceAll("\\", "/");
+    return root.endsWith("/") ? root + relPath : root + "/" + relPath;
+  }
+
+  /** 文件归属 repo：取绝对路径下最深前缀的 repo 根。 */
+  function repoForPath(relPath: string) {
+    const abs = absPath(relPath);
+    let best: (typeof gitRepos)[number] | null = null;
+    for (const r of gitRepos) {
+      const root = r.root.replaceAll("\\", "/");
+      if ((abs === root || abs.startsWith(root + "/")) && (!best || root.length > best.root.length)) {
+        best = r;
+      }
+    }
+    return best;
+  }
+
+  /** 该文件/目录在仓库状态中的条目（conflicted > staged > unstaged/untracked 优先）。 */
+  function statusOf(relPath: string, repoId: string) {
+    const st = dataStore.state.git?.statusByRepo[repoId];
+    if (!st) return null;
+    for (const group of [st.conflicted, st.staged, st.unstaged, st.untracked]) {
+      const hit = group.find((x) => x.path === relPath);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  type GitBadge = {
+    badge: string;
+    tone: "error" | "staged" | "warning" | "muted";
+    repoId: string;
+    dir: boolean;
+  };
+  /** 徽标：文件 = 状态字母（U error / 暂存 primary / 未暂存·未跟踪 warning / D muted）；目录 = 聚合计数。 */
+  function badgeFor(e: FsEntry): GitBadge | null {
+    const repo = repoForPath(e.path);
+    if (!repo) return null;
+    const st = dataStore.state.git?.statusByRepo[repo.id];
+    if (!st) return null;
+    if (e.is_dir) {
+      const prefix = e.path + "/";
+      let n = 0;
+      let anyConflict = false;
+      for (const group of [st.conflicted, st.staged, st.unstaged, st.untracked]) {
+        for (const x of group) {
+          if (x.path.startsWith(prefix)) {
+            n++;
+            if (x.status.includes("U")) anyConflict = true;
+          }
+        }
+      }
+      if (n === 0) return null;
+      return { badge: String(n), tone: anyConflict ? "error" : "warning", repoId: repo.id, dir: true };
+    }
+    const hit = statusOf(e.path, repo.id);
+    if (!hit) return null;
+    if (hit.status.includes("U")) return { badge: hit.status, tone: "error", repoId: repo.id, dir: false };
+    if (st.staged.some((x) => x.path === e.path)) return { badge: hit.status, tone: "staged", repoId: repo.id, dir: false };
+    if (hit.status.includes("D")) return { badge: hit.status, tone: "muted", repoId: repo.id, dir: false };
+    return { badge: hit.status, tone: "warning", repoId: repo.id, dir: false };
+  }
+
+  /** 徽标点击：未跟踪 → 直接打开编辑器；其余 → 打开该文件的 git-diff 面板。 */
+  function onBadgeClick(e: FsEntry, repoId: string) {
+    if (e.is_dir) return;
+    const hit = statusOf(e.path, repoId);
+    if (!hit) return;
+    if (hit.status === "??") {
+      if (activeWs) openFile(activeWs, e.path);
+    } else {
+      dataStore.openGitDiff(repoId, e.path);
+    }
+  }
+
   // ── 树状态：dirPath → 加载结果（"" = 根）──
   type DirState =
     | { status: "loading"; entries: FsEntry[] }
@@ -681,6 +761,7 @@
       {#each rows as row (row.key)}
         {#if row.kind === "entry"}
           {@const e = row.entry}
+          {@const gb = badgeFor(e)}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <div
             class="row"
@@ -716,6 +797,17 @@
               />
             {:else}
               <span class="name" title={e.path}>{e.name}</span>
+            {/if}
+            {#if gb}
+              <button
+                class="git-badge {gb.tone}"
+                class:dir={gb.dir}
+                title={gb.dir ? t("git.filesCount", { n: gb.badge }) : `${gb.badge} · ${e.path}`}
+                onclick={(ev) => {
+                  ev.stopPropagation();
+                  onBadgeClick(e, gb.repoId);
+                }}
+              >{gb.badge}</button>
             {/if}
             <button
               class="row-more icon-btn"
@@ -987,6 +1079,29 @@
   .row.selected .row-more {
     opacity: 1;
   }
+  /* Git 状态徽标：等宽字母 + 状态色（对齐 visual-design token 映射） */
+  .git-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    min-width: 18px;
+    height: 16px;
+    padding: 0 3px;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1;
+    cursor: pointer;
+    transition: filter var(--duration-fast) var(--ease-out);
+  }
+  .git-badge:hover { filter: brightness(1.25); }
+  .git-badge.error { color: var(--color-error); background: var(--color-error-bg); }
+  .git-badge.staged { color: var(--color-primary); background: color-mix(in oklch, var(--color-primary) 14%, transparent); }
+  .git-badge.warning { color: var(--color-warning); background: color-mix(in oklch, var(--color-warning) 14%, transparent); }
+  .git-badge.muted { color: var(--color-text-muted); background: color-mix(in oklch, var(--color-text-muted) 12%, transparent); }
+  .git-badge.dir { cursor: default; }
   /* pad/移动端：无 hover，⋮ 常显 */
   @media (hover: none) {
     .row-more {

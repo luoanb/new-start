@@ -77,7 +77,7 @@
   }
   .modal-header h2 { margin: 0; font-size: var(--fs-lg); font-weight: 600; }
   .modal-body { padding: 20px; }
-  .message { font-size: var(--fs-base); color: var(--color-text-muted); line-height: 1.6; }
+  .message { font-size: var(--fs-base); color: var(--color-text-muted); line-height: 1.6; white-space: pre-line; }
   .modal-footer {
     display: flex; justify-content: flex-end; gap: 8px;
     padding: 12px 20px; border-top: 1px solid var(--color-border);

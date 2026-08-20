@@ -20,7 +20,9 @@ export type StateEventKind =
   | "neurons"
   | "providers"
   | "tools"
-  | "workspaces";
+  | "workspaces"
+  | "git"
+  | "git_confirm";
 
 export type StateChangePayload =
   | { kind: "topics" }
@@ -42,7 +44,16 @@ export type StateChangePayload =
   | { kind: "neurons" }
   | { kind: "providers" }
   | { kind: "tools" }
-  | { kind: "workspaces" };
+  | { kind: "workspaces" }
+  | { kind: "git" }
+  | {
+      kind: "git_confirm";
+      op_id: string;
+      /** Commit / Push / Pull / Reset / Checkout / StashApply / StashDrop / Clean。 */
+      op_kind: string;
+      title: string;
+      detail: unknown;
+    };
 
 export interface ApiClient {
   /** 调用后端命令：本机走 Tauri invoke，远程走 POST /rpc。 */

@@ -6,8 +6,15 @@ export type SplitOrientation = "horizontal" | "vertical";
 export type ViewContainerId = "sidebar" | "info" | "panel";
 
 /** main 区可插入的面板类型。多数类型全局唯一（多个会话共享同一个 chat 面板）；
- * `file-editor` 例外：按文件路径多实例（实例 id = 文件 key，见 LayoutStore.insertPanel）。 */
-export type MainPanelType = "chat" | "neurons" | "tool-editor" | "provider-manager" | "file-editor";
+ * `file-editor` 例外：按文件路径多实例（实例 id = 文件 key，见 LayoutStore.insertPanel）；
+ * `git-diff` 复用同一实例语义（实例 id = `git-diff:${repoId}:${relPath}`，按文件路径多开）。 */
+export type MainPanelType =
+  | "chat"
+  | "neurons"
+  | "tool-editor"
+  | "provider-manager"
+  | "file-editor"
+  | "git-diff";
 
 /** main 区面板实例（insertPanel 返回其 id，供外部关闭）。 */
 export type MainPanel = {
