@@ -18,8 +18,11 @@ export class LocalStorageLayoutStorage implements LayoutStorage {
       if (!raw) return null;
       const parsed = JSON.parse(raw) as Partial<LayoutState>;
       // 旧布局中的 providers/models 两个独立视图 → 聚合为 providers-models（任意版本兼容）
-      // 任意版本出口统一确保 sidebar 容器含 files（v10 新增文件管理视图）
-      return ensureFilesInSidebar(mergeProvidersModels(normalize(parsed)));
+      const base = mergeProvidersModels(normalize(parsed));
+      // 仅当布局早于 v10（files 视图引入前）时确保 sidebar 含 files；
+      // v10 及以后的布局是用户权威，尊重用户拖拽/隐藏 files 的自定义结果，不再强制插回。
+      const legacy = parsed.version === undefined || parsed.version < 10;
+      return legacy ? ensureFilesInSidebar(base) : base;
     } catch {
       return null;
     }
