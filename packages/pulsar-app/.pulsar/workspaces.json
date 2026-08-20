@@ -22,8 +22,6 @@
         ".git",
         "node_modules",
         "target",
-        "dist",
-        ".pulsar",
         ".DS_Store"
       ],
       "created_at": 1787064309217

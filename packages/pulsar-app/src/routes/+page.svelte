@@ -195,6 +195,15 @@
     }
   }
 
+  /** 中断运行中的会话（后端 close_session 触发 abort 回调）。 */
+  async function handleStopSession(sessionId: string) {
+    try {
+      await dataStore.stopRunningSession(sessionId);
+    } catch (e) {
+      error = `Failed to stop session: ${formatInvokeError(e)}`;
+    }
+  }
+
   function handleSelectConversation(id: string) {
     void dataStore.selectConversation(id);
     // 会话切换：回显后端持有的该会话模型选择（后端权威），未指定则保持现状。
@@ -267,6 +276,7 @@
     ui,
     commands: {
       sendMessage: handleSend,
+      stopRunningSession: handleStopSession,
       selectConversation: handleSelectConversation,
       createSession: handleCreateSession,
       closeSession: handleCloseSession,

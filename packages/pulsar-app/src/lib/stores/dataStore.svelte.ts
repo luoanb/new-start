@@ -294,6 +294,12 @@ async function closeSession(sessionId: string): Promise<void> {
   await refreshConversations();
 }
 
+/** 中断当前运行中的会话（后端 close_session 触发 abort 回调）；广播 Sessions 事件自动刷新，兜底重拉。 */
+async function stopRunningSession(sessionId: string): Promise<void> {
+  await api.invoke<string>("close_session", { sessionId });
+  await refreshRunningSessions();
+}
+
 async function sendMessage(
   text: string,
   providerId: string,
@@ -552,6 +558,7 @@ export const dataStore = {
   selectConversation,
   createConversation,
   closeSession,
+  stopRunningSession,
   sendMessage,
   setSessionModel,
   clearConversation,

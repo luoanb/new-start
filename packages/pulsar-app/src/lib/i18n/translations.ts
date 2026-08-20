@@ -41,6 +41,7 @@ export type Translations = {
     emptyTitle: string;
     emptyDesc: string;
     chatInputPlaceholder: string;
+    stop: string;
   };
   chatMessage: {
     you: string;
@@ -520,6 +521,7 @@ export const en: Translations = {
     emptyTitle: "Start a conversation",
     emptyDesc: "Send a message below to begin",
     chatInputPlaceholder: "Type a message... (Enter to send, Shift+Enter for new line)",
+    stop: "Stop",
   },
   chatMessage: {
     you: "You",
@@ -1018,6 +1020,7 @@ export const zh: Translations = {
     emptyTitle: "开始对话",
     emptyDesc: "在下方输入消息开始对话",
     chatInputPlaceholder: "输入消息... (Enter 发送, Shift+Enter 换行)",
+    stop: "终止",
   },
   chatMessage: {
     you: "你",

@@ -28,6 +28,9 @@
     pendingAlignTop = true;
     void ctx.commands.sendMessage(text);
   };
+  const onStop = () => {
+    if (activeConversationId) void ctx.commands.stopRunningSession(activeConversationId);
+  };
   const onModelChange = (
     providerId: string,
     modelId: string,
@@ -247,7 +250,8 @@
 
   <ChatInput
     {onSend}
-    loading={isRunning}
+    running={isRunning}
+    {onStop}
     {providers}
     {models}
     {selectedProviderId}
