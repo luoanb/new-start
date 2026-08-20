@@ -375,6 +375,8 @@ export type Translations = {
     providerManager: string;
     files: string;
     fileEditor: string;
+    git: string;
+    gitDiff: string;
   };
   fileExplorer: {
     addWorkspace: string;
@@ -428,6 +430,66 @@ export type Translations = {
     loading: string;
     loadedLines: string;
     loadMore: string;
+  };
+  git: {
+    repo: string;
+    repoPlaceholder: string;
+    noRepos: string;
+    branch: string;
+    summary: string;
+    groupStaged: string;
+    groupChanges: string;
+    groupConflicted: string;
+    stage: string;
+    unstage: string;
+    filesCount: string;
+    commitPlaceholder: string;
+    commit: string;
+    committing: string;
+    nothingToCommit: string;
+    branches: string;
+    stash: string;
+    stashCreate: string;
+    stashApply: string;
+    stashDrop: string;
+    notRepo: string;
+    clean: string;
+    pull: string;
+    push: string;
+    discard: string;
+    editIgnore: string;
+    refresh: string;
+    loadFailed: string;
+    operationFailed: string;
+    checkoutFailed: string;
+    commitConfirmTitle: string;
+    commitConfirmBody: string;
+    pushConfirmTitle: string;
+    pushConfirmBody: string;
+    pullConfirmTitle: string;
+    pullConfirmBody: string;
+    discardConfirmTitle: string;
+    discardConfirmBody: string;
+    stashApplyConfirmTitle: string;
+    stashApplyConfirmBody: string;
+    stashDropConfirmTitle: string;
+    stashDropConfirmBody: string;
+    confirmDiscard: string;
+    dangerousWrites: string;
+    rangeStaged: string;
+    rangeUnstaged: string;
+    rangeBoth: string;
+    prevHunk: string;
+    nextHunk: string;
+    hunkCount: string;
+    acceptOurs: string;
+    acceptTheirs: string;
+    acceptBoth: string;
+    blame: string;
+    diffEmpty: string;
+    untrackedHint: string;
+    binaryDiff: string;
+    missingFile: string;
   };
   providersModelsPanel: {
     create: string;
@@ -874,6 +936,8 @@ export const en: Translations = {
     providerManager: "Model Manager",
     files: "Files",
     fileEditor: "File Editor",
+    git: "Git",
+    gitDiff: "Diff",
   },
   fileExplorer: {
     addWorkspace: "Add Workspace",
@@ -927,6 +991,67 @@ export const en: Translations = {
     loading: "Loading…",
     loadedLines: "Loaded {loaded}/{total} lines",
     loadMore: "Scroll to bottom to load more",
+  },
+  git: {
+    repo: "Repository",
+    repoPlaceholder: "Select repository",
+    noRepos: "No git repository found",
+    branch: "Branch",
+    summary: "{staged} staged · {changes} changed",
+    groupStaged: "Staged",
+    groupChanges: "Changes",
+    groupConflicted: "Conflicts",
+    stage: "Stage",
+    unstage: "Unstage",
+    filesCount: "{n} files",
+    commitPlaceholder: "Commit message…",
+    commit: "Commit",
+    committing: "Committing…",
+    nothingToCommit: "Nothing to commit",
+    branches: "Branches",
+    stash: "Stash",
+    stashCreate: "Stash…",
+    stashApply: "Apply",
+    stashDrop: "Drop",
+    notRepo: "Current workspace is not a git repository",
+    clean: "Working tree clean",
+    pull: "Pull",
+    push: "Push",
+    discard: "Discard changes",
+    editIgnore: "Edit repo ignore rules",
+    refresh: "Refresh",
+    loadFailed: "Failed to load: {error}",
+    operationFailed: "Operation failed: {error}",
+    checkoutFailed: "Checkout failed: {error}",
+    commitConfirmTitle: "Commit changes",
+    commitConfirmBody: "Commit {n} staged file(s)?",
+    pushConfirmTitle: "Push",
+    pushConfirmBody: "Push {branch} (ahead by {ahead})?",
+    pullConfirmTitle: "Pull",
+    pullConfirmBody: "Pull latest and merge into {branch}? Local changes may conflict.",
+    discardConfirmTitle: "Discard changes",
+    discardConfirmBody: "This will permanently discard changes in {n} file(s). Continue?",
+    checkoutConfirmBody: "Switch to {target}? Uncommitted changes may be overwritten.",
+    stashApplyConfirmTitle: "Apply stash",
+    stashApplyConfirmBody: "Apply this stash? This may cause conflicts.",
+    stashDropConfirmTitle: "Drop stash",
+    stashDropConfirmBody: "Drop this stash? This cannot be undone.",
+    confirmDiscard: "Discard",
+    dangerousWrites: "Allow dangerous writes (reset --hard / checkout overwrite)",
+    rangeStaged: "Staged (vs HEAD)",
+    rangeUnstaged: "Changes (vs index)",
+    rangeBoth: "All changes",
+    prevHunk: "Previous hunk",
+    nextHunk: "Next hunk",
+    hunkCount: "{current}/{total}",
+    acceptOurs: "Accept ours",
+    acceptTheirs: "Accept theirs",
+    acceptBoth: "Accept both",
+    blame: "Blame",
+    diffEmpty: "No changes",
+    untrackedHint: "Untracked file",
+    binaryDiff: "Binary file, diff not available",
+    missingFile: "File not found",
   },
   providersModelsPanel: {
     create: "New provider",
@@ -1373,6 +1498,8 @@ export const zh: Translations = {
     providerManager: "模型管理",
     files: "文件",
     fileEditor: "文件编辑",
+    git: "Git",
+    gitDiff: "差异",
   },
   fileExplorer: {
     addWorkspace: "添加工作区",
@@ -1426,6 +1553,67 @@ export const zh: Translations = {
     loading: "加载中…",
     loadedLines: "已加载 {loaded}/{total} 行",
     loadMore: "滚动到底部加载更多",
+  },
+  git: {
+    repo: "仓库",
+    repoPlaceholder: "选择仓库",
+    noRepos: "未发现 Git 仓库",
+    branch: "分支",
+    summary: "{staged} 暂存 · {changes} 更改",
+    groupStaged: "暂存区",
+    groupChanges: "更改",
+    groupConflicted: "冲突",
+    stage: "暂存",
+    unstage: "取消暂存",
+    filesCount: "{n} 个文件",
+    commitPlaceholder: "提交信息…",
+    commit: "提交",
+    committing: "提交中…",
+    nothingToCommit: "没有可提交的更改",
+    branches: "分支",
+    stash: "Stash",
+    stashCreate: "Stash…",
+    stashApply: "应用",
+    stashDrop: "丢弃",
+    notRepo: "当前工作区不是 Git 仓库",
+    clean: "工作区干净",
+    pull: "拉到最新",
+    push: "推送到远端",
+    discard: "丢弃更改",
+    editIgnore: "编辑仓库过滤规则",
+    refresh: "刷新",
+    loadFailed: "加载失败：{error}",
+    operationFailed: "操作失败：{error}",
+    checkoutFailed: "切换分支失败：{error}",
+    commitConfirmTitle: "提交更改",
+    commitConfirmBody: "将 {n} 个暂存文件提交？",
+    pushConfirmTitle: "推送",
+    pushConfirmBody: "推送 {branch}（领先 {ahead}）？",
+    pullConfirmTitle: "拉取",
+    pullConfirmBody: "拉取最新并合并到 {branch}？本地改动可能冲突。",
+    discardConfirmTitle: "丢弃更改",
+    discardConfirmBody: "将永久丢弃 {n} 个文件中的改动，继续？",
+    checkoutConfirmBody: "切换到 {target}？未提交的更改可能被覆盖。",
+    stashApplyConfirmTitle: "应用 Stash",
+    stashApplyConfirmBody: "应用该 stash？可能产生冲突。",
+    stashDropConfirmTitle: "丢弃 Stash",
+    stashDropConfirmBody: "丢弃该 stash？此操作无法撤销。",
+    confirmDiscard: "确认丢弃",
+    dangerousWrites: "允许危险写操作（reset --hard / checkout 覆盖未提交改动）",
+    rangeStaged: "暂存区（vs HEAD）",
+    rangeUnstaged: "更改（vs 暂存区）",
+    rangeBoth: "全部更改",
+    prevHunk: "上一处",
+    nextHunk: "下一处",
+    hunkCount: "{current}/{total}",
+    acceptOurs: "接受当前",
+    acceptTheirs: "接受传入",
+    acceptBoth: "接受两者",
+    blame: "Blame",
+    diffEmpty: "无差异",
+    untrackedHint: "未跟踪文件",
+    binaryDiff: "二进制文件，无法显示差异",
+    missingFile: "文件不存在",
   },
   providersModelsPanel: {
     create: "新增服务商",

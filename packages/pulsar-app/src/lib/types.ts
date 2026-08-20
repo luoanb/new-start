@@ -454,3 +454,129 @@ export type FsInfo = {
   modified_ms: number | null;
   is_binary: boolean;
 };
+
+// ── Git（对齐后端 fileops/gitops/mod.rs DTO）──
+
+export type GitRepo = {
+  /** 稳定 id：由 canonicalized repo 根派生。 */
+  id: string;
+  name: string;
+  root: string;
+  /** 是否为嵌套 repo。 */
+  is_nested: boolean;
+};
+
+export type GitStatusEntry = {
+  /** 相对 repo 根（`/` 分隔）。 */
+  path: string;
+  /** M/A/D/R/?/U 等单字母或组合（如 "MM"）。 */
+  status: string;
+  is_dir: boolean;
+};
+
+export type GitStatusView = {
+  branch: string | null;
+  ahead: number;
+  behind: number;
+  staged: GitStatusEntry[];
+  unstaged: GitStatusEntry[];
+  untracked: GitStatusEntry[];
+  conflicted: GitStatusEntry[];
+};
+
+export type GitDiffLineKind = "context" | "add" | "del";
+
+export type GitDiffLine = {
+  kind: GitDiffLineKind;
+  old_no: number | null;
+  new_no: number | null;
+  text: string;
+};
+
+export type GitHunk = {
+  old_start: number;
+  old_lines: number;
+  new_start: number;
+  new_lines: number;
+  /** 原始头 `@@ -a,b +c,d @@ ctx`。 */
+  header: string;
+  lines: GitDiffLine[];
+};
+
+export type GitFileDiff = {
+  path: string;
+  status: string;
+  is_binary: boolean;
+  hunks: GitHunk[];
+};
+
+export type GitDiff = {
+  files: GitFileDiff[];
+  /** 输出超限被截断。 */
+  truncated: boolean;
+};
+
+export type GitCommitInfo = {
+  hash: string;
+  short: string;
+  author: string;
+  date: string;
+  subject: string;
+};
+
+export type GitBlameLine = {
+  line_no: number;
+  short: string;
+  author: string;
+  date: string;
+  text: string;
+};
+
+export type GitStashEntry = {
+  /** stash@{n} 的 n。 */
+  index: number;
+  message: string;
+};
+
+export type GitBranchItem = {
+  name: string;
+  current: boolean;
+  upstream: string | null;
+};
+
+export type GitResetMode = "mixed" | "soft" | "hard" | "keep";
+
+export type GitResetPreview = {
+  /** hard 场景将丢失改动文件清单。 */
+  lost: string[];
+};
+
+export type GitStashAction = "push" | "pop" | "drop" | "apply";
+
+export type ConflictTake = "ours" | "theirs" | "both";
+
+/** git 确认弹窗载荷（git_confirm 事件消费后 resolve）。 */
+export type GitConfirmRequest = {
+  op_id: string;
+  kind: string;
+  title: string;
+  detail: unknown;
+};
+
+/** git 面板聚合视图（dataStore 单一数据源）。 */
+export type GitView = {
+  repos: GitRepo[];
+  activeRepoId: string | null;
+  /** 每个 repo 的状态（文件树徽标按文件归属 repo 取数；面板用 active repo 的 status）。 */
+  statusByRepo: Record<string, GitStatusView | null>;
+  status: GitStatusView | null;
+  branches: GitBranchItem[];
+  log: GitCommitInfo[];
+  stash: GitStashEntry[];
+  confirmConfig: { dangerous_writes: boolean };
+};
+
+/** git 写操作确认结果。 */
+export type GitConfirmResult =
+  | { approved: true }
+  | { approved: false; reason: "rejected" | "timed_out" | "error"; message?: string };

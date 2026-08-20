@@ -27,8 +27,14 @@ use crate::core::{
 use crate::fileops::fs::{
     FsEntry, FsInfo, FsMatch, FsReadResult, FsSuggestEntry, FsWriteResult, GrepMatch,
 };
+use crate::fileops::gitops::confirm::{ConfirmOutcome, GitOpKind};
+use crate::fileops::gitops::{
+    ConflictTake, GitBlameLine, GitBranchItem, GitCommitInfo, GitDiff, GitRepo, GitResetMode,
+    GitResetPreview, GitStashAction, GitStashEntry, GitStatusView,
+};
 use crate::fileops::workspace::{WorkspaceEntry, WorkspaceView};
 use crate::net::{NetState, ServerConfig};
+use serde_json::json;
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex as StdMutex},
@@ -838,6 +844,497 @@ async fn fs_suggest_abs(path: String) -> TauriResult<Vec<FsSuggestEntry>> {
     })
 }
 
+// ── Git ──
+
+/// 发现 active workspace 内全部 git 仓库（仅向内扫描，结果缓存于 GitService）。
+#[tauri::command]
+async fn git_repos(gateway: State<'_, Gateway>) -> TauriResult<Vec<GitRepo>> {
+    gateway
+        .inner()
+        .git_service()
+        .discover_repos()
+        .await
+        .map_err(|error| error.payload())
+}
+
+/// 指定仓库（repo_id）或当前操作仓库状态（缺省回落 active/第一个 repo）。
+#[tauri::command]
+async fn git_status(
+    gateway: State<'_, Gateway>,
+    repo_id: Option<String>,
+) -> TauriResult<GitStatusView> {
+    let svc = gateway.inner().git_service();
+    let repo = match repo_id {
+        Some(id) => svc.repo_by_id(&id).map_err(|error| error.payload())?,
+        None => svc.active_repo().await.map_err(|error| error.payload())?,
+    };
+    svc.backend()
+        .status(&repo)
+        .await
+        .map_err(|error| error.payload())
+}
+
+/// unified diff；`cached=true` 查看暂存区，默认工作区（未暂存）。
+/// `repo_id` 指定仓库（git-diff 面板按 key 内 repo 取数），缺省回落 active。
+#[tauri::command]
+async fn git_diff(
+    gateway: State<'_, Gateway>,
+    repo_id: Option<String>,
+    path: Option<String>,
+    cached: Option<bool>,
+) -> TauriResult<GitDiff> {
+    let svc = gateway.inner().git_service();
+    let repo = match repo_id {
+        Some(id) => svc.repo_by_id(&id).map_err(|error| error.payload())?,
+        None => svc.active_repo().await.map_err(|error| error.payload())?,
+    };
+    svc.backend()
+        .diff(&repo, cached.unwrap_or(false), path.as_deref())
+        .await
+        .map_err(|error| error.payload())
+}
+
+/// 最近提交历史，默认 30 条。
+#[tauri::command]
+async fn git_log(
+    gateway: State<'_, Gateway>,
+    limit: Option<usize>,
+) -> TauriResult<Vec<GitCommitInfo>> {
+    let svc = gateway.inner().git_service();
+    let repo = svc.active_repo().await.map_err(|error| error.payload())?;
+    svc.backend()
+        .log(&repo, limit.unwrap_or(30))
+        .await
+        .map_err(|error| error.payload())
+}
+
+/// 本地 + 远端分支（标记当前分支与 upstream）。
+#[tauri::command]
+async fn git_branches(gateway: State<'_, Gateway>) -> TauriResult<Vec<GitBranchItem>> {
+    let svc = gateway.inner().git_service();
+    let repo = svc.active_repo().await.map_err(|error| error.payload())?;
+    svc.backend()
+        .branches(&repo)
+        .await
+        .map_err(|error| error.payload())
+}
+
+/// 单文件行级 blame（路径相对 repo 根）。
+#[tauri::command]
+async fn git_blame(
+    gateway: State<'_, Gateway>,
+    repo_id: Option<String>,
+    path: String,
+) -> TauriResult<Vec<GitBlameLine>> {
+    let svc = gateway.inner().git_service();
+    let repo = match repo_id {
+        Some(id) => svc.repo_by_id(&id).map_err(|error| error.payload())?,
+        None => svc.active_repo().await.map_err(|error| error.payload())?,
+    };
+    svc.backend()
+        .blame(&repo, &path)
+        .await
+        .map_err(|error| error.payload())
+}
+
+/// stash 列表。
+#[tauri::command]
+async fn git_stash_list(gateway: State<'_, Gateway>) -> TauriResult<Vec<GitStashEntry>> {
+    let svc = gateway.inner().git_service();
+    let repo = svc.active_repo().await.map_err(|error| error.payload())?;
+    svc.backend()
+        .stash_list(&repo)
+        .await
+        .map_err(|error| error.payload())
+}
+
+/// 切换当前操作仓库（会话内存态）。
+#[tauri::command]
+async fn git_set_active_repo(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    repo_id: String,
+) -> TauriResult<()> {
+    gateway
+        .inner()
+        .git_service()
+        .set_active_repo(Some(repo_id))
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Git);
+    Ok(())
+}
+
+/// 暂存；`all=true` 暂存全部，或按 `paths`（相对 repo 根）暂存指定路径。
+#[tauri::command]
+async fn git_add(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    paths: Option<Vec<String>>,
+    all: Option<bool>,
+) -> TauriResult<()> {
+    let svc = gateway.inner().git_service();
+    let repo = svc.active_repo().await.map_err(|error| error.payload())?;
+    svc.backend()
+        .stage(&repo, &paths.unwrap_or_default(), all.unwrap_or(false))
+        .await
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Git);
+    Ok(())
+}
+
+/// 从暂存区取消暂存（`git restore --staged`；paths 为空 = 取消全部）。
+#[tauri::command]
+async fn git_unstage(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    paths: Option<Vec<String>>,
+) -> TauriResult<()> {
+    let svc = gateway.inner().git_service();
+    let repo = svc.active_repo().await.map_err(|error| error.payload())?;
+    svc.backend()
+        .unstage(&repo, &paths.unwrap_or_default())
+        .await
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Git);
+    Ok(())
+}
+
+/// 撤销工作区改动（丢弃未提交修改；需用户确认）。
+#[tauri::command]
+async fn git_restore(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    paths: Vec<String>,
+) -> TauriResult<()> {
+    if paths.is_empty() {
+        return Err(
+            crate::core::AppError::InvalidInput("git_restore requires at least one path".into())
+                .payload(),
+        );
+    }
+    let svc = gateway.inner().git_service();
+    let repo = svc.active_repo().await.map_err(|error| error.payload())?;
+    let outcome = svc
+        .confirm()
+        .request_and_wait(
+            GitOpKind::Checkout,
+            "撤销工作区改动".into(),
+            json!({ "paths": paths.clone() }),
+        )
+        .await
+        .map_err(|error| error.payload())?;
+    if outcome == ConfirmOutcome::Approved {
+        svc.backend()
+            .restore(&repo, &paths)
+            .await
+            .map_err(|error| error.payload())?;
+        state_emit.inner()(StateChange::Git);
+    }
+    Ok(())
+}
+
+/// 从暂存区提交（确认弹窗展示 staged diff 摘要）。
+#[tauri::command]
+async fn git_commit(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    message: String,
+) -> TauriResult<()> {
+    if message.trim().is_empty() {
+        return Err(
+            crate::core::AppError::InvalidInput("commit message must not be empty".into()).payload(),
+        );
+    }
+    let svc = gateway.inner().git_service();
+    let repo = svc.active_repo().await.map_err(|error| error.payload())?;
+    let detail = match svc.backend().diff(&repo, true, None).await {
+        Ok(d) => json!({
+            "staged_files": d.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>(),
+            "truncated": d.truncated,
+        }),
+        Err(_) => json!({ "staged_files": [] }),
+    };
+    let outcome = svc
+        .confirm()
+        .request_and_wait(GitOpKind::Commit, "提交暂存区改动".into(), detail)
+        .await
+        .map_err(|error| error.payload())?;
+    if outcome == ConfirmOutcome::Approved {
+        svc.backend()
+            .commit(&repo, &message)
+            .await
+            .map_err(|error| error.payload())?;
+        state_emit.inner()(StateChange::Git);
+    }
+    Ok(())
+}
+
+/// 重置到目标（默认 HEAD）；`--hard/--keep` 属高危写：默认关闭，需先开启
+/// `git.dangerous_writes` 开关，且仍走确认服务（展示将丢失改动清单）。
+#[tauri::command]
+async fn git_reset(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    mode: String,
+    target: Option<String>,
+) -> TauriResult<GitResetPreview> {
+    let reset_mode = GitResetMode::parse(&mode).map_err(|error| error.payload())?;
+    let svc = gateway.inner().git_service();
+    let repo = svc.active_repo().await.map_err(|error| error.payload())?;
+    if (reset_mode == GitResetMode::Hard || reset_mode == GitResetMode::Keep)
+        && !svc.dangerous_writes()
+    {
+        return Err(crate::core::AppError::InvalidInput(
+            "git reset --hard/--keep 会丢弃工作区改动，属危险写操作且默认关闭；请先开启「危险写操作」开关或改用 --soft/--mixed".into(),
+        )
+        .payload());
+    }
+    let detail = if reset_mode == GitResetMode::Hard || reset_mode == GitResetMode::Keep {
+        match svc.backend().status(&repo).await {
+            Ok(s) => json!({
+                "lost": s.staged.into_iter().chain(s.unstaged).map(|e| e.path).collect::<Vec<_>>(),
+            }),
+            Err(_) => json!({ "lost": [] }),
+        }
+    } else {
+        json!({ "lost": [] })
+    };
+    let outcome = svc
+        .confirm()
+        .request_and_wait(
+            GitOpKind::Reset,
+            format!(
+                "重置到 {}（--{}）",
+                target.as_deref().unwrap_or("HEAD"),
+                reset_mode.as_str()
+            ),
+            detail,
+        )
+        .await
+        .map_err(|error| error.payload())?;
+    if outcome == ConfirmOutcome::Approved {
+        let preview = svc
+            .backend()
+            .reset(&repo, reset_mode, target.as_deref())
+            .await
+            .map_err(|error| error.payload())?;
+        state_emit.inner()(StateChange::Git);
+        Ok(preview)
+    } else {
+        Ok(GitResetPreview::default())
+    }
+}
+
+/// 切换分支/提交；若工作区有未提交改动将被覆盖 → 高危写场景，默认关闭开关 + 确认。
+#[tauri::command]
+async fn git_checkout(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    target: String,
+) -> TauriResult<()> {
+    let svc = gateway.inner().git_service();
+    let repo = svc.active_repo().await.map_err(|error| error.payload())?;
+    let dirty = match svc.backend().status(&repo).await {
+        Ok(s) => !s.unstaged.is_empty() || !s.untracked.is_empty(),
+        Err(_) => false,
+    };
+    if dirty {
+        if !svc.dangerous_writes() {
+            return Err(crate::core::AppError::InvalidInput(
+                "checkout 将覆盖未提交改动，属危险写操作且默认关闭；请先提交/暂存改动或开启「危险写操作」开关".into(),
+            )
+            .payload());
+        }
+        let outcome = svc
+            .confirm()
+            .request_and_wait(
+                GitOpKind::Checkout,
+                format!("切换到 {target}（将覆盖未提交改动）"),
+                json!({ "target": target.clone() }),
+            )
+            .await
+            .map_err(|error| error.payload())?;
+        if outcome == ConfirmOutcome::Approved {
+            svc.backend()
+                .checkout(&repo, &target)
+                .await
+                .map_err(|error| error.payload())?;
+            state_emit.inner()(StateChange::Git);
+        }
+    } else {
+        svc.backend()
+            .checkout(&repo, &target)
+            .await
+            .map_err(|error| error.payload())?;
+        state_emit.inner()(StateChange::Git);
+    }
+    Ok(())
+}
+
+/// stash 操作：push/apply 直接执行；pop/drop 需确认。
+#[tauri::command]
+async fn git_stash(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    action: String,
+    message: Option<String>,
+) -> TauriResult<()> {
+    let stash_action = GitStashAction::parse(&action).map_err(|error| error.payload())?;
+    let svc = gateway.inner().git_service();
+    let repo = svc.active_repo().await.map_err(|error| error.payload())?;
+    match stash_action {
+        GitStashAction::Push | GitStashAction::Apply => {
+            svc.backend()
+                .stash(&repo, stash_action, message.as_deref())
+                .await
+                .map_err(|error| error.payload())?;
+            state_emit.inner()(StateChange::Git);
+        }
+        GitStashAction::Pop => {
+            let outcome = svc
+                .confirm()
+                .request_and_wait(
+                    GitOpKind::StashApply,
+                    "应用并移除最新 stash".into(),
+                    json!({}),
+                )
+                .await
+                .map_err(|error| error.payload())?;
+            if outcome == ConfirmOutcome::Approved {
+                svc.backend()
+                    .stash(&repo, stash_action, None)
+                    .await
+                    .map_err(|error| error.payload())?;
+                state_emit.inner()(StateChange::Git);
+            }
+        }
+        GitStashAction::Drop => {
+            let outcome = svc
+                .confirm()
+                .request_and_wait(GitOpKind::StashDrop, "丢弃最新 stash".into(), json!({}))
+                .await
+                .map_err(|error| error.payload())?;
+            if outcome == ConfirmOutcome::Approved {
+                svc.backend()
+                    .stash(&repo, stash_action, None)
+                    .await
+                    .map_err(|error| error.payload())?;
+                state_emit.inner()(StateChange::Git);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 推送到远程分支（需确认）。
+#[tauri::command]
+async fn git_push(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    remote: Option<String>,
+    branch: Option<String>,
+) -> TauriResult<()> {
+    let svc = gateway.inner().git_service();
+    let repo = svc.active_repo().await.map_err(|error| error.payload())?;
+    let detail = match svc.backend().status(&repo).await {
+        Ok(s) => json!({ "branch": s.branch, "ahead": s.ahead }),
+        Err(_) => json!({}),
+    };
+    let outcome = svc
+        .confirm()
+        .request_and_wait(GitOpKind::Push, "推送到远程分支".into(), detail)
+        .await
+        .map_err(|error| error.payload())?;
+    if outcome == ConfirmOutcome::Approved {
+        svc.backend()
+            .push(&repo, remote.as_deref(), branch.as_deref())
+            .await
+            .map_err(|error| error.payload())?;
+        state_emit.inner()(StateChange::Git);
+    }
+    Ok(())
+}
+
+/// 拉取并合并远程改动（需确认）。
+#[tauri::command]
+async fn git_pull(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+) -> TauriResult<()> {
+    let svc = gateway.inner().git_service();
+    let repo = svc.active_repo().await.map_err(|error| error.payload())?;
+    let outcome = svc
+        .confirm()
+        .request_and_wait(GitOpKind::Pull, "拉取并合并远程改动".into(), json!({}))
+        .await
+        .map_err(|error| error.payload())?;
+    if outcome == ConfirmOutcome::Approved {
+        svc.backend()
+            .pull(&repo)
+            .await
+            .map_err(|error| error.payload())?;
+        state_emit.inner()(StateChange::Git);
+    }
+    Ok(())
+}
+
+/// 冲突解决：ours / theirs / both。
+#[tauri::command]
+async fn git_resolve_conflict(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    repo_id: Option<String>,
+    path: String,
+    take: String,
+) -> TauriResult<()> {
+    let take = ConflictTake::parse(&take).map_err(|error| error.payload())?;
+    let svc = gateway.inner().git_service();
+    let repo = match repo_id {
+        Some(id) => svc.repo_by_id(&id).map_err(|error| error.payload())?,
+        None => svc.active_repo().await.map_err(|error| error.payload())?,
+    };
+    svc.backend()
+        .resolve_conflict(&repo, &path, take)
+        .await
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Git);
+    Ok(())
+}
+
+/// 确认服务唯一入口：向等待中的写操作投递用户决定。
+#[tauri::command]
+fn git_confirm(gateway: State<'_, Gateway>, op_id: String, approved: bool) -> TauriResult<()> {
+    gateway
+        .inner()
+        .git_service()
+        .confirm()
+        .resolve(&op_id, approved)
+        .map_err(|error| error.payload())
+}
+
+/// 危险写开关回显（前端弹窗/设置读取）。
+#[tauri::command]
+fn git_get_confirm_config(gateway: State<'_, Gateway>) -> TauriResult<serde_json::Value> {
+    Ok(json!({
+        "dangerous_writes": gateway.inner().git_service().dangerous_writes(),
+    }))
+}
+
+/// 持久化并热更新危险写开关（config.json `git` 节）。
+#[tauri::command]
+async fn git_set_dangerous_writes(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    enabled: bool,
+) -> TauriResult<serde_json::Value> {
+    gateway
+        .inner()
+        .set_git_dangerous_writes(enabled)
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Git);
+    Ok(json!({ "dangerous_writes": enabled }))
+}
+
 #[tauri::command]
 async fn fs_read(
     gateway: State<'_, Gateway>,
@@ -1281,6 +1778,28 @@ pub fn run() {
             fs_info,
             get_home_dir,
             fs_suggest_abs,
+            // Git
+            git_repos,
+            git_status,
+            git_diff,
+            git_log,
+            git_branches,
+            git_blame,
+            git_stash_list,
+            git_set_active_repo,
+            git_add,
+            git_unstage,
+            git_restore,
+            git_commit,
+            git_reset,
+            git_checkout,
+            git_stash,
+            git_push,
+            git_pull,
+            git_resolve_conflict,
+            git_confirm,
+            git_get_confirm_config,
+            git_set_dangerous_writes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

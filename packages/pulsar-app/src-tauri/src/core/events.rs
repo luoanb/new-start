@@ -49,6 +49,17 @@ pub enum StateChange {
     /// 工作区集合 / 文件树变化（添加/移除/切换工作区、ignore 编辑、fs 写操作），
     /// 前端应重新拉取工作区列表与文件树。
     Workspaces,
+    /// 仓库状态变化（status/stage/commit/reset/push/pull/stash 等写操作后），
+    /// 前端应重拉 git 面板（repos/status/log/stash）。
+    Git,
+    /// git 写操作确认请求：`git_confirm` 处理后事件收敛（无 UI 超时作废）。
+    /// `op_kind` 为写操作分类（commit/push/pull/reset/...），供前端分类展示。
+    GitConfirm {
+        op_id: String,
+        op_kind: String,
+        title: String,
+        detail: serde_json::Value,
+    },
 }
 
 /// 状态事件发射器：由 `lib.rs` setup 构造（捕获 AppHandle），

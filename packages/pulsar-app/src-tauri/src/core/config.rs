@@ -19,9 +19,20 @@ pub struct AppConfigFile {
     /// 内嵌网络服务配置（远程模式）。缺省 = 不启动，等价现状。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub server: Option<ServerSection>,
+    /// git 领域配置（顶层 `git` 键）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitSection>,
     /// 尚未建模的顶层字段原样保留，写回时不丢数据。
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+/// git 领域配置（顶层 `git` 键）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GitSection {
+    /// 高危写开关（reset --hard/--keep / checkout 丢弃改动）。默认 false。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dangerous_writes: Option<bool>,
 }
 
 /// 内嵌 HTTP server 配置（顶层 `server` 键）。
@@ -155,5 +166,28 @@ mod tests {
         let json = serde_json::to_string(&config).expect("serialize");
         assert!(json.contains("future_key"));
         assert!(json.contains("server"));
+    }
+
+    #[test]
+    fn git_section_parses_and_defaults() {
+        // 缺省无 `git` 键 → None（gateway 回落 false）。
+        assert!(parse(r#"{"server":{"enabled":false}}"#).git.is_none());
+        // 显式 false / true 均可解析。
+        let off = parse(r#"{"git":{"dangerous_writes":false}}"#);
+        assert_eq!(off.git.unwrap().dangerous_writes, Some(false));
+        let on = parse(r#"{"git":{"dangerous_writes":true}}"#);
+        assert_eq!(on.git.unwrap().dangerous_writes, Some(true));
+        // 仅缺省字段 → None。
+        assert_eq!(parse(r#"{"git":{}}"#).git.unwrap().dangerous_writes, None);
+    }
+
+    #[test]
+    fn git_section_roundtrips_with_extra() {
+        let config = parse(r#"{"git":{"dangerous_writes":true},"future_key":42}"#);
+        let json = serde_json::to_string(&config).expect("serialize");
+        assert!(json.contains("dangerous_writes"));
+        assert!(json.contains("future_key"));
+        // git 键被类型化承载后不再落入 extra。
+        assert!(config.extra.get("git").is_none());
     }
 }

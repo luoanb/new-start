@@ -8,7 +8,7 @@
 
 use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::path::PathBuf;
 
 use crate::core::{
@@ -19,6 +19,8 @@ use crate::core::{
     StateChange, TopicStatus, TopicUpdate,
 };
 use crate::fileops::workspace::{WorkspaceEntry, WorkspaceStore};
+use crate::fileops::gitops::confirm::{ConfirmOutcome, GitOpKind};
+use crate::fileops::gitops::{ConflictTake, GitResetMode, GitStashAction};
 
 use super::NetState;
 
@@ -941,6 +943,383 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
             value(info)
         }
 
+        // ── Git ──
+        "git_repos" => {
+            let repos = state
+                .gateway
+                .git_service()
+                .discover_repos()
+                .await
+                .map_err(RpcErrorBody::from)?;
+            value(repos)
+        }
+        "git_status" => {
+            let p: GitStatusParams = from_params(params)?;
+            let svc = state.gateway.git_service();
+            let repo = match p.repo_id {
+                Some(id) => svc.repo_by_id(&id).map_err(RpcErrorBody::from)?,
+                None => svc.active_repo().await.map_err(RpcErrorBody::from)?,
+            };
+            let view = svc.backend().status(&repo).await.map_err(RpcErrorBody::from)?;
+            value(view)
+        }
+        "git_diff" => {
+            let p: GitDiffParams = from_params(params)?;
+            let svc = state.gateway.git_service();
+            let repo = match p.repo_id {
+                Some(id) => svc.repo_by_id(&id).map_err(RpcErrorBody::from)?,
+                None => svc.active_repo().await.map_err(RpcErrorBody::from)?,
+            };
+            let diff = svc
+                .backend()
+                .diff(&repo, p.cached.unwrap_or(false), p.path.as_deref())
+                .await
+                .map_err(RpcErrorBody::from)?;
+            value(diff)
+        }
+        "git_log" => {
+            let p: GitLogParams = from_params(params)?;
+            let svc = state.gateway.git_service();
+            let repo = svc.active_repo().await.map_err(RpcErrorBody::from)?;
+            let commits = svc
+                .backend()
+                .log(&repo, p.limit.unwrap_or(30))
+                .await
+                .map_err(RpcErrorBody::from)?;
+            value(commits)
+        }
+        "git_branches" => {
+            let svc = state.gateway.git_service();
+            let repo = svc.active_repo().await.map_err(RpcErrorBody::from)?;
+            let branches = svc
+                .backend()
+                .branches(&repo)
+                .await
+                .map_err(RpcErrorBody::from)?;
+            value(branches)
+        }
+        "git_blame" => {
+            let p: GitBlameParams = from_params(params)?;
+            let svc = state.gateway.git_service();
+            let repo = match p.repo_id {
+                Some(id) => svc.repo_by_id(&id).map_err(RpcErrorBody::from)?,
+                None => svc.active_repo().await.map_err(RpcErrorBody::from)?,
+            };
+            let lines = svc
+                .backend()
+                .blame(&repo, &p.path)
+                .await
+                .map_err(RpcErrorBody::from)?;
+            value(lines)
+        }
+        "git_stash_list" => {
+            let svc = state.gateway.git_service();
+            let repo = svc.active_repo().await.map_err(RpcErrorBody::from)?;
+            let entries = svc
+                .backend()
+                .stash_list(&repo)
+                .await
+                .map_err(RpcErrorBody::from)?;
+            value(entries)
+        }
+        "git_set_active_repo" => {
+            let p: GitSetActiveRepoParams = from_params(params)?;
+            state
+                .gateway
+                .git_service()
+                .set_active_repo(Some(p.repo_id))
+                .map_err(RpcErrorBody::from)?;
+            (state.state_emit)(StateChange::Git);
+            value(())
+        }
+        "git_add" => {
+            let p: GitAddParams = from_params(params)?;
+            let svc = state.gateway.git_service();
+            let repo = svc.active_repo().await.map_err(RpcErrorBody::from)?;
+            svc.backend()
+                .stage(&repo, &p.paths.unwrap_or_default(), p.all.unwrap_or(false))
+                .await
+                .map_err(RpcErrorBody::from)?;
+            (state.state_emit)(StateChange::Git);
+            value(())
+        }
+        "git_unstage" => {
+            let p: GitUnstageParams = from_params(params)?;
+            let svc = state.gateway.git_service();
+            let repo = svc.active_repo().await.map_err(RpcErrorBody::from)?;
+            svc.backend()
+                .unstage(&repo, &p.paths.unwrap_or_default())
+                .await
+                .map_err(RpcErrorBody::from)?;
+            (state.state_emit)(StateChange::Git);
+            value(())
+        }
+        "git_restore" => {
+            let p: GitRestoreParams = from_params(params)?;
+            if p.paths.is_empty() {
+                return Err(bad_request("git_restore requires at least one path"));
+            }
+            let svc = state.gateway.git_service();
+            let repo = svc.active_repo().await.map_err(RpcErrorBody::from)?;
+            let outcome = svc
+                .confirm()
+                .request_and_wait(
+                    GitOpKind::Checkout,
+                    "撤销工作区改动".into(),
+                    json!({ "paths": p.paths.clone() }),
+                )
+                .await
+                .map_err(RpcErrorBody::from)?;
+            if outcome == ConfirmOutcome::Approved {
+                svc.backend()
+                    .restore(&repo, &p.paths)
+                    .await
+                    .map_err(RpcErrorBody::from)?;
+                (state.state_emit)(StateChange::Git);
+            }
+            value(())
+        }
+        "git_commit" => {
+            let p: GitCommitParams = from_params(params)?;
+            if p.message.trim().is_empty() {
+                return Err(bad_request("commit message must not be empty"));
+            }
+            let svc = state.gateway.git_service();
+            let repo = svc.active_repo().await.map_err(RpcErrorBody::from)?;
+            let detail = match svc.backend().diff(&repo, true, None).await {
+                Ok(d) => json!({
+                    "staged_files": d.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>(),
+                    "truncated": d.truncated,
+                }),
+                Err(_) => json!({ "staged_files": [] }),
+            };
+            let outcome = svc
+                .confirm()
+                .request_and_wait(GitOpKind::Commit, "提交暂存区改动".into(), detail)
+                .await
+                .map_err(RpcErrorBody::from)?;
+            if outcome == ConfirmOutcome::Approved {
+                svc.backend()
+                    .commit(&repo, &p.message)
+                    .await
+                    .map_err(RpcErrorBody::from)?;
+                (state.state_emit)(StateChange::Git);
+            }
+            value(())
+        }
+        "git_reset" => {
+            let p: GitResetParams = from_params(params)?;
+            let reset_mode = GitResetMode::parse(&p.mode).map_err(RpcErrorBody::from)?;
+            let svc = state.gateway.git_service();
+            let repo = svc.active_repo().await.map_err(RpcErrorBody::from)?;
+            if (reset_mode == GitResetMode::Hard || reset_mode == GitResetMode::Keep)
+                && !svc.dangerous_writes()
+            {
+                return Err(bad_request(
+                    "git reset --hard/--keep 会丢弃工作区改动，属危险写操作且默认关闭；请先开启「危险写操作」开关或改用 --soft/--mixed",
+                ));
+            }
+            let detail = if reset_mode == GitResetMode::Hard || reset_mode == GitResetMode::Keep {
+                match svc.backend().status(&repo).await {
+                    Ok(s) => json!({
+                        "lost": s.staged.into_iter().chain(s.unstaged).map(|e| e.path).collect::<Vec<_>>(),
+                    }),
+                    Err(_) => json!({ "lost": [] }),
+                }
+            } else {
+                json!({ "lost": [] })
+            };
+            let outcome = svc
+                .confirm()
+                .request_and_wait(
+                    GitOpKind::Reset,
+                    format!(
+                        "重置到 {}（--{}）",
+                        p.target.as_deref().unwrap_or("HEAD"),
+                        reset_mode.as_str()
+                    ),
+                    detail,
+                )
+                .await
+                .map_err(RpcErrorBody::from)?;
+            if outcome == ConfirmOutcome::Approved {
+                let preview = svc
+                    .backend()
+                    .reset(&repo, reset_mode, p.target.as_deref())
+                    .await
+                    .map_err(RpcErrorBody::from)?;
+                (state.state_emit)(StateChange::Git);
+                value(preview)
+            } else {
+                value(crate::fileops::gitops::GitResetPreview::default())
+            }
+        }
+        "git_checkout" => {
+            let p: GitCheckoutParams = from_params(params)?;
+            let svc = state.gateway.git_service();
+            let repo = svc.active_repo().await.map_err(RpcErrorBody::from)?;
+            let dirty = match svc.backend().status(&repo).await {
+                Ok(s) => !s.unstaged.is_empty() || !s.untracked.is_empty(),
+                Err(_) => false,
+            };
+            if dirty {
+                if !svc.dangerous_writes() {
+                    return Err(bad_request(
+                        "checkout 将覆盖未提交改动，属危险写操作且默认关闭；请先提交/暂存改动或开启「危险写操作」开关",
+                    ));
+                }
+                let outcome = svc
+                    .confirm()
+                    .request_and_wait(
+                        GitOpKind::Checkout,
+                        format!("切换到 {}（将覆盖未提交改动）", p.target),
+                        json!({ "target": p.target.clone() }),
+                    )
+                    .await
+                    .map_err(RpcErrorBody::from)?;
+                if outcome == ConfirmOutcome::Approved {
+                    svc.backend()
+                        .checkout(&repo, &p.target)
+                        .await
+                        .map_err(RpcErrorBody::from)?;
+                    (state.state_emit)(StateChange::Git);
+                }
+            } else {
+                svc.backend()
+                    .checkout(&repo, &p.target)
+                    .await
+                    .map_err(RpcErrorBody::from)?;
+                (state.state_emit)(StateChange::Git);
+            }
+            value(())
+        }
+        "git_stash" => {
+            let p: GitStashParams = from_params(params)?;
+            let stash_action = GitStashAction::parse(&p.action).map_err(RpcErrorBody::from)?;
+            let svc = state.gateway.git_service();
+            let repo = svc.active_repo().await.map_err(RpcErrorBody::from)?;
+            match stash_action {
+                GitStashAction::Push | GitStashAction::Apply => {
+                    svc.backend()
+                        .stash(&repo, stash_action, p.message.as_deref())
+                        .await
+                        .map_err(RpcErrorBody::from)?;
+                    (state.state_emit)(StateChange::Git);
+                }
+                GitStashAction::Pop => {
+                    let outcome = svc
+                        .confirm()
+                        .request_and_wait(
+                            GitOpKind::StashApply,
+                            "应用并移除最新 stash".into(),
+                            json!({}),
+                        )
+                        .await
+                        .map_err(RpcErrorBody::from)?;
+                    if outcome == ConfirmOutcome::Approved {
+                        svc.backend()
+                            .stash(&repo, stash_action, None)
+                            .await
+                            .map_err(RpcErrorBody::from)?;
+                        (state.state_emit)(StateChange::Git);
+                    }
+                }
+                GitStashAction::Drop => {
+                    let outcome = svc
+                        .confirm()
+                        .request_and_wait(GitOpKind::StashDrop, "丢弃最新 stash".into(), json!({}))
+                        .await
+                        .map_err(RpcErrorBody::from)?;
+                    if outcome == ConfirmOutcome::Approved {
+                        svc.backend()
+                            .stash(&repo, stash_action, None)
+                            .await
+                            .map_err(RpcErrorBody::from)?;
+                        (state.state_emit)(StateChange::Git);
+                    }
+                }
+            }
+            value(())
+        }
+        "git_push" => {
+            let p: GitPushParams = from_params(params)?;
+            let svc = state.gateway.git_service();
+            let repo = svc.active_repo().await.map_err(RpcErrorBody::from)?;
+            let detail = match svc.backend().status(&repo).await {
+                Ok(s) => json!({ "branch": s.branch, "ahead": s.ahead }),
+                Err(_) => json!({}),
+            };
+            let outcome = svc
+                .confirm()
+                .request_and_wait(GitOpKind::Push, "推送到远程分支".into(), detail)
+                .await
+                .map_err(RpcErrorBody::from)?;
+            if outcome == ConfirmOutcome::Approved {
+                svc.backend()
+                    .push(&repo, p.remote.as_deref(), p.branch.as_deref())
+                    .await
+                    .map_err(RpcErrorBody::from)?;
+                (state.state_emit)(StateChange::Git);
+            }
+            value(())
+        }
+        "git_pull" => {
+            let svc = state.gateway.git_service();
+            let repo = svc.active_repo().await.map_err(RpcErrorBody::from)?;
+            let outcome = svc
+                .confirm()
+                .request_and_wait(GitOpKind::Pull, "拉取并合并远程改动".into(), json!({}))
+                .await
+                .map_err(RpcErrorBody::from)?;
+            if outcome == ConfirmOutcome::Approved {
+                svc.backend()
+                    .pull(&repo)
+                    .await
+                    .map_err(RpcErrorBody::from)?;
+                (state.state_emit)(StateChange::Git);
+            }
+            value(())
+        }
+        "git_resolve_conflict" => {
+            let p: GitResolveConflictParams = from_params(params)?;
+            let take = ConflictTake::parse(&p.take).map_err(RpcErrorBody::from)?;
+            let svc = state.gateway.git_service();
+            let repo = match p.repo_id {
+                Some(id) => svc.repo_by_id(&id).map_err(RpcErrorBody::from)?,
+                None => svc.active_repo().await.map_err(RpcErrorBody::from)?,
+            };
+            svc.backend()
+                .resolve_conflict(&repo, &p.path, take)
+                .await
+                .map_err(RpcErrorBody::from)?;
+            (state.state_emit)(StateChange::Git);
+            value(())
+        }
+        "git_confirm" => {
+            let p: GitConfirmParams = from_params(params)?;
+            state
+                .gateway
+                .git_service()
+                .confirm()
+                .resolve(&p.op_id, p.approved)
+                .map_err(RpcErrorBody::from)?;
+            value(())
+        }
+        "git_get_confirm_config" => {
+            value(json!({
+                "dangerous_writes": state.gateway.git_service().dangerous_writes(),
+            }))
+        }
+        "git_set_dangerous_writes" => {
+            let p: GitSetDangerousWritesParams = from_params(params)?;
+            state
+                .gateway
+                .set_git_dangerous_writes(p.enabled)
+                .map_err(RpcErrorBody::from)?;
+            (state.state_emit)(StateChange::Git);
+            value(json!({ "dangerous_writes": p.enabled }))
+        }
+
         _ => Err(RpcErrorBody {
             code: "unknown_command".into(),
             message: format!("unknown command: {cmd}"),
@@ -1035,6 +1414,114 @@ struct FsGrepParams {
     multiline: Option<bool>,
     glob: Option<String>,
     context: Option<usize>,
+}
+
+// ── Git 参数（字段名与前端 invoke 一致）──
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitStatusParams {
+    repo_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitDiffParams {
+    repo_id: Option<String>,
+    path: Option<String>,
+    cached: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitLogParams {
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitBlameParams {
+    repo_id: Option<String>,
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitSetActiveRepoParams {
+    repo_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitAddParams {
+    paths: Option<Vec<String>>,
+    all: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitUnstageParams {
+    paths: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitRestoreParams {
+    paths: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitCommitParams {
+    message: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitResetParams {
+    mode: String,
+    target: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitCheckoutParams {
+    target: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitStashParams {
+    action: String,
+    message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitPushParams {
+    remote: Option<String>,
+    branch: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitResolveConflictParams {
+    repo_id: Option<String>,
+    path: String,
+    take: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitConfirmParams {
+    op_id: String,
+    approved: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitSetDangerousWritesParams {
+    enabled: bool,
 }
 
 /// fs_* 命令统一以 active workspace 为根。

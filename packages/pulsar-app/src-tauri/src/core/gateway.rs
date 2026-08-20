@@ -41,8 +41,11 @@ use super::{
     CompactionConfig,
 };
 
+use crate::core::config::{ConfigStore, GitSection};
 use crate::fileops::fs::FileSystem;
 use crate::fileops::fs_tools::{register_file_tools, FileToolContext};
+use crate::fileops::gitops::service::{build_git_service, GitService};
+use crate::fileops::gitops::tools::{register_git_tools, GitToolContext};
 use crate::fileops::workspace::WorkspaceStore;
 
 use super::events::{StateChange, StateEmitter};
@@ -87,6 +90,9 @@ pub struct Gateway {
     /// 文件 AI 工具与前端文件视图共用同一实例，保证越界防护与已读状态一致。
     workspace_store: Arc<WorkspaceStore>,
     file_system: Arc<FileSystem>,
+    /// git 能力组合服务（CliGitBackend + 确认服务 + active repo + 危险写开关）。
+    /// Tauri commands、AI 原生 git 工具、RPC 共用同一实例。
+    git_service: Arc<GitService>,
     /// 装配互斥：串行化启动期后台装配与运行期手动重装配，保证「以最后一次为准」。
     assemble_lock: Arc<tokio::sync::Mutex<()>>,
     /// 状态事件发射器：流式入口（`send_model_message_stream`）内部广播
@@ -186,13 +192,28 @@ impl Gateway {
             Arc::clone(&file_system),
         ));
 
+        // git 能力：CliGitBackend + 确认服务 + active repo + 危险写开关。
+        // 开关默认关，可经 config.json 顶层 `git.dangerous_writes` 开启
+        // （未建模键经 AppConfigFile.extra 无损承载）。
+        let dangerous_writes = git_dangerous_writes_config(store.root());
+        let git_service = build_git_service(
+            Arc::clone(&workspace_store),
+            state_emit.clone(),
+            dangerous_writes,
+        );
+        let git_ctx = Arc::new(GitToolContext::new(Arc::clone(&git_service)));
+
         // 工具装配：本地通道（native + config）同步就绪、启动即可用；MCP 通道
         // 改为后台异步装配（不阻塞应用启动，连接完成自动登记并广播 Tools）。
         // 测试注入注册表时直接使用注入值（跳过本地/MCP 装配）。
         let tool_registry = match &test_tool_registry {
             Some(registry) => Arc::clone(registry),
             None => {
-                let local_registry = assemble_local_tools(&store.root(), Arc::clone(&file_ctx))?;
+                let local_registry = assemble_local_tools(
+                    &store.root(),
+                    Arc::clone(&file_ctx),
+                    Arc::clone(&git_ctx),
+                )?;
                 Arc::new(RwLock::new(local_registry))
             }
         };
@@ -226,12 +247,14 @@ impl Gateway {
             let assemble_lock = Arc::clone(&assemble_lock);
             let storage_root = store.root().to_path_buf();
             let file_ctx_for_assembly = Arc::clone(&file_ctx);
+            let git_ctx_for_assembly = Arc::clone(&git_ctx);
             let neuron_manager_for_assembly = Arc::clone(&neuron_manager);
             tauri::async_runtime::spawn(async move {
                 let _guard = assemble_lock.lock().await;
                 let mut base_registry = match assemble_local_tools(
                     &storage_root,
                     Arc::clone(&file_ctx_for_assembly),
+                    Arc::clone(&git_ctx_for_assembly),
                 ) {
                     Ok(registry) => registry,
                     Err(error) => {
@@ -348,6 +371,7 @@ impl Gateway {
             mcp_server_statuses,
             workspace_store,
             file_system,
+            git_service,
             assemble_lock,
             state_emit: EmitterSlot(state_emit),
         })
@@ -567,7 +591,8 @@ impl Gateway {
             Arc::clone(&self.workspace_store),
             Arc::clone(&self.file_system),
         ));
-        let mut base_registry = assemble_local_tools(&self.store.root(), file_ctx)?;
+        let git_ctx = Arc::new(GitToolContext::new(Arc::clone(&self.git_service)));
+        let mut base_registry = assemble_local_tools(&self.store.root(), file_ctx, git_ctx)?;
         // base 装配统一含神经元 System 工具，保证保存配置后的重装配与启动装配一致。
         register_system_tools(&mut base_registry, Arc::clone(&self.neuron_manager));
         let (new_registry, new_statuses) = assemble_mcp_progressive(
@@ -1015,6 +1040,22 @@ impl Gateway {
         Arc::clone(&self.file_system)
     }
 
+    pub fn git_service(&self) -> Arc<GitService> {
+        Arc::clone(&self.git_service)
+    }
+
+    /// 持久化 git 危险写开关到 config.json `git` 节并热更新内存开关。
+    /// 沿用统一 ConfigStore 读改写 + 原子写回流程；失败不触碰内存状态。
+    pub fn set_git_dangerous_writes(&self, enabled: bool) -> AppResult<()> {
+        ConfigStore::new(self.store.root().to_path_buf()).update(|c| {
+            c.git = Some(GitSection {
+                dangerous_writes: Some(enabled),
+            });
+        })?;
+        self.git_service.set_dangerous_writes(enabled);
+        Ok(())
+    }
+
     pub fn providers(&self) -> ProviderRegistry {
         self.providers.clone()
     }
@@ -1182,6 +1223,17 @@ fn spawn_neuron_recycle_runtime(
     });
 }
 
+/// 从 config.json 顶层 `git.dangerous_writes` 读取危险写开关（默认关）。
+fn git_dangerous_writes_config(storage_root: &std::path::Path) -> bool {
+    let Ok(config) = ConfigStore::new(storage_root.to_path_buf()).read() else {
+        return false;
+    };
+    config
+        .git
+        .and_then(|g| g.dangerous_writes)
+        .unwrap_or(false)
+}
+
 /// 本地通道装配（native + config，同步、无网络）：启动即可用。
 ///
 /// `execute_command` 是首个上架 native 工具（见 inserts/execute_command.md），
@@ -1189,17 +1241,21 @@ fn spawn_neuron_recycle_runtime(
 /// 文件工具集（list_directory/read_file/write_file/search_replace/delete_file/glob/grep/
 /// file_info/create_directory/rename，各见 inserts/<name>.md）随后追加，共享
 /// `FileToolContext`（工作区存储 + 文件操作层）。
+/// git 工具集（只读 6 个 Core + 写 9 个 Normal，各见 inserts/git_*.md）共用
+/// `GitToolContext`（GitService：backend + 确认 + active repo + 危险写开关）。
 /// 配置驱动通道：dynamic_tools.json（HttpTool / CommandTool）。声明即 schema，
 /// 豁免 insert 门禁；命令模板复用 cmd_exec 安全护栏。
 fn assemble_local_tools(
     storage_root: &std::path::Path,
     file_ctx: Arc<FileToolContext>,
+    git_ctx: Arc<GitToolContext>,
 ) -> AppResult<ToolRegistry> {
     let mut registry = ToolRegistry::new();
     // 内置工具全部打标 Core（用户决策）：任何对话都得带上。
     registry.register_core(ExecuteCommandTool::new());
     registry.register_core(GetCurrentTimeTool::new());
     register_file_tools(&mut registry, file_ctx);
+    register_git_tools(&mut registry, git_ctx);
     let tool_config = ToolConfigReader::new(storage_root.to_path_buf());
     let dynamic = tool_config.dynamic_tools()?;
     for cfg in dynamic.http {

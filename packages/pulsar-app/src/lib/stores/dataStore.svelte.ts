@@ -29,6 +29,16 @@ import type {
   ThinkingConfig,
   ChatModelSelection,
   WorkspaceView,
+  GitView,
+  GitRepo,
+  GitStatusView,
+  GitBranchItem,
+  GitCommitInfo,
+  GitStashEntry,
+  GitConfirmRequest,
+  GitResetMode,
+  GitStashAction,
+  ConflictTake,
 } from "$lib/types";
 import { formatInvokeError } from "$lib/utils/formatInvokeError";
 
@@ -54,6 +64,11 @@ const state = $state({
   workspacesVersion: 0,
   /** 工作区集合 + active（文件树/编辑器数据源）。 */
   workspaces: null as WorkspaceView | null,
+  // ── Git（git 面板 / 文件树徽标 / git-diff 数据源）──
+  /** git 聚合视图（repos/status/branches/log/stash/开关）。 */
+  git: null as GitView | null,
+  /** 后端写操作确认请求队列（ConfirmDialog 消费后 resolve）。 */
+  gitConfirmQueue: [] as GitConfirmRequest[],
   // ── 神经元统一管理：列表 ←→ 画布共享状态 ──
   /** 画布核心（单选=1 项，多选=数组；列表行点击驱动）。 */
   neuronSelection: [] as string[],
@@ -116,6 +131,77 @@ async function refreshPoller(): Promise<void> {
 async function refreshWorkspaces(): Promise<void> {
   state.workspaces = await api.invoke<WorkspaceView>("list_workspaces");
   state.workspacesVersion++;
+}
+
+/** 空 git 视图（无仓库 / 拉取失败兜底）。 */
+function emptyGitView(): GitView {
+  return {
+    repos: [],
+    activeRepoId: null,
+    statusByRepo: {},
+    status: null,
+    branches: [],
+    log: [],
+    stash: [],
+    confirmConfig: { dangerous_writes: false },
+  };
+}
+
+/**
+ * Git 聚合视图刷新：git 事件（写操作/仓库切换）后重拉。
+ * repos 先拉；active repo 失效时回落第一个 repo（后端 active_repo() 同策略）。
+ * status 按 repo 逐仓库拉取（文件树徽标按文件归属 repo 取数，不切换 active repo）；
+ * branches/log/stash 对 active repo 并行拉取，单个失败不影响其余（无仓库时整组跳过）。
+ */
+async function refreshGit(): Promise<void> {
+  try {
+    const repos = await api.invoke<GitRepo[]>("git_repos");
+    const previousActive = state.git?.activeRepoId ?? null;
+    let activeRepoId: string | null = null;
+    if (repos.length > 0) {
+      activeRepoId =
+        previousActive && repos.some((r) => r.id === previousActive)
+          ? previousActive
+          : repos[0].id;
+      if (activeRepoId !== previousActive) {
+        await api.invoke("git_set_active_repo", { repoId: activeRepoId });
+      }
+    }
+    const statusByRepo = Object.fromEntries(
+      await Promise.all(
+        repos.map(async (r) => [
+          r.id,
+          await api
+            .invoke<GitStatusView>("git_status", { repoId: r.id })
+            .catch(() => null),
+        ]),
+      ),
+    ) as Record<string, GitStatusView | null>;
+    const [branches, log, stash, confirmConfig] =
+      repos.length > 0
+        ? await Promise.all([
+            api.invoke<GitBranchItem[]>("git_branches").catch(() => []),
+            api.invoke<GitCommitInfo[]>("git_log").catch(() => []),
+            api.invoke<GitStashEntry[]>("git_stash_list").catch(() => []),
+            api
+              .invoke<{ dangerous_writes: boolean }>("git_get_confirm_config")
+              .catch(() => ({ dangerous_writes: false })),
+          ])
+        : [[], [], [], { dangerous_writes: false }];
+    state.git = {
+      repos,
+      activeRepoId,
+      statusByRepo,
+      status: activeRepoId ? (statusByRepo[activeRepoId] ?? null) : null,
+      branches,
+      log,
+      stash,
+      confirmConfig: confirmConfig ?? { dangerous_writes: false },
+    };
+  } catch (e) {
+    state.git = emptyGitView();
+    state.error = `Git refresh failed: ${formatInvokeError(e)}`;
+  }
 }
 
 /** 服务商/模型配置变化（保存后广播）：重新拉取 providers 与 models。 */
@@ -201,6 +287,14 @@ async function handleStateChanged(payload: StateChangePayload): Promise<void> {
       state.toolsVersion++;
     } else if (payload.kind === "workspaces") {
       await refreshWorkspaces();
+    } else if (payload.kind === "git") {
+      await refreshGit();
+    } else if (payload.kind === "git_confirm") {
+      // 写操作确认请求：入队由 ConfirmDialog 消费（resolve 后弹出下一个）。
+      state.gitConfirmQueue = [
+        ...state.gitConfirmQueue,
+        { op_id: payload.op_id, kind: payload.op_kind, title: payload.title, detail: payload.detail },
+      ];
     }
   } catch (e) {
     state.error = `State refresh failed: ${formatInvokeError(e)}`;
@@ -256,6 +350,9 @@ async function bootstrap(): Promise<void> {
     state.runningSessions = runningSessionsRes;
     state.workspaces = workspacesRes;
     state.error = "";
+
+    // Git 面板/文件树徽标数据源（无仓库时内部回落空视图，不抛错）。
+    await refreshGit();
 
     // 默认选中第一个会话（若存在），并加载其消息。
     if (!state.activeConversationId && convsRes.length > 0) {
@@ -543,6 +640,91 @@ async function updateWorkspaceIgnore(id: string, ignore: string[]): Promise<void
   await refreshWorkspaces();
 }
 
+// ── Git actions（写操作后依赖 StateChange::Git 事件刷新 + 兜底 refreshGit）──
+
+/** 切换当前操作仓库（git 面板作用域；不改变文件树）。 */
+async function setActiveGitRepo(repoId: string): Promise<void> {
+  await api.invoke("git_set_active_repo", { repoId });
+  await refreshGit();
+}
+
+/** 暂存：all=true 暂存全部，或按 paths（相对 repo 根）暂存指定路径。 */
+async function gitAdd(paths: string[], all = false): Promise<void> {
+  await api.invoke("git_add", { paths, all });
+  await refreshGit();
+}
+
+/** 取消暂存：paths 为空 = 取消全部（git restore --staged）。 */
+async function gitUnstage(paths: string[] = []): Promise<void> {
+  await api.invoke("git_unstage", { paths });
+  await refreshGit();
+}
+
+/** 撤销工作区改动（需确认；用户经 ConfirmDialog 决定）。 */
+async function gitRestore(paths: string[]): Promise<void> {
+  await api.invoke("git_restore", { paths });
+  await refreshGit();
+}
+
+/** 提交暂存区（需确认，弹窗展示 staged diff 摘要）。 */
+async function gitCommit(message: string): Promise<void> {
+  await api.invoke("git_commit", { message });
+  await refreshGit();
+}
+
+/** 重置到目标（默认 HEAD）；--hard/--keep 高危，开关+确认。 */
+async function gitReset(mode: GitResetMode, target?: string): Promise<void> {
+  await api.invoke("git_reset", { mode, target });
+  await refreshGit();
+}
+
+/** 切换分支/提交（丢弃改动场景开关+确认）。 */
+async function gitCheckout(target: string): Promise<void> {
+  await api.invoke("git_checkout", { target });
+  await refreshGit();
+}
+
+/** stash：push/apply 直接执行；pop/drop 需确认。 */
+async function gitStash(action: GitStashAction, message?: string): Promise<void> {
+  await api.invoke("git_stash", { action, message });
+  await refreshGit();
+}
+
+/** 推送（需确认）。 */
+async function gitPush(remote?: string, branch?: string): Promise<void> {
+  await api.invoke("git_push", { remote, branch });
+  await refreshGit();
+}
+
+/** 拉取并合并（需确认）。 */
+async function gitPull(): Promise<void> {
+  await api.invoke("git_pull");
+  await refreshGit();
+}
+
+/** 冲突解决：ours / theirs / both（指定 repo；缺省 active）。 */
+async function gitResolveConflict(path: string, take: ConflictTake, repoId?: string): Promise<void> {
+  await api.invoke("git_resolve_conflict", { repoId, path, take });
+  await refreshGit();
+}
+
+/** 确认服务唯一入口：投递用户决定并出队。 */
+async function gitConfirm(opId: string, approved: boolean): Promise<void> {
+  await api.invoke("git_confirm", { opId, approved });
+  state.gitConfirmQueue = state.gitConfirmQueue.filter((r) => r.op_id !== opId);
+}
+
+/** 持久化并热更新危险写开关（config.json git 节）。 */
+async function setDangerousWrites(enabled: boolean): Promise<void> {
+  await api.invoke("git_set_dangerous_writes", { enabled });
+  await refreshGit();
+}
+
+/** 打开文件的 git-diff 面板（实例 key = `git-diff:${repoId}:${relPath}`，按文件路径多开）。 */
+function openGitDiff(repoId: string, relPath: string): void {
+  layoutStore.insertPanel("git-diff", undefined, `git-diff:${repoId}:${relPath}`);
+}
+
 export const dataStore = {
   state,
   bootstrap,
@@ -554,6 +736,7 @@ export const dataStore = {
   refreshRunningSessions,
   refreshProvidersModels,
   refreshWorkspaces,
+  refreshGit,
   // actions
   selectConversation,
   createConversation,
@@ -568,6 +751,21 @@ export const dataStore = {
   removeWorkspace,
   setActiveWorkspace,
   updateWorkspaceIgnore,
+  // Git
+  setActiveGitRepo,
+  gitAdd,
+  gitUnstage,
+  gitRestore,
+  gitCommit,
+  gitReset,
+  gitCheckout,
+  gitStash,
+  gitPush,
+  gitPull,
+  gitResolveConflict,
+  gitConfirm,
+  setDangerousWrites,
+  openGitDiff,
   // 神经元统一管理（列表 ←→ 画布共享）
   setNeuronSelection,
   toggleNeuronSelection,
