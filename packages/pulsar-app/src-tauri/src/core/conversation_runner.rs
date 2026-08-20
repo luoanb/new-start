@@ -14,6 +14,7 @@ use super::{
     round_executor::RoundExecutor,
     round_resolver::RoundResolver,
     round_types::{RoundOutcome, SessionSeed, SessionState},
+    session_coordinator::SessionCoordinator,
 };
 
 /// 流式增量写盘 / 事件节流间隔（首块立即写，此后 ~150ms 一次；完成时最终写保证一致）。
@@ -98,6 +99,8 @@ pub struct ConversationRunner {
     store: ConversationStore,
     resolver: Arc<RoundResolver>,
     executor: Arc<RoundExecutor>,
+    /// 会话级串行协调器：User 轮抢占（cancel 当前轮），非 User 轮遇忙跳过。
+    coordinator: Arc<SessionCoordinator>,
 }
 
 impl ConversationRunner {
@@ -105,11 +108,13 @@ impl ConversationRunner {
         store: ConversationStore,
         resolver: Arc<RoundResolver>,
         executor: Arc<RoundExecutor>,
+        coordinator: Arc<SessionCoordinator>,
     ) -> Self {
         Self {
             store,
             resolver,
             executor,
+            coordinator,
         }
     }
 
@@ -130,6 +135,17 @@ impl ConversationRunner {
         thinking_override: Option<ThinkingConfig>,
     ) -> AppResult<ChatResponse> {
         let mut ctx = self.load_context(session_id, input, tool_override, model)?;
+        // B 方案：会话级串行。User 轮抢占（cancel 当前轮）；非 User 轮遇忙跳过（返回占位，
+        // 由 Poller / 手动推进等调用方静默吞掉，不打断正在进行的对话）。
+        let cancel = match self.coordinator.begin(&ctx.session_id, ctx.trigger) {
+            Some(token) => Some(token),
+            None => {
+                return Ok(ChatResponse {
+                    conversation_id: ctx.session_id.clone(),
+                    response: String::new(),
+                });
+            }
+        };
         tracing::info!(
             phase = "run_round",
             session_id = %ctx.session_id,
@@ -189,26 +205,64 @@ impl ConversationRunner {
         // ③ 执行（独立落库两段式）：工具授权落点（override 优先 → neuron.tool_ids → 标签并入
         // ∩ 注册表）→ 发送前投影 ModelMessage → 模型调用 → 先落「模型声明」（tool_calls）→
         // 再执行工具 → 落「执行结果」。声明不依赖工具执行结果而存在。
-        let (model_response, _authorized_tool_ids) = self
-            .executor
-            .call_model(
-                ctx.selected_neuron.as_ref(),
-                &ctx.messages,
-                model,
-                ctx.tool_override.clone(),
-                ctx.mode.tool_tags(),
-                thinking_override,
-            )
-            .await?;
+        // 用户优先：模型调用期间被新用户消息抢占 → 协作式取消，已产出（声明）保持落库。
+        let model_fut = self.executor.call_model(
+            ctx.selected_neuron.as_ref(),
+            &ctx.messages,
+            model,
+            ctx.tool_override.clone(),
+            ctx.mode.tool_tags(),
+            thinking_override,
+        );
+        let (model_response, _authorized_tool_ids) = if let Some(token) = &cancel {
+            tokio::select! {
+                r = model_fut => r?,
+                _ = token.cancelled() => {
+                    tracing::info!(
+                        phase = "run_round",
+                        session_id = %ctx.session_id,
+                        "round interrupted by user"
+                    );
+                    self.coordinator.end(&ctx.session_id, token);
+                    return Ok(ChatResponse {
+                        conversation_id: ctx.session_id.clone(),
+                        response: String::new(),
+                    });
+                }
+            }
+        } else {
+            model_fut.await?
+        };
         // 模型已返回：若声明了工具调用，先落库声明（Assistant/ToolCall）。
         self.persist_model_decl(&ctx, &model_response)?;
-        let outcome = self
-            .executor
-            .execute_tools(
+        let outcome = if let Some(token) = &cancel {
+            let fut = self.executor.execute_tools(
                 model_response,
                 ctx.selected_neuron.as_ref().map(|n| n.id.clone()),
-            )
-            .await?;
+            );
+            tokio::select! {
+                r = fut => r?,
+                _ = token.cancelled() => {
+                    tracing::info!(
+                        phase = "run_round",
+                        session_id = %ctx.session_id,
+                        "tool execution interrupted by user"
+                    );
+                    self.coordinator.end(&ctx.session_id, token);
+                    return Ok(ChatResponse {
+                        conversation_id: ctx.session_id.clone(),
+                        response: String::new(),
+                    });
+                }
+            }
+        } else {
+            self.executor
+                .execute_tools(
+                    model_response,
+                    ctx.selected_neuron.as_ref().map(|n| n.id.clone()),
+                )
+                .await?
+        };
         tracing::info!(
             phase = "run_round",
             session_id = %ctx.session_id,
@@ -226,6 +280,9 @@ impl ConversationRunner {
             hooks.after_round(&mut ctx).await?;
         }
         tracing::info!(phase = "run_round", session_id = %ctx.session_id, "round ok");
+        if let Some(token) = &cancel {
+            self.coordinator.end(&ctx.session_id, token);
+        }
         Ok(ChatResponse {
             conversation_id: ctx.session_id.clone(),
             response: outcome.response,
@@ -253,6 +310,16 @@ impl ConversationRunner {
         on_delta: Option<Box<dyn FnMut(StreamDelta) + Send>>,
     ) -> AppResult<ChatResponse> {
         let mut ctx = self.load_context(session_id, input, tool_override, model)?;
+        // B 方案：会话级串行。User 轮抢占（cancel 当前轮）；非 User 轮遇忙跳过（返回占位）。
+        let cancel = match self.coordinator.begin(&ctx.session_id, ctx.trigger) {
+            Some(token) => Some(token),
+            None => {
+                return Ok(ChatResponse {
+                    conversation_id: ctx.session_id.clone(),
+                    response: String::new(),
+                });
+            }
+        };
         tracing::info!(
             phase = "run_round_stream",
             session_id = %ctx.session_id,
@@ -350,16 +417,19 @@ impl ConversationRunner {
         let on_delta_for_chunk = Arc::clone(&on_delta_shared);
         let stream_store = self.store.clone();
         let stream_session_id = ctx.session_id.clone();
-        let mut content_accum = String::new();
-        let mut reasoning_accum = String::new();
+        // 累积器共享：on_chunk（模型流回调）写入；中断收敛分支（select 取消）读取，
+        // 保证「回复多少存储多少」——取消时把已累积的部分落库再终止。
+        let accum = Arc::new(std::sync::Mutex::new((String::new(), String::new())));
+        let stream_accum = Arc::clone(&accum);
         let mut last_flush: Option<std::time::Instant> = None;
         let on_chunk = Box::new(move |chunk: openai_compat::StreamChunk| {
+            let mut guard = stream_accum.lock().unwrap();
             if let Some(choice) = chunk.choices.first() {
                 if let Some(c) = &choice.delta.content {
-                    content_accum.push_str(c);
+                    guard.0.push_str(c);
                 }
                 if let Some(r) = &choice.delta.reasoning_content {
-                    reasoning_accum.push_str(r);
+                    guard.1.push_str(r);
                 }
             }
             let now = std::time::Instant::now();
@@ -368,16 +438,18 @@ impl ConversationRunner {
                 return;
             }
             last_flush = Some(now);
-            if let Err(error) = stream_store.update_last_assistant_message(&stream_session_id, |m| {
+            let (content_text, reasoning_text) = guard.clone();
+            drop(guard);
+            if let Err(error) = stream_store.update_message_at(&stream_session_id, placeholder_index, |m| {
                 if let MessageBody::Text {
                     content, reasoning, ..
                 } = &mut m.body
                 {
-                    *content = content_accum.clone();
-                    *reasoning = if reasoning_accum.is_empty() {
+                    *content = content_text.clone();
+                    *reasoning = if reasoning_text.is_empty() {
                         None
                     } else {
-                        Some(reasoning_accum.clone())
+                        Some(reasoning_text.clone())
                     };
                 }
             }) {
@@ -391,8 +463,8 @@ impl ConversationRunner {
             if let Some(cb) = on_delta_for_chunk.lock().unwrap().as_mut() {
                 cb(StreamDelta {
                     message_index: placeholder_index,
-                    content: content_accum.clone(),
-                    reasoning: reasoning_accum.clone(),
+                    content: content_text,
+                    reasoning: reasoning_text,
                     done: false,
                 });
             }
@@ -402,18 +474,58 @@ impl ConversationRunner {
             session_id = %ctx.session_id,
             "calling main model stream"
         );
-        let (model_response, _authorized_tool_ids) = self
-            .executor
-            .call_model_stream(
-                ctx.selected_neuron.as_ref(),
-                &ctx.messages,
-                model,
-                ctx.tool_override.clone(),
-                ctx.mode.tool_tags(),
-                thinking_override,
-                on_chunk,
-            )
-            .await?;
+        // 用户优先：流式模型调用期间被新用户消息抢占 → 取消当前流，已累积部分按索引收敛落库。
+        let model_fut = self.executor.call_model_stream(
+            ctx.selected_neuron.as_ref(),
+            &ctx.messages,
+            model,
+            ctx.tool_override.clone(),
+            ctx.mode.tool_tags(),
+            thinking_override,
+            on_chunk,
+        );
+        let (model_response, _authorized_tool_ids) = if let Some(token) = &cancel {
+            tokio::select! {
+                r = model_fut => r?,
+                _ = token.cancelled() => {
+                    tracing::info!(
+                        phase = "run_round_stream",
+                        session_id = %ctx.session_id,
+                        "stream interrupted by user; finalizing partial output"
+                    );
+                    // 中断收敛：已累积内容按索引落库（回复多少存储多少），前端全量重拉。
+                    let (content_text, reasoning_text) = accum.lock().unwrap().clone();
+                    let _ = self.store.update_message_at(&ctx.session_id, placeholder_index, |m| {
+                        if let MessageBody::Text {
+                            content, reasoning, ..
+                        } = &mut m.body
+                        {
+                            *content = content_text.clone();
+                            *reasoning = if reasoning_text.is_empty() {
+                                None
+                            } else {
+                                Some(reasoning_text.clone())
+                            };
+                        }
+                    });
+                    if let Some(cb) = on_delta_shared.lock().unwrap().as_mut() {
+                        cb(StreamDelta {
+                            message_index: placeholder_index,
+                            content: content_text.clone(),
+                            reasoning: reasoning_text,
+                            done: true,
+                        });
+                    }
+                    self.coordinator.end(&ctx.session_id, token);
+                    return Ok(ChatResponse {
+                        conversation_id: ctx.session_id.clone(),
+                        response: content_text,
+                    });
+                }
+            }
+        } else {
+            model_fut.await?
+        };
         tracing::info!(
             phase = "run_round_stream",
             session_id = %ctx.session_id,
@@ -424,7 +536,7 @@ impl ConversationRunner {
         );
 
         // ── 完成后收敛：占位消息更新为权威最终形态（content + reasoning [+ tool_calls]）──
-        self.store.update_last_assistant_message(&ctx.session_id, |m| {
+        self.store.update_message_at(&ctx.session_id, placeholder_index, |m| {
             if let MessageBody::Text {
                 content,
                 reasoning,
@@ -441,13 +553,41 @@ impl ConversationRunner {
             .tool_calls
             .as_ref()
             .map_or(false, |c| !c.is_empty());
+        // 用户优先：工具执行期间被新用户消息抢占 → 取消本轮（模型声明已落库，工具结果不落，
+        // 「到此为止」），前端全量重拉。
         let outcome = if has_calls {
-            self.executor
-                .execute_tools(
-                    model_response.clone(),
-                    ctx.selected_neuron.as_ref().map(|n| n.id.clone()),
-                )
-                .await?
+            let fut = self.executor.execute_tools(
+                model_response.clone(),
+                ctx.selected_neuron.as_ref().map(|n| n.id.clone()),
+            );
+            if let Some(token) = &cancel {
+                tokio::select! {
+                    r = fut => r?,
+                    _ = token.cancelled() => {
+                        tracing::info!(
+                            phase = "run_round_stream",
+                            session_id = %ctx.session_id,
+                            "tool execution interrupted by user"
+                        );
+                        let content = model_response.output.clone();
+                        if let Some(cb) = on_delta_shared.lock().unwrap().as_mut() {
+                            cb(StreamDelta {
+                                message_index: placeholder_index,
+                                content: content.clone(),
+                                reasoning: model_response.reasoning.clone().unwrap_or_default(),
+                                done: true,
+                            });
+                        }
+                        self.coordinator.end(&ctx.session_id, token);
+                        return Ok(ChatResponse {
+                            conversation_id: ctx.session_id.clone(),
+                            response: content,
+                        });
+                    }
+                }
+            } else {
+                fut.await?
+            }
         } else {
             RoundOutcome {
                 response: model_response.output.clone(),
@@ -501,6 +641,9 @@ impl ConversationRunner {
             session_id = %ctx.session_id,
             "stream round ok"
         );
+        if let Some(token) = &cancel {
+            self.coordinator.end(&ctx.session_id, token);
+        }
         Ok(ChatResponse {
             conversation_id: ctx.session_id.clone(),
             response: outcome.response,
@@ -1825,5 +1968,179 @@ mod tests {
         .await
         .unwrap();
         assert!(wire_names().is_empty(), "非对话调用不应注入任何工具");
+    }
+
+    /// 流式模型替身：第一次调用发出一个增量后挂起（模拟流式输出到一半被用户打断，
+    /// future 被外层 select 取消即 drop）；第二次调用正常返回。
+    struct StreamHangCaller {
+        calls: AtomicUsize,
+        first_chunk_sent: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl ModelCaller for StreamHangCaller {
+        async fn call_model(&self, _request: ModelCallRequest) -> AppResult<ModelCallResponse> {
+            unreachable!("stream caller must not fall back to non-stream call")
+        }
+
+        async fn call_model_stream(
+            &self,
+            _request: ModelCallRequest,
+            mut on_chunk: Box<dyn FnMut(openai_compat::StreamChunk) + Send>,
+        ) -> AppResult<ModelCallResponse> {
+            if self.calls.fetch_add(1, Ordering::Relaxed) == 0 {
+                on_chunk(openai_compat::StreamChunk {
+                    id: "chunk-0".into(),
+                    object: "chat.completion.chunk".into(),
+                    created: 0,
+                    model: "test-model".into(),
+                    choices: vec![openai_compat::StreamChoice {
+                        index: 0,
+                        delta: openai_compat::StreamDelta {
+                            role: Some("assistant".into()),
+                            content: Some("partial reply".into()),
+                            reasoning_content: None,
+                            tool_calls: None,
+                        },
+                        finish_reason: None,
+                    }],
+                    usage: None,
+                });
+                self.first_chunk_sent.notify_waiters();
+                // 挂起直到被抢占（外层 select 取消时 future 被 drop）。
+                std::future::pending::<()>().await;
+                unreachable!("stream caller must be preempted")
+            }
+            Ok(ModelCallResponse {
+                provider_id: "test".into(),
+                model_id: "test-model".into(),
+                output: "echo".into(),
+                tool_calls: None,
+                finish_reason: "stop".into(),
+                reasoning: None,
+            })
+        }
+    }
+
+    /// 回归（流式期间发送被吞 / B 方案核心）：第一轮流式进行中被第二轮 User 消息抢占 →
+    /// 第一轮取消、已累积部分落库（回复多少存储多少）；第二轮完整执行；两条用户消息都在。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn user_message_preempts_running_stream_round_and_persists_partial() {
+        let h = harness();
+        let store = ConversationStore::new(h.root.join("sessions")).unwrap();
+        let coordinator = Arc::new(SessionCoordinator::new());
+        let hang_signal = Arc::new(tokio::sync::Notify::new());
+        let caller: Arc<dyn ModelCaller> = Arc::new(StreamHangCaller {
+            calls: AtomicUsize::new(0),
+            first_chunk_sent: Arc::clone(&hang_signal),
+        });
+        let executor = Arc::new(RoundExecutor::new(
+            Arc::clone(&caller),
+            Arc::clone(&h.tool_registry),
+        ));
+        let runner = ConversationRunner::new(
+            store.clone(),
+            Arc::clone(&h.resolver),
+            executor,
+            Arc::clone(&coordinator),
+        );
+        let conv = store.create_conversation(None, ConversationMode::Chat).unwrap();
+        let id = conv.id.clone();
+
+        let runner_a = runner.clone();
+        let id_a = id.clone();
+        let first = tokio::spawn(async move {
+            runner_a
+                .run_round_stream(
+                    &id_a,
+                    InputRecord::User("first question".into()),
+                    None,
+                    &model(),
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+        });
+        // 等第一轮进入模型调用并发出首个 chunk（流式节流写已把部分内容落库）。
+        hang_signal.notified().await;
+
+        // 对话进行中用户直接回车发新消息 → 抢占当前轮。
+        let runner_b = runner.clone();
+        let id_b = id.clone();
+        let second = tokio::spawn(async move {
+            runner_b
+                .run_round_stream(
+                    &id_b,
+                    InputRecord::User("second question".into()),
+                    None,
+                    &model(),
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+        });
+        let _first_resp = first.await.unwrap();
+        let second_resp = second.await.unwrap();
+        assert_eq!(second_resp.response, "echo");
+
+        // 落库断言：旧轮被抢占但部分产出已存储；新轮完整执行；两条用户消息都在（未被吞）。
+        let conv = store.require_conversation(&id).unwrap();
+        assert_eq!(
+            conv.messages.len(),
+            4,
+            "expected [user first, assistant partial, user second, assistant echo]"
+        );
+        assert_eq!(conv.messages[0].text(), "first question");
+        assert_eq!(
+            conv.messages[1].text(),
+            "partial reply",
+            "preempted round's partial output must be persisted"
+        );
+        assert_eq!(conv.messages[2].text(), "second question");
+        assert_eq!(conv.messages[3].text(), "echo");
+    }
+
+    /// 会话忙时非 User 轮（Poller 推进）直接跳过：不落消息、不调模型、返回占位。
+    #[tokio::test]
+    async fn non_user_round_skipped_when_session_busy() {
+        let h = harness();
+        let store = ConversationStore::new(h.root.join("sessions-skip")).unwrap();
+        let coordinator = Arc::new(SessionCoordinator::new());
+        let caller: Arc<dyn ModelCaller> = Arc::new(EchoCaller {
+            calls: Arc::new(AtomicUsize::new(0)),
+            tool_call: Arc::new(Mutex::new(None)),
+            last_messages: Arc::new(Mutex::new(Vec::new())),
+            last_tools: Arc::new(Mutex::new(Vec::new())),
+        });
+        let executor = Arc::new(RoundExecutor::new(
+            Arc::clone(&caller),
+            Arc::clone(&h.tool_registry),
+        ));
+        let runner = ConversationRunner::new(
+            store.clone(),
+            Arc::clone(&h.resolver),
+            executor,
+            Arc::clone(&coordinator),
+        );
+        let conv = store.create_conversation(None, ConversationMode::Chat).unwrap();
+        let id = conv.id.clone();
+        // 占用该会话（模拟正在进行的对话）。
+        coordinator.begin(&id, RoundTriggerKind::User).unwrap();
+
+        // Poller 推进遇忙 → 跳过。
+        let resp = runner
+            .run_round_stream(&id, InputRecord::Nudge, None, &model(), None, None, None)
+            .await
+            .unwrap();
+        assert!(resp.response.is_empty(), "busy session round should be skipped");
+        let conv = store.require_conversation(&id).unwrap();
+        assert!(
+            conv.messages.is_empty(),
+            "skipped round must not persist anything"
+        );
     }
 }

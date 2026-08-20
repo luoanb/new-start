@@ -32,6 +32,7 @@ use super::{
     round_executor::{ModelCaller, RoundExecutor},
     round_resolver::RoundResolver,
     round_types::SessionSeed,
+    session_coordinator::SessionCoordinator,
     session_tracker::SessionTracker,
     tool_config::{
         validate_tool_config, DynamicToolsFile, McpServersFile, ToolConfigReader, ToolConfigView,
@@ -325,7 +326,13 @@ impl Gateway {
         ));
 
         // 单轮编排 + 业务接入（各业务独立文件，业务逻辑不进入 Gateway）。
-        let runner = ConversationRunner::new(store.clone(), resolver, executor);
+        // 会话级串行协调器（B 方案）：User 轮抢占 / 非 User 轮遇忙跳过。
+        let runner = ConversationRunner::new(
+            store.clone(),
+            resolver,
+            executor,
+            Arc::new(SessionCoordinator::new()),
+        );
         let chat = ChatSession::new(runner.clone());
         let agent = AgentSession::new(runner.clone(), Arc::clone(&tool_registry));
         let assistant = Arc::new(AssistantSession::new(

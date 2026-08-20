@@ -41,6 +41,7 @@ http = "1"
 # 内嵌网络服务（远程模式）：统一 RPC 端点 + SSE 状态推送 + WebSocket 公共服务（/ws）。
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "ws"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-util = "0.7"
 futures-util = "0.3"
 mlua = { version = "0.12.0", features = ["vendored", "lua54"] }
 # 文件管理（core/fs.rs 与 core/workspace.rs）：glob/grep 语义与递归遍历，纯 Rust 无 C 依赖。

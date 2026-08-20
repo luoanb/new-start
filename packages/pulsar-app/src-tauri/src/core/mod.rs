@@ -39,6 +39,7 @@ pub mod providers;
 pub mod round_executor;
 pub mod round_resolver;
 pub mod round_types;
+pub mod session_coordinator;
 pub mod session_tracker;
 pub mod spec_manager {
     pub use super::neuron::spec::*;
