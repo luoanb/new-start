@@ -19,7 +19,7 @@ use super::super::fs::is_ignored;
 use super::{
     validate_rel_path, ConflictTake, GitBackend, GitBlameLine, GitBranchItem, GitCommitInfo,
     GitDiff, GitDiffLine, GitDiffLineKind, GitFileDiff, GitHunk, GitRepo, GitResetMode,
-    GitResetPreview, GitStashAction, GitStashEntry, GitStatusEntry, GitStatusView,
+    GitResetPreview, GitShowFile, GitStashAction, GitStashEntry, GitStatusEntry, GitStatusView,
 };
 use crate::core::cmd_exec::{truncate_output, MAX_CONCURRENT, MAX_OUTPUT_CHARS};
 use crate::core::error::{AppError, AppResult};
@@ -45,11 +45,24 @@ impl CliGitBackend {
 
     /// 通用执行：`git -C <root> <args...>`，参数数组不经 shell。
     async fn run_git(&self, repo_root: &Path, args: &[&str]) -> AppResult<GitOutput> {
+        let started = std::time::Instant::now();
+        tracing::info!(
+            target: "gitops",
+            root = %repo_root.display(),
+            args = %args.join(" "),
+            "git run_git start"
+        );
         let _permit = self
             .semaphore
             .acquire()
             .await
             .map_err(|e| AppError::RuntimeError(format!("git semaphore acquire failed: {e}")))?;
+        tracing::info!(
+            target: "gitops",
+            args = %args.join(" "),
+            wait_ms = started.elapsed().as_millis(),
+            "git semaphore acquired"
+        );
 
         let mut cmd = Command::new("git");
         cmd.arg("-C").arg(repo_root);
@@ -60,20 +73,53 @@ impl CliGitBackend {
         let mut child = cmd.spawn().map_err(|e| {
             AppError::RuntimeError(format!("git spawn failed (is git installed?): {e}"))
         })?;
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
+        let stdout_pipe = child.stdout.take();
+        let stderr_pipe = child.stderr.take();
 
-        let status = match tokio::time::timeout(
+        // 先并发读取 stdout/stderr 再等进程退出：输出超过管道缓冲（约 64KB）时，
+        // 子进程写满缓冲区会阻塞无法退出，若先 wait 后读会形成管道死锁直到超时。
+        let wait_fut = child.wait();
+        let read_stdout = async {
+            match stdout_pipe {
+                Some(mut r) => {
+                    let mut buf = Vec::new();
+                    r.read_to_end(&mut buf)
+                        .await
+                        .map_err(|e| AppError::RuntimeError(format!("git read stdout failed: {e}")))?;
+                    Ok::<Vec<u8>, AppError>(buf)
+                }
+                None => Ok::<Vec<u8>, AppError>(Vec::new()),
+            }
+        };
+        let read_stderr = async {
+            match stderr_pipe {
+                Some(mut r) => {
+                    let mut buf = Vec::new();
+                    r.read_to_end(&mut buf)
+                        .await
+                        .map_err(|e| AppError::RuntimeError(format!("git read stderr failed: {e}")))?;
+                    Ok::<Vec<u8>, AppError>(buf)
+                }
+                None => Ok::<Vec<u8>, AppError>(Vec::new()),
+            }
+        };
+
+        let (wait_res, stdout_res, stderr_res) = match tokio::time::timeout(
             Duration::from_millis(crate::core::cmd_exec::DEFAULT_TIMEOUT_MS),
-            child.wait(),
+            async { tokio::join!(wait_fut, read_stdout, read_stderr) },
         )
         .await
         {
-            Ok(status) => status
-                .map_err(|e| AppError::RuntimeError(format!("git wait failed: {e}")))?,
+            Ok(v) => v,
             Err(_elapsed) => {
                 let _ = child.kill().await;
                 let _ = child.wait().await;
+                tracing::error!(
+                    target: "gitops",
+                    args = %args.join(" "),
+                    elapsed_ms = started.elapsed().as_millis(),
+                    "git run_git timed out"
+                );
                 return Err(AppError::RuntimeError(format!(
                     "git command timed out after {}ms",
                     crate::core::cmd_exec::DEFAULT_TIMEOUT_MS
@@ -81,26 +127,20 @@ impl CliGitBackend {
             }
         };
 
-        let stdout_bytes = match stdout {
-            Some(mut r) => {
-                let mut buf = Vec::new();
-                r.read_to_end(&mut buf)
-                    .await
-                    .map_err(|e| AppError::RuntimeError(format!("git read stdout failed: {e}")))?;
-                buf
-            }
-            None => Vec::new(),
-        };
-        let stderr_bytes = match stderr {
-            Some(mut r) => {
-                let mut buf = Vec::new();
-                r.read_to_end(&mut buf)
-                    .await
-                    .map_err(|e| AppError::RuntimeError(format!("git read stderr failed: {e}")))?;
-                buf
-            }
-            None => Vec::new(),
-        };
+        let status = wait_res
+            .map_err(|e| AppError::RuntimeError(format!("git wait failed: {e}")))?;
+        let stdout_bytes = stdout_res?;
+        let stderr_bytes = stderr_res?;
+
+        tracing::info!(
+            target: "gitops",
+            args = %args.join(" "),
+            exit_code = status.code().unwrap_or(-1),
+            stdout_bytes = stdout_bytes.len(),
+            stderr_bytes = stderr_bytes.len(),
+            elapsed_ms = started.elapsed().as_millis(),
+            "git run_git done"
+        );
 
         Ok(GitOutput {
             exit_code: status.code().unwrap_or(-1),
@@ -259,11 +299,17 @@ fn push_status_entry(view: &mut GitStatusView, entry: GitStatusEntry) {
     let y = entry.status.chars().nth(1).unwrap_or(' ');
     if x == 'U' || y == 'U' {
         view.conflicted.push(entry);
-    } else if x == '?' && y == '?' {
+        return;
+    }
+    if x == '?' && y == '?' {
         view.untracked.push(entry);
-    } else if x != ' ' && x != '?' {
-        view.staged.push(entry);
-    } else if y != ' ' && y != '?' {
+        return;
+    }
+    // 暂存区 / 工作区是独立维度：MM 等双状态文件同时出现在两个分组（VS Code SCM 语义）。
+    if x != ' ' && x != '?' {
+        view.staged.push(entry.clone());
+    }
+    if y != ' ' && y != '?' {
         view.unstaged.push(entry);
     }
 }
@@ -443,6 +489,41 @@ fn parse_log(output: &str, limit: usize) -> Vec<GitCommitInfo> {
         .collect()
 }
 
+/// 解析 `git show --numstat --format=`（每行 `add\tdel\tpath`；二进制为 `-\t-\tpath`）。
+fn parse_numstat(output: &str) -> Vec<GitShowFile> {
+    let mut files = Vec::new();
+    for line in output.lines() {
+        let mut parts = line.splitn(3, '\t');
+        let (Some(add), Some(del), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        let path = path.trim();
+        if path.is_empty() {
+            continue;
+        }
+        let (additions, deletions, is_binary) = match (add, del) {
+            ("-", "-") => (0, 0, true),
+            (a, d) => (a.parse().unwrap_or(0), d.parse().unwrap_or(0), false),
+        };
+        files.push(GitShowFile {
+            path: path.to_string(),
+            additions,
+            deletions,
+            is_binary,
+        });
+    }
+    files
+}
+
+/// 校验提交引用参数（hash / ref 名）：拒绝空、前导 `-` 与空白（防选项注入）。
+fn validate_rev(rev: &str) -> AppResult<String> {
+    let r = rev.trim();
+    if r.is_empty() || r.starts_with('-') || r.chars().any(char::is_whitespace) {
+        return Err(AppError::InvalidInput("invalid git revision".into()));
+    }
+    Ok(r.to_string())
+}
+
 /// 解析 `git for-each-ref ... --format=%(refname:short)%09%(HEAD)%09%(upstream:short)`。
 fn parse_branches(output: &str) -> Vec<GitBranchItem> {
     output
@@ -508,17 +589,17 @@ fn parse_blame(output: &str) -> Vec<GitBlameLine> {
             sha = it.next().unwrap_or("").to_string();
             it.next(); // orig-line
             final_line = it.next().and_then(|n| n.parse().ok()).unwrap_or(0);
-            author.clear();
-            date.clear();
+            // 注意：author/date 由组第一行的 meta（`author ...` / `author-time ...`）写入，
+            // 组内后续行的 header（`sha orig final`，无 meta）不得清空，否则组内行丢失归属。
         } else if let Some(v) = line.strip_prefix("author ") {
             author = v.trim().to_string();
         } else if let Some(v) = line.strip_prefix("author-time ") {
             date = ts_to_date(v);
         } else if is_blame_meta(line) {
-            // 其他 header（author-mail / committer / summary / tab 行）跳过
-        } else {
-            // 代码行：porcelain 的 final-line 为 1-based，逐行递增。
-            code_lines.push((final_line, line.to_string()));
+            // 其他 header（author-mail / committer / summary / previous / filename / tab 行）跳过
+        } else if let Some(code) = line.strip_prefix('\t') {
+            // porcelain 代码行以 tab 前缀标记；剥离后即为真实代码内容。
+            code_lines.push((final_line, code.to_string()));
             final_line += 1;
         }
     }
@@ -527,11 +608,13 @@ fn parse_blame(output: &str) -> Vec<GitBlameLine> {
 }
 
 fn is_commit_header(line: &str) -> bool {
-    if line.len() < 40 {
+    let bytes = line.as_bytes();
+    if bytes.len() < 40 {
         return false;
     }
-    let (head, _) = line.split_at(40);
-    head.chars().all(|c| c.is_ascii_hexdigit())
+    // 按字节判断前 40 位是否全为 ASCII hex：blame header 行前 40 字节是 commit hash，
+    // 用 `split_at(40)` 会因第 40 字节落在多字节字符（如中文代码行）中间而 panic。
+    bytes[..40].iter().all(|b| b.is_ascii_hexdigit())
 }
 
 fn is_blame_meta(line: &str) -> bool {
@@ -539,7 +622,8 @@ fn is_blame_meta(line: &str) -> bool {
         || line.starts_with("author-tz ")
         || line.starts_with("committer")
         || line.starts_with("summary ")
-        || line.starts_with('\t')
+        || line.starts_with("previous ")
+        || line.starts_with("filename ")
 }
 
 /// 解析 `git stash list --format=%gd%x09%s`。
@@ -690,6 +774,36 @@ impl GitBackend for CliGitBackend {
         Ok(parse_log(&out.stdout, limit.clamp(1, 200)))
     }
 
+    async fn show_files(&self, repo: &GitRepo, hash: &str) -> AppResult<Vec<GitShowFile>> {
+        let root = Self::repo_root(repo)?;
+        let rev = validate_rev(hash)?;
+        let out = self
+            .run_git_ok(
+                &root,
+                &["show", "--numstat", "--format=", "--no-renames", &rev],
+            )
+            .await?;
+        Ok(parse_numstat(&out.stdout))
+    }
+
+    async fn show_diff(&self, repo: &GitRepo, hash: &str, path: &str) -> AppResult<GitFileDiff> {
+        let root = Self::repo_root(repo)?;
+        let rev = validate_rev(hash)?;
+        let rel = validate_rel_path(path)?;
+        let out = self
+            .run_git_ok(
+                &root,
+                &[
+                    "show", "--no-color", "--unified=3", "--no-renames", &rev, "--", &rel,
+                ],
+            )
+            .await?;
+        let diff = parse_diff(&out.stdout, false);
+        diff.files.into_iter().next().ok_or_else(|| {
+            AppError::InvalidInput(format!("no diff for {rel} at {rev}"))
+        })
+    }
+
     async fn branches(&self, repo: &GitRepo) -> AppResult<Vec<GitBranchItem>> {
         let root = Self::repo_root(repo)?;
         let out = self
@@ -707,12 +821,23 @@ impl GitBackend for CliGitBackend {
     }
 
     async fn blame(&self, repo: &GitRepo, path: &str) -> AppResult<Vec<GitBlameLine>> {
+        let started = std::time::Instant::now();
+        tracing::info!(target: "gitops", path = %path, "git blame start");
         let root = Self::repo_root(repo)?;
         let rel = validate_rel_path(path)?;
         let out = self
             .run_git_ok(&root, &["blame", "--porcelain", "--", &rel])
             .await?;
-        Ok(parse_blame(&out.stdout))
+        // 用完整输出解析：blame porcelain 行数多，truncate 后（64KB）会丢尾部行。
+        let lines = parse_blame(&String::from_utf8_lossy(&out.stdout_bytes));
+        tracing::info!(
+            target: "gitops",
+            path = %path,
+            lines = lines.len(),
+            elapsed_ms = started.elapsed().as_millis(),
+            "git blame done"
+        );
+        Ok(lines)
     }
 
     async fn stash_list(&self, repo: &GitRepo) -> AppResult<Vec<GitStashEntry>> {
@@ -792,11 +917,16 @@ impl GitBackend for CliGitBackend {
         let lost = if mode == GitResetMode::Hard {
             let out = self.run_git_ok(&root, &["status", "--porcelain"]).await?;
             let view = parse_status(&out.stdout);
-            view.staged
+            // 双状态文件（如 MM）同时出现在 staged 与 unstaged，去重。
+            let mut paths: Vec<String> = view
+                .staged
                 .into_iter()
                 .chain(view.unstaged)
                 .map(|e| e.path)
-                .collect()
+                .collect();
+            paths.sort();
+            paths.dedup();
+            paths
         } else {
             Vec::new()
         };
@@ -997,6 +1127,21 @@ UU conflicted.txt
     }
 
     #[test]
+    fn status_dual_state_appears_in_both_groups() {
+        // MM：同一文件暂存区与工作区都有改动，应同时出现在 staged 与 unstaged（VS Code 语义）。
+        let out = "\
+## main
+MM dual.txt
+AM added_then_modified.txt
+";
+        let view = parse_status(out);
+        assert!(view.staged.iter().any(|e| e.path == "dual.txt" && e.status == "MM"));
+        assert!(view.unstaged.iter().any(|e| e.path == "dual.txt" && e.status == "MM"));
+        assert!(view.staged.iter().any(|e| e.path == "added_then_modified.txt" && e.status == "AM"));
+        assert!(view.unstaged.iter().any(|e| e.path == "added_then_modified.txt" && e.status == "AM"));
+    }
+
+    #[test]
     fn status_unquotes_paths() {
         let out = "?? \"a b.txt\"\n M \"x\\t\\\"q\"\n";
         let view = parse_status(out);
@@ -1100,6 +1245,35 @@ def4567890abcdef1234\tdef4567\tBob\t2026-08-02T11:00:00Z\tSecond commit
     }
 
     #[test]
+    fn numstat_parses_fields() {
+        let out = "\
+12\t3\tsrc/main.rs
+1\t1\tREADME.md
+-\t-\tassets/logo.png
+";
+        let files = parse_numstat(out);
+        assert_eq!(files.len(), 3);
+        assert_eq!(files[0].path, "src/main.rs");
+        assert_eq!(files[0].additions, 12);
+        assert_eq!(files[0].deletions, 3);
+        assert!(!files[0].is_binary);
+        assert_eq!(files[1].additions, 1);
+        assert_eq!(files[1].deletions, 1);
+        assert!(files[2].is_binary);
+        assert_eq!(files[2].additions, 0);
+        assert_eq!(files[2].deletions, 0);
+    }
+
+    #[test]
+    fn rev_validation_rejects_options_and_whitespace() {
+        assert!(validate_rev("abc1234").is_ok());
+        assert!(validate_rev("HEAD~1").is_ok());
+        assert!(validate_rev("").is_err());
+        assert!(validate_rev("--all").is_err());
+        assert!(validate_rev("abc 123").is_err());
+    }
+
+    #[test]
     fn branches_parse_current_and_upstream() {
         let out = "main\t*\torigin/main\nfeature\t\t\norigin/main\t\t\norigin/feature\t\t\n";
         let items = parse_branches(out);
@@ -1122,6 +1296,83 @@ def4567890abcdef1234\tdef4567\tBob\t2026-08-02T11:00:00Z\tSecond commit
 
     #[test]
     fn blame_parses_lines() {
+        // porcelain v1 格式：每个代码行前有 `<40hex> <orig> <final> [<num>]` header；
+        // meta（author 等）只在每组第一行 header 后出现一次，组内后续行共享。
+        let out = "\
+abc1234567890abcdef1111111111111111111111 1 1 2
+author Alice
+author-mail <a@b.c>
+author-time 1754000000
+author-tz +0800
+committer Alice
+committer-mail <a@b.c>
+committer-time 1754000000
+committer-tz +0800
+summary Initial
+filename path/a.rs
+\tInitial commit
+abc1234567890abcdef1111111111111111111111 2 2
+\tHello world
+def4567890abcdef2222222222222222222222222 3 3 1
+author Bob
+author-mail <b@c.d>
+author-time 1754100000
+author-tz +0800
+committer Bob
+committer-mail <b@c.d>
+committer-time 1754100000
+committer-tz +0800
+summary Second
+filename path/a.rs
+\tSecond
+def4567890abcdef2222222222222222222222222 4 4
+\tAnother line
+";
+        let lines = parse_blame(out);
+        assert_eq!(lines.len(), 4);
+        assert_eq!(lines[0].line_no, 1);
+        assert_eq!(lines[0].short, "abc1234");
+        assert_eq!(lines[0].author, "Alice");
+        assert_eq!(lines[0].text, "Initial commit");
+        assert_eq!(lines[1].line_no, 2);
+        assert_eq!(lines[1].author, "Alice");
+        assert_eq!(lines[1].text, "Hello world");
+        assert_eq!(lines[2].line_no, 3);
+        assert_eq!(lines[2].author, "Bob");
+        assert_eq!(lines[2].text, "Second");
+        assert_eq!(lines[3].line_no, 4);
+        assert_eq!(lines[3].author, "Bob");
+        assert_eq!(lines[3].text, "Another line");
+    }
+
+    #[test]
+    fn blame_handles_multibyte_code_lines_without_panicking() {
+        // 回归：is_commit_header 旧实现用 split_at(40) 按字节切分，中文代码行前 40 字节
+        // 会落在多字节字符中间 → `str` char boundary panic（客户端表现为 Empty reply）。
+        let code_line = "中文中文中文中文中文中文中文中文中文中文中文中文中文中文注释";
+        let out = format!(
+            "abc1234567890abcdef1111111111111111111111 1 1 1\n\
+             author Alice\n\
+             author-mail <a@b.c>\n\
+             author-time 1754000000\n\
+             author-tz +0800\n\
+             committer Alice\n\
+             committer-mail <a@b.c>\n\
+             committer-time 1754000000\n\
+             committer-tz +0800\n\
+             summary Initial\n\
+             filename path/a.rs\n\
+             \t{code_line}\n"
+        );
+        let lines = parse_blame(&out);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, code_line);
+    }
+
+    #[test]
+    fn blame_skips_previous_and_filename_headers() {
+        // 回归：porcelain 头部的 `previous <sha> <file>` / `filename <file>` 行此前被当成
+        // 代码行输出（text 混入 header），导致前端显示一串无意义的 "previous/filename"。
         let out = "\
 abc1234567890abcdef1111111111111111111111 1 1 1
 author Alice
@@ -1132,29 +1383,60 @@ committer Alice
 committer-mail <a@b.c>
 committer-time 1754000000
 committer-tz +0800
-\tInitial commit
-hello world
-def4567890abcdef2222222222222222222222222 2 2
-author Bob
-author-mail <b@c.d>
-author-time 1754100000
-author-tz +0800
-committer Bob
-committer-mail <b@c.d>
-committer-time 1754100000
-committer-tz +0800
-\tSecond
-another line
+summary Initial
+previous eeea15be79d20a78845179003fee836c4b3cb521 path/to/file.rs
+filename path/to/file.rs
+\thello world
 ";
         let lines = parse_blame(out);
-        assert_eq!(lines.len(), 2);
+        assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].line_no, 1);
-        assert_eq!(lines[0].short, "abc1234");
-        assert_eq!(lines[0].author, "Alice");
         assert_eq!(lines[0].text, "hello world");
-        assert_eq!(lines[1].line_no, 2);
-        assert_eq!(lines[1].author, "Bob");
-        assert_eq!(lines[1].text, "another line");
+        assert!(
+            lines
+                .iter()
+                .all(|l| !l.text.starts_with("previous ") && !l.text.starts_with("filename "))
+        );
+    }
+
+    #[test]
+    fn blame_parses_real_porcelain_output_of_this_repo() {
+        // 真实验证：跑真实 `git blame --porcelain` 喂给解析器，断言行数与真实文件一致，
+        // 且 `previous`/`filename` 头部不再混入代码文本（此前两个 bug 均由此类真实输出暴露）。
+        if !git_available() {
+            return;
+        }
+        let rel = "src/fileops/gitops/repo.rs";
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let out = std::process::Command::new("git")
+            .args(["blame", "--porcelain", "--", rel])
+            .current_dir(&manifest_dir)
+            .output()
+            .expect("git blame runs");
+        assert!(
+            out.status.success(),
+            "git blame failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let text = String::from_utf8_lossy(&out.stdout);
+        let lines = parse_blame(&text);
+        let file_lines = std::fs::read_to_string(manifest_dir.join(rel))
+            .unwrap()
+            .lines()
+            .count();
+        assert!(!lines.is_empty());
+        // 硬性正确性：解析出的行数必须等于真实文件行数。porcelain 头部行（author/
+        // committer/summary/previous/filename 等）若泄漏为代码行，行数必然超过文件行数。
+        assert_eq!(
+            lines.len(),
+            file_lines,
+            "parsed blame lines must equal real file lines"
+        );
+        // meta 只在组第一行出现，组内行共享；author 为空说明组内归属被错误清空。
+        assert!(
+            lines.iter().all(|l| !l.author.is_empty()),
+            "every blame line must carry an author (group-shared meta)"
+        );
     }
 
     #[test]

@@ -30,8 +30,8 @@ use crate::fileops::fs::{
 };
 use crate::fileops::gitops::confirm::{ConfirmOutcome, GitOpKind};
 use crate::fileops::gitops::{
-    ConflictTake, GitBlameLine, GitBranchItem, GitCommitInfo, GitDiff, GitRepo, GitResetMode,
-    GitResetPreview, GitStashAction, GitStashEntry, GitStatusView,
+    ConflictTake, GitBlameLine, GitBranchItem, GitCommitInfo, GitDiff, GitFileDiff, GitRepo,
+    GitResetMode, GitResetPreview, GitShowFile, GitStashAction, GitStashEntry, GitStatusView,
 };
 use crate::fileops::workspace::{WorkspaceEntry, WorkspaceView};
 use crate::net::{NetState, ServerConfig};
@@ -912,6 +912,43 @@ async fn git_log(
         .map_err(|error| error.payload())
 }
 
+/// 某提交的变更文件统计列表（`git show --numstat`）。`repo_id` 缺省回落 active。
+#[tauri::command]
+async fn git_show_files(
+    gateway: State<'_, Gateway>,
+    repo_id: Option<String>,
+    hash: String,
+) -> TauriResult<Vec<GitShowFile>> {
+    let svc = gateway.inner().git_service();
+    let repo = match repo_id {
+        Some(id) => svc.repo_by_id(&id).map_err(|error| error.payload())?,
+        None => svc.active_repo().await.map_err(|error| error.payload())?,
+    };
+    svc.backend()
+        .show_files(&repo, &hash)
+        .await
+        .map_err(|error| error.payload())
+}
+
+/// 某提交中单个文件的 unified diff（复用 `GitFileDiff` 结构）。
+#[tauri::command]
+async fn git_show_diff(
+    gateway: State<'_, Gateway>,
+    repo_id: Option<String>,
+    hash: String,
+    path: String,
+) -> TauriResult<GitFileDiff> {
+    let svc = gateway.inner().git_service();
+    let repo = match repo_id {
+        Some(id) => svc.repo_by_id(&id).map_err(|error| error.payload())?,
+        None => svc.active_repo().await.map_err(|error| error.payload())?,
+    };
+    svc.backend()
+        .show_diff(&repo, &hash, &path)
+        .await
+        .map_err(|error| error.payload())
+}
+
 /// 本地 + 远端分支（标记当前分支与 upstream）。
 #[tauri::command]
 async fn git_branches(gateway: State<'_, Gateway>) -> TauriResult<Vec<GitBranchItem>> {
@@ -1577,6 +1614,15 @@ pub fn run() {
                 "pulsar logging initialized"
             );
 
+            // panic hook：把任何 panic（含 tokio task / RPC 分支）落盘到 pulsar.log。
+            // hyper 对 handler panic 的默认行为是不发响应直接关闭连接（客户端表现为
+            // "Empty reply"），本地复现不到 stderr 时靠这份记录定位。
+            let default_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                tracing::error!(target: "panic", "panic: {info}");
+                default_hook(info);
+            }));
+
             // WebKitGTK 磁盘缓存不完全遵守 no-store（实测重启后仍按 URL 复用旧 CSS/JS，
             // 导致整个 App 样式混搭）；每次启动在建窗前清掉 WebKitCache，保证加载最新 bundle。
             if let Ok(data_dir) = app.path().app_data_dir() {
@@ -1814,6 +1860,8 @@ pub fn run() {
             git_status,
             git_diff,
             git_log,
+            git_show_files,
+            git_show_diff,
             git_branches,
             git_blame,
             git_stash_list,

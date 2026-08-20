@@ -34,6 +34,8 @@ import type {
   GitStatusView,
   GitBranchItem,
   GitCommitInfo,
+  GitShowFile,
+  GitFileDiff,
   GitStashEntry,
   GitConfirmRequest,
   GitResetMode,
@@ -720,9 +722,22 @@ async function setDangerousWrites(enabled: boolean): Promise<void> {
   await refreshGit();
 }
 
-/** 打开文件的 git-diff 面板（实例 key = `git-diff:${repoId}:${relPath}`，按文件路径多开）。 */
-function openGitDiff(repoId: string, relPath: string): void {
-  layoutStore.insertPanel("git-diff", undefined, `git-diff:${repoId}:${relPath}`);
+/**
+ * 打开 git-diff 面板（实例 key = `git-diff:${repoId}:${relPath}:${range}`，按文件路径多开）。
+ * range = 默认 diff 范围（按来源分组：暂存 → staged / 工作区 → unstaged / 冲突 → both）。
+ */
+function openGitDiff(repoId: string, relPath: string, range: "staged" | "unstaged" | "both"): void {
+  layoutStore.insertPanel("git-diff", undefined, `git-diff:${repoId}:${relPath}:${range}`);
+}
+
+/** 某提交的变更文件统计列表（懒加载，不入全局 state）。 */
+async function gitShowFiles(hash: string): Promise<GitShowFile[]> {
+  return await api.invoke("git_show_files", { hash });
+}
+
+/** 某提交中单个文件的 unified diff（懒加载）。 */
+async function gitShowDiff(hash: string, path: string): Promise<GitFileDiff> {
+  return await api.invoke("git_show_diff", { hash, path });
 }
 
 export const dataStore = {
@@ -765,6 +780,8 @@ export const dataStore = {
   gitResolveConflict,
   gitConfirm,
   setDangerousWrites,
+  gitShowFiles,
+  gitShowDiff,
   openGitDiff,
   // 神经元统一管理（列表 ←→ 画布共享）
   setNeuronSelection,

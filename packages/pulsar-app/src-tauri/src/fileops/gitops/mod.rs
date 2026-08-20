@@ -119,6 +119,17 @@ pub struct GitCommitInfo {
     pub subject: String,
 }
 
+/// 某提交中单个变更文件的统计（`git show --numstat` 解析）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitShowFile {
+    /// 相对 repo 根的文件路径。
+    pub path: String,
+    pub additions: usize,
+    pub deletions: usize,
+    /// 二进制 / LFS 指针文件（numstat 为 `-`）→ 前端不渲染正文。
+    pub is_binary: bool,
+}
+
 /// blame 行（`git blame --porcelain` 解析，行维度）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitBlameLine {
@@ -252,6 +263,10 @@ pub trait GitBackend: Send + Sync {
     async fn status(&self, repo: &GitRepo) -> AppResult<GitStatusView>;
     async fn diff(&self, repo: &GitRepo, cached: bool, path: Option<&str>) -> AppResult<GitDiff>;
     async fn log(&self, repo: &GitRepo, limit: usize) -> AppResult<Vec<GitCommitInfo>>;
+    /// 某提交的变更文件统计列表（`git show --numstat`）。
+    async fn show_files(&self, repo: &GitRepo, hash: &str) -> AppResult<Vec<GitShowFile>>;
+    /// 某提交中单个文件的 unified diff（复用 `parse_diff` 结构）。
+    async fn show_diff(&self, repo: &GitRepo, hash: &str, path: &str) -> AppResult<GitFileDiff>;
     async fn branches(&self, repo: &GitRepo) -> AppResult<Vec<GitBranchItem>>;
     async fn blame(&self, repo: &GitRepo, path: &str) -> AppResult<Vec<GitBlameLine>>;
     async fn stash_list(&self, repo: &GitRepo) -> AppResult<Vec<GitStashEntry>>;

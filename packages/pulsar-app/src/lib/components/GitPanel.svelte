@@ -6,11 +6,12 @@
   import { dataStore } from "$lib/stores/dataStore.svelte";
   import { fileEditorStore, fileKey } from "$lib/stores/fileEditorStore.svelte";
   import { layoutStore } from "$lib/layout/LayoutStore.svelte";
-  import { t } from "$lib/i18n";
+  import { t, tMap } from "$lib/i18n";
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
   import Select from "./Select.svelte";
   import ContextMenu, { type ContextMenuItem } from "./ContextMenu.svelte";
-  import type { GitStatusEntry } from "$lib/types";
+  import Tooltip from "./Tooltip.svelte";
+  import type { GitStatusEntry, GitShowFile, GitFileDiff } from "$lib/types";
 
   const git = $derived(dataStore.state.git);
   const activeRepo = $derived(git?.repos.find((r) => r.id === git?.activeRepoId) ?? null);
@@ -72,6 +73,7 @@
     conflicted: true,
     staged: true,
     changes: true,
+    log: false,
     branches: false,
     stash: false,
   });
@@ -91,7 +93,10 @@
   }
 
   function setRepo(repoId: string) {
-    if (repoId && repoId !== git?.activeRepoId) void run(() => dataStore.setActiveGitRepo(repoId));
+    if (repoId && repoId !== git?.activeRepoId) {
+      resetLogExpansion();
+      void run(() => dataStore.setActiveGitRepo(repoId));
+    }
   }
 
   function checkout(target: string) {
@@ -119,10 +124,10 @@
     void run(() => dataStore.gitRestore(unstaged.map((x) => x.path)));
   }
 
-  /** 条目点击：未跟踪文件无 diff 直接打开编辑器；其余打开 git-diff 面板。 */
-  function openEntry(e: GitStatusEntry) {
+  /** 条目点击：未跟踪文件无 diff 直接打开编辑器；其余打开 git-diff 面板（range 按来源分组：暂存→staged / 工作区→unstaged / 冲突→both）。 */
+  function openEntry(e: GitStatusEntry, range: "staged" | "unstaged" | "both") {
     if (!activeRepo) return;
-    if (e.status === "??") {
+    if (e.status.trim() === "??") {
       if (activeWs) {
         const key = fileKey(activeWs.id, e.path);
         fileEditorStore.open(key, activeWs.id, e.path, null);
@@ -130,7 +135,7 @@
       }
       return;
     }
-    dataStore.openGitDiff(activeRepo.id, e.path);
+    dataStore.openGitDiff(activeRepo.id, e.path, range);
   }
 
   // ── 提交区 ──
@@ -153,6 +158,58 @@
     if (action === "push") stashMsg = "";
   }
 
+  // ── 提交记录（git log 区段，点击提交懒加载文件列表与 diff）──
+  let openCommit = $state<string | null>(null);
+  let commitFiles = $state<GitShowFile[] | null>(null);
+  let openFile = $state<string | null>(null);
+  let commitDiff = $state<GitFileDiff | null>(null);
+
+  function resetLogExpansion() {
+    openCommit = null;
+    commitFiles = null;
+    openFile = null;
+    commitDiff = null;
+  }
+
+  function shortDate(iso: string): string {
+    return iso.slice(0, 10);
+  }
+
+  /** 拆出文件名与目录前缀（目录弱化跟随在文件名右侧）；兼容目录尾斜杠。 */
+  function splitPath(p: string): { name: string; dir: string } {
+    const t = p.endsWith("/") ? p.slice(0, -1) : p;
+    const i = t.lastIndexOf("/");
+    return i < 0 ? { name: t, dir: "" } : { name: t.slice(i + 1), dir: t.slice(0, i + 1) };
+  }
+
+  async function toggleCommit(hash: string) {
+    if (openCommit === hash) {
+      resetLogExpansion();
+      return;
+    }
+    openCommit = hash;
+    openFile = null;
+    commitDiff = null;
+    commitFiles = null;
+    await run(async () => {
+      commitFiles = await dataStore.gitShowFiles(hash);
+    });
+  }
+
+  async function toggleFile(f: GitShowFile) {
+    if (openFile === f.path) {
+      openFile = null;
+      commitDiff = null;
+      return;
+    }
+    openFile = f.path;
+    commitDiff = null;
+    if (f.is_binary || !openCommit) return;
+    await run(async () => {
+      commitDiff = await dataStore.gitShowDiff(openCommit!, f.path);
+    });
+  }
+
   // ── 危险写开关 ──
   async function setDangerous(checked: boolean) {
     await run(() => dataStore.setDangerousWrites(checked));
@@ -173,9 +230,60 @@
   function statusTone(tone: "staged" | "changes" | "conflict"): string {
     return tone === "conflict" ? "error" : tone === "staged" ? "staged" : "warning";
   }
+
+  /**
+   * git 状态码说明（徽标 hover 提示）。
+   * 优先精炼映射（trim 后匹配，如 MM/??）；未命中时用 states 拆解双字符模板兜底，
+   * 保证任意状态码都有提示。
+   */
+  function statusHint(code: string): string {
+    const c = code.trim();
+    const exact = tMap("git.status", c);
+    if (!exact.startsWith("git.status.")) return exact;
+    if (c.length >= 2) {
+      return t("git.statusTemplate", {
+        x: tMap("git.states", c[0]),
+        y: tMap("git.states", c[1]),
+      });
+    }
+    return tMap("git.states", c);
+  }
 </script>
 
 <svelte:window />
+
+{#snippet groupIcon(kind: string)}
+  {#if kind === "conflicted"}
+    <path d="M8 3 2.5 13h11L8 3z" />
+    <path d="M8 8v3" />
+    <path d="M8 12.5h.01" />
+  {:else if kind === "staged"}
+    <rect x="3" y="3" width="10" height="10" rx="2" />
+    <path d="M8 6v4M6 8h4" />
+  {:else if kind === "changes"}
+    <path d="M11.2 2.8l2 2L4.5 13.5h-2v-2L11.2 2.8z" />
+  {:else if kind === "log"}
+    <path d="M4 4.5a5 5 0 1 1 0 7" />
+    <path d="M4 2.5v3h3" />
+    <path d="M8 6v2.5l1.8 1.1" />
+  {:else if kind === "branches"}
+    <circle cx="4.5" cy="3.5" r="1.5" />
+    <circle cx="4.5" cy="12.5" r="1.5" />
+    <circle cx="11.5" cy="12.5" r="1.5" />
+    <path d="M4.5 5v5" />
+    <path d="M11.5 11c0-2-1.5-3.5-4-3.5" />
+  {:else if kind === "stash"}
+    <path d="M3 4.5h10v9H3z" />
+    <path d="M6.5 8h3" />
+  {/if}
+{/snippet}
+
+{#snippet badge(code: string, tone: string)}
+  <Tooltip label={statusHint(code)} position="bottom">
+    <!-- title="" 阻止继承父级 .item 的文件路径提示 -->
+    <span class="badge {tone}" title="">{code}</span>
+  </Tooltip>
+{/snippet}
 
 <div class="git-panel">
   {#if error}
@@ -227,16 +335,19 @@
     <!-- 冲突分组 -->
     {#if conflicted.length > 0}
       <button class="group-head" onclick={() => toggleColl("conflicted")}>
-        <span class="chevron" class:open={coll.conflicted}>▸</span>
+        <svg class="chevron" class:open={coll.conflicted} viewBox="0 0 16 16" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 4 10 8 6 12" /></svg>
+        <svg class="group-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{@render groupIcon("conflicted")}</svg>
         {t("git.groupConflicted")} ({conflicted.length})
       </button>
       {#if coll.conflicted}
         {#each conflicted as e (e.path)}
-          {@const checked = true}
+          {@const { name, dir } = splitPath(e.path)}
           <div class="item" class:error title={e.path}>
-            <input type="checkbox" {checked} disabled />
-            <span class="badge error">{e.status}</span>
-            <button class="name" onclick={() => openEntry(e)}>{e.is_dir ? `${e.path}/` : e.path}</button>
+            {@render badge(e.status, "error")}
+            <button class="name" onclick={() => openEntry(e, "both")}>
+              <span class="name-basename">{e.is_dir ? `${name}/` : name}</span>
+              {#if dir}<span class="name-dir">{dir}</span>{/if}
+            </button>
             <button class="op" title={t("git.stage")} onclick={() => stagePath(e)}>＋</button>
           </div>
         {/each}
@@ -246,7 +357,8 @@
     <!-- 暂存区 -->
     <div class="group-row">
       <button class="group-head" onclick={() => toggleColl("staged")}>
-        <span class="chevron" class:open={coll.staged}>▸</span>
+        <svg class="chevron" class:open={coll.staged} viewBox="0 0 16 16" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 4 10 8 6 12" /></svg>
+        <svg class="group-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{@render groupIcon("staged")}</svg>
         {t("git.groupStaged")} ({staged.length})
       </button>
       <button
@@ -264,10 +376,13 @@
     </div>
     {#if coll.staged}
       {#each staged as e (e.path)}
+        {@const { name, dir } = splitPath(e.path)}
         <div class="item" class:staged title={e.path}>
-          <input type="checkbox" checked onchange={() => unstagePath(e)} />
-          <span class="badge staged">{e.status}</span>
-          <button class="name" onclick={() => openEntry(e)}>{e.is_dir ? `${e.path}/` : e.path}</button>
+          {@render badge(e.status, "staged")}
+          <button class="name" onclick={() => openEntry(e, "staged")}>
+            <span class="name-basename">{e.is_dir ? `${name}/` : name}</span>
+            {#if dir}<span class="name-dir">{dir}</span>{/if}
+          </button>
           <button class="op" title={t("git.unstage")} onclick={() => unstagePath(e)}>−</button>
         </div>
       {/each}
@@ -279,7 +394,8 @@
     <!-- 更改（未暂存 + 未跟踪） -->
     <div class="group-row">
       <button class="group-head" onclick={() => toggleColl("changes")}>
-        <span class="chevron" class:open={coll.changes}>▸</span>
+        <svg class="chevron" class:open={coll.changes} viewBox="0 0 16 16" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 4 10 8 6 12" /></svg>
+        <svg class="group-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{@render groupIcon("changes")}</svg>
         {t("git.groupChanges")} ({allChanges.length})
       </button>
       <button
@@ -297,10 +413,13 @@
     </div>
     {#if coll.changes}
       {#each allChanges as e (e.path)}
+        {@const { name, dir } = splitPath(e.path)}
         <div class="item" title={e.path}>
-          <input type="checkbox" onchange={() => stagePath(e)} />
-          <span class="badge {statusTone(e.status.includes("U") ? "conflict" : "changes")}">{e.status}</span>
-          <button class="name" onclick={() => openEntry(e)}>{e.is_dir ? `${e.path}/` : e.path}</button>
+          {@render badge(e.status, statusTone(e.status.includes("U") ? "conflict" : "changes"))}
+          <button class="name" onclick={() => openEntry(e, "unstaged")}>
+            <span class="name-basename">{e.is_dir ? `${name}/` : name}</span>
+            {#if dir}<span class="name-dir">{dir}</span>{/if}
+          </button>
           <button class="op" title={t("git.stage")} onclick={() => stagePath(e)}>＋</button>
         </div>
       {/each}
@@ -331,9 +450,77 @@
       >{committing ? t("git.committing") : t("git.commit")}</button>
     </div>
 
+    <!-- 提交记录 -->
+    <button class="group-head" onclick={() => toggleColl("log")}>
+      <svg class="chevron" class:open={coll.log} viewBox="0 0 16 16" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 4 10 8 6 12" /></svg>
+      <svg class="group-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{@render groupIcon("log")}</svg>
+      {t("git.groupLog")} ({git?.log.length ?? 0})
+    </button>
+    {#if coll.log}
+      {#each git?.log ?? [] as c (c.hash)}
+        <button
+          class="commit-item"
+          class:open={openCommit === c.hash}
+          onclick={() => void toggleCommit(c.hash)}
+          title={c.subject}
+        >
+          <span class="commit-short">{c.short}</span>
+          <span class="commit-subject">{c.subject}</span>
+          <span class="commit-meta">{c.author} · {shortDate(c.date)}</span>
+        </button>
+        {#if openCommit === c.hash}
+          {#if commitFiles === null}
+            <p class="hint-muted">{t("git.logLoading")}</p>
+          {:else if commitFiles.length === 0}
+            <p class="hint-muted">{t("git.logEmpty")}</p>
+          {:else}
+            {#each commitFiles as f (f.path)}
+              {@const { name, dir } = splitPath(f.path)}
+              <button
+                class="commit-file"
+                class:open={openFile === f.path}
+                onclick={() => void toggleFile(f)}
+                title={f.path}
+              >
+                <span class="cf-name">{name}</span>
+                {#if dir}<span class="cf-dir">{dir}</span>{/if}
+                {#if f.is_binary}
+                  <span class="cf-stat binary">{t("git.binaryDiff")}</span>
+                {:else}
+                  <span class="cf-stat"><i class="add">+{f.additions}</i> <i class="del">-{f.deletions}</i></span>
+                {/if}
+              </button>
+              {#if openFile === f.path}
+                {#if f.is_binary}
+                  <p class="hint-muted">{t("git.binaryDiff")}</p>
+                {:else if commitDiff}
+                  <div class="commit-diff">
+                    {#each commitDiff.hunks as h (h.header)}
+                      <div class="hunk-header">{h.header}</div>
+                      {#each h.lines as l, i (i)}
+                        <div class="dline {l.kind}">
+                          <span class="ln">{l.old_no ?? ""}</span>
+                          <span class="ln">{l.new_no ?? ""}</span>
+                          <span class="dt">{l.text}</span>
+                        </div>
+                      {/each}
+                    {/each}
+                  </div>
+                {/if}
+              {/if}
+            {/each}
+          {/if}
+        {/if}
+      {/each}
+      {#if (git?.log?.length ?? 0) === 0}
+        <p class="hint-muted">{t("git.logEmpty")}</p>
+      {/if}
+    {/if}
+
     <!-- 分支区段 -->
     <button class="group-head" onclick={() => toggleColl("branches")}>
-      <span class="chevron" class:open={coll.branches}>▸</span>
+      <svg class="chevron" class:open={coll.branches} viewBox="0 0 16 16" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 4 10 8 6 12" /></svg>
+      <svg class="group-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{@render groupIcon("branches")}</svg>
       {t("git.branches")} ({branchOptions.length})
     </button>
     {#if coll.branches}
@@ -358,7 +545,8 @@
 
     <!-- Stash 区段 -->
     <button class="group-head" onclick={() => toggleColl("stash")}>
-      <span class="chevron" class:open={coll.stash}>▸</span>
+      <svg class="chevron" class:open={coll.stash} viewBox="0 0 16 16" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 4 10 8 6 12" /></svg>
+      <svg class="group-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{@render groupIcon("stash")}</svg>
       {t("git.stash")} ({git?.stash.length ?? 0})
     </button>
     {#if coll.stash}
@@ -522,7 +710,7 @@
     border: none;
     background: transparent;
     color: var(--color-text-muted);
-    font-size: var(--fs-xs);
+    font-size: var(--fs-sm);
     font-weight: 600;
     text-align: left;
     cursor: pointer;
@@ -531,13 +719,18 @@
     color: var(--color-text);
   }
   .chevron {
-    display: inline-block;
-    width: 10px;
+    flex-shrink: 0;
     transition: transform var(--duration-fast) var(--ease-out);
-    font-size: var(--fs-xs);
+    transform-origin: center;
   }
   .chevron.open {
     transform: rotate(90deg);
+  }
+  .group-icon {
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    color: var(--color-text-muted);
   }
 
   /* 分组批量操作按钮（复用 .op 图标按钮样式，仅补间距） */
@@ -557,14 +750,6 @@
   .item:hover {
     background: var(--color-hover);
   }
-  .item input[type="checkbox"] {
-    accent-color: var(--color-primary);
-    flex-shrink: 0;
-    width: 14px;
-    height: 14px;
-    margin: 0;
-    cursor: pointer;
-  }
   .badge {
     flex-shrink: 0;
     min-width: 18px;
@@ -573,6 +758,7 @@
     font-family: var(--font-mono);
     font-size: var(--fs-xs);
     text-align: center;
+    cursor: default;
   }
   .badge.staged { color: var(--color-primary); background: color-mix(in oklch, var(--color-primary) 12%, transparent); }
   .badge.warning { color: var(--color-warning); background: color-mix(in oklch, var(--color-warning) 12%, transparent); }
@@ -580,11 +766,12 @@
   .item.error .name { color: var(--color-error); }
 
   .name {
+    display: flex;
+    align-items: baseline;
+    gap: 2px;
     flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
     border: none;
     background: transparent;
     color: var(--color-text);
@@ -594,6 +781,25 @@
   }
   .name:hover {
     color: var(--color-primary);
+  }
+  .name-basename {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .name-dir {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--fs-xs);
+    color: var(--color-text-muted);
+  }
+  .name:hover .name-dir {
+    color: var(--color-text-muted);
   }
 
   .op {
@@ -686,6 +892,121 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+
+  /* 提交记录区段 */
+  .commit-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    height: 28px;
+    padding: 0 var(--space-3);
+    border: none;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+  }
+  .commit-item:hover { background: var(--color-hover); }
+  .commit-item.open { background: var(--color-hover); }
+  .commit-short {
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--color-primary);
+  }
+  .commit-subject {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--fs-sm);
+    color: var(--color-text);
+  }
+  .commit-meta {
+    flex-shrink: 1;
+    min-width: 0;
+    max-width: 45%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--fs-xs);
+    color: var(--color-text-muted);
+  }
+
+  .commit-file {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    width: 100%;
+    height: 26px;
+    padding: 0 var(--space-3) 0 var(--space-5);
+    border: none;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+  }
+  .commit-file:hover { background: var(--color-hover); }
+  .commit-file.open { background: var(--color-hover); }
+  .cf-name {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--fs-sm);
+    color: var(--color-text);
+  }
+  .cf-dir {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--fs-xs);
+    color: var(--color-text-muted);
+  }
+  .cf-stat {
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--color-text-muted);
+  }
+  .cf-stat i { font-style: normal; }
+  .cf-stat .add { color: var(--color-success); }
+  .cf-stat .del { color: var(--color-error); }
+  .cf-stat.binary { font-size: var(--fs-xs); }
+
+  .commit-diff {
+    margin: 0 var(--space-2) var(--space-1) var(--space-5);
+    border: var(--border-width) solid var(--color-border);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    overflow-x: auto;
+  }
+  .hunk-header {
+    padding: 2px var(--space-2);
+    background: var(--color-elevated);
+    color: var(--color-text-muted);
+    white-space: nowrap;
+  }
+  .dline {
+    display: flex;
+    white-space: pre;
+    line-height: 1.5;
+  }
+  .dline .ln {
+    flex-shrink: 0;
+    width: 3em;
+    padding-right: var(--space-1);
+    text-align: right;
+    color: var(--color-text-muted);
+    user-select: none;
+  }
+  .dline .dt { overflow: hidden; }
+  .dline.add { background: color-mix(in oklch, var(--color-success) 12%, transparent); }
+  .dline.del { background: color-mix(in oklch, var(--color-error) 12%, transparent); }
 
   /* 危险写开关 */
   .danger-toggle {

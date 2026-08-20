@@ -100,7 +100,7 @@
     if (hit.status === "??") {
       if (activeWs) openFile(activeWs, e.path);
     } else {
-      dataStore.openGitDiff(repoId, e.path);
+      dataStore.openGitDiff(repoId, e.path, "unstaged");
     }
   }
 

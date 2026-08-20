@@ -524,6 +524,15 @@ export type GitCommitInfo = {
   subject: string;
 };
 
+/** 某提交中单个变更文件的统计（`git show --numstat`）。 */
+export type GitShowFile = {
+  path: string;
+  additions: number;
+  deletions: number;
+  /** 二进制 / LFS 指针文件 → 不渲染 diff 正文。 */
+  is_binary: boolean;
+};
+
 export type GitBlameLine = {
   line_no: number;
   short: string;

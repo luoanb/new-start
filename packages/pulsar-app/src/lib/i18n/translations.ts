@@ -467,6 +467,15 @@ export type Translations = {
     groupStaged: string;
     groupChanges: string;
     groupConflicted: string;
+    groupLog: string;
+    logEmpty: string;
+    logLoading: string;
+    /** git 状态码 → 精炼说明（徽标 hover 提示，按 trim 后的码匹配） */
+    status: Record<string, string>;
+    /** 单字符状态含义（通用模板兜底拆解） */
+    states: Record<string, string>;
+    /** 双字符码兜底模板：暂存区 / 工作区 */
+    statusTemplate: string;
     stage: string;
     unstage: string;
     stageAll: string;
@@ -516,6 +525,7 @@ export type Translations = {
     acceptTheirs: string;
     acceptBoth: string;
     blame: string;
+    blameLoading: string;
     diffEmpty: string;
     untrackedHint: string;
     binaryDiff: string;
@@ -1058,6 +1068,35 @@ export const en: Translations = {
     groupStaged: "Staged",
     groupChanges: "Changes",
     groupConflicted: "Conflicts",
+    groupLog: "Commits",
+    logEmpty: "No commits",
+    logLoading: "Loading…",
+    status: {
+      "??": "Untracked",
+      M: "Modified",
+      A: "Added",
+      D: "Deleted",
+      R: "Renamed",
+      U: "Conflict",
+      MM: "Staged changes + further unstaged changes",
+      AM: "Staged new file + further unstaged changes",
+      AD: "Staged new file, then deleted in working tree",
+      DD: "Both deleted",
+      UU: "Both modified (conflict)",
+    },
+    states: {
+      M: "Modified",
+      A: "Added",
+      D: "Deleted",
+      R: "Renamed",
+      C: "Copied",
+      U: "Conflict",
+      "?": "Untracked",
+      T: "Type changed",
+      "!": "Ignored",
+      " ": "Unchanged",
+    },
+    statusTemplate: "Staged: {x} / Changes: {y}",
     stage: "Stage",
     unstage: "Unstage",
     stageAll: "Stage All",
@@ -1107,6 +1146,7 @@ export const en: Translations = {
     acceptTheirs: "Accept theirs",
     acceptBoth: "Accept both",
     blame: "Blame",
+    blameLoading: "Analyzing blame…",
     diffEmpty: "No changes",
     untrackedHint: "Untracked file",
     binaryDiff: "Binary file, diff not available",
@@ -1646,9 +1686,38 @@ export const zh: Translations = {
     noRepos: "未发现 Git 仓库",
     branch: "分支",
     summary: "{staged} 暂存 · {changes} 更改",
-    groupStaged: "暂存区",
+    groupStaged: "暂存",
     groupChanges: "更改",
     groupConflicted: "冲突",
+    groupLog: "提交记录",
+    logEmpty: "无提交记录",
+    logLoading: "加载中…",
+    status: {
+      "??": "未跟踪",
+      M: "已修改",
+      A: "已新增",
+      D: "已删除",
+      R: "已重命名",
+      U: "冲突",
+      MM: "已暂存修改，工作区又有改动",
+      AM: "已暂存新增，工作区又有改动",
+      AD: "已暂存新增，工作区已删除",
+      DD: "双方已删除",
+      UU: "双方修改冲突",
+    },
+    states: {
+      M: "已修改",
+      A: "已新增",
+      D: "已删除",
+      R: "已重命名",
+      C: "已复制",
+      U: "冲突",
+      "?": "未跟踪",
+      T: "类型变更",
+      "!": "已忽略",
+      " ": "未修改",
+    },
+    statusTemplate: "暂存：{x} / 更改：{y}",
     stage: "暂存",
     unstage: "取消暂存",
     stageAll: "全部暂存",
@@ -1688,8 +1757,8 @@ export const zh: Translations = {
     stashDropConfirmBody: "丢弃该 stash？此操作无法撤销。",
     confirmDiscard: "确认丢弃",
     dangerousWrites: "允许危险写操作（reset --hard / checkout 覆盖未提交改动）",
-    rangeStaged: "暂存区（vs HEAD）",
-    rangeUnstaged: "更改（vs 暂存区）",
+    rangeStaged: "暂存（vs HEAD）",
+    rangeUnstaged: "更改（vs 暂存）",
     rangeBoth: "全部更改",
     prevHunk: "上一处",
     nextHunk: "下一处",
@@ -1698,6 +1767,7 @@ export const zh: Translations = {
     acceptTheirs: "接受传入",
     acceptBoth: "接受两者",
     blame: "Blame",
+    blameLoading: "分析行归属中…",
     diffEmpty: "无差异",
     untrackedHint: "未跟踪文件",
     binaryDiff: "二进制文件，无法显示差异",

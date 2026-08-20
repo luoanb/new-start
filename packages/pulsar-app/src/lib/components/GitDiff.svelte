@@ -23,12 +23,22 @@
   } from "$lib/types";
   import Select from "./Select.svelte";
 
-  // ── 实例解析：key = `git-diff:${repoId}:${relPath}`（repoId 无冒号，首个冒号后即路径）──
+  // ── 实例解析：key = `git-diff:${repoId}:${relPath}:${range}`（repoId 无冒号；旧 key 无 range 尾段 → unstaged）──
   const panel = getContext<MainPanel>("pulsar:panel");
   const raw = panel.id.startsWith("git-diff:") ? panel.id.slice("git-diff:".length) : panel.id;
-  const sep = raw.indexOf(":");
-  const repoId = sep >= 0 ? raw.slice(0, sep) : raw;
-  const relPath = sep >= 0 ? raw.slice(sep + 1) : "";
+  const rangeIdx = raw.lastIndexOf(":");
+  let rangePart = "";
+  let rest = raw;
+  if (rangeIdx >= 0) {
+    const tail = raw.slice(rangeIdx + 1);
+    if (tail === "staged" || tail === "unstaged" || tail === "both") {
+      rangePart = tail;
+      rest = raw.slice(0, rangeIdx);
+    }
+  }
+  const sep = rest.indexOf(":");
+  const repoId = sep >= 0 ? rest.slice(0, sep) : rest;
+  const relPath = sep >= 0 ? rest.slice(sep + 1) : "";
 
   const repo = $derived(dataStore.state.git?.repos.find((r) => r.id === repoId) ?? null);
   /** 该文件在仓库状态中的条目（判断冲突/未跟踪/二进制）。 */
@@ -46,7 +56,9 @@
 
   // ── 范围（staged/unstaged/both）──
   type Range = "staged" | "unstaged" | "both";
-  let range = $state<Range>("unstaged");
+  /** 打开来源分组的默认范围：暂存 → staged，工作区 → unstaged，冲突 → both。 */
+  const initialRange: Range = rangePart === "staged" ? "staged" : rangePart === "both" ? "both" : "unstaged";
+  let range = $state<Range>(initialRange);
   const rangeOptions = $derived([
     { value: "staged", label: t("git.rangeStaged") },
     { value: "unstaged", label: t("git.rangeUnstaged") },
@@ -236,7 +248,9 @@
           </div>
         {/each}
       </div>
-    {:else if !loading}
+    {:else if loading}
+      <p class="hint">{t("git.blameLoading")}</p>
+    {:else}
       <p class="hint">{t("git.diffEmpty")}</p>
     {/if}
   {:else if isUntracked}

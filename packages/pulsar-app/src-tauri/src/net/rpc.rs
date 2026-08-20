@@ -988,6 +988,34 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
                 .map_err(RpcErrorBody::from)?;
             value(commits)
         }
+        "git_show_files" => {
+            let p: GitShowFilesParams = from_params(params)?;
+            let svc = state.gateway.git_service();
+            let repo = match p.repo_id {
+                Some(id) => svc.repo_by_id(&id).map_err(RpcErrorBody::from)?,
+                None => svc.active_repo().await.map_err(RpcErrorBody::from)?,
+            };
+            let files = svc
+                .backend()
+                .show_files(&repo, &p.hash)
+                .await
+                .map_err(RpcErrorBody::from)?;
+            value(files)
+        }
+        "git_show_diff" => {
+            let p: GitShowDiffParams = from_params(params)?;
+            let svc = state.gateway.git_service();
+            let repo = match p.repo_id {
+                Some(id) => svc.repo_by_id(&id).map_err(RpcErrorBody::from)?,
+                None => svc.active_repo().await.map_err(RpcErrorBody::from)?,
+            };
+            let diff = svc
+                .backend()
+                .show_diff(&repo, &p.hash, &p.path)
+                .await
+                .map_err(RpcErrorBody::from)?;
+            value(diff)
+        }
         "git_branches" => {
             let svc = state.gateway.git_service();
             let repo = svc.active_repo().await.map_err(RpcErrorBody::from)?;
@@ -1436,6 +1464,21 @@ struct GitDiffParams {
 #[serde(rename_all = "camelCase")]
 struct GitLogParams {
     limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitShowFilesParams {
+    repo_id: Option<String>,
+    hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitShowDiffParams {
+    repo_id: Option<String>,
+    hash: String,
+    path: String,
 }
 
 #[derive(Debug, Deserialize)]
