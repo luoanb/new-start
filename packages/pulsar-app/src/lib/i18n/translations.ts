@@ -367,6 +367,7 @@ export type Translations = {
     poller: string;
     tools: string;
     logs: string;
+    terminal: string;
     chat: string;
     neurons: string;
     toolEditor: string;
@@ -866,6 +867,7 @@ export const en: Translations = {
     poller: "Poller",
     tools: "Tools",
     logs: "Logs",
+    terminal: "Terminal",
     chat: "Chat",
     neurons: "Neurons",
     toolEditor: "Tool config",
@@ -1365,6 +1367,7 @@ export const zh: Translations = {
     poller: "轮询器",
     tools: "工具",
     logs: "日志",
+    terminal: "终端",
     chat: "对话",
     neurons: "神经元",
     toolEditor: "工具配置",

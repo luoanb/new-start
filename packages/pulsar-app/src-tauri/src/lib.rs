@@ -2,6 +2,7 @@ pub mod core;
 pub mod fileops;
 pub mod net;
 pub mod runtime;
+pub mod terminal;
 pub mod tui;
 
 use crate::core::{
@@ -29,6 +30,9 @@ use crate::fileops::fs::{
 };
 use crate::fileops::workspace::{WorkspaceEntry, WorkspaceView};
 use crate::net::{NetState, ServerConfig};
+use crate::terminal::commands::{
+    terminal_kill, terminal_list, terminal_resize, terminal_spawn, terminal_write,
+};
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex as StdMutex},
@@ -1119,8 +1123,20 @@ pub fn run() {
             });
 
             let store = ConversationStore::new(&storage_root).map_err(|error| error.to_string())?;
-            let gateway = Gateway::with_state_emitter(store, Some(state_emit.clone()))
-                .map_err(|error| error.to_string())?;
+            // 终端桥接（方案 A）：先于 Gateway 创建，注入 execute_command 可见执行能力；
+            // 同一 manager 由 tauri command 层（app.manage）与 Agent 工具桥接共用。
+            let terminal_manager = Arc::new(terminal::TerminalManager::new());
+            let terminal_hub = terminal::TerminalEventHub::new(handle.clone());
+            let terminal_bridge = Arc::new(terminal::AgentTerminalBridge::new(
+                Arc::clone(&terminal_manager),
+                terminal_hub.clone(),
+            ));
+            let gateway = Gateway::with_state_emitter_and_terminal(
+                store,
+                Some(state_emit.clone()),
+                Some(terminal_bridge),
+            )
+            .map_err(|error| error.to_string())?;
 
             // Domain states (no outer Mutex across network).
             let neuron_manager = gateway.neuron_manager();
@@ -1138,6 +1154,18 @@ pub fn run() {
             app.manage(sessions);
             app.manage(providers);
             app.manage(conversation_store);
+            // 终端事件 hub：IPC 命令与 WS 网关共享的会话事件广播器。
+            app.manage(terminal_hub.clone());
+            // 终端浏览器支持：内嵌 WebSocket 网关（绑定 127.0.0.1，
+            // 端口 PULSAR_TERMINAL_WS_PORT，默认 43110），浏览器前端经 ws 直连。
+            let ws_manager = Arc::clone(&terminal_manager);
+            app.manage(terminal_manager);
+            let ws_hub = terminal_hub.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = terminal::ws::run(ws_manager, ws_hub).await {
+                    tracing::error!(error = %error, "terminal ws gateway exited");
+                }
+            });
             let gateway_for_server = gateway.clone();
             app.manage(gateway);
             let state_emit_for_server = state_emit.clone();
@@ -1281,6 +1309,12 @@ pub fn run() {
             fs_info,
             get_home_dir,
             fs_suggest_abs,
+            // Terminal
+            terminal_spawn,
+            terminal_write,
+            terminal_resize,
+            terminal_kill,
+            terminal_list,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

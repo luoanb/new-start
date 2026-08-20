@@ -34,7 +34,7 @@ export type ViewContainerState = {
 };
 
 export type LayoutState = {
-  version: 10;
+  version: 11;
   sidebar: { visible: boolean; width: number };
   info: { visible: boolean; width: number };
   panel: { visible: boolean; height: number };
@@ -49,7 +49,7 @@ export type LayoutState = {
 };
 
 export const DEFAULT_LAYOUT: LayoutState = {
-  version: 10,
+  version: 11,
   sidebar: { visible: true, width: 260 },
   info: { visible: true, width: 280 },
   // v2/v3: 底部面板默认展开（对齐 VS Code 底部栏习惯）
@@ -57,10 +57,11 @@ export const DEFAULT_LAYOUT: LayoutState = {
   containers: {
     // v5/v6: topics 曾默认在 panel/topics 位置演变；v7: topics 与 tools 默认归位左侧 sidebar
     // v10: 新增 files（文件管理）默认归位左侧 sidebar（sessions 之后，VSCode 资源管理器语义）
+    // v11: 新增 terminal（集成终端面板）默认归位底部 panel（poller/logs 之后，VS Code 底部终端语义）
     sidebar: { views: ["sessions", "files", "topics", "tools"], activeView: "sessions" },
     // v10: providers+models 聚合为单个视图 providers-models（服务商分组 + 模型子项）
     info: { views: ["providers-models", "neurons-list"], activeView: "providers-models" },
-    panel: { views: ["poller", "logs"], activeView: "poller" },
+    panel: { views: ["poller", "logs", "terminal"], activeView: "poller" },
   },
   hiddenViews: [],
   // v8: main 区默认空，面板全部由用户交互插入

@@ -92,6 +92,8 @@ pub struct Gateway {
     /// 状态事件发射器：流式入口（`send_model_message_stream`）内部广播
     /// `StateChange::MessageDelta` 增量与完成后的 `Conversations` 收敛；为 None（测试）时静默。
     state_emit: EmitterSlot,
+    /// 终端桥接（方案 A）：运行期重装配时保持 execute_command 的可见执行能力。
+    terminal: Option<Arc<crate::terminal::AgentTerminalBridge>>,
 }
 
 impl Gateway {
@@ -109,7 +111,17 @@ impl Gateway {
         store: ConversationStore,
         state_emit: Option<StateEmitter>,
     ) -> AppResult<Self> {
-        Self::build(store, state_emit, None, None)
+        Self::build(store, state_emit, None, None, None)
+    }
+
+    /// 在 `with_state_emitter` 基础上追加终端桥接（方案 A）：`execute_command`
+    /// 的 `visible_terminal: true` 需要把输出广播到 Terminal 面板。
+    pub fn with_state_emitter_and_terminal(
+        store: ConversationStore,
+        state_emit: Option<StateEmitter>,
+        terminal: Option<Arc<crate::terminal::AgentTerminalBridge>>,
+    ) -> AppResult<Self> {
+        Self::build(store, state_emit, None, None, terminal)
     }
 
     /// 测试专用构造：注入模型调用替身与工具注册表，使 Chat/Agent 收敛路径
@@ -120,7 +132,7 @@ impl Gateway {
         model_caller: Arc<dyn ModelCaller>,
         tool_registry: Arc<RwLock<ToolRegistry>>,
     ) -> AppResult<Self> {
-        Self::build(store, None, Some(model_caller), Some(tool_registry))
+        Self::build(store, None, Some(model_caller), Some(tool_registry), None)
     }
 
     /// 测试专用构造（带事件发射器）：流式测试需要断言 `MessageDelta` 事件序列，
@@ -132,15 +144,17 @@ impl Gateway {
         tool_registry: Arc<RwLock<ToolRegistry>>,
         state_emit: Option<StateEmitter>,
     ) -> AppResult<Self> {
-        Self::build(store, state_emit, Some(model_caller), Some(tool_registry))
+        Self::build(store, state_emit, Some(model_caller), Some(tool_registry), None)
     }
 
-    /// 统一构造：`test_model_caller` / `test_tool_registry` 仅供测试注入。
+    /// 统一构造：`test_model_caller` / `test_tool_registry` 仅供测试注入；
+    /// `terminal` 为方案 A 的终端桥接（可见执行广播）。
     fn build(
         store: ConversationStore,
         state_emit: Option<StateEmitter>,
         test_model_caller: Option<Arc<dyn ModelCaller>>,
         test_tool_registry: Option<Arc<RwLock<ToolRegistry>>>,
+        terminal: Option<Arc<crate::terminal::AgentTerminalBridge>>,
     ) -> AppResult<Self> {
         let providers = ProviderRegistry::new(store.root().to_path_buf());
         let current_conversation_id = match store.list_conversations()?.first() {
@@ -192,7 +206,11 @@ impl Gateway {
         let tool_registry = match &test_tool_registry {
             Some(registry) => Arc::clone(registry),
             None => {
-                let local_registry = assemble_local_tools(&store.root(), Arc::clone(&file_ctx))?;
+                let local_registry = assemble_local_tools(
+                    &store.root(),
+                    Arc::clone(&file_ctx),
+                    terminal.clone(),
+                )?;
                 Arc::new(RwLock::new(local_registry))
             }
         };
@@ -227,11 +245,13 @@ impl Gateway {
             let storage_root = store.root().to_path_buf();
             let file_ctx_for_assembly = Arc::clone(&file_ctx);
             let neuron_manager_for_assembly = Arc::clone(&neuron_manager);
+            let terminal_for_assembly = terminal.clone();
             tauri::async_runtime::spawn(async move {
                 let _guard = assemble_lock.lock().await;
                 let mut base_registry = match assemble_local_tools(
                     &storage_root,
                     Arc::clone(&file_ctx_for_assembly),
+                    terminal_for_assembly,
                 ) {
                     Ok(registry) => registry,
                     Err(error) => {
@@ -350,6 +370,7 @@ impl Gateway {
             file_system,
             assemble_lock,
             state_emit: EmitterSlot(state_emit),
+            terminal,
         })
     }
 
@@ -567,7 +588,11 @@ impl Gateway {
             Arc::clone(&self.workspace_store),
             Arc::clone(&self.file_system),
         ));
-        let mut base_registry = assemble_local_tools(&self.store.root(), file_ctx)?;
+        let mut base_registry = assemble_local_tools(
+            &self.store.root(),
+            file_ctx,
+            self.terminal.clone(),
+        )?;
         // base 装配统一含神经元 System 工具，保证保存配置后的重装配与启动装配一致。
         register_system_tools(&mut base_registry, Arc::clone(&self.neuron_manager));
         let (new_registry, new_statuses) = assemble_mcp_progressive(
@@ -1194,10 +1219,16 @@ fn spawn_neuron_recycle_runtime(
 fn assemble_local_tools(
     storage_root: &std::path::Path,
     file_ctx: Arc<FileToolContext>,
+    terminal: Option<Arc<crate::terminal::AgentTerminalBridge>>,
 ) -> AppResult<ToolRegistry> {
     let mut registry = ToolRegistry::new();
     // 内置工具全部打标 Core（用户决策）：任何对话都得带上。
-    registry.register_core(ExecuteCommandTool::new());
+    // 方案 A：注入终端桥接后 execute_command 支持 visible_terminal 可见执行。
+    let mut exec_tool = ExecuteCommandTool::new();
+    if let Some(bridge) = terminal {
+        exec_tool = exec_tool.with_terminal(bridge);
+    }
+    registry.register_core(exec_tool);
     registry.register_core(GetCurrentTimeTool::new());
     register_file_tools(&mut registry, file_ctx);
     let tool_config = ToolConfigReader::new(storage_root.to_path_buf());

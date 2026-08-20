@@ -14,6 +14,7 @@ import TopicPanel from "$lib/components/TopicPanel.svelte";
 import PollerPanel from "$lib/components/PollerPanel.svelte";
 import ToolPanel from "$lib/components/ToolPanel.svelte";
 import LogPanel from "$lib/components/LogPanel.svelte";
+import TerminalPanel from "$lib/components/TerminalPanel.svelte";
 import ChatArea from "$lib/components/ChatArea.svelte";
 import NeuronManager from "$lib/components/NeuronManager.svelte";
 import NeuronListPanel from "$lib/components/NeuronListPanel.svelte";
@@ -100,6 +101,14 @@ export const viewRegistry: Record<string, ViewRegistration> = {
     title: "views.logs",
     icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
     component: LogPanel,
+    movableTo: "*",
+  },
+  // v11: 集成终端面板（底部 panel 容器，VS Code 集成终端语义）
+  terminal: {
+    id: "terminal",
+    title: "views.terminal",
+    icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
+    component: TerminalPanel,
     movableTo: "*",
   },
   // 文件管理：文件树（sidebar 默认挂载，VSCode 资源管理器语义）

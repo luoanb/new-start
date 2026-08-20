@@ -19,10 +19,10 @@ export class LocalStorageLayoutStorage implements LayoutStorage {
       const parsed = JSON.parse(raw) as Partial<LayoutState>;
       // 旧布局中的 providers/models 两个独立视图 → 聚合为 providers-models（任意版本兼容）
       const base = mergeProvidersModels(normalize(parsed));
-      // 仅当布局早于 v10（files 视图引入前）时确保 sidebar 含 files；
-      // v10 及以后的布局是用户权威，尊重用户拖拽/隐藏 files 的自定义结果，不再强制插回。
-      const legacy = parsed.version === undefined || parsed.version < 10;
-      return legacy ? ensureFilesInSidebar(base) : base;
+      // 仅当布局早于 v11（terminal 视图引入前）时确保 panel 容器含 terminal；
+      // v11 及以后的布局是用户权威，尊重用户拖拽/隐藏 terminal 的自定义结果，不再强制插回。
+      const legacy = parsed.version === undefined || parsed.version < 11;
+      return legacy ? ensureTerminalInPanel(ensureFilesInSidebar(base)) : base;
     } catch {
       return null;
     }
@@ -62,8 +62,8 @@ function normalize(parsed: Partial<LayoutState>): LayoutState {
     return migrateV8ToV9(sanitizeLegacyInfo(merged));
   }
 
-  // v9 → v10：结构与 v10 相同（仅 sidebar 补 files，已在 load 出口统一处理）
-  if (parsed.version === 9) {
+  // v9/v10 → v11：结构与 v11 相同（v10 已聚合 providers-models；sidebar 补 files / panel 补 terminal 在 load 出口统一处理）
+  if (parsed.version === 10 || parsed.version === 9) {
     const merged = merge(parsed);
     if (migratedMain) merged.main = migratedMain;
     return migrateV8ToV9(sanitizeLegacyInfo(merged));
@@ -294,6 +294,22 @@ function ensureFilesInSidebar(state: LayoutState): LayoutState {
     ...state,
     containers: containers as LayoutState["containers"],
     hiddenViews: state.hiddenViews.filter((v) => v !== "files"),
+  };
+}
+
+/** v11：集成终端面板默认挂入底部 panel 容器（poller/logs 之后）。仅对旧布局补齐；v11 起用户权威。 */
+function ensureTerminalInPanel(state: LayoutState): LayoutState {
+  const containers = { ...state.containers } as Record<
+    string,
+    { views: string[]; activeView: string }
+  >;
+  const panel = containers.panel;
+  if (!panel.views.includes("terminal")) {
+    containers.panel = { views: [...panel.views, "terminal"], activeView: panel.activeView };
+  }
+  return {
+    ...state,
+    containers: containers as LayoutState["containers"],
   };
 }
 
