@@ -5,6 +5,23 @@ use serde_json::{Map, Value};
 
 use super::error::{AppError, AppResult};
 
+/// 内嵌 server 内置默认值（唯一兜底；部署时可用 env / config.json / CLI 覆盖）。
+pub const DEFAULT_SERVER_HOST: &str = "127.0.0.1";
+pub const DEFAULT_SERVER_PORT: u16 = 9999;
+/// server 配置环境变量前缀：`PULSAR_HOST` / `PULSAR_PORT` / `PULSAR_TOKEN`。
+pub const SERVER_ENV_PREFIX: &str = "PULSAR_";
+
+/// 读取环境变量覆盖（GUI 与 headless 共用），返回 `(host, port, token)`。
+///
+/// 分层覆盖链（与 CLI / config.json 合并处共同实现）：
+/// `CLI > env(PULSAR_*) > config.json > 内置默认`（GUI 无 CLI 层，跳过第一级）。
+pub fn server_env_overrides() -> (Option<String>, Option<u16>, Option<String>) {
+    let host = std::env::var("PULSAR_HOST").ok().filter(|s| !s.is_empty());
+    let port = std::env::var("PULSAR_PORT").ok().and_then(|s| s.parse().ok());
+    let token = std::env::var("PULSAR_TOKEN").ok().filter(|s| !s.is_empty());
+    (host, port, token)
+}
+
 /// 统一的 `config.json` 读写入口。
 ///
 /// 各领域模块共享此接口读写 `.pulsar/config.json`：`read` 解析整份文件
@@ -44,7 +61,7 @@ pub struct ServerSection {
     /// 监听地址；默认 127.0.0.1（仅本机）。跨机访问需显式改绑非 loopback。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
-    /// 监听端口；默认 8787。
+    /// 监听端口；默认 9999。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
     /// 远程访问白名单 token；空列表 = 本机免鉴权放行，非空 = 所有请求须携带列表内 token。

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { t } from "$lib/i18n";
-  import { createHttpClient, currentConn, isTauriEnv, switchConn } from "$lib/api";
+  import { createHttpClient, currentConn, DEFAULT_REMOTE_URL, isTauriEnv, switchConn } from "$lib/api";
   import type { ConnConfig } from "$lib/api/types";
   import { dataStore } from "$lib/stores/dataStore.svelte";
 
@@ -19,7 +19,7 @@
     if (open) {
       const cfg = currentConn();
       mode = !isTauriEnv ? "remote" : cfg.mode;
-      url = cfg.url ?? "http://127.0.0.1:8787";
+      url = cfg.url ?? DEFAULT_REMOTE_URL;
       token = cfg.token ?? "";
       testStatus = "idle";
       testMsg = "";

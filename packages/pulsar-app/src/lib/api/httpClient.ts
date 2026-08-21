@@ -8,7 +8,7 @@
  *
  * 超时：fetch 无默认超时，本期失败即抛错，不做流式进度。
  */
-import { RpcError, STATE_CHANGED_EVENT, type ApiClient, type ConnConfig, type StateChangePayload } from "./types";
+import { RpcError, STATE_CHANGED_EVENT, type ApiClient, type ConnConfig, type ServerInfo, type StateChangePayload } from "./types";
 
 interface RpcResponse {
   ok: boolean;
@@ -69,6 +69,12 @@ export function httpClient(baseUrl: string, token?: string): ApiClient {
       } catch {
         return false;
       }
+    },
+
+    async serverInfo(): Promise<ServerInfo> {
+      const res = await fetch(`${base}/config`);
+      if (!res.ok) throw new RpcError("http_error", `GET /config 失败: HTTP ${res.status}`);
+      return (await res.json()) as ServerInfo;
     },
   };
 }

@@ -7,15 +7,21 @@
 pub mod auth;
 pub mod rpc;
 pub mod sse;
+#[cfg(feature = "embed-static")]
+pub mod static_assets;
 pub mod ws;
 
 use std::sync::Arc;
 
 use axum::{
+    body::Body,
+    extract::State,
+    http::{header, Response},
     middleware,
     routing::{get, post},
-    Router,
+    Json, Router,
 };
+use serde::Serialize;
 use tokio::sync::broadcast;
 
 use crate::core::{events::STATE_CHANGED_EVENT, Gateway, StateChange, StateEmitter};
@@ -29,8 +35,23 @@ pub struct ServerConfig {
     pub tokens: Vec<String>,
 }
 
+/// 服务器运行信息（`GET /config` 公开端点 + 桌面 IPC `server_info` 共用同一结构）。
+/// 只含非敏感运行信息，不含 token 本身。
+#[derive(Debug, Clone, Serialize)]
+pub struct ServerInfo {
+    pub version: &'static str,
+    /// server 是否启用（桌面场景反映 config.json `server.enabled`）。
+    pub enabled: bool,
+    pub host: String,
+    pub port: u16,
+    /// 是否托管前端静态资源（feature `embed-static`）。
+    pub static_enabled: bool,
+    /// 是否已配置 token（true 时远程访问需要认证）。
+    pub auth_required: bool,
+}
+
 /// axum managed state：可 Clone 的 `Gateway` + 状态发射器 + SSE 广播通道 + token 白名单 +
-/// 终端会话（WS `/ws` 终端业务复用）。
+/// 终端会话（WS `/ws` 终端业务复用）+ 实际监听 host/port（供 `/config` 暴露）。
 #[derive(Clone)]
 pub struct NetState {
     pub gateway: Gateway,
@@ -39,20 +60,76 @@ pub struct NetState {
     pub tokens: Vec<String>,
     pub terminal: Arc<TerminalManager>,
     pub terminal_hub: TerminalEventHub,
+    pub host: String,
+    pub port: u16,
 }
 
-/// 构建路由：RPC 端点 / SSE 事件流 / WebSocket 公共服务 / 存活检查。
+/// `/config` 公开端点（免鉴权）：供远程前端同源自动发现与能力探测。
+async fn handle_config(State(state): State<NetState>) -> Json<ServerInfo> {
+    Json(ServerInfo {
+        version: env!("CARGO_PKG_VERSION"),
+        enabled: true, // 能访问到本端点即 server 在运行
+        host: state.host.clone(),
+        port: state.port,
+        static_enabled: cfg!(feature = "embed-static"),
+        auth_required: !state.tokens.is_empty(),
+    })
+}
+
+/// 全局 CORS 响应头：公开端点（/config /healthz / 静态资源）与 API 统一生效，
+/// 供跨主机手动连接场景读取响应（鉴权仍由 API 子路由的 auth_middleware 负责）。
+async fn cors_response(response: Response<Body>) -> Response<Body> {
+    let mut response = response;
+    let headers = response.headers_mut();
+    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().unwrap());
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        "authorization, content-type".parse().unwrap(),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        "GET, POST, OPTIONS".parse().unwrap(),
+    );
+    response
+}
+
+/// 构建路由：公开端点（`/healthz` `/config`）+ RPC 端点 / SSE 事件流 / WebSocket 公共服务。
+///
+/// 鉴权中间件只保护 API 子路由（route_layer），公开端点与静态资源免鉴权
+/// （否则浏览器首屏拿不到 JS/CSS，同源自动发现也无法进行）。
+/// feature `embed-static` 开启时，`fallback_service` 以 SPA 方式托管内嵌前端静态资源。
 pub fn router(state: NetState) -> Router {
-    Router::new()
+    let public = Router::new()
         .route("/healthz", get(|| async { "ok" }))
+        .route("/config", get(handle_config));
+
+    let api = Router::new()
         .route("/rpc", post(rpc::handle_rpc))
         .route("/events", get(sse::handle_sse))
         .route("/ws", get(ws::handle_ws))
-        .layer(middleware::from_fn_with_state(
+        .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::auth_middleware,
-        ))
-        .with_state(state)
+        ));
+
+    #[cfg(feature = "embed-static")]
+    {
+        let spa = Router::new().fallback(static_assets::handle_spa);
+        Router::new()
+            .merge(public)
+            .merge(api)
+            .fallback_service(spa)
+            .with_state(state)
+            .layer(middleware::map_response(cors_response))
+    }
+    #[cfg(not(feature = "embed-static"))]
+    {
+        Router::new()
+            .merge(public)
+            .merge(api)
+            .with_state(state)
+            .layer(middleware::map_response(cors_response))
+    }
 }
 
 /// 绑定并启动内嵌 server（错误记录后由调用方决定是否回退）。
@@ -111,6 +188,8 @@ mod tests {
             tokens,
             terminal,
             terminal_hub,
+            host: "127.0.0.1".into(),
+            port: 9999,
         }
     }
 
@@ -148,6 +227,46 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
         let body = to_bytes(res.into_body(), 1024).await.expect("read body");
         assert_eq!(&body[..], b"ok");
+    }
+
+    /// `/config` 公开端点：免鉴权返回运行信息（即使配了 token 也不 401）。
+    #[tokio::test]
+    async fn config_endpoint_public_and_informative() {
+        let app = router(test_state(vec!["s3cret".into()]));
+        let res = request(
+            &app,
+            Request::builder()
+                .uri("/config")
+                .body(Body::empty())
+                .expect("valid request"),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = to_bytes(res.into_body(), 4096).await.expect("read body");
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("valid json");
+        assert_eq!(json["port"], 9999);
+        assert_eq!(json["host"], "127.0.0.1");
+        assert_eq!(json["enabled"], true);
+        assert_eq!(json["auth_required"], true);
+        assert!(json["version"].is_string());
+    }
+
+    /// `/config` 公开端点：未配 token 时 auth_required=false。
+    #[tokio::test]
+    async fn config_endpoint_reports_no_auth_when_whitelist_empty() {
+        let app = router(test_state(vec![]));
+        let res = request(
+            &app,
+            Request::builder()
+                .uri("/config")
+                .body(Body::empty())
+                .expect("valid request"),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = to_bytes(res.into_body(), 4096).await.expect("read body");
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("valid json");
+        assert_eq!(json["auth_required"], false);
     }
 
     #[tokio::test]

@@ -8,14 +8,21 @@
 import { createHttpClient } from "./httpClient";
 import { tauriClient } from "./tauriClient";
 import { isTauriEnv } from "./env";
-import type { ApiClient, ConnConfig } from "./types";
+import type { ApiClient, ConnConfig, ServerInfo } from "./types";
 
 const MODE_KEY = "pulsar:connMode";
 const URL_KEY = "pulsar:remoteUrl";
 const TOKEN_KEY = "pulsar:remoteToken";
 
-/** 远程模式默认地址（非 Tauri 环境 / 未配置时使用）。 */
-export const DEFAULT_REMOTE_URL = "http://127.0.0.1:8787";
+/**
+ * 远程模式默认地址：构建期由 `PUBLIC_REMOTE_URL` 注入（.env / 部署环境管理），
+ * 未注入时兜底本机默认端口。非 Tauri 且页面由 pulsar-server 托管时，
+ * 启动阶段的 `discoverRemote()` 会以同源自动发现覆盖此值（见 +page.svelte）。
+ */
+const injectedRemoteUrl: string | undefined = (
+  import.meta.env as Record<string, string | undefined>
+).PUBLIC_REMOTE_URL;
+export const DEFAULT_REMOTE_URL = injectedRemoteUrl || "http://127.0.0.1:9999";
 
 export { isTauriEnv } from "./env";
 
@@ -41,7 +48,7 @@ export function writeConnConfig(cfg: ConnConfig): void {
 export function createClient(cfg: ConnConfig): ApiClient {
   if (cfg.mode === "remote") {
     if (!cfg.url) {
-      throw new Error("远程模式需要 pulsar:remoteUrl（如 http://127.0.0.1:8787）");
+      throw new Error("远程模式需要 pulsar:remoteUrl（如 http://127.0.0.1:9999）");
     }
     return createHttpClient(cfg);
   }
@@ -76,6 +83,24 @@ export function currentConn(): ConnConfig {
   return readConnConfig();
 }
 
-export type { ApiClient, ConnConfig, StateChangePayload, StateEventKind } from "./types";
+/**
+ * 同源自动发现：非 Tauri 环境且用户未显式配置远程地址时，探测当前页面来源
+ * （location.origin）是否就是 pulsar-server 托管的页面——`GET /config` 可达即证明。
+ * 命中则返回该 origin（前端零写死端口），否则返回 null 保持现有配置。
+ */
+export async function discoverRemote(): Promise<string | null> {
+  if (isTauriEnv) return null;
+  if (readConnConfig().url) return null; // 用户已显式配置过，不覆盖
+  try {
+    const res = await fetch(`${location.origin}/config`, { cache: "no-store" });
+    if (!res.ok) return null;
+    const info = (await res.json()) as ServerInfo;
+    return info.enabled ? location.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+export type { ApiClient, ConnConfig, ServerInfo, StateChangePayload, StateEventKind } from "./types";
 export { STATE_CHANGED_EVENT } from "./types";
 export { createHttpClient } from "./httpClient";

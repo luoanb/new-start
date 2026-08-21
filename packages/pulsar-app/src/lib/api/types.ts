@@ -55,6 +55,19 @@ export type StateChangePayload =
       detail: unknown;
     };
 
+/** 服务器运行信息：桌面 IPC `server_info` 与远程 `GET /config` 共用（后端 net::ServerInfo 同构）。 */
+export interface ServerInfo {
+  version: string;
+  /** server 是否启用（桌面场景反映 config.json server.enabled）。 */
+  enabled: boolean;
+  host: string;
+  port: number;
+  /** 是否托管前端静态资源（后端 feature embed-static）。 */
+  static_enabled: boolean;
+  /** 是否已配置 token（true 时远程访问需要认证）。 */
+  auth_required: boolean;
+}
+
 export interface ApiClient {
   /** 调用后端命令：本机走 Tauri invoke，远程走 POST /rpc。 */
   invoke<T>(cmd: string, params?: Record<string, unknown>): Promise<T>;
@@ -62,12 +75,14 @@ export interface ApiClient {
   subscribe(handler: (payload: StateChangePayload) => void): () => void;
   /** 后端可达性检查（本机恒 true）。 */
   health(): Promise<boolean>;
+  /** 服务器运行信息：本机走 IPC server_info，远程走 GET /config。 */
+  serverInfo(): Promise<ServerInfo>;
 }
 
 /** 连接配置（存 localStorage：pulsar:connMode / pulsar:remoteUrl / pulsar:remoteToken）。 */
 export interface ConnConfig {
   mode: "local" | "remote";
-  /** 远程模式必填：http://host:port（如 http://127.0.0.1:8787）。 */
+  /** 远程模式必填：http://host:port（如 http://127.0.0.1:9999）。 */
   url?: string;
   /** 远程模式可选：白名单 token；后端白名单为空时可不填。 */
   token?: string;

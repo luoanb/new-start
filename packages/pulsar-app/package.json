@@ -11,7 +11,11 @@
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "cli": "cargo run --manifest-path src-tauri/Cargo.toml --bin pulsar-cli --",
     "tui": "cargo run --manifest-path src-tauri/Cargo.toml --bin pulsar-tui",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "server:build": "pnpm build && cargo build --release --manifest-path src-tauri/Cargo.toml --bin pulsar-server --features embed-static",
+    "server:prod": "PULSAR_HOST=0.0.0.0 PULSAR_PORT=9999 cargo run --release --manifest-path src-tauri/Cargo.toml --bin pulsar-server --features embed-static --",
+    "server:run": "cargo run --release --manifest-path src-tauri/Cargo.toml --bin pulsar-server --features embed-static --",
+    "server:dev": "pnpm build && cargo run --manifest-path src-tauri/Cargo.toml --bin pulsar-server --features embed-static --"
   },
   "license": "MIT",
   "dependencies": {

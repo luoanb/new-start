@@ -2,13 +2,14 @@ pub mod core;
 pub mod fileops;
 pub mod net;
 pub mod runtime;
+pub mod server_runtime;
 pub mod terminal;
 pub mod tui;
 
 use crate::core::{
     app_log::{self, LogEntry},
     assistant_session::AssistantSession,
-    config::ConfigStore,
+    config::{server_env_overrides, ConfigStore, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT},
     conversation_store::ConversationStore,
     error::AppErrorPayload,
     insert_catalog::{InsertCatalog, InsertInfo},
@@ -34,7 +35,7 @@ use crate::fileops::gitops::{
     GitResetMode, GitResetPreview, GitShowFile, GitStashAction, GitStashEntry, GitStatusView,
 };
 use crate::fileops::workspace::{WorkspaceEntry, WorkspaceView};
-use crate::net::{NetState, ServerConfig};
+use crate::net::{NetState, ServerConfig, ServerInfo};
 use crate::terminal::commands::{
     terminal_kill, terminal_list, terminal_resize, terminal_spawn, terminal_write,
 };
@@ -60,6 +61,43 @@ fn debug_storage_path() -> String {
             .unwrap()
             .join(storage::STORAGE_DIR_NAME)
     )
+}
+
+// ── Server ──
+
+/// 服务器运行信息（桌面 IPC 版 `GET /config`）：读 config.json `server` 节 + env 覆盖，
+/// 与远程 `/config` 端点同构，供前端统一展示 / 预判认证（GUI 无 CLI 层，优先级 env > config > 默认）。
+#[tauri::command]
+fn server_info() -> ServerInfo {
+    let (env_host, env_port, env_token) = server_env_overrides();
+    let section = ConfigStore::new(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join(storage::STORAGE_DIR_NAME),
+    )
+    .read()
+    .ok()
+    .and_then(|config| config.server);
+    let enabled = section.as_ref().and_then(|s| s.enabled).unwrap_or(false);
+    let host = env_host
+        .or_else(|| section.as_ref().and_then(|s| s.host.clone()))
+        .unwrap_or_else(|| DEFAULT_SERVER_HOST.into());
+    let port = env_port
+        .or_else(|| section.as_ref().and_then(|s| s.port))
+        .unwrap_or(DEFAULT_SERVER_PORT);
+    let tokens = env_token
+        .map(|t| vec![t])
+        .or_else(|| section.as_ref().and_then(|s| s.tokens.clone()))
+        .unwrap_or_default();
+    ServerInfo {
+        version: env!("CARGO_PKG_VERSION"),
+        enabled,
+        host,
+        port,
+        static_enabled: cfg!(feature = "embed-static"),
+        auth_required: !tokens.is_empty(),
+    }
 }
 
 // ── Chat ──
@@ -1640,15 +1678,26 @@ pub fn run() {
 
             // 远程模式：内嵌 server 配置（config.json `server` 节）。缺省 / enabled=false 不启动，
             // 等价现状（本机 Tauri IPC 路径零改动）。
+            // 覆盖链：env(PULSAR_HOST/PORT/TOKEN) > config.json `server` 节 > 内置默认（GUI 无 CLI 层）。
+            let (env_host, env_port, env_token) = server_env_overrides();
             let server_cfg = ConfigStore::new(storage_root.clone())
                 .read()
                 .ok()
                 .and_then(|config| config.server)
                 .filter(|section| section.enabled.unwrap_or(false))
                 .map(|section| ServerConfig {
-                    host: section.host.unwrap_or_else(|| "127.0.0.1".into()),
-                    port: section.port.unwrap_or(8787),
-                    tokens: section.tokens.unwrap_or_default(),
+                    host: env_host
+                        .clone()
+                        .or_else(|| section.host.clone())
+                        .unwrap_or_else(|| DEFAULT_SERVER_HOST.into()),
+                    port: env_port
+                        .or_else(|| section.port)
+                        .unwrap_or(DEFAULT_SERVER_PORT),
+                    tokens: env_token
+                        .clone()
+                        .map(|t| vec![t])
+                        .or(section.tokens)
+                        .unwrap_or_default(),
                 });
             let server_enabled = server_cfg.is_some();
 
@@ -1665,46 +1714,29 @@ pub fn run() {
                 let _ = state_emit_handle.emit(STATE_CHANGED_EVENT, change);
             });
 
-            let store = ConversationStore::new(&storage_root).map_err(|error| error.to_string())?;
-            // 终端桥接（方案 A）：先于 Gateway 创建，注入 execute_command 可见执行能力；
-            // 同一 manager 由 tauri command 层（app.manage）与 Agent 工具桥接共用。
-            let terminal_manager = Arc::new(terminal::TerminalManager::new());
+            // 终端事件 hub：桌面 IPC 事件 + WS 广播双路发布（headless 用 new_headless）。
             let terminal_hub = terminal::TerminalEventHub::new(handle.clone());
-            let terminal_bridge = Arc::new(terminal::AgentTerminalBridge::new(
-                Arc::clone(&terminal_manager),
-                terminal_hub.clone(),
-            ));
-            let gateway = Gateway::with_state_emitter_and_terminal(
-                store,
-                Some(state_emit.clone()),
-                Some(terminal_bridge),
-            )
-            .map_err(|error| error.to_string())?;
+            // 服务器公共运行时：Gateway + 分域服务统一初始化（GUI 与 headless 复用）。
+            let runtime =
+                server_runtime::build_server_runtime(&storage_root, state_emit.clone(), terminal_hub.clone())
+                    .map_err(|error| error.to_string())?;
+            let neuron_manager = runtime.neuron_manager.clone();
 
-            // Domain states (no outer Mutex across network).
-            let neuron_manager = gateway.neuron_manager();
-            let topic_store = gateway.topic_store().map_err(|e| e.to_string())?;
-            let assistant = gateway.assistant();
-            let poller = gateway.poller();
-            let sessions = gateway.session_tracker();
-            let providers = gateway.providers();
-            let conversation_store = gateway.conversation_store();
-
-            app.manage(neuron_manager.clone());
-            app.manage(topic_store);
-            app.manage(assistant);
-            app.manage(poller);
-            app.manage(sessions);
-            app.manage(providers);
-            app.manage(conversation_store);
+            app.manage(runtime.neuron_manager.clone());
+            app.manage(runtime.topic_store.clone());
+            app.manage(runtime.assistant.clone());
+            app.manage(runtime.poller.clone());
+            app.manage(runtime.sessions.clone());
+            app.manage(runtime.providers.clone());
+            app.manage(runtime.conversation_store.clone());
             // 终端事件 hub：IPC 命令与 WS 公共通道（net/ws.rs）共享的会话事件广播器。
-            app.manage(terminal_hub.clone());
+            app.manage(runtime.terminal_hub.clone());
             // 终端浏览器支持：随内嵌 server 的 `/ws` 端点启动（net::NetState 注入
             // terminal manager 与 hub，见下方远程模式分支）；不再独立监听端口。
-            let ws_manager = Arc::clone(&terminal_manager);
-            app.manage(terminal_manager);
-            let gateway_for_server = gateway.clone();
-            app.manage(gateway);
+            let ws_manager = Arc::clone(&runtime.terminal_manager);
+            app.manage(runtime.terminal_manager);
+            let gateway_for_server = runtime.gateway.clone();
+            app.manage(runtime.gateway);
             let state_emit_for_server = state_emit.clone();
             app.manage(state_emit);
 
@@ -1717,7 +1749,9 @@ pub fn run() {
                     events_tx: events_tx.clone(),
                     tokens: cfg.tokens.clone(),
                     terminal: ws_manager,
-                    terminal_hub: terminal_hub.clone(),
+                    terminal_hub: runtime.terminal_hub.clone(),
+                    host: cfg.host.clone(),
+                    port: cfg.port,
                 };
                 tauri::async_runtime::spawn(async move {
                     if let Err(error) = net::run_server(cfg, net_state).await {
@@ -1772,6 +1806,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             debug_storage_path,
+            server_info,
             send_chat_message,
             set_session_model,
             create_conversation,

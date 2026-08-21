@@ -7,7 +7,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-import { STATE_CHANGED_EVENT, type ApiClient, type StateChangePayload } from "./types";
+import { STATE_CHANGED_EVENT, type ApiClient, type ServerInfo, type StateChangePayload } from "./types";
 
 export const tauriClient: ApiClient = {
   async invoke<T>(cmd: string, params?: Record<string, unknown>): Promise<T> {
@@ -26,5 +26,9 @@ export const tauriClient: ApiClient = {
 
   async health(): Promise<boolean> {
     return true;
+  },
+
+  async serverInfo(): Promise<ServerInfo> {
+    return invoke<ServerInfo>("server_info");
   },
 };

@@ -6,6 +6,16 @@ authors = ["you"]
 edition = "2021"
 default-run = "pulsar-app"
 
+[features]
+# 内嵌 server 托管前端静态资源：rust-embed 编译期嵌入 build/（构建前需先 `pnpm build`）。
+embed-static = []
+
+# 服务器版（headless）固定启用静态托管：单端口全功能（RPC/SSE/WS + 前端页面）。
+[[bin]]
+name = "pulsar-server"
+path = "src/bin/pulsar-server.rs"
+required-features = ["embed-static"]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]

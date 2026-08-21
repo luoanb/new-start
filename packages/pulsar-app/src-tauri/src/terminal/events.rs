@@ -41,9 +41,19 @@ impl TerminalEventHub {
         }
     }
 
+    /// 无 AppHandle 构造（headless server / 单元测试）：仅保留 WS 广播通道，
+    /// 跳过桌面 IPC 事件发射。
+    pub fn new_headless() -> Self {
+        Self::without_app()
+    }
+
     /// 无 AppHandle 的测试构造：仅保留 WS 广播通道，跳过桌面 IPC 事件发射。
     #[cfg(test)]
     pub fn new_for_test() -> Self {
+        Self::without_app()
+    }
+
+    fn without_app() -> Self {
         let (output, _) = broadcast::channel(256);
         let (exit, _) = broadcast::channel(16);
         Self {
