@@ -13,6 +13,29 @@
     new Set(ctx.stores.data.state.runningSessions.map((s) => s.session_id)),
   );
 
+  // 复制反馈：记录最近复制成功的会话 id，短暂显示「已复制」。
+  let copiedId = $state<string | null>(null);
+  let copyTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function copyId(id: string) {
+    try {
+      await navigator.clipboard.writeText(id);
+    } catch {
+      // 非安全上下文 / WebKitGTK 下 Clipboard API 不可用时的兜底方案。
+      const ta = document.createElement("textarea");
+      ta.value = id;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+    copiedId = id;
+    clearTimeout(copyTimer);
+    copyTimer = setTimeout(() => (copiedId = null), 1500);
+  }
+
   const onSelect = (id: string) => ctx.commands.selectConversation(id);
   const onCreate = () => ctx.commands.openCreateModal();
   const onClose = (id: string) => void ctx.commands.closeSession(id);
@@ -109,12 +132,17 @@
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <span
                 class="copy-btn"
+                class:copied={copiedId === conv.id}
                 role="button"
                 tabindex="-1"
-                onclick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(conv.id); }}
-                title={t("sessionList.copyId")}
+                onclick={(e) => { e.stopPropagation(); void copyId(conv.id); }}
+                title={copiedId === conv.id ? t("chatMessage.copied") : t("sessionList.copyId")}
               >
-                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                {#if copiedId === conv.id}
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+                {:else}
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                {/if}
               </span>
               {#if runningSessionIds.has(conv.id)}
                 <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -169,8 +197,10 @@
   .session-count { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .session-time { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .session-actions { flex-shrink: 0; display: flex; align-items: center; gap: 2px; }
-  .copy-btn { background: none; border: none; cursor: pointer; font-size: var(--fs-base); color: inherit; padding: 2px 4px; border-radius: var(--radius-sm); line-height: 1; transition: opacity var(--duration-fast) var(--ease-out); }
+  .copy-btn { background: none; border: none; cursor: pointer; font-size: var(--fs-base); color: inherit; padding: 2px 4px; border-radius: var(--radius-sm); line-height: 1; display: inline-flex; align-items: center; justify-content: center; transition: opacity var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out); }
+  .copy-btn svg { display: block; }
   .copy-btn:hover { opacity: 1 !important; background: var(--color-hover); }
+  .copy-btn.copied { color: var(--color-primary); opacity: 1 !important; visibility: visible; }
   .close-btn { background: none; border: none; cursor: pointer; color: inherit; padding: 2px 4px; border-radius: var(--radius-sm); line-height: 1; display: inline-flex; align-items: center; justify-content: center; transition: opacity var(--duration-fast) var(--ease-out); }
   .close-btn svg { display: block; }
   .close-btn:hover { opacity: 1 !important; background: var(--color-hover); }
