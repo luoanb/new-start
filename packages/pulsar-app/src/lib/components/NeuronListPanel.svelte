@@ -1,6 +1,6 @@
 <script lang="ts">
   import { t } from "$lib/i18n";
-  import { api } from "$lib/api";
+  import { api, c } from "$lib/api";
   import { useViewContext } from "$lib/layout/viewContext";
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
   import type { Neuron, NeuronPage } from "$lib/types";
@@ -40,7 +40,7 @@
     loading = true;
     errorMsg = "";
     try {
-      const res = await api.invoke<NeuronPage>("list_neurons_page", {
+      const res = await api.call(c.listNeuronsPage, {
         page: 0,
         pageSize: PAGE_SIZE,
         search: search || null,
@@ -61,7 +61,7 @@
     loadingMore = true;
     try {
       const next = page + 1;
-      const res = await api.invoke<NeuronPage>("list_neurons_page", {
+      const res = await api.call(c.listNeuronsPage, {
         page: next,
         pageSize: PAGE_SIZE,
         search: search || null,

@@ -75,11 +75,12 @@ struct FrontendAssets;   // 编译期嵌入 build/
 
 ## Done Contract
 
-- [x] `net/static_assets.rs` + feature `embed-static`：router 可托管 SPA 前端，`/healthz` 等 API 不受影响
-- [x] `pulsar-server` headless binary 可启动并 `curl /healthz`、`curl /`（HTML）通过
-- [x] `TerminalEventHub::new_headless()` 就绪，WS `/ws` 终端在 headless 下可用
+- [x] `net/static_assets.rs` + feature `embed-static`：router 可托管 SPA 前端，`/api/*` 等 API 不受影响
+- [x] `pulsar-server` headless binary 可启动并 `curl /api/healthz`、`curl /`（HTML）通过
+- [x] `TerminalEventHub::new_headless()` 就绪，WS `/api/ws` 终端在 headless 下可用
 - [x] GUI 构建 + 现有 `cargo test` 全绿（无回归）
 - [x] 构建矩阵三形态产物均可出包
+- [x] HTTP API 统一 `/api` 前缀 + vite dev proxy（dev 与 prod 同源行为一致，局域网零配置访问）
 
 ## 实施记录（2026-08-21）
 
@@ -93,16 +94,29 @@ struct FrontendAssets;   // 编译期嵌入 build/
 冒烟验证（release + embed-static，`/tmp/pulsar-server-smoke`）：
 
 ```
-/healthz                    200 "ok"
-/ (index.html)              200 (SvelteKit HTML)
-/some/client/route          200 (SPA fallback)
-/manifest.webmanifest       200
-POST /rpc {"cmd":"status"}  200 {"ok":true,...}
-/ws 握手                    101
+/api/healthz                  200 "ok"
+/ (index.html)                200 (SvelteKit HTML)
+/some/client/route            200 (SPA fallback)
+/api/notexist                 404（API 前缀永不回退 index.html）
+/manifest.webmanifest         200
+POST /api/rpc {"cmd":"status"} 200 {"ok":true,...}
+/api/ws 握手                  101
 --token s3cret 时：
-/rpc 无 token              401     /rpc Bearer s3cret   200
-/events 无 token           401     / (静态) 无 token    200
+/api/rpc 无 token            401     /api/rpc Bearer s3cret   200
+/api/events 无 token         401     / (静态) 无 token        200
 ```
+
+## 实施记录（2026-08-22）：/api 前缀统一 + dev 同源代理
+
+背景：dev（vite 1432 托管前端 + 独立后端）与 prod（server 托管）连接行为不一致——同源自动发现 `/config` 在 vite 上 404、默认地址 `127.0.0.1` 在局域网指向访问者自己、dev 后端默认绑 loopback。根因是**前后端分离时 API 无统一入口**。
+
+方案（统一前缀 + 一条代理规则）：
+
+- **后端 `net::router`**：HTTP API 全部挂 `/api` 前缀——`/api/healthz`（公开）、`/api/config`（公开，同源发现）、`/api/rpc` / `/api/events` / `/api/ws`（`auth_middleware` 保护）。SPA fallback 对 `api/*` 一律 404，杜绝 API 请求被 HTML 兜底。
+- **前端客户端**：`httpClient` 拼 `/api/rpc|events|healthz|config`；`discoverRemote` 探测 `{origin}/api/config`；`TerminalPanel` WS 推导 `ws://host:port/api/ws`。
+- **vite dev proxy**（[vite.config.js](../../packages/pulsar-app/vite.config.js)）：`/api` → `DEV_PROXY_TARGET`（默认 `http://127.0.0.1:9999`）。dev 下前端同源访问 `/api/*` 即命中后端 → `discoverRemote` 自动连接；局域网访问者打开 `<服务器IP>:1432` 即全功能，**零手动填地址**。dev 与 prod 行为一致。
+- **部署脚本**：`scripts/server-prod.sh`（Unix）/ `scripts/server-prod.cmd`（Windows）——`PULSAR_HOST=0.0.0.0 PULSAR_PORT=9999` 启动 release server（仅启动，不含构建）；`server:build` 负责构建。
+- 配置优先级不变：CLI > env（`PULSAR_HOST/PORT/TOKEN`）> `config.json` > 内置默认；`server_info` IPC 与 `/api/config` 同构。
 
 构建命令：
 
@@ -114,6 +128,19 @@ pnpm tauri build --features embed-static     # 或 cargo build --features embed-
 # 服务器版（headless，固定静态托管）
 cargo build --release --bin pulsar-server --features embed-static
 ```
+
+## 实施记录（2026-08-22）：前端请求调用收束（类型安全契约层）
+
+背景：前端散落约 90 处 `api.invoke("cmd", params)` 魔法字符串，命令名/参数/返回类型无编译期校验，后端改命令时前端静默失配。调研社区实践后选型**类型安全 RPC 契约层**（tRPC 要求前后端共用 TS router，Rust 后端不适用；TanStack Query/SWR 的服务器状态管理与现有事件驱动双轨冲突，故不引入，仅收束调用层）。
+
+方案：
+
+- **命令契约唯一真源** [contracts.ts](../../packages/pulsar-app/src/lib/api/contracts.ts)：`Contract<P,R>` + `def<P,R>(cmd)` 声明，`c` 表按领域分组列出全部前端调用的后端命令（会话/消息、Topics、Poller、工作区、服务商/模型、工具/技能、神经元、Git、文件系统、日志、终端、系统）。字段名保持与后端 Tauri command 参数一致（snake_case，如 `max_depth`）。
+- **统一入口**：`ApiClient` 新增 `call<P,R>(contract, params)`，`tauriClient` → `invoke`，`httpClient` → `POST /api/rpc`；业务层一律 `api.call(c.x, params)`，禁止裸写命令字符串。
+- **替换范围**：`dataStore.svelte.ts`（65 处）、`terminal/transport.ts`（5 处）、14 个组件（~52 处）；无参命令统一 `api.call(c.x, undefined)`。
+- **顺带修复**：契约层暴露 `set_neuron_system_type` 参数实际类型应为 `string | null`（此前 `api.invoke` 无校验可传 `undefined`）；`NeuronDetailDrawer.adjustEdge` 的 `Connection` 参数与契约表 `c` 同名遮蔽，改名 `conn`。
+
+验证：`pnpm check` 0 错误；`pnpm build` 通过。
 
 ## Resume / Handoff
 

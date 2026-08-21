@@ -8,7 +8,7 @@
   // - hunk 导航：上一处/下一处 + n/total 计数 + 当前 hunk 摘要，滚动到对应 hunk。
   import { onMount, getContext } from "svelte";
   import { dataStore } from "$lib/stores/dataStore.svelte";
-  import { api } from "$lib/api";
+  import { api, c } from "$lib/api";
   import { t } from "$lib/i18n";
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
   import type { MainPanel } from "$lib/layout/layoutTypes";
@@ -81,12 +81,12 @@
     try {
       if (range === "both") {
         const [s, u] = await Promise.all([
-          api.invoke<GitDiff>("git_diff", { repoId, path: relPath, cached: true }),
-          api.invoke<GitDiff>("git_diff", { repoId, path: relPath, cached: false }),
+          api.call(c.gitDiff, { repoId, path: relPath, cached: true }),
+          api.call(c.gitDiff, { repoId, path: relPath, cached: false }),
         ]);
         diff = mergeDiffs(s, u);
       } else {
-        diff = await api.invoke<GitDiff>("git_diff", { repoId, path: relPath, cached: range === "staged" });
+        diff = await api.call(c.gitDiff, { repoId, path: relPath, cached: range === "staged" });
       }
     } catch (e) {
       diff = null;
@@ -100,7 +100,7 @@
     loading = true;
     error = "";
     try {
-      blame = await api.invoke<GitBlameLine[]>("git_blame", { repoId, path: relPath });
+      blame = await api.call(c.gitBlame, { repoId, path: relPath });
     } catch (e) {
       error = formatInvokeError(e);
     }

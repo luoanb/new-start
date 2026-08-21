@@ -2,11 +2,13 @@
  * 统一 API 客户端抽象（前端双模式收口）。
  *
  * - tauriClient：本机模式，Tauri IPC（invoke + app://state-changed 事件），行为与现状逐字节一致。
- * - httpClient：远程模式，POST /rpc + GET /events(SSE) + GET /healthz，与后端 `net` 模块对齐。
+ * - httpClient：远程模式，POST /api/rpc + GET /api/events(SSE) + GET /api/healthz，与后端 `net` 模块对齐。
  *
- * 业务层（dataStore / 组件）只依赖本接口，切换模式对业务透明。
+ * 业务层（dataStore / 组件）只依赖本接口 + 命令契约（contracts.ts），
+ * 切换模式对业务透明。调用一律走 `call(c.someCommand, params)`，禁止裸 invoke 字符串。
  */
 import type { PollerStatus } from "$lib/types";
+import type { Contract } from "./contracts";
 
 /** 与后端 core/events.rs STATE_CHANGED_EVENT 保持一致（Tauri 事件名 / SSE 事件名共用）。 */
 export const STATE_CHANGED_EVENT = "app://state-changed";
@@ -69,8 +71,13 @@ export interface ServerInfo {
 }
 
 export interface ApiClient {
-  /** 调用后端命令：本机走 Tauri invoke，远程走 POST /rpc。 */
+  /** 调用后端命令：本机走 Tauri invoke，远程走 POST /api/rpc。 */
   invoke<T>(cmd: string, params?: Record<string, unknown>): Promise<T>;
+  /**
+   * 类型安全命令调用：业务层唯一入口。
+   * 参数/返回类型由 `contracts.ts` 契约编译期校验；本机 IPC 与远程 HTTP 对业务透明。
+   */
+  call<P, R>(contract: Contract<P, R>, params: P): Promise<R>;
   /** 订阅状态变更事件，返回退订函数。 */
   subscribe(handler: (payload: StateChangePayload) => void): () => void;
   /** 后端可达性检查（本机恒 true）。 */

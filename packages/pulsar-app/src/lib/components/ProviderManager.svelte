@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api } from "$lib/api";
+  import { api, c } from "$lib/api";
   import { t } from "$lib/i18n";
   import Select from "./Select.svelte";
   import Toggle from "./Toggle.svelte";
@@ -48,7 +48,7 @@
     loading = true;
     error = "";
     try {
-      view = await api.invoke<ProviderConfigView>("get_provider_config");
+      view = await api.call(c.getProviderConfig, undefined);
       // 默认选中第一个启用（未禁用）的服务商
       selectedId =
         view.providers.find((p) => p.enabled)?.id ?? view.providers[0]?.id ?? null;
@@ -69,7 +69,7 @@
     saving = true;
     error = "";
     try {
-      const saved = await api.invoke<ProviderConfigView>("save_provider_config", { view });
+      const saved = await api.call(c.saveProviderConfig, { view });
       view = saved;
       await ctx.commands.closeProviderManager();
     } catch (e) {

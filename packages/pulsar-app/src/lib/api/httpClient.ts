@@ -1,13 +1,15 @@
 /**
  * 远程模式 API 客户端：HTTP + SSE。
  *
- * - invoke：POST {base}/rpc，载荷 `{ cmd, params }`（与后端 `net::rpc` 对齐）。
- * - subscribe：原生 EventSource 连接 {base}/events，事件名 = STATE_CHANGED_EVENT；
+ * 后端 HTTP API 统一挂 `/api` 前缀（见后端 `net::router`）：
+ * - invoke：POST {base}/api/rpc，载荷 `{ cmd, params }`（与后端 `net::rpc` 对齐）。
+ * - subscribe：原生 EventSource 连接 {base}/api/events，事件名 = STATE_CHANGED_EVENT；
  *   EventSource 无法自定义请求头，token 经 query 参数 `?token=` 传递（后端 auth 中间件同时接受 header / query）。
- * - health：GET {base}/healthz。
+ * - health：GET {base}/api/healthz。
  *
  * 超时：fetch 无默认超时，本期失败即抛错，不做流式进度。
  */
+import type { Contract } from "./contracts";
 import { RpcError, STATE_CHANGED_EVENT, type ApiClient, type ConnConfig, type ServerInfo, type StateChangePayload } from "./types";
 
 interface RpcResponse {
@@ -25,7 +27,7 @@ export function httpClient(baseUrl: string, token?: string): ApiClient {
     async invoke<T>(cmd: string, params?: Record<string, unknown>): Promise<T> {
       let res: Response;
       try {
-        res = await fetch(`${base}/rpc`, {
+        res = await fetch(`${base}/api/rpc`, {
           method: "POST",
           headers,
           body: JSON.stringify({ cmd, params: params ?? {} }),
@@ -46,10 +48,14 @@ export function httpClient(baseUrl: string, token?: string): ApiClient {
       return body.data as T;
     },
 
+    async call<P, R>(contract: Contract<P, R>, params: P): Promise<R> {
+      return this.invoke<R>(contract.cmd, params as Record<string, unknown>);
+    },
+
     subscribe(handler: (payload: StateChangePayload) => void): () => void {
       const url = token
-        ? `${base}/events?token=${encodeURIComponent(token)}`
-        : `${base}/events`;
+        ? `${base}/api/events?token=${encodeURIComponent(token)}`
+        : `${base}/api/events`;
       const es = new EventSource(url);
       const onEvent = (event: MessageEvent) => {
         try {
@@ -64,7 +70,7 @@ export function httpClient(baseUrl: string, token?: string): ApiClient {
 
     async health(): Promise<boolean> {
       try {
-        const res = await fetch(`${base}/healthz`);
+        const res = await fetch(`${base}/api/healthz`);
         return res.ok;
       } catch {
         return false;
@@ -72,8 +78,8 @@ export function httpClient(baseUrl: string, token?: string): ApiClient {
     },
 
     async serverInfo(): Promise<ServerInfo> {
-      const res = await fetch(`${base}/config`);
-      if (!res.ok) throw new RpcError("http_error", `GET /config 失败: HTTP ${res.status}`);
+      const res = await fetch(`${base}/api/config`);
+      if (!res.ok) throw new RpcError("http_error", `GET /api/config 失败: HTTP ${res.status}`);
       return (await res.json()) as ServerInfo;
     },
   };

@@ -11,7 +11,7 @@
   import { basicSetup } from "codemirror";
   import { languages } from "@codemirror/language-data";
   import type { LanguageSupport } from "@codemirror/language";
-  import { api } from "$lib/api";
+  import { api, c } from "$lib/api";
   import { t } from "$lib/i18n";
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
   import { dataStore } from "$lib/stores/dataStore.svelte";
@@ -67,7 +67,7 @@
       return;
     }
     try {
-      const first = await api.invoke<FsReadResult>("fs_read", { path: relPath });
+      const first = await api.call(c.fsRead, { path: relPath });
       console.log("[FileEditor] fs_read ok", {
         contentLen: first.content.length,
         totalLines: first.total_lines,
@@ -82,7 +82,7 @@
       if (first.truncated) {
         const remaining = first.total_lines - firstLines;
         if (remaining > 0) {
-          const rest = await api.invoke<FsReadResult>("fs_read", {
+          const rest = await api.call(c.fsRead, {
             path: relPath,
             offset: firstLines,
             limit: remaining,
@@ -185,7 +185,7 @@
       return;
     }
     try {
-      const info = await api.invoke<FsInfo>("fs_info", { path: relPath });
+      const info = await api.call(c.fsInfo, { path: relPath });
       if (!info.exists) {
         saveError = t("fileEditor.fileMissing");
         return;
@@ -207,7 +207,7 @@
     saveError = "";
     try {
       const content = view.state.doc.toString();
-      const res = await api.invoke<FsWriteResult>("fs_write", {
+      const res = await api.call(c.fsWrite, {
         path: relPath,
         content,
         base_mtime: baseMtime,

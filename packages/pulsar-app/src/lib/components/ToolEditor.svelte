@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api } from "$lib/api";
+  import { api, c } from "$lib/api";
   import { t } from "$lib/i18n";
   import Select from "./Select.svelte";
   import Toggle from "./Toggle.svelte";
@@ -38,7 +38,7 @@
     error = "";
     loading = true;
     try {
-      const view = await api.invoke<ToolConfigView>("get_tool_config");
+      const view = await api.call(c.getToolConfig, undefined);
       draft = {
         mcp_servers: view.mcp_servers.map((s) => ({ ...s })),
         http_tools: view.http_tools.map((h) => ({ ...h })),
@@ -60,7 +60,7 @@
     saving = true;
     error = "";
     try {
-      const view = await api.invoke<ToolConfigView>("save_tool_config", {
+      const view = await api.call(c.saveToolConfig, {
         view: {
           mcp_servers: draft.mcp_servers,
           http_tools: draft.http_tools,

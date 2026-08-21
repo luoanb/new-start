@@ -35,7 +35,7 @@ pub struct ServerConfig {
     pub tokens: Vec<String>,
 }
 
-/// 服务器运行信息（`GET /config` 公开端点 + 桌面 IPC `server_info` 共用同一结构）。
+/// 服务器运行信息（`GET /api/config` 公开端点 + 桌面 IPC `server_info` 共用同一结构）。
 /// 只含非敏感运行信息，不含 token 本身。
 #[derive(Debug, Clone, Serialize)]
 pub struct ServerInfo {
@@ -64,7 +64,7 @@ pub struct NetState {
     pub port: u16,
 }
 
-/// `/config` 公开端点（免鉴权）：供远程前端同源自动发现与能力探测。
+/// `/api/config` 公开端点（免鉴权）：供远程前端同源自动发现与能力探测。
 async fn handle_config(State(state): State<NetState>) -> Json<ServerInfo> {
     Json(ServerInfo {
         version: env!("CARGO_PKG_VERSION"),
@@ -93,20 +93,22 @@ async fn cors_response(response: Response<Body>) -> Response<Body> {
     response
 }
 
-/// 构建路由：公开端点（`/healthz` `/config`）+ RPC 端点 / SSE 事件流 / WebSocket 公共服务。
+/// 构建路由：HTTP API 统一挂 `/api` 前缀（公开端点 + RPC / SSE / WebSocket），
+/// 便于反向代理一条规则（如 vite dev proxy 的 `/api` → 后端）与前端客户端统一拼路径；
+/// 其余路径为静态资源 / SPA history 路由。
 ///
 /// 鉴权中间件只保护 API 子路由（route_layer），公开端点与静态资源免鉴权
 /// （否则浏览器首屏拿不到 JS/CSS，同源自动发现也无法进行）。
 /// feature `embed-static` 开启时，`fallback_service` 以 SPA 方式托管内嵌前端静态资源。
 pub fn router(state: NetState) -> Router {
     let public = Router::new()
-        .route("/healthz", get(|| async { "ok" }))
-        .route("/config", get(handle_config));
+        .route("/api/healthz", get(|| async { "ok" }))
+        .route("/api/config", get(handle_config));
 
     let api = Router::new()
-        .route("/rpc", post(rpc::handle_rpc))
-        .route("/events", get(sse::handle_sse))
-        .route("/ws", get(ws::handle_ws))
+        .route("/api/rpc", post(rpc::handle_rpc))
+        .route("/api/events", get(sse::handle_sse))
+        .route("/api/ws", get(ws::handle_ws))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::auth_middleware,
@@ -203,7 +205,7 @@ mod tests {
     fn rpc_post(auth: Option<&str>) -> Request<Body> {
         let mut builder = Request::builder()
             .method(Method::POST)
-            .uri("/rpc")
+            .uri("/api/rpc")
             .header(header::CONTENT_TYPE, "application/json");
         if let Some(token) = auth {
             builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
@@ -219,7 +221,7 @@ mod tests {
         let res = request(
             &app,
             Request::builder()
-                .uri("/healthz")
+                .uri("/api/healthz")
                 .body(Body::empty())
                 .expect("valid request"),
         )
@@ -229,14 +231,14 @@ mod tests {
         assert_eq!(&body[..], b"ok");
     }
 
-    /// `/config` 公开端点：免鉴权返回运行信息（即使配了 token 也不 401）。
+    /// `/api/config` 公开端点：免鉴权返回运行信息（即使配了 token 也不 401）。
     #[tokio::test]
     async fn config_endpoint_public_and_informative() {
         let app = router(test_state(vec!["s3cret".into()]));
         let res = request(
             &app,
             Request::builder()
-                .uri("/config")
+                .uri("/api/config")
                 .body(Body::empty())
                 .expect("valid request"),
         )
@@ -251,14 +253,14 @@ mod tests {
         assert!(json["version"].is_string());
     }
 
-    /// `/config` 公开端点：未配 token 时 auth_required=false。
+    /// `/api/config` 公开端点：未配 token 时 auth_required=false。
     #[tokio::test]
     async fn config_endpoint_reports_no_auth_when_whitelist_empty() {
         let app = router(test_state(vec![]));
         let res = request(
             &app,
             Request::builder()
-                .uri("/config")
+                .uri("/api/config")
                 .body(Body::empty())
                 .expect("valid request"),
         )
@@ -308,7 +310,7 @@ mod tests {
         let res = request(
             &app,
             Request::builder()
-                .uri("/events?token=s3cret")
+                .uri("/api/events?token=s3cret")
                 .body(Body::empty())
                 .expect("valid request"),
         )
@@ -331,7 +333,7 @@ mod tests {
         let res = request(
             &app,
             Request::builder()
-                .uri("/events?token=wrong")
+                .uri("/api/events?token=wrong")
                 .body(Body::empty())
                 .expect("valid request"),
         )
@@ -346,7 +348,7 @@ mod tests {
             &app,
             Request::builder()
                 .method(Method::OPTIONS)
-                .uri("/rpc")
+                .uri("/api/rpc")
                 .body(Body::empty())
                 .expect("valid request"),
         )
@@ -392,7 +394,7 @@ mod tests {
         use tokio_tungstenite::tungstenite::Message;
 
         let base = serve_app(test_state(vec![])).await;
-        let (ws, _resp) = tokio_tungstenite::connect_async(format!("{base}/ws"))
+        let (ws, _resp) = tokio_tungstenite::connect_async(format!("{base}/api/ws"))
             .await
             .expect("ws connect should succeed");
         let (mut sink, mut source) = ws.split();
@@ -483,7 +485,7 @@ mod tests {
     #[tokio::test]
     async fn ws_handshake_requires_token_when_whitelist_nonempty() {
         let base = serve_app(test_state(vec!["s3cret".into()])).await;
-        let err = tokio_tungstenite::connect_async(format!("{base}/ws"))
+        let err = tokio_tungstenite::connect_async(format!("{base}/api/ws"))
             .await
             .expect_err("no-token handshake should fail");
         assert!(
@@ -499,7 +501,7 @@ mod tests {
 
         let base = serve_app(test_state(vec!["s3cret".into()])).await;
         let (ws, _resp) =
-            tokio_tungstenite::connect_async(format!("{base}/ws?token=s3cret"))
+            tokio_tungstenite::connect_async(format!("{base}/api/ws?token=s3cret"))
                 .await
                 .expect("token handshake should succeed");
         let (mut sink, mut source) = ws.split();

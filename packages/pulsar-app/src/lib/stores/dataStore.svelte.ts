@@ -4,14 +4,15 @@
  * 职责：
  * - bootstrap()：一次性拉取全部领域数据（providers/models/skills/conversations/status/topics/poller）。
  * - subscribe()：通过 `api` 客户端订阅状态变更事件，按 StateChange.kind 增量刷新对应领域。
- * - 组件只读 dataStore.state，写操作一律走 dataStore actions（内部 api.invoke + refresh），
+ * - 组件只读 dataStore.state，写操作一律走 dataStore actions（内部 api.call + refresh），
  *   保证后端与 store 一致，消除各面板本地数组。
  *
- * 通信方式：统一走 `$lib/api`（本机 Tauri IPC / 远程 HTTP+SSE），业务层无感知。
+ * 通信方式：统一走 `$lib/api`（本机 Tauri IPC / 远程 HTTP+SSE），业务层无感知；
+ * 命令一律经命令契约 `api.call(c.x, params)`（见 $lib/api/contracts），禁止裸写命令字符串。
  * 后端推送策略：写操作完成后广播 StateChange；Conversations/Topics 走「重拉」，
  * Poller 负载直带最新 PollerStatus（数据小，避免一次额外 invoke）。
  */
-import { api } from "$lib/api";
+import { api, c } from "$lib/api";
 import type { StateChangePayload } from "$lib/api/types";
 import { layoutStore } from "$lib/layout/LayoutStore.svelte";
 import type {
@@ -94,13 +95,13 @@ let unlisten: (() => void) | null = null;
 // ── 内部刷新 ──
 
 // runningSessions 刷新版本守卫：register/update/unregister 每次变化都会触发一次
-// 全量 api.invoke，响应可能乱序；只允许"最后一次发起的刷新"写入，丢弃过期旧快照，
+// 全量 api.call，响应可能乱序；只允许"最后一次发起的刷新"写入，丢弃过期旧快照，
 // 防止已结束的会话残留（表现为永久"思考中"）。
 let runningSessionsSeq = 0;
 
 async function refreshRunningSessions(): Promise<void> {
   const seq = ++runningSessionsSeq;
-  const list = await api.invoke<RunningSession[]>("list_running_sessions");
+  const list = await api.call(c.listRunningSessions, undefined);
   if (seq !== runningSessionsSeq) return;
   state.runningSessions = list;
 }
@@ -110,28 +111,28 @@ async function refreshMessages(): Promise<void> {
     state.messages = [];
     return;
   }
-  state.messages = await api.invoke<Message[]>("history", {
+  state.messages = await api.call(c.history, {
     conversationId: state.activeConversationId,
   });
 }
 
 async function refreshConversations(): Promise<void> {
-  state.conversations = await api.invoke<Conversation[]>("list_conversations");
+  state.conversations = await api.call(c.listConversations, undefined);
   // 会话变化往往伴随消息变化（发送/清空/后台推进），同步刷新当前会话消息。
   await refreshMessages();
 }
 
 async function refreshTopics(): Promise<void> {
-  state.topics = await api.invoke<Topic[]>("list_topics");
+  state.topics = await api.call(c.listTopics, undefined);
 }
 
 async function refreshPoller(): Promise<void> {
-  state.poller = await api.invoke<PollerStatus>("poll_status");
+  state.poller = await api.call(c.pollStatus, undefined);
 }
 
 /** 工作区集合 + active：workspaces 事件（增删/切换/ignore 编辑/fs 写操作）后重拉。 */
 async function refreshWorkspaces(): Promise<void> {
-  state.workspaces = await api.invoke<WorkspaceView>("list_workspaces");
+  state.workspaces = await api.call(c.listWorkspaces, undefined);
   state.workspacesVersion++;
 }
 
@@ -157,7 +158,7 @@ function emptyGitView(): GitView {
  */
 async function refreshGit(): Promise<void> {
   try {
-    const repos = await api.invoke<GitRepo[]>("git_repos");
+    const repos = await api.call(c.gitRepos, undefined);
     const previousActive = state.git?.activeRepoId ?? null;
     let activeRepoId: string | null = null;
     if (repos.length > 0) {
@@ -166,7 +167,7 @@ async function refreshGit(): Promise<void> {
           ? previousActive
           : repos[0].id;
       if (activeRepoId !== previousActive) {
-        await api.invoke("git_set_active_repo", { repoId: activeRepoId });
+        await api.call(c.gitSetActiveRepo, { repoId: activeRepoId });
       }
     }
     const statusByRepo = Object.fromEntries(
@@ -174,7 +175,7 @@ async function refreshGit(): Promise<void> {
         repos.map(async (r) => [
           r.id,
           await api
-            .invoke<GitStatusView>("git_status", { repoId: r.id })
+            .call(c.gitStatus, { repoId: r.id })
             .catch(() => null),
         ]),
       ),
@@ -182,11 +183,11 @@ async function refreshGit(): Promise<void> {
     const [branches, log, stash, confirmConfig] =
       repos.length > 0
         ? await Promise.all([
-            api.invoke<GitBranchItem[]>("git_branches").catch(() => []),
-            api.invoke<GitCommitInfo[]>("git_log").catch(() => []),
-            api.invoke<GitStashEntry[]>("git_stash_list").catch(() => []),
+            api.call(c.gitBranches, undefined).catch(() => []),
+            api.call(c.gitLog, undefined).catch(() => []),
+            api.call(c.gitStashList, undefined).catch(() => []),
             api
-              .invoke<{ dangerous_writes: boolean }>("git_get_confirm_config")
+              .call(c.gitGetConfirmConfig, undefined)
               .catch(() => ({ dangerous_writes: false })),
           ])
         : [[], [], [], { dangerous_writes: false }];
@@ -209,8 +210,8 @@ async function refreshGit(): Promise<void> {
 /** 服务商/模型配置变化（保存后广播）：重新拉取 providers 与 models。 */
 async function refreshProvidersModels(): Promise<void> {
   const [providersRes, modelsRes] = await Promise.all([
-    api.invoke<ProviderInfo[]>("list_providers"),
-    api.invoke<ModelInfo[]>("list_models"),
+    api.call(c.listProviders, undefined),
+    api.call(c.listModels, undefined),
   ]);
   state.providers = providersRes;
   state.models = modelsRes;
@@ -227,7 +228,7 @@ async function handleStateChanged(payload: StateChangePayload): Promise<void> {
       const affected = payload.affected ?? [];
       if (affected.length === 0) return;
       // 会话列表摘要始终重拉（标题/最后消息/时间可能变）。
-      state.conversations = await api.invoke<Conversation[]>("list_conversations");
+      state.conversations = await api.call(c.listConversations, undefined);
       // 仅当受影响会话含当前激活会话时才重拉消息，
       // 避免后台推进其他会话时误触发当前会话重拉与滚动。
       if (state.activeConversationId && affected.includes(state.activeConversationId)) {
@@ -331,15 +332,15 @@ async function bootstrap(): Promise<void> {
       runningSessionsRes,
       workspacesRes,
     ] = await Promise.all([
-      api.invoke<ProviderInfo[]>("list_providers"),
-      api.invoke<ModelInfo[]>("list_models"),
-      api.invoke<SkillInfo[]>("list_skills"),
-      api.invoke<Conversation[]>("list_conversations"),
-      api.invoke<RuntimeStatus>("status"),
-      api.invoke<Topic[]>("list_topics"),
-      api.invoke<PollerStatus>("poll_status"),
-      api.invoke<RunningSession[]>("list_running_sessions"),
-      api.invoke<WorkspaceView>("list_workspaces"),
+      api.call(c.listProviders, undefined),
+      api.call(c.listModels, undefined),
+      api.call(c.listSkills, undefined),
+      api.call(c.listConversations, undefined),
+      api.call(c.status, undefined),
+      api.call(c.listTopics, undefined),
+      api.call(c.pollStatus, undefined),
+      api.call(c.listRunningSessions, undefined),
+      api.call(c.listWorkspaces, undefined),
     ]);
 
     state.providers = providersRes;
@@ -368,7 +369,7 @@ async function bootstrap(): Promise<void> {
   }
 }
 
-// ── Actions（写操作：内部 api.invoke，成功后依赖事件刷新 + 兜底 refresh）──
+// ── Actions（写操作：内部 api.call，成功后依赖事件刷新 + 兜底 refresh）──
 
 async function selectConversation(id: string): Promise<void> {
   state.activeConversationId = id;
@@ -377,14 +378,14 @@ async function selectConversation(id: string): Promise<void> {
 }
 
 async function createConversation(mode: string): Promise<string> {
-  const id = await api.invoke<string>("create_conversation", { mode });
+  const id = await api.call(c.createConversation, { mode });
   state.activeConversationId = id;
   await refreshConversations();
   return id;
 }
 
 async function closeSession(sessionId: string): Promise<void> {
-  await api.invoke<string>("close_session", { sessionId });
+  await api.call(c.closeSession, { sessionId });
   // 若关闭的是当前会话，先清空本地选中，让列表刷新后由回退逻辑接管。
   if (state.activeConversationId === sessionId) {
     state.activeConversationId = null;
@@ -395,7 +396,7 @@ async function closeSession(sessionId: string): Promise<void> {
 
 /** 中断当前运行中的会话（后端 close_session 触发 abort 回调）；广播 Sessions 事件自动刷新，兜底重拉。 */
 async function stopRunningSession(sessionId: string): Promise<void> {
-  await api.invoke<string>("close_session", { sessionId });
+  await api.call(c.closeSession, { sessionId });
   await refreshRunningSessions();
 }
 
@@ -429,7 +430,7 @@ async function sendMessage(
     },
   ];
   try {
-    const res = await api.invoke<ChatResponse>("send_chat_message", {
+    const res = await api.call(c.sendChatMessage, {
       message: text,
       providerId,
       modelId,
@@ -452,11 +453,11 @@ async function setSessionModel(
   conversationId: string,
   selection: ChatModelSelection,
 ): Promise<void> {
-  await api.invoke("set_session_model", { conversationId, selection });
+  await api.call(c.setSessionModel, { conversationId, selection });
 }
 
 async function clearConversation(): Promise<void> {
-  await api.invoke<string>("clear_conversation", {
+  await api.call(c.clearConversation, {
     conversationId: state.activeConversationId,
   });
   await refreshConversations();
@@ -468,7 +469,7 @@ async function scoreFeedback(
   messageIndex: number,
   score: number
 ): Promise<void> {
-  await api.invoke("score_feedback", { conversationId, messageIndex, score });
+  await api.call(c.scoreFeedback, { conversationId, messageIndex, score });
 }
 
 // ── 神经元统一管理（列表 ←→ 画布共享状态）actions ──
@@ -509,7 +510,7 @@ async function openSession(
   specNeuronId: string,
   mode: string = "assistant",
 ): Promise<Conversation> {
-  const conv = await api.invoke<Conversation>("open_session", { specNeuronId, mode });
+  const conv = await api.call(c.openSession, { specNeuronId, mode });
   state.activeConversationId = conv.id;
   await refreshConversations();
   return conv;
@@ -536,7 +537,7 @@ async function converseSession(
   providerId: string,
   modelId: string,
 ): Promise<ChatResponse> {
-  return api.invoke<ChatResponse>("converse_session", {
+  return api.call(c.converseSession, {
     sessionId,
     input,
     providerId,
@@ -546,25 +547,25 @@ async function converseSession(
 
 // Topic actions
 async function createTopic(name: string, description: string): Promise<Topic> {
-  const topic = await api.invoke<Topic>("create_topic", { name, description });
+  const topic = await api.call(c.createTopic, { name, description });
   await refreshTopics();
   return topic;
 }
 
 async function pauseTopic(id: string): Promise<Topic> {
-  const topic = await api.invoke<Topic>("pause_topic", { id });
+  const topic = await api.call(c.pauseTopic, { id });
   await refreshTopics();
   return topic;
 }
 
 async function resumeTopic(id: string): Promise<Topic> {
-  const topic = await api.invoke<Topic>("resume_topic", { id });
+  const topic = await api.call(c.resumeTopic, { id });
   await refreshTopics();
   return topic;
 }
 
 async function deleteTopic(id: string): Promise<boolean> {
-  const deleted = await api.invoke<boolean>("delete_topic", { id });
+  const deleted = await api.call(c.deleteTopic, { id });
   await refreshTopics();
   return deleted;
 }
@@ -574,7 +575,7 @@ async function addScopeItem(
   goal: string,
   doneContract: string,
 ): Promise<Topic> {
-  const topic = await api.invoke<Topic>("add_topic_scope_item", {
+  const topic = await api.call(c.addTopicScopeItem, {
     topicId,
     goal,
     doneContract,
@@ -584,35 +585,35 @@ async function addScopeItem(
 }
 
 async function completeScopeItem(topicId: string, itemId: string): Promise<Topic> {
-  const topic = await api.invoke<Topic>("complete_topic_scope_item", { topicId, itemId });
+  const topic = await api.call(c.completeTopicScopeItem, { topicId, itemId });
   await refreshTopics();
   return topic;
 }
 
 async function deleteScopeItem(topicId: string, itemId: string): Promise<Topic> {
-  const topic = await api.invoke<Topic>("delete_topic_scope_item", { topicId, itemId });
+  const topic = await api.call(c.deleteTopicScopeItem, { topicId, itemId });
   await refreshTopics();
   return topic;
 }
 
 // Poller actions
 async function pausePoller(): Promise<void> {
-  await api.invoke<void>("poll_pause");
+  await api.call(c.pollPause, undefined);
   await refreshPoller();
 }
 
 async function resumePoller(): Promise<void> {
-  await api.invoke<void>("poll_resume");
+  await api.call(c.pollResume, undefined);
   await refreshPoller();
 }
 
 async function triggerPoller(): Promise<void> {
-  await api.invoke<void>("poll_trigger");
+  await api.call(c.pollTrigger, undefined);
   await refreshPoller();
 }
 
 async function setPollParallelism(n: number): Promise<void> {
-  await api.invoke<number>("poll_set_parallelism", { n });
+  await api.call(c.pollSetParallelism, { n });
   await refreshPoller();
 }
 
@@ -620,25 +621,25 @@ async function setPollParallelism(n: number): Promise<void> {
 
 /** 添加工作区：root 为目录绝对路径；后端校验存在/重复并 canonicalize。 */
 async function addWorkspace(root: string): Promise<void> {
-  await api.invoke<WorkspaceView>("add_workspace", { root });
+  await api.call(c.addWorkspace, { root });
   await refreshWorkspaces();
 }
 
 /** 移除工作区条目（不删目录）；active 失效时后端自动清除。 */
 async function removeWorkspace(id: string): Promise<void> {
-  await api.invoke<WorkspaceView>("remove_workspace", { id });
+  await api.call(c.removeWorkspace, { id });
   await refreshWorkspaces();
 }
 
 /** 切换 active 工作区（文件树/编辑器数据源随之切换）。 */
 async function setActiveWorkspace(id: string): Promise<void> {
-  await api.invoke<WorkspaceView>("set_active_workspace", { id });
+  await api.call(c.setActiveWorkspace, { id });
   await refreshWorkspaces();
 }
 
 /** 更新工作区 ignore 过滤规则（写入 workspaces.json，立即生效）。 */
 async function updateWorkspaceIgnore(id: string, ignore: string[]): Promise<void> {
-  await api.invoke<WorkspaceView>("update_workspace_ignore", { id, ignore });
+  await api.call(c.updateWorkspaceIgnore, { id, ignore });
   await refreshWorkspaces();
 }
 
@@ -646,79 +647,79 @@ async function updateWorkspaceIgnore(id: string, ignore: string[]): Promise<void
 
 /** 切换当前操作仓库（git 面板作用域；不改变文件树）。 */
 async function setActiveGitRepo(repoId: string): Promise<void> {
-  await api.invoke("git_set_active_repo", { repoId });
+  await api.call(c.gitSetActiveRepo, { repoId });
   await refreshGit();
 }
 
 /** 暂存：all=true 暂存全部，或按 paths（相对 repo 根）暂存指定路径。 */
 async function gitAdd(paths: string[], all = false): Promise<void> {
-  await api.invoke("git_add", { paths, all });
+  await api.call(c.gitAdd, { paths, all });
   await refreshGit();
 }
 
 /** 取消暂存：paths 为空 = 取消全部（git restore --staged）。 */
 async function gitUnstage(paths: string[] = []): Promise<void> {
-  await api.invoke("git_unstage", { paths });
+  await api.call(c.gitUnstage, { paths });
   await refreshGit();
 }
 
 /** 撤销工作区改动（需确认；用户经 ConfirmDialog 决定）。 */
 async function gitRestore(paths: string[]): Promise<void> {
-  await api.invoke("git_restore", { paths });
+  await api.call(c.gitRestore, { paths });
   await refreshGit();
 }
 
 /** 提交暂存区（需确认，弹窗展示 staged diff 摘要）。 */
 async function gitCommit(message: string): Promise<void> {
-  await api.invoke("git_commit", { message });
+  await api.call(c.gitCommit, { message });
   await refreshGit();
 }
 
 /** 重置到目标（默认 HEAD）；--hard/--keep 高危，开关+确认。 */
 async function gitReset(mode: GitResetMode, target?: string): Promise<void> {
-  await api.invoke("git_reset", { mode, target });
+  await api.call(c.gitReset, { mode, target });
   await refreshGit();
 }
 
 /** 切换分支/提交（丢弃改动场景开关+确认）。 */
 async function gitCheckout(target: string): Promise<void> {
-  await api.invoke("git_checkout", { target });
+  await api.call(c.gitCheckout, { target });
   await refreshGit();
 }
 
 /** stash：push/apply 直接执行；pop/drop 需确认。 */
 async function gitStash(action: GitStashAction, message?: string): Promise<void> {
-  await api.invoke("git_stash", { action, message });
+  await api.call(c.gitStash, { action, message });
   await refreshGit();
 }
 
 /** 推送（需确认）。 */
 async function gitPush(remote?: string, branch?: string): Promise<void> {
-  await api.invoke("git_push", { remote, branch });
+  await api.call(c.gitPush, { remote, branch });
   await refreshGit();
 }
 
 /** 拉取并合并（需确认）。 */
 async function gitPull(): Promise<void> {
-  await api.invoke("git_pull");
+  await api.call(c.gitPull, undefined);
   await refreshGit();
 }
 
 /** 冲突解决：ours / theirs / both（指定 repo；缺省 active）。 */
 async function gitResolveConflict(path: string, take: ConflictTake, repoId?: string): Promise<void> {
-  await api.invoke("git_resolve_conflict", { repoId, path, take });
+  await api.call(c.gitResolveConflict, { repoId, path, take });
   await refreshGit();
 }
 
 /** 确认服务唯一入口：投递用户决定并出队。 */
 async function gitConfirm(opId: string, approved: boolean): Promise<void> {
-  await api.invoke("git_confirm", { opId, approved });
+  await api.call(c.gitConfirm, { opId, approved });
   state.gitConfirmQueue = state.gitConfirmQueue.filter((r) => r.op_id !== opId);
 }
 
 /** 持久化并热更新危险写开关（config.json git 节）。 */
 async function setDangerousWrites(enabled: boolean): Promise<void> {
-  await api.invoke("git_set_dangerous_writes", { enabled });
+  await api.call(c.gitSetDangerousWrites, { enabled });
   await refreshGit();
 }
 
@@ -732,12 +733,12 @@ function openGitDiff(repoId: string, relPath: string, range: "staged" | "unstage
 
 /** 某提交的变更文件统计列表（懒加载，不入全局 state）。 */
 async function gitShowFiles(hash: string): Promise<GitShowFile[]> {
-  return await api.invoke("git_show_files", { hash });
+  return await api.call(c.gitShowFiles, { hash });
 }
 
 /** 某提交中单个文件的 unified diff（懒加载）。 */
 async function gitShowDiff(hash: string, path: string): Promise<GitFileDiff> {
-  return await api.invoke("git_show_diff", { hash, path });
+  return await api.call(c.gitShowDiff, { hash, path });
 }
 
 export const dataStore = {

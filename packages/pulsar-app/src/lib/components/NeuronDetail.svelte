@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api } from "$lib/api";
+  import { api, c } from "$lib/api";
   import type { Neuron, Connection } from "$lib/types";
   import { t } from "$lib/i18n";
   import { errorMessage } from "$lib/errorMessage";
@@ -32,8 +32,8 @@
     errorMsg = "";
     try {
       const [n, conns] = await Promise.all([
-        api.invoke<Neuron>("get_neuron", { id: neuronId }),
-        api.invoke<Connection[]>("get_connections", { id: neuronId }),
+        api.call(c.getNeuron, { id: neuronId }),
+        api.call(c.getConnections, { id: neuronId }),
       ]);
       neuron = n;
       connections = conns;
@@ -55,7 +55,7 @@
     saving = true;
     errorMsg = "";
     try {
-      const updated = await api.invoke<Neuron>("update_neuron", {
+      const updated = await api.call(c.updateNeuron, {
         id: neuron.id,
         desc: editDesc !== neuron.desc ? editDesc : null,
         content: editContent !== neuron.content ? editContent : null,

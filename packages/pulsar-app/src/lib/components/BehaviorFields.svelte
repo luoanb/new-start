@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api } from "$lib/api";
+  import { api, c } from "$lib/api";
   import type {
     NeighborhoodPoolPolicy,
     SelectionPolicy,
@@ -120,7 +120,7 @@
   let insertCatalog = $state<InsertInfo[]>([]);
   onMount(async () => {
     try {
-      insertCatalog = (await api.invoke<InsertInfo[]>("list_insert_catalog")) ?? [];
+      insertCatalog = (await api.call(c.listInsertCatalog, undefined)) ?? [];
     } catch (e) {
       console.error("[behavior-fields] failed to load insert catalog", e);
     }

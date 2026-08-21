@@ -7,11 +7,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+import type { Contract } from "./contracts";
 import { STATE_CHANGED_EVENT, type ApiClient, type ServerInfo, type StateChangePayload } from "./types";
 
 export const tauriClient: ApiClient = {
   async invoke<T>(cmd: string, params?: Record<string, unknown>): Promise<T> {
     return invoke<T>(cmd, params);
+  },
+
+  async call<P, R>(contract: Contract<P, R>, params: P): Promise<R> {
+    return invoke<R>(contract.cmd, params as Record<string, unknown> | undefined);
   },
 
   subscribe(handler: (payload: StateChangePayload) => void): () => void {

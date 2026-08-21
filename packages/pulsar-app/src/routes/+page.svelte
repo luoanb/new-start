@@ -123,7 +123,7 @@
     // 启动即应用已保存的主题偏好，避免等到打开设置弹窗（ThemeSwitcher 挂载）才生效造成跳变。
     applyThemeOnBoot();
     // 非 Tauri 环境：未显式配置远程地址时做同源自动发现——页面若由 pulsar-server 托管
-    // （GET /config 可达），直接采用当前 origin，前端无需知道端口。
+    // （GET /api/config 可达），直接采用当前 origin，前端无需知道端口。
     if (!isTauriEnv) {
       const discovered = await discoverRemote();
       if (discovered) switchConn({ mode: "remote", url: discovered });

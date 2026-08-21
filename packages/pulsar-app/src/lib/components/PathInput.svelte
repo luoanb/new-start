@@ -1,7 +1,7 @@
 <script lang="ts">
   // PathInput：绝对路径输入 + 百度式补全下拉（当前目录直接子项 + `.` / `..`，不递归）。
   // 聚焦/输入即展示；目录不存在/无权限时逐级向父目录回退；Esc 先收下拉再请求关闭。
-  import { api } from "$lib/api";
+  import { api, c } from "$lib/api";
   import type { FsEntry } from "$lib/types";
 
   type SuggestItem =
@@ -58,7 +58,7 @@
     let dir = parent;
     while (dir) {
       try {
-        entries = await api.invoke<FsEntry[]>("fs_suggest_abs", { path: dir });
+        entries = await api.call(c.fsSuggestAbs, { path: dir });
         break;
       } catch {
         if (dir === "/") break;

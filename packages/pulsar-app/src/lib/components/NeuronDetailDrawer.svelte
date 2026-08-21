@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api } from "$lib/api";
+  import { api, c } from "$lib/api";
   import type { Connection, Neuron, SessionBehavior } from "$lib/types";
   import { t } from "$lib/i18n";
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
@@ -108,15 +108,15 @@
     try {
       const { kind, type } = confirmAction;
       if (kind === "bind") {
-        const updated = (await api.invoke("set_neuron_system_type", {
+        const updated = (await api.call(c.setNeuronSystemType, {
           id: neuron.id,
-          systemType: type,
+          systemType: type ?? null,
         })) as Neuron;
         neuron = { ...neuron, system_type: updated.system_type, behavior: updated.behavior };
         bindMode = false;
         bindTypeInput = "";
       } else {
-        const updated = (await api.invoke("set_neuron_system_type", {
+        const updated = (await api.call(c.setNeuronSystemType, {
           id: neuron.id,
           systemType: null,
         })) as Neuron;
@@ -137,7 +137,7 @@
     behaviorSaving = true;
     saveError = null;
     try {
-      const updated = (await api.invoke("update_neuron_behavior", {
+      const updated = (await api.call(c.updateNeuronBehavior, {
         id: neuron.id,
         behavior: behaviorDraft,
       })) as Neuron;
@@ -152,7 +152,7 @@
   }
 
   onMount(() => {
-    api.invoke("list_skills")
+    api.call(c.listSkills, undefined)
       .then((skills) => {
         availableTools = skills as { name: string; description: string }[];
       })
@@ -166,7 +166,7 @@
     saving = true;
     saveError = null;
     try {
-      await api.invoke("update_neuron", {
+      await api.call(c.updateNeuron, {
         id: neuron.id,
         desc,
         content,
@@ -201,7 +201,7 @@
     toolIds = next;
     saveError = null;
     try {
-      const updated = (await api.invoke("update_neuron", {
+      const updated = (await api.call(c.updateNeuron, {
         id: neuron.id,
         toolIds: next,
       })) as Neuron;
@@ -219,7 +219,7 @@
     if (!neuron || weightBusy) return;
     weightBusy = true;
     try {
-      const updated = (await api.invoke("adjust_neuron_weight", {
+      const updated = (await api.call(c.adjustNeuronWeight, {
         id: neuron.id,
         delta,
       })) as Neuron;
@@ -232,13 +232,13 @@
     }
   }
 
-  async function adjustEdge(c: Connection, delta: number) {
+  async function adjustEdge(conn: Connection, delta: number) {
     if (weightBusy) return;
     weightBusy = true;
     try {
-      const updated = (await api.invoke("adjust_edge_weight", {
-        source: c.source,
-        target: c.target,
+      const updated = (await api.call(c.adjustEdgeWeight, {
+        source: conn.source,
+        target: conn.target,
         delta,
       })) as Connection;
       connections = connections.map((x) =>

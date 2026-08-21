@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
-  import { api, isTauriEnv } from "$lib/api";
+  import { api, c, isTauriEnv } from "$lib/api";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import type { LogEntry, LogLevel } from "$lib/types";
   import { t } from "$lib/i18n";
@@ -50,9 +50,9 @@
   onMount(async () => {
     try {
       const [snapshot, level, dir] = await Promise.all([
-        api.invoke<LogEntry[]>("logs_snapshot"),
-        api.invoke<string>("logs_get_level"),
-        api.invoke<string | null>("logs_dir"),
+        api.call(c.logsSnapshot, undefined),
+        api.call(c.logsGetLevel, undefined),
+        api.call(c.logsDir, undefined),
       ]);
       entries = snapshot;
       verbosity = (LEVELS.includes(level as LogLevel) ? level : "info") as LogLevel;
@@ -79,7 +79,7 @@
   async function setVerbosity(level: LogLevel) {
     errorMsg = "";
     try {
-      const next = await api.invoke<string>("logs_set_level", { level });
+      const next = await api.call(c.logsSetLevel, { level });
       verbosity = (LEVELS.includes(next as LogLevel) ? next : level) as LogLevel;
     } catch (e) {
       errorMsg = t("logPanel.setLevelFailed", { error: `${e}` });
@@ -89,7 +89,7 @@
   async function clearBuffer() {
     errorMsg = "";
     try {
-      await api.invoke("logs_clear_buffer");
+      await api.call(c.logsClearBuffer, undefined);
       entries = [];
     } catch (e) {
       errorMsg = t("logPanel.clearFailed", { error: `${e}` });

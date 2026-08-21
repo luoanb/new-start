@@ -14,7 +14,7 @@
 
   /**
    * 浏览器模式直连 Tauri 进程内嵌的 WS 公共通道（见 spec terminal-browser-ws）。
-   * 地址从远程连接配置（pulsar:remoteUrl）自动推导：http(s)://host:port → ws(s)://host:port/ws，
+   * 地址从远程连接配置（pulsar:remoteUrl）自动推导：http(s)://host:port → ws(s)://host:port/api/ws，
    * 配置了 token 时追加 ?token=；未配置时回落默认地址。WS 与 HTTP RPC 同端口同监听。
    */
   function deriveWsUrl(): string {
@@ -22,7 +22,7 @@
     const base = cfg.url || DEFAULT_REMOTE_URL;
     const scheme = base.replace(/^http/, "ws"); // http→ws / https→wss
     const query = cfg.token ? `?token=${encodeURIComponent(cfg.token)}` : "";
-    return `${scheme}/ws${query}`;
+    return `${scheme}/api/ws${query}`;
   }
   const WS_URL = typeof window !== "undefined" ? deriveWsUrl() : "";
 

@@ -6,7 +6,7 @@
   // - 移动：HTML5 拖拽到目标目录；右键菜单「移动…」备选（目录选择器）
   // - pad/移动端：条目右侧 ⋮ 按钮触发同一右键菜单
   import { open } from "@tauri-apps/plugin-dialog";
-  import { api, isTauriEnv } from "$lib/api";
+  import { api, c, isTauriEnv } from "$lib/api";
   import { t } from "$lib/i18n";
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
   import { dataStore } from "$lib/stores/dataStore.svelte";
@@ -149,7 +149,7 @@
     if (!force && cur?.status === "loaded") return;
     dirs[path] = { status: "loading", entries: [] };
     try {
-      const list = await api.invoke<FsEntry[]>("fs_list", { path: path || undefined });
+      const list = await api.call(c.fsList, { path: path || undefined });
       console.log("[FileExplorer] fs_list ok", { path, count: list.length });
       dirs[path] = { status: "loaded", entries: sortEntries(list) };
     } catch (e) {
@@ -402,11 +402,11 @@
     const target = editing.parent ? `${editing.parent}/${name}` : name;
     try {
       if (editing.mode === "new-folder") {
-        await api.invoke("fs_create_dir", { path: target });
+        await api.call(c.fsCreateDir, { path: target });
       } else if (editing.mode === "new-file") {
-        await api.invoke("fs_write", { path: target, content: "" });
+        await api.call(c.fsWrite, { path: target, content: "" });
       } else {
-        await api.invoke("fs_rename", { from: editing.path, to: target });
+        await api.call(c.fsRename, { from: editing.path, to: target });
         selectedPath = target;
       }
       editing = null;
@@ -419,7 +419,7 @@
   // ── 删除（直接删，无确认——用户确认）──
   async function deletePath(path: string) {
     try {
-      await api.invoke("fs_delete", { paths: [path] });
+      await api.call(c.fsDelete, { paths: [path] });
       if (selectedPath === path) {
         selectedPath = null;
         selectedKind = null;
@@ -495,7 +495,7 @@
   /** 打开时默认填入用户主目录（App 模式也保留输入入口）；下拉由组件聚焦时自动拉取。 */
   async function initWsInput() {
     try {
-      const home = await api.invoke<string>("get_home_dir");
+      const home = await api.call(c.getHomeDir, undefined);
       wsInput = home.endsWith("/") ? home : home + "/";
     } catch {
       wsInput = "";
@@ -550,7 +550,7 @@
     let dir = parent;
     while (dir) {
       try {
-        entries = await api.invoke<FsEntry[]>("fs_suggest_abs", { path: dir });
+        entries = await api.call(c.fsSuggestAbs, { path: dir });
         break;
       } catch {
         if (dir === "/") break;
@@ -637,7 +637,7 @@
     }
     dragFrom = null;
     try {
-      await api.invoke("fs_move", { from, to });
+      await api.call(c.fsMove, { from, to });
       error = "";
     } catch (e) {
       error = t("fileExplorer.operationFailed", { error: formatInvokeError(e) });
@@ -657,7 +657,7 @@
     moveError = "";
     movePath = dirPath;
     try {
-      const list = await api.invoke<FsEntry[]>("fs_list", { path: dirPath || undefined });
+      const list = await api.call(c.fsList, { path: dirPath || undefined });
       moveDirs = sortEntries(list).filter((e) => e.is_dir);
     } catch (e) {
       moveError = formatInvokeError(e);
@@ -678,7 +678,7 @@
       return;
     }
     try {
-      await api.invoke("fs_move", { from: moveReq.from, to });
+      await api.call(c.fsMove, { from: moveReq.from, to });
       moveReq = null;
       error = "";
     } catch (e) {

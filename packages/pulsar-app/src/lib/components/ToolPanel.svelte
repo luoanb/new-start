@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
-  import { api } from "$lib/api";
+  import { api, c } from "$lib/api";
   import { STATE_CHANGED_EVENT } from "$lib/api/types";
   import { t, tMap } from "$lib/i18n";
   import Select from "./Select.svelte";
@@ -41,8 +41,8 @@
     errorMsg = "";
     try {
       const [toolList, serverList] = await Promise.all([
-        api.invoke<ToolInfo[]>("list_tools"),
-        api.invoke<McpServerStatus[]>("list_mcp_servers"),
+        api.call(c.listTools, undefined),
+        api.call(c.listMcpServers, undefined),
       ]);
       tools = toolList;
       mcpServers = serverList;
@@ -59,7 +59,7 @@
     refreshing = true;
     errorMsg = "";
     try {
-      await api.invoke("reassemble_tools");
+      await api.call(c.reassembleTools, undefined);
       await refresh(true);
     } catch (e) {
       errorMsg = t("toolPanel.reassembleFailed", { error: `${e}` });

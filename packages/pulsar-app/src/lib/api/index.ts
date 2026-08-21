@@ -85,14 +85,14 @@ export function currentConn(): ConnConfig {
 
 /**
  * 同源自动发现：非 Tauri 环境且用户未显式配置远程地址时，探测当前页面来源
- * （location.origin）是否就是 pulsar-server 托管的页面——`GET /config` 可达即证明。
+ * （location.origin）是否就是 pulsar-server 托管的页面——`GET /api/config` 可达即证明。
  * 命中则返回该 origin（前端零写死端口），否则返回 null 保持现有配置。
  */
 export async function discoverRemote(): Promise<string | null> {
   if (isTauriEnv) return null;
   if (readConnConfig().url) return null; // 用户已显式配置过，不覆盖
   try {
-    const res = await fetch(`${location.origin}/config`, { cache: "no-store" });
+    const res = await fetch(`${location.origin}/api/config`, { cache: "no-store" });
     if (!res.ok) return null;
     const info = (await res.json()) as ServerInfo;
     return info.enabled ? location.origin : null;
@@ -104,3 +104,4 @@ export async function discoverRemote(): Promise<string | null> {
 export type { ApiClient, ConnConfig, ServerInfo, StateChangePayload, StateEventKind } from "./types";
 export { STATE_CHANGED_EVENT } from "./types";
 export { createHttpClient } from "./httpClient";
+export { c, type Contract } from "./contracts";

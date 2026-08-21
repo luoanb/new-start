@@ -6,7 +6,7 @@
  * - 浏览器：`spawn / write / resize / kill / list` JSON 帧（c→s）；`spawned / output / exit / list / error` 帧（s→c）。
  *   `write` 与 `output` 的 data 均为 base64 编码的字节串。
  */
-import { api } from "$lib/api";
+import { api, c } from "$lib/api";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 /** 后端 `terminal_list` 返回的会话元信息（IPC 与 WS 的 list 帧结构一致）。 */
@@ -38,7 +38,7 @@ export type TerminalTransport = {
   dispose?(): void;
 };
 
-/** Tauri IPC 传输：事件走 `app://terminal-output / exit`，命令走 `api.invoke`。 */
+/** Tauri IPC 传输：事件走 `app://terminal-output / exit`，命令走 `api.call`。 */
 export function ipcTransport(): TerminalTransport {
   const outputCbs = new Set<(sessionId: string, data: Uint8Array) => void>();
   const exitCbs = new Set<(sessionId: string, exitCode: number) => void>();
@@ -61,21 +61,21 @@ export function ipcTransport(): TerminalTransport {
   return {
     async spawn(opts) {
       await started;
-      const { sessionId } = await api.invoke<{ sessionId: string }>("terminal_spawn", opts ?? {});
+      const { sessionId } = await api.call(c.terminalSpawn, opts ?? {});
       return sessionId;
     },
     async write(sessionId, data) {
-      await api.invoke("terminal_write", { sessionId, data });
+      await api.call(c.terminalWrite, { sessionId, data });
     },
     async resize(sessionId, cols, rows) {
-      await api.invoke("terminal_resize", { sessionId, cols, rows });
+      await api.call(c.terminalResize, { sessionId, cols, rows });
     },
     async kill(sessionId) {
-      await api.invoke("terminal_kill", { sessionId });
+      await api.call(c.terminalKill, { sessionId });
     },
     async list() {
       await started;
-      return api.invoke<TerminalSessionInfo[]>("terminal_list");
+      return api.call(c.terminalList, undefined);
     },
     onOutput(cb) {
       outputCbs.add(cb);

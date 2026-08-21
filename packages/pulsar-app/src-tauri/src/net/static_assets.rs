@@ -33,8 +33,12 @@ fn content_type(path: &str) -> &'static str {
 /// SPA fallback handler：命中资源按其扩展名返回；未命中时，
 /// 带扩展名的资源请求返回 404（避免 HTML 冒充静态资源），
 /// 无扩展名视为 history 路由回退 index.html（按 HTML 返回，防止浏览器当成文件下载）。
+/// HTTP API 统一挂 `/api` 前缀，未命中该前缀的 API 请求一律 404，绝不回退 index.html。
 pub async fn handle_spa(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
+    if path.starts_with("api/") {
+        return not_found();
+    }
     if let Some(file) = FrontendAssets::get(path) {
         return serve(path, file);
     }

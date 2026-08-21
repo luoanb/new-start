@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api } from "$lib/api";
+  import { api, c } from "$lib/api";
   import type { NeuronSubgraph } from "$lib/types";
   import { t } from "$lib/i18n";
   import { errorMessage } from "$lib/errorMessage";
@@ -31,7 +31,7 @@
     loading = true;
     errorMsg = "";
     try {
-      subgraph = await api.invoke<NeuronSubgraph>("get_network", {
+      subgraph = await api.call(c.getNetwork, {
         id: rootId,
         max_depth: maxDepth,
       });
