@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use serde_json;
 
+use super::openai_compat::ResponseFormatSpec;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum MessageRole {
@@ -536,6 +538,10 @@ pub struct ModelCallRequest {
     /// 单次思考模式配置覆盖（最高优先级）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ThinkingConfig>,
+    /// 单次结构化输出契约覆盖（裁决 hook 传入；None = 无约束）。经 providers 与
+    /// `apply_thinking` 同级注入 `req.extra`（`#[serde(flatten)]` 展平为请求体顶层字段）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<ResponseFormatSpec>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

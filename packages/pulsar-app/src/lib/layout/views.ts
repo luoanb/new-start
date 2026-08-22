@@ -11,6 +11,7 @@ import SessionList from "$lib/components/SessionList.svelte";
 import ProvidersModelsPanel from "$lib/components/ProvidersModelsPanel.svelte";
 import ProviderManager from "$lib/components/ProviderManager.svelte";
 import TopicPanel from "$lib/components/TopicPanel.svelte";
+import HookJudgementPanel from "$lib/components/HookJudgementPanel.svelte";
 import PollerPanel from "$lib/components/PollerPanel.svelte";
 import ToolPanel from "$lib/components/ToolPanel.svelte";
 import LogPanel from "$lib/components/LogPanel.svelte";
@@ -82,6 +83,14 @@ export const viewRegistry: Record<string, ViewRegistration> = {
     title: "views.topics",
     icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>',
     component: TopicPanel,
+    movableTo: "*",
+  },
+  // v12: Hook 判定（裁决记录全局时间线面板，与「会话/文件」同级）
+  "hook-judgements": {
+    id: "hook-judgements",
+    title: "views.hookJudgements",
+    icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
+    component: HookJudgementPanel,
     movableTo: "*",
   },
   poller: {

@@ -17,6 +17,7 @@ use super::{
         ToolTag,
     },
     openai_compat,
+    openai_compat::ResponseFormatSpec,
     round_types::{RoundOutcome, ToolResultItem},
     tool_registry::ToolRegistry,
 };
@@ -92,6 +93,8 @@ impl RoundExecutor {
         tool_tags: Vec<ToolTag>,
         // 思考配置覆盖：Some = 调用方直接给定（后台调用传 disabled）；None = 跟随模型/会话配置。
         thinking_override: Option<ThinkingConfig>,
+        // 结构化输出契约覆盖（裁决 hook 传入；None = 无约束）。
+        response_format: Option<ResponseFormatSpec>,
     ) -> AppResult<RoundOutcome> {
         let (model_response, _authorized_tool_ids) = self
             .call_model(
@@ -101,6 +104,7 @@ impl RoundExecutor {
                 tool_override,
                 tool_tags,
                 thinking_override,
+                response_format,
             )
             .await?;
         self.execute_tools(model_response, neuron.map(|n| n.id.clone()))
@@ -120,6 +124,8 @@ impl RoundExecutor {
         tool_tags: Vec<ToolTag>,
         // 思考配置覆盖：Some = 调用方直接给定（后台调用传 disabled）；None = 跟随模型/会话配置。
         thinking_override: Option<ThinkingConfig>,
+        // 结构化输出契约覆盖（裁决 hook 传入；None = 无约束）。
+        response_format: Option<ResponseFormatSpec>,
     ) -> AppResult<(ModelCallResponse, Vec<String>)> {
         let (request, authorized_tool_ids) = self.build_model_call_request(
             neuron,
@@ -128,6 +134,7 @@ impl RoundExecutor {
             tool_override,
             tool_tags,
             thinking_override,
+            response_format,
         )?;
         let model_response = self.model_caller.call_model(request).await?;
         tracing::info!(
@@ -151,6 +158,8 @@ impl RoundExecutor {
         tool_override: Option<Vec<String>>,
         tool_tags: Vec<ToolTag>,
         thinking_override: Option<ThinkingConfig>,
+        // 结构化输出契约覆盖（裁决 hook 传入；None = 无约束）。
+        response_format: Option<ResponseFormatSpec>,
         on_chunk: Box<dyn FnMut(openai_compat::StreamChunk) + Send>,
     ) -> AppResult<(ModelCallResponse, Vec<String>)> {
         let (request, authorized_tool_ids) = self.build_model_call_request(
@@ -160,6 +169,7 @@ impl RoundExecutor {
             tool_override,
             tool_tags,
             thinking_override,
+            response_format,
         )?;
         let model_response = self
             .model_caller
@@ -185,6 +195,8 @@ impl RoundExecutor {
         tool_override: Option<Vec<String>>,
         tool_tags: Vec<ToolTag>,
         thinking_override: Option<ThinkingConfig>,
+        // 结构化输出契约覆盖（裁决 hook 传入；None = 无约束）。
+        response_format: Option<ResponseFormatSpec>,
     ) -> AppResult<(ModelCallRequest, Vec<String>)> {
         // 工具授权：override 优先；否则取选中神经元的 tool_ids（∩ 注册表）。
         let tool_ids = match tool_override {
@@ -252,6 +264,8 @@ impl RoundExecutor {
                 params: model.params.clone(),
                 // 调用方给定覆盖优先；None = 用会话/模型自带配置。
                 thinking: thinking_override.or_else(|| model.thinking.clone()),
+                // 结构化输出契约（裁决调用传入；主对话 None）。
+                response_format,
             },
             authorized_tool_ids,
         ))

@@ -9,6 +9,7 @@ use std::{path::Path, sync::Arc};
 use crate::core::{
     assistant_session::AssistantSession,
     conversation_store::ConversationStore,
+    hook_judgement_store::HookJudgementStore,
     neuron_manager::NeuronManager,
     poller::Poller,
     providers::ProviderRegistry,
@@ -23,6 +24,7 @@ pub struct ServerRuntime {
     pub gateway: Gateway,
     pub neuron_manager: Arc<NeuronManager>,
     pub topic_store: Arc<std::sync::Mutex<TopicStore>>,
+    pub hook_judgement_store: Arc<std::sync::Mutex<HookJudgementStore>>,
     pub assistant: Arc<AssistantSession>,
     pub poller: Arc<std::sync::Mutex<Poller>>,
     pub sessions: SessionTracker,
@@ -57,6 +59,7 @@ pub fn build_server_runtime(
     // Domain states (no outer Mutex across network).
     let neuron_manager = gateway.neuron_manager();
     let topic_store = gateway.topic_store().map_err(|e| e.to_string())?;
+    let hook_judgement_store = gateway.hook_judgement_store().map_err(|e| e.to_string())?;
     let assistant = gateway.assistant();
     let poller = gateway.poller();
     let sessions = gateway.session_tracker();
@@ -67,6 +70,7 @@ pub fn build_server_runtime(
         gateway,
         neuron_manager,
         topic_store,
+        hook_judgement_store,
         assistant,
         poller,
         sessions,

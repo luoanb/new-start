@@ -404,6 +404,36 @@ export type Translations = {
     fileEditor: string;
     git: string;
     gitDiff: string;
+    hookJudgements: string;
+  };
+  judgement: {
+    status: {
+      pending: string;
+      ok: string;
+      retriedOk: string;
+      downgraded: string;
+    };
+    hookType: string;
+    statusLabel: string;
+    conversation: string;
+    all: string;
+    attempts: string;
+    durationMs: string;
+    model: string;
+    payload: string;
+    attemptsDetail: string;
+    rawResponse: string;
+    decision: string;
+    error: string;
+    locate: string;
+    empty: string;
+    loadFailed: string;
+  };
+  hook: {
+    completeScope: string;
+    matchTopic: string;
+    reviseTopic: string;
+    scoreFeedback: string;
   };
   fileExplorer: {
     addWorkspace: string;
@@ -1005,6 +1035,36 @@ export const en: Translations = {
     fileEditor: "File Editor",
     git: "Git",
     gitDiff: "Diff",
+    hookJudgements: "Hook Judgements",
+  },
+  judgement: {
+    status: {
+      pending: "Pending",
+      ok: "OK",
+      retriedOk: "Retried OK",
+      downgraded: "Downgraded",
+    },
+    hookType: "Hook",
+    statusLabel: "Status",
+    conversation: "Conversation",
+    all: "All",
+    attempts: "Attempts",
+    durationMs: "Duration (ms)",
+    model: "Model",
+    payload: "Judgement Input",
+    attemptsDetail: "Attempts Detail",
+    rawResponse: "Raw Output",
+    decision: "Decision",
+    error: "Error",
+    locate: "Locate in conversation",
+    empty: "No hook judgement records yet",
+    loadFailed: "Failed to load: {error}",
+  },
+  hook: {
+    completeScope: "Complete Scope",
+    matchTopic: "Match Topic",
+    reviseTopic: "Revise Topic",
+    scoreFeedback: "Score Feedback",
   },
   fileExplorer: {
     addWorkspace: "Add Workspace",
@@ -1626,6 +1686,36 @@ export const zh: Translations = {
     fileEditor: "文件编辑",
     git: "Git",
     gitDiff: "差异",
+    hookJudgements: "Hook 判定",
+  },
+  judgement: {
+    status: {
+      pending: "裁决中",
+      ok: "成功",
+      retriedOk: "重试成功",
+      downgraded: "已降级",
+    },
+    hookType: "Hook",
+    statusLabel: "状态",
+    conversation: "会话",
+    all: "全部",
+    attempts: "尝试次数",
+    durationMs: "耗时 (ms)",
+    model: "模型",
+    payload: "裁决输入",
+    attemptsDetail: "尝试明细",
+    rawResponse: "原始输出",
+    decision: "决策",
+    error: "错误",
+    locate: "在会话中定位",
+    empty: "暂无 Hook 判定记录",
+    loadFailed: "加载失败：{error}",
+  },
+  hook: {
+    completeScope: "范围完成裁决",
+    matchTopic: "课题匹配裁决",
+    reviseTopic: "课题修订裁决",
+    scoreFeedback: "评分反馈裁决",
   },
   fileExplorer: {
     addWorkspace: "添加工作区",

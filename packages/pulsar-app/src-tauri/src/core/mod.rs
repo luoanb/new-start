@@ -12,6 +12,12 @@ pub mod dynamic_tool;
 pub mod error;
 pub mod events;
 pub mod gateway;
+pub mod hook;
+/// 兼容别名：旧 `core::hook_judgement_store` 路径指向 `core/hook/store` 子模块，
+/// 保持外部消费方引用不变（hook 收拢到 `core/hook/` 后零改动目标）。
+pub mod hook_judgement_store {
+    pub use super::hook::store::*;
+}
 pub mod insert_catalog;
 pub mod log_redact;
 pub mod mcp;
@@ -50,12 +56,17 @@ pub mod tool_registry;
 pub mod topic_manager;
 pub mod topic_store;
 pub use topic_store::TopicStore;
+pub use hook_judgement_store::HookJudgementStore;
+pub use hook::{
+    hook_def, hook_defs_meta, AttemptRecord, HookDef, HookDefMeta, JudgementAnchor,
+    JudgementOutcome, JudgementStatus, HOOK_DEFS,
+};
 
 pub use assistant_session::{
     AssistantSession, SYSTEM_TYPE_COMPLETE_SCOPE, SYSTEM_TYPE_MATCH_TOPIC,
     SYSTEM_TYPE_SCORE_FEEDBACK, SYSTEM_TYPE_SELECT_NEURON,
 };
-pub use conversation_runner::{ConversationRunner, RoundHooks};
+pub use conversation_runner::ConversationRunner;
 pub use error::{AppError, AppResult};
 pub use events::{StateChange, StateEmitter, STATE_CHANGED_EVENT};
 pub use gateway::Gateway;

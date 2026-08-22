@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
-
 use super::{
     conversation_store::{now_ms, ConversationStore},
     error::AppResult,
+    hook::defs::{HookDef, HookRegistry, RegisterError},
     model_call_input::ModelCallInput,
     models::{
         ChatModelSelection, ChatResponse, Conversation, ConversationMode, Message, MessageBody,
         MessageRole, ModelCallResponse, ModelMessage, Neuron, ThinkingConfig, ToolTag,
     },
     openai_compat,
+    openai_compat::ResponseFormatSpec,
     round_executor::RoundExecutor,
     round_resolver::RoundResolver,
     round_types::{RoundOutcome, SessionSeed, SessionState},
@@ -84,16 +84,9 @@ pub struct RoundContext {
     pub outcome: Option<RoundOutcome>,
 }
 
-/// 单轮钩子：业务（Assistant 等）通过注入 before/after 感知一轮的生命周期。
-#[async_trait]
-pub trait RoundHooks: Send + Sync {
-    async fn before_round(&self, ctx: &mut RoundContext) -> AppResult<()>;
-    async fn after_round(&self, ctx: &mut RoundContext) -> AppResult<()>;
-}
-
-/// 统一编排层：「读会话 → before hooks → 三段管道（选型 → 组装 → 执行）→ after hooks → 落库」。
+/// 统一编排层：读会话 → IP-1（选型等调度 hook）→ 三段管道（组装 → 执行）→ 落库 → IP-5。
 ///
-/// 业务无关：不感知触发语义、不感知课题/评分等业务副作用（由 hooks / 各业务 session 文件承担）。
+/// 业务无关：不感知触发语义、不感知课题/评分等业务副作用（由注入点 hook 承担，装配期注册）。
 #[derive(Debug, Clone)]
 pub struct ConversationRunner {
     store: ConversationStore,
@@ -101,6 +94,8 @@ pub struct ConversationRunner {
     executor: Arc<RoundExecutor>,
     /// 会话级串行协调器：User 轮抢占（cancel 当前轮），非 User 轮遇忙跳过。
     coordinator: Arc<SessionCoordinator>,
+    /// 注入点注册表：核心 5 步之外的调度均以 hook 形式挂载（装配期注册；Clone 共享）。
+    hooks: Arc<HookRegistry>,
 }
 
 impl ConversationRunner {
@@ -115,12 +110,23 @@ impl ConversationRunner {
             resolver,
             executor,
             coordinator,
+            hooks: Arc::new(HookRegistry::new()),
         }
     }
 
-    /// 一轮端到端：读会话（seed/state/messages）→ before hooks → resolve（选型+角色拼接）
-    /// → 写回锚点（发送前）→ 构造输入消息 → persist_input（落 wire 增量）→ execute →
-    /// persist_outcome → after hooks。
+    /// 装配期注入已注册 hook 的注册表（上层将选型 / 课题 / 判定 / 打分 / 压缩注册进来）。
+    pub fn with_hooks(mut self, hooks: Arc<HookRegistry>) -> Self {
+        self.hooks = hooks;
+        self
+    }
+
+    /// 直接注册一个注入点 hook（内部加锁；同 id 重复注册 → Err）。
+    pub fn register_hook(&self, def: HookDef) -> Result<(), RegisterError> {
+        self.hooks.register(def)
+    }
+
+    /// 一轮端到端：读会话（seed/state/messages）→ IP-1 hooks（选型 / 课题路由等调度）
+    /// → 组装输入消息 → persist_input（落 wire 增量）→ execute → persist_outcome → IP-5 hooks。
     ///
     /// `tool_override`：本轮工具授权覆盖（Agent 传全部工具；Chat/Assistant 传 None 按模式取
     /// 神经元 tool_ids）；标签并入按 `ConversationMode::tool_tags()`，均落点在 executor。
@@ -130,21 +136,18 @@ impl ConversationRunner {
         input: InputRecord,
         tool_override: Option<Vec<String>>,
         model: &ChatModelSelection,
-        hooks: Option<&dyn RoundHooks>,
         // 思考配置覆盖：Some = 调用方直接给定（后台调用传 disabled）；None = 跟随模型/会话配置。
         thinking_override: Option<ThinkingConfig>,
     ) -> AppResult<ChatResponse> {
         let mut ctx = self.load_context(session_id, input, tool_override, model)?;
         // B 方案：会话级串行。User 轮抢占（cancel 当前轮）；非 User 轮遇忙跳过（返回占位，
         // 由 Poller / 手动推进等调用方静默吞掉，不打断正在进行的对话）。
-        let cancel = match self.coordinator.begin(&ctx.session_id, ctx.trigger) {
-            Some(token) => Some(token),
-            None => {
-                return Ok(ChatResponse {
-                    conversation_id: ctx.session_id.clone(),
-                    response: String::new(),
-                });
-            }
+        // busy 必然释放：guard 生命周期覆盖全轮，任何早退路径 Drop 自动 end()。
+        let Some(active_round) = self.coordinator.begin(&ctx.session_id, ctx.trigger) else {
+            return Ok(ChatResponse {
+                conversation_id: ctx.session_id.clone(),
+                response: String::new(),
+            });
         };
         tracing::info!(
             phase = "run_round",
@@ -156,52 +159,19 @@ impl ConversationRunner {
             input_len = ctx.model_input.len(),
             "round start"
         );
-        if let Some(hooks) = hooks {
-            hooks.before_round(&mut ctx).await?;
-            // before hook 可能切换会话（assistant match_topic switch）→ 重读上下文。
-            if ctx.session_id != session_id {
-                tracing::info!(
-                    phase = "run_round",
-                    from_session = %session_id,
-                    to_session = %ctx.session_id,
-                    "session switched by before hook; reloading context"
-                );
-                self.reload(&mut ctx)?;
-            }
-        }
-        // ① 选型 + 角色上下文拼接（resolve 目标单一：获取角色神经元）。
-        // 输出 = old + 角色上下文（首轮 System / 后续仅角色切换时 RoleContext），不含本轮输入消息。
-        let old_len = ctx.messages.len();
-        let (with_role, neuron) = self
-            .resolver
-            .resolve(
-                ctx.seed.as_ref(),
-                ctx.state.last_selected_neuron_id.as_deref(),
-                &ctx.messages,
-                ctx.reselect,
-            )
+        // IP-1 AfterLoadContext：load_context 后、assemble 前。选型（resolve + 角色拼接）
+        // 等调度由上层注册的 hook 承担（核心流程不感知）；hook 可切换会话，runner 检测到
+        // session 变化即 reload 并继续执行后续 hooks。fail 策略——最早点未落库，Err 中止本轮。
+        self.hooks
+            .run_after_load_context(&mut ctx, |ctx| self.reload(ctx))
             .await?;
-        tracing::info!(
-            phase = "run_round",
-            session_id = %ctx.session_id,
-            selected_neuron_id = ?neuron.as_ref().map(|n| n.id.as_str()),
-            role_msgs = with_role.len() - old_len,
-            "resolve done"
-        );
-        // 发送前写回锚点（D7）：resolve 已定选中神经元，模型调用前落会话态。
-        // 选中 → 写回其 id；未选中（直连/选型失败）→ 清空锚点。
-        let anchor = neuron.as_ref().map(|n| n.id.clone());
-        if anchor != ctx.state.last_selected_neuron_id {
-            ctx.state.last_selected_neuron_id = anchor;
-            write_session_state(&self.store, &ctx.session_id, &ctx.state)?;
-        }
-        ctx.selected_neuron = neuron;
-        ctx.messages = with_role;
         // ② 构造输入消息（User / Continue / Nudge → Message，kind 自明）append，构成完整 wire。
         self.append_input_message(&mut ctx);
-        // 发送前落输入增量：wire[old.len()..]（System / RoleContext / 输入 / Nudge）全落——
-        // 模型调用失败/超时也不丢用户消息；产物在发送后落。
-        self.persist_input(&ctx, old_len)?;
+        // 发送前落输入增量（角色上下文 / 输入 / Nudge 等未落库部分全落）：增量边界由真相源
+        // 已落库消息数推导——会话被 hook 切换后依然正确；模型调用失败/超时也不丢用户消息。
+        self.persist_input(&ctx)?;
+        // IP-2 AfterPersistInput：wire 已落库、call_model 前。ignore 策略——Err 按原 wire 发送。
+        self.hooks.run_after_persist_input(&mut ctx).await;
         // ③ 执行（独立落库两段式）：工具授权落点（override 优先 → neuron.tool_ids → 标签并入
         // ∩ 注册表）→ 发送前投影 ModelMessage → 模型调用 → 先落「模型声明」（tool_calls）→
         // 再执行工具 → 落「执行结果」。声明不依赖工具执行结果而存在。
@@ -213,56 +183,52 @@ impl ConversationRunner {
             ctx.tool_override.clone(),
             ctx.mode.tool_tags(),
             thinking_override,
+            None, // 主对话：不注入结构化输出契约（裁决调用才传）。
         );
-        let (model_response, _authorized_tool_ids) = if let Some(token) = &cancel {
-            tokio::select! {
-                r = model_fut => r?,
-                _ = token.cancelled() => {
-                    tracing::info!(
-                        phase = "run_round",
-                        session_id = %ctx.session_id,
-                        "round interrupted by user"
-                    );
-                    self.coordinator.end(&ctx.session_id, token);
-                    return Ok(ChatResponse {
-                        conversation_id: ctx.session_id.clone(),
-                        response: String::new(),
-                    });
-                }
+        let token = active_round.token();
+        let (mut model_response, _authorized_tool_ids) = tokio::select! {
+            r = model_fut => r?,
+            _ = token.cancelled() => {
+                tracing::info!(
+                    phase = "run_round",
+                    session_id = %ctx.session_id,
+                    "round interrupted by user"
+                );
+                return Ok(ChatResponse {
+                    conversation_id: ctx.session_id.clone(),
+                    response: String::new(),
+                });
             }
-        } else {
-            model_fut.await?
         };
+        // IP-3 AfterCallModel：声明落库前可改写响应 / 拦截工具调用。ignore 策略。
+        self.hooks
+            .run_after_call_model(&mut ctx, &mut model_response)
+            .await;
         // 模型已返回：若声明了工具调用，先落库声明（Assistant/ToolCall）。
         self.persist_model_decl(&ctx, &model_response)?;
-        let outcome = if let Some(token) = &cancel {
-            let fut = self.executor.execute_tools(
-                model_response,
-                ctx.selected_neuron.as_ref().map(|n| n.id.clone()),
-            );
-            tokio::select! {
-                r = fut => r?,
-                _ = token.cancelled() => {
-                    tracing::info!(
-                        phase = "run_round",
-                        session_id = %ctx.session_id,
-                        "tool execution interrupted by user"
-                    );
-                    self.coordinator.end(&ctx.session_id, token);
-                    return Ok(ChatResponse {
-                        conversation_id: ctx.session_id.clone(),
-                        response: String::new(),
-                    });
-                }
+        let token = active_round.token();
+        let fut = self.executor.execute_tools(
+            model_response,
+            ctx.selected_neuron.as_ref().map(|n| n.id.clone()),
+        );
+        let mut outcome = tokio::select! {
+            r = fut => r?,
+            _ = token.cancelled() => {
+                tracing::info!(
+                    phase = "run_round",
+                    session_id = %ctx.session_id,
+                    "tool execution interrupted by user"
+                );
+                return Ok(ChatResponse {
+                    conversation_id: ctx.session_id.clone(),
+                    response: String::new(),
+                });
             }
-        } else {
-            self.executor
-                .execute_tools(
-                    model_response,
-                    ctx.selected_neuron.as_ref().map(|n| n.id.clone()),
-                )
-                .await?
         };
+        // IP-4 AfterExecuteTools：工具结果落库前可改写 / 丢弃。ignore 策略。
+        self.hooks
+            .run_after_execute_tools(&mut ctx, &mut outcome.tool_results)
+            .await;
         tracing::info!(
             phase = "run_round",
             session_id = %ctx.session_id,
@@ -276,13 +242,9 @@ impl ConversationRunner {
         // 再跑 after hooks：课题副作用（如 complete_scope 模型调用）失败只影响副作用本身，不丢失本轮模型产物。
         self.persist_outcome(&ctx)?;
         tracing::info!(phase = "run_round", session_id = %ctx.session_id, "persist done");
-        if let Some(hooks) = hooks {
-            hooks.after_round(&mut ctx).await?;
-        }
+        // IP-5 AfterPersistOutcome：产物已落库，只读整轮上下文；落账本等副作用由 hook 自办。ignore 策略。
+        self.hooks.run_after_persist_outcome(&ctx).await;
         tracing::info!(phase = "run_round", session_id = %ctx.session_id, "round ok");
-        if let Some(token) = &cancel {
-            self.coordinator.end(&ctx.session_id, token);
-        }
         Ok(ChatResponse {
             conversation_id: ctx.session_id.clone(),
             response: outcome.response,
@@ -304,21 +266,18 @@ impl ConversationRunner {
         input: InputRecord,
         tool_override: Option<Vec<String>>,
         model: &ChatModelSelection,
-        hooks: Option<&dyn RoundHooks>,
         // 思考配置覆盖：Some = 调用方直接给定（后台调用传 disabled）；None = 跟随模型/会话配置。
         thinking_override: Option<ThinkingConfig>,
         on_delta: Option<Box<dyn FnMut(StreamDelta) + Send>>,
     ) -> AppResult<ChatResponse> {
         let mut ctx = self.load_context(session_id, input, tool_override, model)?;
         // B 方案：会话级串行。User 轮抢占（cancel 当前轮）；非 User 轮遇忙跳过（返回占位）。
-        let cancel = match self.coordinator.begin(&ctx.session_id, ctx.trigger) {
-            Some(token) => Some(token),
-            None => {
-                return Ok(ChatResponse {
-                    conversation_id: ctx.session_id.clone(),
-                    response: String::new(),
-                });
-            }
+        // busy 必然释放：guard 生命周期覆盖全轮，任何早退路径 Drop 自动 end()。
+        let Some(active_round) = self.coordinator.begin(&ctx.session_id, ctx.trigger) else {
+            return Ok(ChatResponse {
+                conversation_id: ctx.session_id.clone(),
+                response: String::new(),
+            });
         };
         tracing::info!(
             phase = "run_round_stream",
@@ -330,56 +289,18 @@ impl ConversationRunner {
             input_len = ctx.model_input.len(),
             "round start"
         );
-        if let Some(hooks) = hooks {
-            hooks.before_round(&mut ctx).await?;
-            if ctx.session_id != session_id {
-                tracing::info!(
-                    phase = "run_round_stream",
-                    from_session = %session_id,
-                    to_session = %ctx.session_id,
-                    "session switched by before hook; reloading context"
-                );
-                self.reload(&mut ctx)?;
-            }
-            tracing::info!(
-                phase = "run_round_stream",
-                session_id = %ctx.session_id,
-                "before hook done"
-            );
-        }
-        let old_len = ctx.messages.len();
-        tracing::info!(
-            phase = "run_round_stream",
-            session_id = %ctx.session_id,
-            last_selected = ?ctx.state.last_selected_neuron_id,
-            reselect = ctx.reselect,
-            "calling resolver.resolve"
-        );
-        let (with_role, neuron) = self
-            .resolver
-            .resolve(
-                ctx.seed.as_ref(),
-                ctx.state.last_selected_neuron_id.as_deref(),
-                &ctx.messages,
-                ctx.reselect,
-            )
+        // IP-1 AfterLoadContext：load_context 后、assemble 前。选型（resolve + 角色拼接）
+        // 等调度由上层注册的 hook 承担；hook 可切换会话，runner 检测到 session 变化即
+        // reload 并继续执行后续 hooks。fail 策略——最早点未落库，Err 中止本轮。
+        self.hooks
+            .run_after_load_context(&mut ctx, |ctx| self.reload(ctx))
             .await?;
-        tracing::info!(
-            phase = "run_round_stream",
-            session_id = %ctx.session_id,
-            neuron_id = neuron.as_ref().map(|n| n.id.as_str()),
-            messages_len = with_role.len(),
-            "resolver.resolve done"
-        );
-        let anchor = neuron.as_ref().map(|n| n.id.clone());
-        if anchor != ctx.state.last_selected_neuron_id {
-            ctx.state.last_selected_neuron_id = anchor;
-            write_session_state(&self.store, &ctx.session_id, &ctx.state)?;
-        }
-        ctx.selected_neuron = neuron;
-        ctx.messages = with_role;
+        // ② 构造输入消息 append，构成完整 wire。
         self.append_input_message(&mut ctx);
-        self.persist_input(&ctx, old_len)?;
+        // 发送前落输入增量（未落库部分全落，边界由真相源已落库消息数推导）。
+        self.persist_input(&ctx)?;
+        // IP-2 AfterPersistInput：wire 已落库、call_model 前。ignore 策略——Err 按原 wire 发送。
+        self.hooks.run_after_persist_input(&mut ctx).await;
         tracing::info!(
             phase = "run_round_stream",
             session_id = %ctx.session_id,
@@ -482,50 +403,51 @@ impl ConversationRunner {
             ctx.tool_override.clone(),
             ctx.mode.tool_tags(),
             thinking_override,
+            None, // 主对话：不注入结构化输出契约（裁决调用才传）。
             on_chunk,
         );
-        let (model_response, _authorized_tool_ids) = if let Some(token) = &cancel {
-            tokio::select! {
-                r = model_fut => r?,
-                _ = token.cancelled() => {
-                    tracing::info!(
-                        phase = "run_round_stream",
-                        session_id = %ctx.session_id,
-                        "stream interrupted by user; finalizing partial output"
-                    );
-                    // 中断收敛：已累积内容按索引落库（回复多少存储多少），前端全量重拉。
-                    let (content_text, reasoning_text) = accum.lock().unwrap().clone();
-                    let _ = self.store.update_message_at(&ctx.session_id, placeholder_index, |m| {
-                        if let MessageBody::Text {
-                            content, reasoning, ..
-                        } = &mut m.body
-                        {
-                            *content = content_text.clone();
-                            *reasoning = if reasoning_text.is_empty() {
-                                None
-                            } else {
-                                Some(reasoning_text.clone())
-                            };
-                        }
-                    });
-                    if let Some(cb) = on_delta_shared.lock().unwrap().as_mut() {
-                        cb(StreamDelta {
-                            message_index: placeholder_index,
-                            content: content_text.clone(),
-                            reasoning: reasoning_text,
-                            done: true,
-                        });
+        let token = active_round.token();
+        let (mut model_response, _authorized_tool_ids) = tokio::select! {
+            r = model_fut => r?,
+            _ = token.cancelled() => {
+                tracing::info!(
+                    phase = "run_round_stream",
+                    session_id = %ctx.session_id,
+                    "stream interrupted by user; finalizing partial output"
+                );
+                // 中断收敛：已累积内容按索引落库（回复多少存储多少），前端全量重拉。
+                let (content_text, reasoning_text) = accum.lock().unwrap().clone();
+                let _ = self.store.update_message_at(&ctx.session_id, placeholder_index, |m| {
+                    if let MessageBody::Text {
+                        content, reasoning, ..
+                    } = &mut m.body
+                    {
+                        *content = content_text.clone();
+                        *reasoning = if reasoning_text.is_empty() {
+                            None
+                        } else {
+                            Some(reasoning_text.clone())
+                        };
                     }
-                    self.coordinator.end(&ctx.session_id, token);
-                    return Ok(ChatResponse {
-                        conversation_id: ctx.session_id.clone(),
-                        response: content_text,
+                });
+                if let Some(cb) = on_delta_shared.lock().unwrap().as_mut() {
+                    cb(StreamDelta {
+                        message_index: placeholder_index,
+                        content: content_text.clone(),
+                        reasoning: reasoning_text,
+                        done: true,
                     });
                 }
+                return Ok(ChatResponse {
+                    conversation_id: ctx.session_id.clone(),
+                    response: content_text,
+                });
             }
-        } else {
-            model_fut.await?
         };
+        // IP-3 AfterCallModel：占位收敛落库前可改写响应 / 拦截工具调用。ignore 策略。
+        self.hooks
+            .run_after_call_model(&mut ctx, &mut model_response)
+            .await;
         tracing::info!(
             phase = "run_round_stream",
             session_id = %ctx.session_id,
@@ -555,38 +477,34 @@ impl ConversationRunner {
             .map_or(false, |c| !c.is_empty());
         // 用户优先：工具执行期间被新用户消息抢占 → 取消本轮（模型声明已落库，工具结果不落，
         // 「到此为止」），前端全量重拉。
-        let outcome = if has_calls {
+        let mut outcome = if has_calls {
+            let token = active_round.token();
             let fut = self.executor.execute_tools(
                 model_response.clone(),
                 ctx.selected_neuron.as_ref().map(|n| n.id.clone()),
             );
-            if let Some(token) = &cancel {
-                tokio::select! {
-                    r = fut => r?,
-                    _ = token.cancelled() => {
-                        tracing::info!(
-                            phase = "run_round_stream",
-                            session_id = %ctx.session_id,
-                            "tool execution interrupted by user"
-                        );
-                        let content = model_response.output.clone();
-                        if let Some(cb) = on_delta_shared.lock().unwrap().as_mut() {
-                            cb(StreamDelta {
-                                message_index: placeholder_index,
-                                content: content.clone(),
-                                reasoning: model_response.reasoning.clone().unwrap_or_default(),
-                                done: true,
-                            });
-                        }
-                        self.coordinator.end(&ctx.session_id, token);
-                        return Ok(ChatResponse {
-                            conversation_id: ctx.session_id.clone(),
-                            response: content,
+            tokio::select! {
+                r = fut => r?,
+                _ = token.cancelled() => {
+                    tracing::info!(
+                        phase = "run_round_stream",
+                        session_id = %ctx.session_id,
+                        "tool execution interrupted by user"
+                    );
+                    let content = model_response.output.clone();
+                    if let Some(cb) = on_delta_shared.lock().unwrap().as_mut() {
+                        cb(StreamDelta {
+                            message_index: placeholder_index,
+                            content: content.clone(),
+                            reasoning: model_response.reasoning.clone().unwrap_or_default(),
+                            done: true,
                         });
                     }
+                    return Ok(ChatResponse {
+                        conversation_id: ctx.session_id.clone(),
+                        response: content,
+                    });
                 }
-            } else {
-                fut.await?
             }
         } else {
             RoundOutcome {
@@ -598,6 +516,10 @@ impl ConversationRunner {
                 selected_neuron_id: ctx.selected_neuron.as_ref().map(|n| n.id.clone()),
             }
         };
+        // IP-4 AfterExecuteTools：工具结果落库前可改写 / 丢弃。ignore 策略。
+        self.hooks
+            .run_after_execute_tools(&mut ctx, &mut outcome.tool_results)
+            .await;
         // 工具轮：执行结果独立落库（ToolResult）；纯文本轮占位消息即产物，不重复落。
         if has_calls {
             for item in &outcome.tool_results {
@@ -624,9 +546,8 @@ impl ConversationRunner {
             tool_results = outcome.tool_results.len(),
             "stream round execute done"
         );
-        if let Some(hooks) = hooks {
-            hooks.after_round(&mut ctx).await?;
-        }
+        // IP-5 AfterPersistOutcome：产物已落库，只读整轮上下文；副作用由 hook 自办。ignore 策略。
+        self.hooks.run_after_persist_outcome(&ctx).await;
         // 收敛事件：done=true，前端据此全量重拉（权威数据）。
         if let Some(cb) = on_delta_shared.lock().unwrap().as_mut() {
             cb(StreamDelta {
@@ -641,9 +562,6 @@ impl ConversationRunner {
             session_id = %ctx.session_id,
             "stream round ok"
         );
-        if let Some(token) = &cancel {
-            self.coordinator.end(&ctx.session_id, token);
-        }
         Ok(ChatResponse {
             conversation_id: ctx.session_id.clone(),
             response: outcome.response,
@@ -667,6 +585,8 @@ impl ConversationRunner {
         model: &ChatModelSelection,
         // 思考配置覆盖：Some = 调用方直接给定（hook 裁决等后台调用传 disabled）；None = 跟随模型/会话配置。
         thinking_override: Option<ThinkingConfig>,
+        // 结构化输出契约覆盖（裁决 hook 传入；None = 无约束）。
+        response_format: Option<ResponseFormatSpec>,
     ) -> AppResult<RoundOutcome> {
         let (with_role, neuron) = self
             .resolver
@@ -693,6 +613,7 @@ impl ConversationRunner {
                 tool_override,
                 tool_tags,
                 thinking_override,
+                response_format,
             )
             .await
     }
@@ -801,10 +722,16 @@ impl ConversationRunner {
         }
     }
 
-    /// 落库（发送前）：落 `ctx.messages[old_len..]` 增量，全落（System / RoleContext / 输入 /
-    /// Nudge）——wire 即落库，模型调用失败/超时也不丢用户消息；产物在发送后落。
-    fn persist_input(&self, ctx: &RoundContext, old_len: usize) -> AppResult<()> {
-        for message in &ctx.messages[old_len..] {
+    /// 落库（发送前）：落 `ctx.messages` 中尚未落库的增量（角色上下文 / 输入 / Nudge）——
+    /// 边界从真相源已落库消息数推导：会话被 IP-1 hook 切换后仍正确；wire 即落库，
+    /// 模型调用失败/超时也不丢用户消息；产物在发送后落。
+    fn persist_input(&self, ctx: &RoundContext) -> AppResult<()> {
+        let truth_len = self
+            .store
+            .require_conversation(&ctx.session_id)?
+            .messages
+            .len();
+        for message in &ctx.messages[truth_len..] {
             self.store.add_message(&ctx.session_id, message.clone())?;
         }
         Ok(())
@@ -1248,6 +1175,7 @@ mod tests {
                     enabled: Some(false),
                     effort: None,
                 }),
+                None, // 测试管道无结构化输出契约（主对话语义）。
             )
             .await?;
         Ok((wire, neuron, outcome))
@@ -2058,7 +1986,6 @@ mod tests {
                     &model(),
                     None,
                     None,
-                    None,
                 )
                 .await
                 .unwrap()
@@ -2076,7 +2003,6 @@ mod tests {
                     InputRecord::User("second question".into()),
                     None,
                     &model(),
-                    None,
                     None,
                     None,
                 )
@@ -2128,12 +2054,12 @@ mod tests {
         );
         let conv = store.create_conversation(None, ConversationMode::Chat).unwrap();
         let id = conv.id.clone();
-        // 占用该会话（模拟正在进行的对话）。
-        coordinator.begin(&id, RoundTriggerKind::User).unwrap();
+        // 占用该会话（模拟正在进行的对话）。guard 需存活至断言完成（Drop 即释放 busy）。
+        let _active = coordinator.begin(&id, RoundTriggerKind::User).unwrap();
 
         // Poller 推进遇忙 → 跳过。
         let resp = runner
-            .run_round_stream(&id, InputRecord::Nudge, None, &model(), None, None, None)
+            .run_round_stream(&id, InputRecord::Nudge, None, &model(), None, None)
             .await
             .unwrap();
         assert!(resp.response.is_empty(), "busy session round should be skipped");

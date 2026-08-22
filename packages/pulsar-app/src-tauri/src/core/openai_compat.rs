@@ -8,7 +8,7 @@
 //!
 //! 依赖：`serde` + `serde_json` + `reqwest`（`json`、`rustls-tls`），**不依赖 async-openai**。
 
-use std::collections::BTreeMap;
+use std::{borrow::Cow, collections::BTreeMap};
 
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,19 @@ use super::error::{AppError, AppResult};
 pub enum MessageContent {
     Text(String),
     Parts(Vec<ContentPart>),
+}
+
+/// 结构化输出契约（值类型，随 hook 走，不持有 hook 业务数据）。
+///
+/// wire 形态（经 `extra` 扁平透传为请求体顶层 `response_format`）：
+/// - `JsonSchema` → `{"type":"json_schema","json_schema":{...}}`
+/// - `JsonObject` → `{"type":"json_object"}`
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ResponseFormatSpec {
+    /// 显式 JSON Schema（schema 原文，服务商要求对象形态时反序列化后注入）。
+    JsonSchema(Cow<'static, str>),
+    /// 仅要求输出 JSON 对象（不校验结构）。
+    JsonObject,
 }
 
 impl MessageContent {

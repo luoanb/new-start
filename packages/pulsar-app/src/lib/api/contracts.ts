@@ -27,6 +27,9 @@ import type {
   GitStashAction,
   GitStashEntry,
   GitStatusView,
+  HookDefMeta,
+  HookJudgementFilter,
+  HookJudgementRecord,
   LogEntry,
   McpServerStatus,
   Message,
@@ -118,6 +121,12 @@ export const c = {
   deleteTopicScopeItem: def<{ topicId: string; itemId: string }, Topic>(
     "delete_topic_scope_item",
   ),
+
+  // ── Hook 判定 ──
+  hookJudgementsList: def<{ filters?: HookJudgementFilter }, HookJudgementRecord[]>(
+    "hook_judgements_list",
+  ),
+  hookDefsList: def<undefined, HookDefMeta[]>("hook_defs_list"),
 
   // ── Poller ──
   pollStatus: def<undefined, PollerStatus>("poll_status"),

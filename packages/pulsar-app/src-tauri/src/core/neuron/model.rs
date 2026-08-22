@@ -55,6 +55,7 @@ impl NeuronModelCaller for DefaultNeuronModelCaller {
                     enabled: Some(false),
                     effort: None,
                 }),
+                response_format: None,
             })
             .await?;
         if response.output.trim().is_empty() {

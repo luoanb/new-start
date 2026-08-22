@@ -68,7 +68,6 @@ impl AgentSession {
                     record,
                     Some(authorized_tool_ids.clone()),
                     model,
-                    None,
                     None, // 用户聊天窗口发起的 agent 循环：保留思考配置（跟随前端勾选）
                 )
                 .await?;
@@ -133,7 +132,6 @@ impl AgentSession {
                     record,
                     Some(authorized_tool_ids.clone()),
                     model,
-                    None,
                     None, // 用户聊天窗口发起的 agent 循环：保留思考配置（跟随前端勾选）
                     round_cb,
                 )

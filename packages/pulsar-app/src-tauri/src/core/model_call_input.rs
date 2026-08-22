@@ -220,10 +220,26 @@ impl ModelCallInput {
     /// 真相源唯一约定：发送前（executor）与选型上下文（resolver）共用同一投影，不存在第二份
     /// 「给模型的 msg」。防御过滤丢弃「非 tool_call 且 content 空」的 assistant 残留（模型偶发
     /// 空响应，不清理会锁死后续调用）。
+    ///
+    /// 压缩生效：`Compaction` 摘要按 System 角色携带（见 [`Self::from_message`]），其
+    /// `summary_of` 记录被摘要代表的旧消息 timestamp——这些旧消息不再逐条投影，只发摘要。
+    /// 被覆盖段内的孤立 tool 配对由 `sanitize_tool_pairs` 兜底清理。
     pub fn project_history(messages: &[Message]) -> Vec<ModelMessage> {
+        // 摘要覆盖的旧消息 timestamp 集合（跨多条 Compaction 合并；解析失败即忽略该条）。
+        let covered: std::collections::HashSet<u128> = messages
+            .iter()
+            .filter_map(|m| match &m.body {
+                MessageBody::Compaction { summary_of, .. } => {
+                    Some(summary_of.iter().filter_map(|s| s.parse::<u128>().ok()))
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect();
         Self::sanitize_tool_pairs(
             &messages
                 .iter()
+                .filter(|m| !covered.contains(&m.timestamp))
                 .filter_map(Self::from_message)
                 .filter(|m| {
                     !(m.role == ModelMessageRole::Assistant
@@ -703,5 +719,45 @@ mod tests {
         let ctx_back = ModelCallInput::from_message(&context).expect("role context refills");
         assert_eq!(ctx_back.role, ModelMessageRole::User);
         assert_eq!(ctx_back.content, "[当前角色]\nctx");
+    }
+
+    #[test]
+    fn project_history_skips_summarized_old_messages() {
+        // 旧消息（被摘要覆盖）+ Compaction 摘要 + 最近消息。
+        let mut messages: Vec<Message> = (1..=6)
+            .map(|i| Message {
+                role: if i % 2 == 0 {
+                    MessageRole::Assistant
+                } else {
+                    MessageRole::User
+                },
+                body: MessageBody::Text {
+                    content: format!("old message {i}"),
+                    reasoning: None,
+                    tool_calls: None,
+                },
+                timestamp: i,
+                neuron_id: None,
+            })
+            .collect();
+        // 模拟 Compactor 落库形态：摘要插入头部，summary_of = 被覆盖旧消息 timestamps。
+        messages.insert(
+            0,
+            Message {
+                role: MessageRole::Compaction,
+                body: MessageBody::Compaction {
+                    summary_of: vec!["1".into(), "2".into(), "3".into()],
+                    content: "compressed summary".into(),
+                },
+                timestamp: 0,
+                neuron_id: None,
+            },
+        );
+        let projected = ModelCallInput::project_history(&messages);
+        assert_eq!(projected.len(), 4, "摘要 1 条 + 未覆盖旧消息 3 条");
+        assert_eq!(projected[0].role, ModelMessageRole::System);
+        assert!(projected[0].content.contains("compressed summary"));
+        assert!(projected[1..].iter().all(|m| !m.content.starts_with("old message 1")));
+        assert!(projected[1..].iter().any(|m| m.content.contains("old message 6")));
     }
 }

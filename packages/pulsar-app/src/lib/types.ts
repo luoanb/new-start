@@ -342,6 +342,55 @@ export type LogEntry = {
   fields?: Record<string, string>;
 };
 
+// ── Hook Judgements（裁决记录，与后端 hook_judgement_store.rs serde 一致）──
+
+/** 裁决终态（后端 JudgementStatus 序列化同构；pending 为过程态）。 */
+export type HookJudgementStatus = "pending" | "ok" | "retried_ok" | "downgraded";
+
+export type HookJudgementRecord = {
+  id: string;
+  session_id?: string | null;
+  conversation_id: string;
+  /** 锚点消息索引（消息列表裁决卡挂载位置）；未绑定消息为 null。 */
+  anchor_message_index?: number | null;
+  /** system_type（如 `assistant_complete_scope`）。 */
+  hook_type: string;
+  status: HookJudgementStatus;
+  /** 尝试次数（1 或 2）。 */
+  attempts: number;
+  /** 每轮尝试明细（JSON 数组字符串：`[{attempt, raw, error}]`）。 */
+  attempts_detail: string;
+  /** 用户侧裁决输入（JSON 字符串）。 */
+  payload: string;
+  /** 最终轮模型原始输出（全文）。 */
+  raw_response: string;
+  /** 解析出的 JSON 决策（成功时；降级时为空串）。 */
+  decision?: string | null;
+  /** 失败/降级原因摘要。 */
+  error?: string | null;
+  /** 总耗时（含重试），毫秒。 */
+  duration_ms: number;
+  model_provider?: string | null;
+  model_id?: string | null;
+  created_at: number;
+  updated_at: number;
+};
+
+/** `hook_judgements_list` 过滤入参（后端 HookJudgementFilter camelCase 同构）。 */
+export type HookJudgementFilter = {
+  hookType?: string;
+  status?: string;
+  conversationId?: string;
+  limit?: number;
+  offset?: number;
+};
+
+/** `hook_defs_list` 出参：hook 元信息（面板过滤下拉数据源）。 */
+export type HookDefMeta = {
+  system_type: string;
+  label: string;
+};
+
 // ── Running Sessions ──
 
 export type RunningSession = {

@@ -12,6 +12,8 @@ use crate::core::{
     config::{server_env_overrides, ConfigStore, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT},
     conversation_store::ConversationStore,
     error::AppErrorPayload,
+    hook::hook_defs_meta,
+    hook_judgement_store::{HookJudgementFilter, HookJudgementRecord, HookJudgementStore},
     insert_catalog::{InsertCatalog, InsertInfo},
     neuron_manager::NeuronManager,
     poller::Poller,
@@ -468,6 +470,24 @@ async fn resume_topic(
 ) -> TauriResult<Topic> {
     // 课题变更事件由 TopicStore 写操作统一广播。
     with_topic_store(&topic_store, |store| store.resume(&id))
+}
+
+// ── Hook Judgements ──
+
+/// 裁决记录列表（时间线倒序）。空过滤 = 全量；面板与消息卡锚点查询共用。
+#[tauri::command]
+async fn hook_judgements_list(
+    hook_judgement_store: State<'_, Arc<StdMutex<HookJudgementStore>>>,
+    filters: Option<HookJudgementFilter>,
+) -> TauriResult<Vec<HookJudgementRecord>> {
+    let filter = filters.unwrap_or_default();
+    with_hook_judgement_store(&hook_judgement_store, |store| store.list(&filter))
+}
+
+/// Hook 元信息表（`HOOK_DEFS` 静态表出参：面板过滤下拉的数据源）。
+#[tauri::command]
+fn hook_defs_list() -> Vec<crate::core::hook::HookDefMeta> {
+    hook_defs_meta()
 }
 
 // ── Poller ──
@@ -1615,6 +1635,16 @@ fn with_topic_store<T>(
     action(&store).map_err(|error| error.payload())
 }
 
+fn with_hook_judgement_store<T>(
+    hook_judgement_store: &Arc<StdMutex<HookJudgementStore>>,
+    action: impl FnOnce(&HookJudgementStore) -> crate::core::AppResult<T>,
+) -> TauriResult<T> {
+    let store = hook_judgement_store.lock().map_err(|_| {
+        crate::core::AppError::RuntimeError("HookJudgementStore lock failed".into()).payload()
+    })?;
+    action(&store).map_err(|error| error.payload())
+}
+
 fn with_poller<T>(
     poller: &Arc<StdMutex<Poller>>,
     action: impl FnOnce(&mut Poller) -> crate::core::AppResult<T>,
@@ -1724,6 +1754,7 @@ pub fn run() {
 
             app.manage(runtime.neuron_manager.clone());
             app.manage(runtime.topic_store.clone());
+            app.manage(runtime.hook_judgement_store.clone());
             app.manage(runtime.assistant.clone());
             app.manage(runtime.poller.clone());
             app.manage(runtime.sessions.clone());
@@ -1838,6 +1869,9 @@ pub fn run() {
             complete_topic_scope_item,
             pause_topic,
             resume_topic,
+            // Hook Judgements
+            hook_judgements_list,
+            hook_defs_list,
             // Poller
             poll_status,
             poll_pause,

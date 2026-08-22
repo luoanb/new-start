@@ -6,7 +6,8 @@ use super::{
         ThinkingCapability, ThinkingConfig, ThinkingEffort,
     },
     openai_compat::{
-        self, ChatMessage, ChatRequest, FunctionCallWire, FunctionDef, ToolCallWire, ToolDef,
+        self, ChatMessage, ChatRequest, FunctionCallWire, FunctionDef, ResponseFormatSpec,
+        ToolCallWire, ToolDef,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -285,6 +286,34 @@ impl ProviderRegistry {
         self.require_model_definition(&provider, file_config.providers.get(provider_id), model_id)
     }
 
+    /// 查询模型声明能力（能力探测：裁决 hook 的 `response_format` 降级链依据）。
+    /// 未登记模型（allow_unlisted_models）或查询失败返回 None。
+    pub fn model_capabilities(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+    ) -> Option<ModelCapabilities> {
+        let provider = self.require_provider(provider_id).ok()?;
+        let file_config = self.read_config().ok();
+        let provider_config = file_config.as_ref().and_then(|c| c.providers.get(provider_id));
+        configured_models(&provider, provider_config)
+            .into_iter()
+            .find(|m| m.id == model_id)
+            .map(|m| m.capabilities)
+    }
+
+    /// 查询模型声明的 context_window（token）；未登记 / 未声明返回 None。
+    /// 压缩 hook（IP-2）用它推导阈值；未知窗口由调用方回落默认。
+    pub fn model_context_window(&self, provider_id: &str, model_id: &str) -> Option<u32> {
+        let provider = self.require_provider(provider_id).ok()?;
+        let file_config = self.read_config().ok();
+        let provider_config = file_config.as_ref().and_then(|c| c.providers.get(provider_id));
+        configured_models(&provider, provider_config)
+            .into_iter()
+            .find(|m| m.id == model_id)
+            .and_then(|m| m.context_window)
+    }
+
     /// 读取模型定义级默认采样参数 + 思考能力（providers 抹平的底层默认）。
     /// 允许未登记模型（allow_unlisted_models）时返回 None 默认。
     fn model_runtime_spec(
@@ -327,6 +356,8 @@ impl ProviderRegistry {
         apply_tools(&mut chat_request, &request.tools);
         // 思考模式：`reasoning_effort`（OpenAI 标准）+ DeepSeek `thinking` 开关 → extra 透传。
         apply_thinking(&mut chat_request, thinking.as_ref());
+        // 结构化输出契约：`response_format` 经 `#[serde(flatten)]` 展平为请求体顶层字段。
+        apply_response_format(&mut chat_request, request.response_format.as_ref());
 
         let response = client.chat(&chat_request).await?;
         self.parse_chat_response(response, &request)
@@ -356,6 +387,8 @@ impl ProviderRegistry {
         apply_sampling(&mut chat_request, &sampling);
         apply_tools(&mut chat_request, &request.tools);
         apply_thinking(&mut chat_request, thinking.as_ref());
+        // 结构化输出契约：`response_format` 经 `#[serde(flatten)]` 展平为请求体顶层字段。
+        apply_response_format(&mut chat_request, request.response_format.as_ref());
 
         let stream = client.chat_stream(&chat_request, on_chunk).await?;
         self.parse_chat_response(stream, &request)
@@ -1050,6 +1083,24 @@ fn apply_thinking(req: &mut ChatRequest, thinking: Option<&ThinkingConfig>) {
     }
 }
 
+/// 结构化输出契约 → extra 透传（与 `apply_thinking` 同级）：`response_format` 经
+/// `#[serde(flatten)]` 展平为请求体顶层字段。wire 形态：
+/// - `JsonSchema` → `{"type":"json_schema","json_schema":{...}}`（schema 为 JSON 对象）
+/// - `JsonObject` → `{"type":"json_object"}`
+fn apply_response_format(req: &mut ChatRequest, format: Option<&ResponseFormatSpec>) {
+    let Some(format) = format else { return };
+    let value = match format {
+        ResponseFormatSpec::JsonSchema(schema) => {
+            // schema 是 `&'static str` 常量；反序列化为对象后注入（服务商要求对象形态）。
+            let json_schema = serde_json::from_str::<serde_json::Value>(schema.as_ref())
+                .unwrap_or_else(|_| serde_json::json!({ "schema": schema.as_ref() }));
+            serde_json::json!({ "type": "json_schema", "json_schema": json_schema })
+        }
+        ResponseFormatSpec::JsonObject => serde_json::json!({ "type": "json_object" }),
+    };
+    req.extra.insert("response_format".to_string(), value);
+}
+
 fn default_providers() -> Vec<ProviderDefinition> {
     vec![
         provider(
@@ -1292,6 +1343,7 @@ mod tests {
             tools: None,
             params: None,
             thinking: None,
+            response_format: None,
         };
 
         let error = registry

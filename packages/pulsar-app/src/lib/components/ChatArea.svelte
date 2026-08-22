@@ -1,10 +1,14 @@
 <script lang="ts">
   import ChatMessage from "./ChatMessage.svelte";
+  import JudgementCard from "./JudgementCard.svelte";
   import ChatInput from "./ChatInput.svelte";
   import type { Message, SamplingParams, ThinkingConfig } from "$lib/types";
+  import type { HookJudgementRecord } from "$lib/types";
   import { t } from "$lib/i18n";
   import { errorMessage } from "$lib/errorMessage";
   import { useViewContext } from "$lib/layout/viewContext";
+  import { api, c } from "$lib/api";
+  import { onDestroy, onMount } from "svelte";
 
   // 视图数据/命令统一来自 ViewContext（容器与内容解耦，无 props）。
   const ctx = useViewContext();
@@ -194,6 +198,67 @@
       setTimeout(() => (ratingError = ""), 3000);
     }
   }
+
+  // ── 锚点定位：面板「在会话中定位」→ 滚动高亮锚点消息 ──
+  // 会话切换后消息异步加载，目标元素可能未就绪；待当前会话匹配且元素存在时执行。
+  $effect(() => {
+    const anchor = ctx.stores.layout.locateAnchor;
+    if (!anchor || anchor.conversationId !== activeConversationId) return;
+    ctx.stores.layout.clearLocate();
+    requestAnimationFrame(() => {
+      const target = containerEl?.querySelector(
+        `[data-message-index="${anchor.messageIndex}"]`,
+      ) as HTMLElement | undefined;
+      if (!target) return;
+      scrollToTopOf(target);
+      target.classList.add("locate-flash");
+      setTimeout(() => target.classList.remove("locate-flash"), 2200);
+    });
+  });
+
+  // ── 消息内联裁决卡：锚点附属渲染块（旁路列表，不插入消息数组）──
+  let judgements = $state<HookJudgementRecord[]>([]);
+  let unlistenJudgements: (() => void) | null = null;
+
+  /** 拉取当前会话的裁决记录（按 conversationId 过滤，后端倒序）。 */
+  async function refreshJudgements() {
+    if (!activeConversationId) {
+      judgements = [];
+      return;
+    }
+    try {
+      const list = await api.call(c.hookJudgementsList, {
+        filters: { conversationId: activeConversationId },
+      });
+      judgements = list;
+    } catch {
+      // 裁决卡为附属展示，拉取失败静默降级（不影响主消息渲染）。
+      judgements = [];
+    }
+  }
+
+  // 会话切换（含首次挂载）时重拉；事件驱动后续实时刷新。
+  $effect(() => {
+    void refreshJudgements();
+  });
+
+  onMount(() => {
+    unlistenJudgements = api.subscribe((payload) => {
+      if (payload.kind === "hook_judgements" && payload.conversation_id === activeConversationId) {
+        void refreshJudgements();
+      }
+    });
+  });
+
+  onDestroy(() => {
+    unlistenJudgements?.();
+    unlistenJudgements = null;
+  });
+
+  /** 某条消息索引关联的裁决记录（同一锚点可能挂载多个 hook 裁决，全量渲染）。 */
+  function judgementsFor(messageIndex: number): HookJudgementRecord[] {
+    return judgements.filter((j) => j.anchor_message_index === messageIndex);
+  }
 </script>
 
 <div class="chat-area">
@@ -222,9 +287,14 @@
               compactTool={mi > 0 && round.messages[mi - 1].body.kind === "tool_result"}
               streaming={ctx.stores.data.state.streamingIndex === round.startIndex + mi}
               canRate={rateable}
+              anchorIndex={round.startIndex + mi}
               onCopy={handleCopy}
               onRate={(score) => handleRate(round.startIndex + mi, score)}
             />
+            {#each judgementsFor(round.startIndex + mi) as record (record.id)}
+              <!-- 裁决卡：锚点消息附属渲染块（旁路列表，不插入消息数组、不影响 message_index） -->
+              <JudgementCard {record} />
+            {/each}
           {/each}
           {#if isRunning && i === rounds.length - 1}
             <div class="loading-indicator">
@@ -281,4 +351,13 @@
   .running-step { font-family: var(--font-mono, monospace); font-size: var(--fs-xs); color: var(--color-primary); opacity: 0.85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .dot-pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--color-primary); animation: pulse 1.2s ease-in-out infinite; }
   @keyframes pulse { 0%, 100% { opacity: 0.3; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.2); } }
+  /* 锚点定位高亮：面板「在会话中定位」滚动后给目标消息短暂描边（ChatArea JS 增删类）。
+     keyframes 在组件作用域内定义，Svelte 编译时统一哈希并替换 :global 内的 animation 引用。 */
+  :global(.message.locate-flash) {
+    animation: locate-flash 2.2s ease;
+  }
+  @keyframes locate-flash {
+    0%, 100% { box-shadow: none; }
+    12%, 48% { box-shadow: 0 0 0 2px var(--color-primary), 0 0 14px var(--color-primary); }
+  }
 </style>

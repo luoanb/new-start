@@ -1,36 +1,46 @@
 //! Assistant 业务接入（独立文件，业务逻辑不进入 Gateway 正文）。
 //!
 //! `AssistantSession` 提供 `converse` / `step` / `step_poller` 入口与轮询调度壳；
-//! `AssistantHooks` 实现 [`RoundHooks`]（注入到 `ConversationRunner` 的单轮生命周期），
-//! 承载课题副作用：干预打分（score_feedback）、课题匹配/创建/切换（match_topic）、
-//! 进度验收（complete_scope）、用户干预标记与轮询计数。
+//! 课题副作用（干预打分 score_feedback、课题匹配/创建/切换 match_topic、进度验收
+//! complete_scope、轮询计数）以注入点 hook 形式注册：
+//! - IP-1 AfterLoadContext：`assistant.round.before`（匹配/切换会话、简报推进、打分）
+//! - IP-5 AfterPersistOutcome：`assistant.round.after`（范围修订、进度验收、计数）
 
 use std::fmt;
 use std::sync::{
     atomic::Ordering,
-    Arc, Mutex, MutexGuard,
+    Arc, Mutex, MutexGuard, Weak,
 };
 
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::{
     conversation_runner::{
-        ConversationRunner, InputRecord, RoundContext, RoundHooks, RoundTriggerKind, StreamDelta,
+        ConversationRunner, InputRecord, RoundContext, RoundTriggerKind, StreamDelta,
     },
     conversation_store::ConversationStore,
     error::{AppError, AppResult},
+    hook::{
+        // 命名约定：`defs::HookDef`（注册单元）与 `hook::HookDef`（裁决规则表）同名不同物，
+        // 注册单元以别名 `HookRegistration` 引用，`HookDef` 保持裁决规则表（既有消费者）。
+        defs::HookDef as HookRegistration,
+        hook_def, AttemptRecord, HookDef, HookHandler, HookRegistry, InjectPointId,
+        JudgementAnchor, JudgementOutcome, JudgementStatus,
+    },
+    hook_judgement_store::{new_hook_judgement_id, HookJudgementStore},
     models::{
-        ChatModelSelection, ChatResponse, EnsureSystemOpts, Message, MessageBody, MessageRole,
-        ScopeInItem, ThinkingConfig, Topic, TopicStatus, TopicUpdate,
+        ChatModelSelection, ChatResponse, ConversationMode, EnsureSystemOpts, Message,
+        MessageBody, MessageRole, ScopeInItem, ThinkingConfig, Topic, TopicStatus, TopicUpdate,
     },
     neuron::model::extract_json_object,
     neuron_manager::NeuronManager,
     neuron_store::NeuronStore,
+    openai_compat::ResponseFormatSpec,
     poller::{Poller, SharedPollParallelism},
     poller_step::{AssistantPollHandler, AssistantStepRequest, ASSISTANT_POLL_TASK},
+    providers::ProviderRegistry,
     round_types::SessionSeed,
     session_tracker::SessionTracker,
     topic_store::TopicStore,
@@ -45,12 +55,45 @@ pub const SYSTEM_TYPE_REVISE_TOPIC: &str = "assistant_revise_topic";
 /// Re-export default interval ticks (overridable via `config.json` → `poller`).
 pub use super::poller::DEFAULT_ASSISTANT_POLL_TICKS;
 
+/// 结构化输出能力级别（裁决 hook 的 `response_format` 降级链：json_schema → json_object → 无约束）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StructuredOutputSupport {
+    JsonSchema,
+    JsonObject,
+    None,
+}
+
+/// 构造 B 重试 payload：在原 payload 基础上追加失败反馈（模型原始输出 + 明确「仅返回 JSON」指令）。
+fn append_judgement_feedback(
+    user_payload: &Value,
+    raw_output: &str,
+    parse_error: &str,
+) -> Value {
+    let mut retry = match user_payload {
+        Value::Object(map) => map.clone(),
+        _ => serde_json::Map::new(),
+    };
+    retry.insert(
+        "_feedback".to_string(),
+        json!({
+            "previous_output": raw_output,
+            "previous_error": parse_error,
+            "instruction": "上一次模型输出未遵循 JSON 格式。请只返回一个 JSON 对象，不要任何散文或额外文字。",
+        }),
+    );
+    Value::Object(retry)
+}
+
 /// Assistant 业务门面：对话 / 手动推进 / 轮询推进 + 轮询调度壳。
 pub struct AssistantSession {
     store: ConversationStore,
     neuron_manager: Arc<NeuronManager>,
     topic_store: Arc<Mutex<TopicStore>>,
     neuron_store: Arc<Mutex<NeuronStore>>,
+    /// 裁决记录账本：`call_judgement` 两阶段落库（insert_start → finish）与锚点事件广播。
+    hook_judgement_store: Arc<Mutex<HookJudgementStore>>,
+    /// 模型能力探测（`response_format` 降级链依据：json_schema → json_object → 无约束）。
+    providers: Arc<ProviderRegistry>,
     /// 单轮编排：读会话 → before hooks → 三段管道 → after hooks → 落库。
     /// 裁决调用（call_judgement）经 `run_raw_round` 与主对话共用同一三段管道。
     runner: ConversationRunner,
@@ -73,6 +116,8 @@ impl AssistantSession {
         neuron_manager: Arc<NeuronManager>,
         topic_store: Arc<Mutex<TopicStore>>,
         neuron_store: Arc<Mutex<NeuronStore>>,
+        hook_judgement_store: Arc<Mutex<HookJudgementStore>>,
+        providers: Arc<ProviderRegistry>,
         runner: ConversationRunner,
         step_tx: UnboundedSender<AssistantStepRequest>,
         session_tracker: SessionTracker,
@@ -83,6 +128,8 @@ impl AssistantSession {
             neuron_manager,
             topic_store,
             neuron_store,
+            hook_judgement_store,
+            providers,
             runner,
             step_tx,
             session_tracker,
@@ -90,38 +137,254 @@ impl AssistantSession {
         }
     }
 
+    /// 装配期注册单轮注入点 hooks（Gateway 创建 `AssistantSession` 后调用）：
+    /// - IP-1 AfterLoadContext：`assistant.round.before`（课题路由 / 简报推进 / 打分）
+    /// - IP-5 AfterPersistOutcome：`assistant.round.after`（范围修订 / 进度验收 / 计数）
+    ///
+    /// 以 `Weak` 捕获自身防循环引用（Gateway → AssistantSession；Runner → HookRegistry →
+    /// Weak），执行期 `upgrade` 后调用；会话已销毁时静默跳过（正常装配下不会发生）。
+    ///
+    /// IP-1 组内顺序敏感：装配方须在注册选型 hook **之前**调用本方法——课题路由
+    /// （可能切换会话 / 计算 reselect）先于选型（resolve 需基于路由后的最终会话）执行。
+    pub fn install_hooks(self: &Arc<Self>, registry: &HookRegistry) -> AppResult<()> {
+        let weak = Arc::downgrade(self);
+        registry
+            .register(HookRegistration {
+                id: "assistant.round.before",
+                label: "课题路由 / 简报推进 / 打分（IP-1）",
+                inject_point: InjectPointId::AfterLoadContext,
+                handler: HookHandler::AfterLoadContext(Box::new(move |ctx| {
+                    let weak = Weak::clone(&weak);
+                    Box::pin(async move {
+                        let Some(assistant) = weak.upgrade() else {
+                            tracing::warn!(
+                                hook_id = "assistant.round.before",
+                                "assistant session dropped; hook skipped"
+                            );
+                            return Ok(());
+                        };
+                        AssistantHooks {
+                            assistant: &assistant,
+                        }
+                        .round_before(ctx)
+                        .await
+                    })
+                })),
+            })
+            .map_err(|e| AppError::RuntimeError(format!("register hook failed: {e}")))?;
+        let weak = Arc::downgrade(self);
+        registry
+            .register(HookRegistration {
+                id: "assistant.round.after",
+                label: "范围修订 / 进度验收 / 计数（IP-5）",
+                inject_point: InjectPointId::AfterPersistOutcome,
+                handler: HookHandler::AfterPersistOutcome(Box::new(move |ctx| {
+                    let weak = Weak::clone(&weak);
+                    Box::pin(async move {
+                        let Some(assistant) = weak.upgrade() else {
+                            tracing::warn!(
+                                hook_id = "assistant.round.after",
+                                "assistant session dropped; hook skipped"
+                            );
+                            return Ok(());
+                        };
+                        AssistantHooks {
+                            assistant: &assistant,
+                        }
+                        .round_after(ctx)
+                        .await
+                    })
+                })),
+            })
+            .map_err(|e| AppError::RuntimeError(format!("register hook failed: {e}")))?;
+        Ok(())
+    }
+
     /// 裁决类系统提示词调用：懒创建系统神经元 → 用 [`ConversationRunner::run_raw_round`]
     /// 跑一轮原始管道（系统类型 seed + 禁工具 + 无会话态）→ 解析 JSON 决策。
     ///
     /// 取代旧 `NeuronManager::call_system_prompt`：裁决语义即单轮管道的一种调用形态，
     /// 模型调用统一收敛到 `run_raw_round` 唯一公共入口，NeuronManager 回归纯管理面。
+    ///
+    /// 纠偏组合（hook 级统一，不按 system_type 特判）：
+    /// - C 结构化输出预防：`def.response_format` 契约经能力探测降级链下发
+    ///   （json_schema → json_object → 无约束，按 `(provider_id, model_id)` 缓存探测结果）。
+    /// - B 有限重试：首轮解析失败 → 带反馈重试 1 次（payload 追加原输出 + 「仅返回 JSON」指令）。
+    /// - A 中性降级：重试仍失败 → 返回 `JudgementOutcome::Downgraded`
+    ///   （`def.neutral_fallback()` 中性决策 + error 摘要 + 耗时），不再 `?` 上抛。
+    ///
+    /// 全链路落库：`insert_start`（pending + 锚点事件）→ `finish`（终态收敛 + 终态事件）。
     async fn call_judgement(
         &self,
-        system_type: &str,
-        user_payload: serde_json::Value,
+        def: &HookDef,
+        anchor: JudgementAnchor,
+        user_payload: Value,
         model: &ChatModelSelection,
         history: &[Message],
-    ) -> AppResult<serde_json::Value> {
+    ) -> AppResult<JudgementOutcome> {
+        let started = std::time::Instant::now();
         tracing::info!(
             phase = "call_judgement",
-            system_type,
+            system_type = def.system_type,
             provider = %model.provider_id,
             model = %model.model_id,
             history = history.len(),
             payload_len = user_payload.to_string().len(),
             "judgement call start"
         );
+        // C 结构化输出预防：能力探测决定实际下发的 response_format（降级链见
+        // `structured_output_support`），探测结果按 (provider_id, model_id) 进程内缓存。
+        let response_format = match self.structured_output_support(model) {
+            StructuredOutputSupport::JsonSchema => def.response_format.clone(),
+            StructuredOutputSupport::JsonObject => Some(ResponseFormatSpec::JsonObject),
+            StructuredOutputSupport::None => None,
+        };
+        let id = new_hook_judgement_id();
+        // 两阶段落库 · 开始：pending + 锚点事件（前端就地渲染「裁决中」卡）。
+        self.hook_judgement_store
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Lock error: {e}")))?
+            .insert_start(
+                &id,
+                &anchor.conversation_id,
+                None, // 裁决调用无会话态；与主对话消息列表无耦合。
+                anchor.anchor_message_index,
+                def.system_type,
+                Some(def.inject_point),
+                &user_payload,
+                Some(&model.provider_id),
+                Some(&model.model_id),
+            )?;
         let spec = self
             .neuron_manager
-            .ensure_system_neuron(system_type, EnsureSystemOpts { reset: false })
+            .ensure_system_neuron(def.system_type, EnsureSystemOpts { reset: false })
             .await?;
+
+        // 首轮：原始管道 + 解析。
+        let mut attempts_detail: Vec<AttemptRecord> = Vec::new();
+        let first = self
+            .run_judgement_round(&spec.id, &user_payload, model, history, response_format.clone())
+            .await;
+        let (status, decision, raw_response, error) = match first {
+            Ok((raw, parsed)) => {
+                attempts_detail.push(AttemptRecord {
+                    attempt: 1,
+                    raw: raw.clone(),
+                    error: None,
+                });
+                (JudgementStatus::Ok, parsed, raw, None)
+            }
+            Err((raw, first_error)) => {
+                attempts_detail.push(AttemptRecord {
+                    attempt: 1,
+                    raw: raw.clone(),
+                    error: Some(first_error.clone()),
+                });
+                // B 有限重试：payload 追加失败反馈（原输出 + 明确「仅返回 JSON」指令）。
+                let retry_payload = append_judgement_feedback(&user_payload, &raw, &first_error);
+                let second = self
+                    .run_judgement_round(
+                        &spec.id,
+                        &retry_payload,
+                        model,
+                        history,
+                        response_format,
+                    )
+                    .await;
+                match second {
+                    Ok((raw2, parsed2)) => {
+                        attempts_detail.push(AttemptRecord {
+                            attempt: 2,
+                            raw: raw2.clone(),
+                            error: None,
+                        });
+                        (JudgementStatus::RetriedOk, parsed2, raw2, None)
+                    }
+                    Err((raw2, second_error)) => {
+                        // A 中性降级：不再上抛，主轮次不中断。
+                        attempts_detail.push(AttemptRecord {
+                            attempt: 2,
+                            raw: raw2.clone(),
+                            error: Some(second_error.clone()),
+                        });
+                        tracing::warn!(
+                            phase = "call_judgement",
+                            system_type = def.system_type,
+                            id = %id,
+                            error = %second_error,
+                            "judgement degraded to neutral fallback"
+                        );
+                        (
+                            JudgementStatus::Downgraded,
+                            (def.neutral_fallback)(),
+                            raw2,
+                            Some(second_error),
+                        )
+                    }
+                }
+            }
+        };
+        let duration_ms = started.elapsed().as_millis() as u64;
+        // 两阶段落库 · 结束：终态收敛（ok / retried_ok / downgraded）+ 终态事件。
+        let attempts_json: Vec<Value> = attempts_detail
+            .iter()
+            .map(|a| {
+                json!({
+                    "attempt": a.attempt,
+                    "raw": a.raw,
+                    "error": a.error,
+                })
+            })
+            .collect();
+        self.hook_judgement_store
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Lock error: {e}")))?
+            .finish(
+                &id,
+                status.as_str(),
+                attempts_detail.len() as i64,
+                &attempts_json,
+                &raw_response,
+                Some(&decision),
+                error.as_deref(),
+                duration_ms,
+            )?;
+        tracing::info!(
+            phase = "call_judgement",
+            system_type = def.system_type,
+            id = %id,
+            status = status.as_str(),
+            attempts = attempts_detail.len(),
+            duration_ms,
+            "judgement call done"
+        );
+        Ok(JudgementOutcome {
+            status,
+            decision,
+            raw_response,
+            attempts_detail,
+            error,
+            duration_ms,
+        })
+    }
+
+    /// 跑一轮裁决原始管道并解析 JSON（供首轮与 B 重试共用）。
+    /// 返回 `Ok((raw, decision))` 或 `Err((raw, parse_error))`（raw 全文保留，供反馈与落库）。
+    async fn run_judgement_round(
+        &self,
+        neuron_id: &str,
+        payload: &Value,
+        model: &ChatModelSelection,
+        history: &[Message],
+        response_format: Option<ResponseFormatSpec>,
+    ) -> Result<(String, Value), (String, String)> {
         let outcome = self
             .runner
             .run_raw_round(
-                Some(SessionSeed::Neuron(spec.id)),
+                Some(SessionSeed::Neuron(neuron_id.to_string())),
                 None,
                 history.to_vec(),
-                &user_payload.to_string(),
+                &payload.to_string(),
                 Some(Vec::new()),
                 // 裁决调用非对话：不注入任何标签工具（禁工具语义保持不变）。
                 Vec::new(),
@@ -132,28 +395,57 @@ impl AssistantSession {
                     enabled: Some(false),
                     effort: None,
                 }),
+                response_format,
             )
-            .await?;
-        let decision = extract_json_object(&outcome.response).map_err(|error| {
-            // 裁决调用要求模型只输出 JSON；解析失败时留痕原始输出（截断），便于定位
-            // 「LLM response missing JSON object」类问题（模型偶发输出散文而非 JSON）。
-            tracing::warn!(
-                phase = "call_judgement",
-                system_type,
-                response_len = outcome.response.len(),
-                response_preview = outcome.response.chars().take(500).collect::<String>(),
-                error = %error,
-                "judgement JSON parse failed; dumping raw model output"
-            );
-            error
-        })?;
-        tracing::info!(
-            phase = "call_judgement",
-            system_type,
-            decision = %decision,
-            "judgement call done"
-        );
-        Ok(decision)
+            .await;
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(error) => return Err((String::new(), error.to_string())),
+        };
+        let raw = outcome.response;
+        match extract_json_object(&raw) {
+            Ok(decision) => Ok((raw, decision)),
+            Err(error) => {
+                // 解析失败留痕原始输出（全文保留在 attempts_detail，不截断），便于定位
+                // 「LLM response missing JSON object」类问题（模型偶发输出散文而非 JSON）。
+                tracing::warn!(
+                    phase = "run_judgement_round",
+                    response_len = raw.len(),
+                    response_preview = raw.chars().take(500).collect::<String>(),
+                    error = %error,
+                    "judgement JSON parse failed; dumping raw model output"
+                );
+                Err((raw, error.to_string()))
+            }
+        }
+    }
+
+    /// 能力探测：按 `(provider_id, model_id)` 进程内缓存结构化输出支持级别。
+    /// 降级链：json_schema → json_object → 无约束（缓存后不再重复探测）。
+    fn structured_output_support(&self, model: &ChatModelSelection) -> StructuredOutputSupport {
+        use std::collections::HashMap;
+        use std::sync::OnceLock;
+        static CACHE: OnceLock<Mutex<HashMap<(String, String), StructuredOutputSupport>>> =
+            OnceLock::new();
+        let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        let key = (model.provider_id.clone(), model.model_id.clone());
+        if let Ok(guard) = cache.lock() {
+            if let Some(level) = guard.get(&key) {
+                return *level;
+            }
+        }
+        let level = match self.providers.model_capabilities(&key.0, &key.1) {
+            // 模型声明支持结构化输出 → 可直接下发 json_schema 契约。
+            Some(caps) if caps.structured_output => StructuredOutputSupport::JsonSchema,
+            // 模型已登记但未声明结构化输出 → 尝试 json_object（多数网关兼容）。
+            Some(_) => StructuredOutputSupport::JsonObject,
+            // 未登记模型 / 查询失败 → 保守无约束（B/A 兜底）。
+            None => StructuredOutputSupport::None,
+        };
+        if let Ok(mut guard) = cache.lock() {
+            guard.insert(key, level);
+        }
+        level
     }
 
     /// 更新轮询并发推进数量（运行时生效），返回实际生效值。
@@ -182,7 +474,6 @@ impl AssistantSession {
             input_len = user_input.len(),
             "converse start"
         );
-        let hooks = AssistantHooks { assistant: self };
         let response = self
             .runner
             .run_round(
@@ -190,7 +481,6 @@ impl AssistantSession {
                 InputRecord::User(user_input.to_string()),
                 None,
                 model,
-                Some(&hooks),
                 None, // 用户聊天窗口发起：保留思考配置（跟随前端勾选）
             )
             .await?;
@@ -220,7 +510,6 @@ impl AssistantSession {
             input_len = user_input.len(),
             "converse stream start"
         );
-        let hooks = AssistantHooks { assistant: self };
         let response = self
             .runner
             .run_round_stream(
@@ -228,7 +517,6 @@ impl AssistantSession {
                 InputRecord::User(user_input.to_string()),
                 None,
                 model,
-                Some(&hooks),
                 None, // 用户聊天窗口发起：保留思考配置（跟随前端勾选）
                 on_delta,
             )
@@ -249,7 +537,6 @@ impl AssistantSession {
         model: &ChatModelSelection,
     ) -> AppResult<ChatResponse> {
         tracing::info!(phase = "assistant_step", session_id, "step start");
-        let hooks = AssistantHooks { assistant: self };
         let response = self
             .runner
             .run_round(
@@ -257,7 +544,6 @@ impl AssistantSession {
                 InputRecord::None,
                 None,
                 model,
-                Some(&hooks),
                 // 手动推进：非对话调用，直接显式关闭深度思考。
                 Some(ThinkingConfig {
                     enabled: Some(false),
@@ -276,14 +562,12 @@ impl AssistantSession {
         model: &ChatModelSelection,
     ) -> AppResult<ChatResponse> {
         tracing::info!(phase = "assistant_poller", session_id, "poller step start");
-        let hooks = AssistantHooks { assistant: self };
         self.runner
             .run_round(
                 session_id,
                 InputRecord::Nudge,
                 None,
                 model,
-                Some(&hooks),
                 // 轮询推进：非对话调用，直接显式关闭深度思考。
                 Some(ThinkingConfig {
                     enabled: Some(false),
@@ -533,13 +817,20 @@ impl AssistantSession {
 }
 
 /// 注入 `ConversationRunner` 的单轮钩子：承载 Assistant 全部课题副作用。
+/// `round_before` 挂 IP-1 AfterLoadContext、`round_after` 挂 IP-5 AfterPersistOutcome
+/// （装配期由 [`AssistantSession::install_hooks`] 注册）。
 struct AssistantHooks<'a> {
     assistant: &'a AssistantSession,
 }
 
-#[async_trait]
-impl RoundHooks for AssistantHooks<'_> {
-    async fn before_round(&self, ctx: &mut RoundContext) -> AppResult<()> {
+impl AssistantHooks<'_> {
+    /// IP-1 AfterLoadContext：`assistant.round.before`。课题路由与简报推进。
+    async fn round_before(&self, ctx: &mut RoundContext) -> AppResult<()> {
+        // 业务层语义：课题副作用仅 Assistant/System 模式承载（Chat 直连 / Agent 循环不参与）。
+        // 旧实现由调用方按模式决定是否装配 hooks；hook 全局注册后在此还原该边界。
+        if !matches!(ctx.mode, ConversationMode::Assistant | ConversationMode::System) {
+            return Ok(());
+        }
         // 会话可能已绑定课题（第二轮起的 User 输入 / 手动 / 轮询推进）。
         self.resolve_bound_topic(ctx)?;
         match ctx.trigger {
@@ -559,7 +850,12 @@ impl RoundHooks for AssistantHooks<'_> {
         Ok(())
     }
 
-    async fn after_round(&self, ctx: &mut RoundContext) -> AppResult<()> {
+    /// IP-5 AfterPersistOutcome：`assistant.round.after`。产物已落库，只读整轮上下文。
+    async fn round_after(&self, ctx: &RoundContext) -> AppResult<()> {
+        // 与 round_before 同一模式边界：课题副作用仅 Assistant/System 模式承载。
+        if !matches!(ctx.mode, ConversationMode::Assistant | ConversationMode::System) {
+            return Ok(());
+        }
         // 先改内容再验收：revise_topic（范围修订）先于 complete_scope（进度验收）执行，
         // 新加/修订项本轮即可参与验收勾选。
         let revised = self.revise_topic(ctx).await;
@@ -732,10 +1028,18 @@ impl AssistantHooks<'_> {
         );
         // 同源：用本轮主对话同一模型（用户所选），不读配置默认。
         let model = &ctx.model;
-        let decision = match self
+        let def = hook_def(SYSTEM_TYPE_SCORE_FEEDBACK).expect("known hook");
+        // before hook：用户消息尚未落库，锚点 = 当前消息列表末尾（用户消息即将落库的位置）。
+        let anchor = JudgementAnchor {
+            conversation_id: session_id.clone(),
+            anchor_message_index: Some(ctx.messages.len() as i64),
+        };
+        // 统一入口接管纠偏（A/B/C）；降级态（score=0）由下方按终态跳过打分。
+        let outcome = self
             .assistant
             .call_judgement(
-                SYSTEM_TYPE_SCORE_FEEDBACK,
+                def,
+                anchor,
                 json!({
                     "user_input": ctx.model_input,
                     "topic_id": topic_id,
@@ -744,22 +1048,19 @@ impl AssistantHooks<'_> {
                 &model,
                 &ctx.messages,
             )
-            .await
-        {
-            Ok(decision) => decision,
-            Err(e) => {
-                // 程序强制规范兜底：模型未返回合法 JSON 时，跳过打分，
-                // 不让评分副作用阻断主对话（见 assistant.score_feedback.md）。
-                tracing::warn!(
-                    phase = "score_feedback_hook",
-                    topic_id = %topic_id,
-                    error = %e,
-                    "json parse failed; skip scoring instead of failing the round"
-                );
-                return Ok(());
-            }
-        };
-        let score = decision
+            .await?;
+        if outcome.status == JudgementStatus::Downgraded {
+            // A 降级兜底：中性占位（score=0），跳过打分，不让评分副作用阻断主对话。
+            tracing::warn!(
+                phase = "score_feedback_hook",
+                topic_id = %topic_id,
+                error = ?outcome.error,
+                "judgement degraded; skip scoring"
+            );
+            return Ok(());
+        }
+        let score = outcome
+            .decision
             .get("score")
             .and_then(|v| v.as_i64())
             .ok_or_else(|| AppError::InvalidInput("score feedback missing score".into()))?;
@@ -785,10 +1086,17 @@ impl AssistantHooks<'_> {
             session_id = %ctx.session_id,
             "calling match-topic model"
         );
-        let decision = self
+        let def = hook_def(SYSTEM_TYPE_MATCH_TOPIC).expect("known hook");
+        // before hook：用户消息尚未落库，锚点 = 当前消息列表末尾（用户消息即将落库的位置）。
+        let anchor = JudgementAnchor {
+            conversation_id: ctx.session_id.clone(),
+            anchor_message_index: Some(ctx.messages.len() as i64),
+        };
+        let outcome = self
             .assistant
             .call_judgement(
-                SYSTEM_TYPE_MATCH_TOPIC,
+                def,
+                anchor,
                 json!({
                     "user_input": ctx.model_input,
                     "current_session_id": ctx.session_id,
@@ -806,6 +1114,7 @@ impl AssistantHooks<'_> {
                 &ctx.messages,
             )
             .await?;
+        let decision = &outcome.decision;
 
         let action = decision
             .get("action")
@@ -824,7 +1133,7 @@ impl AssistantHooks<'_> {
                     Some(topic) => topic,
                     None => {
                         let created = self
-                            .create_bound_topic_from_decision(ctx, &decision, true)
+                            .create_bound_topic_from_decision(ctx, decision, true)
                             .or_else(|error| {
                                 tracing::warn!(
                                     phase = "match_topic_hook",
@@ -871,9 +1180,13 @@ impl AssistantHooks<'_> {
                     ctx.topic_id = Some(bound.id);
                 }
             }
+            "none" => {
+                // 中性语义（A 降级兜底 action=none）：不创建、不切换，保持当前绑定。
+                tracing::info!(phase = "match_topic_hook", "match decision: none (no-op)");
+            }
             _ => {
                 if ctx.topic_id.is_none() {
-                    let created = self.create_bound_topic_from_decision(ctx, &decision, false)?;
+                    let created = self.create_bound_topic_from_decision(ctx, decision, false)?;
                     tracing::info!(
                         phase = "match_topic_hook",
                         topic_id = %created.id,
@@ -892,7 +1205,7 @@ impl AssistantHooks<'_> {
     /// - 与 `complete_scope` 平行（在其之前执行）：先改内容再验收，新加项本轮即可参与勾选。
     /// - 触发类型门禁：`completed` 项仅 User 轮允许 edit/remove；ManualStep / Poller 一律跳过（记 skipped_ids）。
     /// - 空 diff 无副作用（不写留痕）；reason 缺失时用占位「（无 reason）」。
-    async fn revise_topic(&self, ctx: &mut RoundContext) -> AppResult<()> {
+    async fn revise_topic(&self, ctx: &RoundContext) -> AppResult<()> {
         let Some(topic_id) = ctx.topic_id.clone() else {
             tracing::info!(phase = "revise_topic_hook", "skip: no topic");
             return Ok(());
@@ -950,10 +1263,17 @@ impl AssistantHooks<'_> {
         );
         // 同源：用本轮主对话同一模型（用户所选），不读配置默认。
         let model = &ctx.model;
-        let decision = self
+        let def = hook_def(SYSTEM_TYPE_REVISE_TOPIC).expect("known hook");
+        // after hook：用户消息已落库，锚点 = 触发轮用户消息在列表中的位置（本轮输入为末尾一条）。
+        let anchor = JudgementAnchor {
+            conversation_id: ctx.session_id.clone(),
+            anchor_message_index: Some(ctx.messages.len().saturating_sub(1) as i64),
+        };
+        let outcome = self
             .assistant
             .call_judgement(
-                SYSTEM_TYPE_REVISE_TOPIC,
+                def,
+                anchor,
                 json!({
                     "topic_id": topic_id,
                     "scope_in": topic.scope_in,
@@ -966,6 +1286,7 @@ impl AssistantHooks<'_> {
                 &ctx.messages,
             )
             .await?;
+        let decision = &outcome.decision;
         let reason = decision
             .get("reason")
             .and_then(|v| v.as_str())
@@ -1051,7 +1372,7 @@ impl AssistantHooks<'_> {
     }
 
     /// 进度验收：scope_in 非空时调用模型裁决已完成项并落库（失败仅记录，不阻断）。
-    async fn complete_scope(&self, ctx: &mut RoundContext) -> AppResult<()> {
+    async fn complete_scope(&self, ctx: &RoundContext) -> AppResult<()> {
         let Some(topic_id) = ctx.topic_id.clone() else {
             tracing::info!(phase = "complete_scope_hook", "skip: no topic");
             return Ok(());
@@ -1117,10 +1438,17 @@ impl AssistantHooks<'_> {
         );
         // 同源：用本轮主对话同一模型（用户所选），不读配置默认。
         let model = &ctx.model;
-        let decision = self
+        let def = hook_def(SYSTEM_TYPE_COMPLETE_SCOPE).expect("known hook");
+        // after hook：用户消息已落库，锚点 = 触发轮用户消息在列表中的位置（本轮输入为末尾一条）。
+        let anchor = JudgementAnchor {
+            conversation_id: ctx.session_id.clone(),
+            anchor_message_index: Some(ctx.messages.len().saturating_sub(1) as i64),
+        };
+        let outcome = self
             .assistant
             .call_judgement(
-                SYSTEM_TYPE_COMPLETE_SCOPE,
+                def,
+                anchor,
                 json!({
                     "topic_id": topic_id,
                     "scope_in": topic.scope_in,
@@ -1132,6 +1460,7 @@ impl AssistantHooks<'_> {
                 &ctx.messages,
             )
             .await?;
+        let decision = &outcome.decision;
         let ids = decision
             .get("completed_item_ids")
             .and_then(|v| v.as_array())
@@ -1606,6 +1935,8 @@ fn interval_neuron_ids(messages: &[Message], anchor_index: usize) -> Vec<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+    // `#[async_trait]` 仅测试 harness 使用（MockNeuronSelector / SequenceModelCaller）。
+    use async_trait::async_trait;
 
     fn state() -> AssistantTopicState {
         AssistantTopicState::default()
@@ -1995,5 +2326,338 @@ mod tests {
         let plan = parse_scope_revision(&decision, &status_of, true);
         assert!(plan.remove_item_ids.is_empty());
         assert!(plan.update_items.is_empty());
+    }
+
+    // ── Step 3 验收：call_judgement 纠偏状态机 ─────────────────────────
+    // 覆盖：解析失败重试 1 次成功 → retried_ok；重试仍失败 → downgraded + 主轮次不报错；
+    // 能力探测降级链（json_schema → json_object → 无约束）。
+
+    use std::collections::VecDeque;
+    use std::sync::{atomic::AtomicUsize, RwLock};
+
+    use rusqlite::Connection as SqliteConnection;
+
+    use crate::core::{
+        hook_judgement_store::HookJudgementFilter,
+        models::{ModelCallRequest, ModelCallResponse, ModelMessage, NeuronCreate},
+        neuron_config::NeuronConfigReader,
+        neuron_model::NeuronModelCaller,
+        poller::new_shared_poll_parallelism,
+        round_executor::{ModelCaller, RoundExecutor},
+        round_resolver::RoundResolver,
+        session_coordinator::SessionCoordinator,
+        tool_registry::ToolRegistry,
+    };
+
+    /// 神经元创建/选型模型替身（NeuronModelCaller）：创建调用返回 draft 数组；
+    /// 选型调用返回固定 neuron_id（裁决路径不触发选型，仅保底）。
+    struct MockNeuronSelector {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl NeuronModelCaller for MockNeuronSelector {
+        async fn call_model(&self, messages: Vec<ModelMessage>) -> AppResult<String> {
+            let call = self.calls.fetch_add(1, Ordering::Relaxed);
+            let blob = messages
+                .iter()
+                .map(|m| m.content.as_str())
+                .collect::<String>();
+            if blob.contains(r#""id":"#) {
+                return Ok(format!(r#"{{"neuron_id":"n-{call}"}}"#));
+            }
+            let count = blob
+                .split("exactly ")
+                .nth(1)
+                .and_then(|rest| rest.split_whitespace().next())
+                .and_then(|token| token.trim_matches(|c: char| !c.is_ascii_digit()).parse().ok())
+                .unwrap_or(1usize);
+            let items: Vec<String> = (0..count)
+                .map(|i| {
+                    format!(
+                        r#"{{"desc":"auto-{call}-{i}","content":"auto-{call}-{i}","weight":1.0,"tool_ids":[]}}"#
+                    )
+                })
+                .collect();
+            Ok(format!("[{}]", items.join(",")))
+        }
+    }
+
+    /// 主模型替身：按预置序列逐次出队响应（模拟「首轮散文 → 重试 JSON」等场景）。
+    struct SequenceModelCaller {
+        responses: Mutex<VecDeque<String>>,
+    }
+
+    #[async_trait]
+    impl ModelCaller for SequenceModelCaller {
+        async fn call_model(&self, _request: ModelCallRequest) -> AppResult<ModelCallResponse> {
+            let output = self
+                .responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| r#"{}"#.into());
+            Ok(ModelCallResponse {
+                provider_id: "openai".into(),
+                model_id: "gpt-4o".into(),
+                output,
+                tool_calls: None,
+                finish_reason: "stop".into(),
+                reasoning: None,
+            })
+        }
+    }
+
+    struct JudgementHarness {
+        root: std::path::PathBuf,
+        assistant: Arc<AssistantSession>,
+        caller: Arc<SequenceModelCaller>,
+        store: Arc<Mutex<HookJudgementStore>>,
+    }
+
+    impl Drop for JudgementHarness {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    /// 构造完整 AssistantSession：in-memory 存储 + mock 主模型 + 预创建裁决系统神经元
+    /// （ensure_system_neuron 幂等命中，不走创建模型调用）。`providers_config` 为
+    /// config.json 的 `providers` 段（能力探测降级链测试用）。
+    fn judgement_harness(providers_config: &str) -> JudgementHarness {
+        let root = std::env::temp_dir().join(format!(
+            "pulsar-judgement-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let config = format!(
+            r#"{{"neurons":{{"bootstrap":{{"create_neuron_prompt":"create a neuron"}}}},"providers":{providers_config}}}"#
+        );
+        std::fs::write(root.join("config.json"), config).unwrap();
+
+        let conn = Arc::new(Mutex::new(SqliteConnection::open_in_memory().unwrap()));
+        let neuron_store = Arc::new(Mutex::new(NeuronStore::new(conn.clone())));
+        neuron_store.lock().unwrap().init_table().unwrap();
+        let topic_store = Arc::new(Mutex::new(TopicStore::new(conn.clone(), None)));
+        topic_store.lock().unwrap().init_table().unwrap();
+        let hook_store = Arc::new(Mutex::new(HookJudgementStore::new(conn.clone(), None)));
+        hook_store.lock().unwrap().init_table().unwrap();
+        let conversation_store = ConversationStore::new(root.clone()).unwrap();
+
+        let tool_registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let manager = Arc::new(NeuronManager::new(
+            Arc::clone(&neuron_store),
+            Arc::new(MockNeuronSelector {
+                calls: Arc::new(AtomicUsize::new(0)),
+            }),
+            NeuronConfigReader::new(root.clone()),
+            Arc::clone(&tool_registry),
+        ));
+        // 预创建 4 个裁决系统神经元（behavior 为空，ensure 命中时自动 backfill 默认）。
+        for system_type in [
+            SYSTEM_TYPE_COMPLETE_SCOPE,
+            SYSTEM_TYPE_MATCH_TOPIC,
+            SYSTEM_TYPE_REVISE_TOPIC,
+            SYSTEM_TYPE_SCORE_FEEDBACK,
+        ] {
+            manager
+                .create_plain(
+                    NeuronCreate {
+                        desc: system_type.into(),
+                        content: format!("{system_type} content"),
+                        weight: 0.0,
+                        system_type: Some(system_type.into()),
+                        tool_ids: vec![],
+                        ..Default::default()
+                    },
+                    None,
+                )
+                .unwrap();
+        }
+
+        let resolver = Arc::new(RoundResolver::new(Arc::clone(&manager)));
+        let caller = Arc::new(SequenceModelCaller {
+            responses: Mutex::new(VecDeque::new()),
+        });
+        let executor = Arc::new(RoundExecutor::new(
+            Arc::clone(&caller) as Arc<dyn ModelCaller>,
+            Arc::clone(&tool_registry),
+        ));
+        let runner = ConversationRunner::new(
+            conversation_store.clone(),
+            resolver,
+            executor,
+            Arc::new(SessionCoordinator::new()),
+        );
+        let (step_tx, _step_rx) = tokio::sync::mpsc::unbounded_channel::<AssistantStepRequest>();
+        let assistant = Arc::new(AssistantSession::new(
+            conversation_store,
+            Arc::clone(&manager),
+            topic_store,
+            neuron_store,
+            Arc::clone(&hook_store),
+            Arc::new(ProviderRegistry::new(root.clone())),
+            runner,
+            step_tx,
+            SessionTracker::new(),
+            new_shared_poll_parallelism(1),
+        ));
+        JudgementHarness {
+            root,
+            assistant,
+            caller,
+            store: hook_store,
+        }
+    }
+
+    fn judgement_model(model_id: &str) -> ChatModelSelection {
+        ChatModelSelection::new("openai", model_id)
+    }
+
+    fn complete_scope_anchor() -> JudgementAnchor {
+        JudgementAnchor {
+            conversation_id: "conv_judge_1".into(),
+            anchor_message_index: Some(2),
+        }
+    }
+
+    #[tokio::test]
+    async fn judgement_retry_succeeds_marks_retried_ok() {
+        let h = judgement_harness(
+            r#"{"openai":{"models":[{"id":"gpt-4o","capabilities":{"chat":true,"tools":true,"streaming":true,"structured_output":true}}]}}"#,
+        );
+        let def = hook_def(SYSTEM_TYPE_COMPLETE_SCOPE).expect("known hook");
+        // 首轮散文（无 JSON）→ 重试轮合法 JSON。
+        h.caller.responses.lock().unwrap().extend([
+            "Sorry, I cannot output JSON here.".to_string(),
+            r#"{"completed_item_ids":["s1"],"reason":"done"}"#.to_string(),
+        ]);
+        let outcome = h
+            .assistant
+            .call_judgement(
+                def,
+                complete_scope_anchor(),
+                serde_json::json!({"topic_id": "t1"}),
+                &judgement_model("gpt-4o"),
+                &[],
+            )
+            .await
+            .expect("重试成功后不应上抛");
+        assert_eq!(outcome.status, JudgementStatus::RetriedOk);
+        assert_eq!(outcome.attempts_detail.len(), 2, "首轮+重试全量留痕");
+        assert!(outcome.attempts_detail[0].error.is_some(), "首轮应留痕解析错误");
+        assert!(outcome.attempts_detail[1].error.is_none(), "重试轮应成功");
+        assert_eq!(outcome.decision["completed_item_ids"][0], "s1");
+        // 两阶段落库：终态收敛 retried_ok + attempts=2。
+        let records = h
+            .store
+            .lock()
+            .unwrap()
+            .list(&HookJudgementFilter {
+                hook_type: None,
+                status: None,
+                conversation_id: Some("conv_judge_1".into()),
+                limit: None,
+                offset: None,
+            })
+            .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, "retried_ok");
+        assert_eq!(records[0].attempts, 2);
+    }
+
+    #[tokio::test]
+    async fn judgement_both_attempts_fail_downgraded() {
+        let h = judgement_harness(
+            r#"{"openai":{"models":[{"id":"gpt-4o","capabilities":{"chat":true,"tools":true,"streaming":true,"structured_output":true}}]}}"#,
+        );
+        let def = hook_def(SYSTEM_TYPE_COMPLETE_SCOPE).expect("known hook");
+        // 两次都返回散文 → A 中性降级，主轮次不报错。
+        h.caller.responses.lock().unwrap().extend([
+            "散文输出，没有 JSON。".to_string(),
+            "again, still no json here".to_string(),
+        ]);
+        let outcome = h
+            .assistant
+            .call_judgement(
+                def,
+                complete_scope_anchor(),
+                serde_json::json!({"topic_id": "t1"}),
+                &judgement_model("gpt-4o"),
+                &[],
+            )
+            .await
+            .expect("降级不应上抛（主轮次不中断）");
+        assert_eq!(outcome.status, JudgementStatus::Downgraded);
+        assert!(outcome.error.is_some(), "降级应带错误摘要");
+        assert_eq!(outcome.attempts_detail.len(), 2);
+        assert_eq!(outcome.decision, (def.neutral_fallback)(), "降级决策 = 中性兜底值");
+        let records = h
+            .store
+            .lock()
+            .unwrap()
+            .list(&HookJudgementFilter {
+                hook_type: None,
+                status: None,
+                conversation_id: Some("conv_judge_1".into()),
+                limit: None,
+                offset: None,
+            })
+            .unwrap();
+        assert_eq!(records[0].status, "downgraded");
+    }
+
+    #[tokio::test]
+    async fn judgement_first_attempt_succeeds_ok() {
+        let h = judgement_harness(
+            r#"{"openai":{"models":[{"id":"gpt-4o","capabilities":{"chat":true,"tools":true,"streaming":true,"structured_output":true}}]}}"#,
+        );
+        let def = hook_def(SYSTEM_TYPE_COMPLETE_SCOPE).expect("known hook");
+        h.caller.responses.lock().unwrap().extend([
+            r#"{"completed_item_ids":["s1"],"reason":"once"}"#.to_string(),
+        ]);
+        let outcome = h
+            .assistant
+            .call_judgement(
+                def,
+                complete_scope_anchor(),
+                serde_json::json!({"topic_id": "t1"}),
+                &judgement_model("gpt-4o"),
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome.status, JudgementStatus::Ok);
+        assert_eq!(outcome.attempts_detail.len(), 1, "一次成功不应重试");
+    }
+
+    #[test]
+    fn structured_output_support_follows_downgrade_chain() {
+        // 能力探测降级链：声明 structured_output → JsonSchema；已登记未声明 → JsonObject；
+        // 未登记模型 → 无约束（B/A 兜底）。
+        let h = judgement_harness(
+            r#"{"openai":{"models":[
+                {"id":"gpt-4o-cap","capabilities":{"chat":true,"tools":true,"streaming":true,"structured_output":true}},
+                {"id":"gpt-4o-plain","capabilities":{"chat":true,"tools":true,"streaming":true}}
+            ]}}"#,
+        );
+        assert_eq!(
+            h.assistant
+                .structured_output_support(&judgement_model("gpt-4o-cap")),
+            StructuredOutputSupport::JsonSchema
+        );
+        assert_eq!(
+            h.assistant
+                .structured_output_support(&judgement_model("gpt-4o-plain")),
+            StructuredOutputSupport::JsonObject
+        );
+        assert_eq!(
+            h.assistant
+                .structured_output_support(&judgement_model("ghost-unknown")),
+            StructuredOutputSupport::None
+        );
     }
 }

@@ -9,7 +9,7 @@ use super::{
     assistant_session::AssistantSession,
     chat_session::ChatSession,
     cmd_exec::ExecuteCommandTool,
-    conversation_runner::{ConversationRunner, StreamDelta},
+    conversation_runner::{write_session_state, ConversationRunner, StreamDelta},
     compactor::Compactor,
     conversation_store::{now_ms, ConversationStore},
     current_time::GetCurrentTimeTool,
@@ -39,6 +39,8 @@ use super::{
     },
     tool_registry::ToolRegistry,
     topic_store::TopicStore,
+    hook_judgement_store::HookJudgementStore,
+    hook::defs::{HookDef, HookHandler, HookRegistry, InjectPointId},
     CompactionConfig,
 };
 
@@ -76,6 +78,8 @@ pub struct Gateway {
     tool_registry: Arc<RwLock<ToolRegistry>>,
     topic_store: Option<Arc<Mutex<TopicStore>>>,
     neuron_store: Option<Arc<Mutex<NeuronStore>>>,
+    /// 裁决记录账本（hook_judgements 表）：两阶段写入 + 锚点事件广播。
+    hook_judgement_store: Option<Arc<Mutex<HookJudgementStore>>>,
     neuron_manager: Arc<NeuronManager>,
     /// 业务接入（独立文件，业务逻辑不进入 Gateway 正文）。
     chat: ChatSession,
@@ -186,6 +190,15 @@ impl Gateway {
 
         let neuron_store = Arc::new(Mutex::new(NeuronStore::new(Arc::clone(&conn))));
         neuron_store
+            .lock()
+            .map_err(|e| AppError::StorageError(format!("Lock error: {}", e)))?
+            .init_table()?;
+
+        let hook_judgement_store = Arc::new(Mutex::new(HookJudgementStore::new(
+            Arc::clone(&conn),
+            state_emit.clone(),
+        )));
+        hook_judgement_store
             .lock()
             .map_err(|e| AppError::StorageError(format!("Lock error: {}", e)))?
             .init_table()?;
@@ -326,13 +339,16 @@ impl Gateway {
         ));
 
         // 单轮编排 + 业务接入（各业务独立文件，业务逻辑不进入 Gateway）。
+        // 注入点注册表：核心 5 步之外的调度全部以 hook 挂载（装配期注册，Runner Clone 共享）。
+        let registry = Arc::new(HookRegistry::new());
         // 会话级串行协调器（B 方案）：User 轮抢占 / 非 User 轮遇忙跳过。
         let runner = ConversationRunner::new(
             store.clone(),
-            resolver,
+            Arc::clone(&resolver),
             executor,
             Arc::new(SessionCoordinator::new()),
-        );
+        )
+        .with_hooks(Arc::clone(&registry));
         let chat = ChatSession::new(runner.clone());
         let agent = AgentSession::new(runner.clone(), Arc::clone(&tool_registry));
         let assistant = Arc::new(AssistantSession::new(
@@ -340,11 +356,68 @@ impl Gateway {
             Arc::clone(&neuron_manager),
             Arc::clone(&topic_store),
             Arc::clone(&neuron_store),
+            Arc::clone(&hook_judgement_store),
+            Arc::new(providers.clone()),
             runner.clone(),
             step_tx,
             session_tracker.clone(),
             Arc::clone(&poll_parallelism),
         ));
+        // 课题路由 / 简报推进 / 打分（IP-1）与 范围修订 / 验收 / 计数（IP-5）随装配注册。
+        // IP-1 组内顺序敏感：先课题路由（可能切换会话 / 计算 reselect），再选型。
+        assistant.install_hooks(&registry)?;
+        // 选型 hook（IP-1，上层注册，非核心流程）：resolve + 角色拼接 + 锚点写回。
+        // 注册在课题路由之后——同一注入点组内按注册顺序执行，选型基于路由后的最终会话
+        // （match_topic 可能切换会话触发 reload；advance_brief 计算 reselect 频率）。
+        {
+            let resolver = Arc::clone(&resolver);
+            let store = store.clone();
+            registry
+                .register(HookDef {
+                    id: "assistant.select-neuron",
+                    label: "选型（resolve + 角色拼接 + 锚点写回）",
+                    inject_point: InjectPointId::AfterLoadContext,
+                    handler: HookHandler::AfterLoadContext(Box::new(move |ctx| {
+                        let resolver = Arc::clone(&resolver);
+                        let store = store.clone();
+                        Box::pin(async move {
+                            let old_len = ctx.messages.len();
+                            let (with_role, neuron) = resolver
+                                .resolve(
+                                    ctx.seed.as_ref(),
+                                    ctx.state.last_selected_neuron_id.as_deref(),
+                                    &ctx.messages,
+                                    ctx.reselect,
+                                )
+                                .await?;
+                            tracing::info!(
+                                phase = "select_neuron_hook",
+                                session_id = %ctx.session_id,
+                                selected_neuron_id = ?neuron.as_ref().map(|n| n.id.as_str()),
+                                role_msgs = with_role.len() - old_len,
+                                "resolve done"
+                            );
+                            // 发送前写回锚点（D7）：resolve 已定选中神经元，模型调用前落会话态。
+                            // 选中 → 写回其 id；未选中（直连/选型失败）→ 清空锚点。
+                            let anchor = neuron.as_ref().map(|n| n.id.clone());
+                            if anchor != ctx.state.last_selected_neuron_id {
+                                ctx.state.last_selected_neuron_id = anchor;
+                                write_session_state(&store, &ctx.session_id, &ctx.state)?;
+                            }
+                            ctx.selected_neuron = neuron;
+                            ctx.messages = with_role;
+                            Ok(())
+                        })
+                    })),
+                })
+                .map_err(|e| {
+                    AppError::RuntimeError(format!("register selection hook failed: {e}"))
+                })?;
+        }
+        // 压缩 hook（IP-2，上层注册，非核心流程）：wire 落库后、call_model 前，超阈值自动
+        // 生成摘要替换本次发送（不落库；project_history 跳过 summary_of 覆盖的旧消息）。
+        super::hook::compaction::register(&registry, compactor.clone(), providers.clone())
+            .map_err(|e| AppError::RuntimeError(format!("register compaction hook failed: {e}")))?;
 
         let poller = Arc::new(Mutex::new(Poller::new(
             poller_settings.base_interval_ms,
@@ -385,6 +458,7 @@ impl Gateway {
             tool_registry,
             topic_store: Some(topic_store),
             neuron_store: Some(neuron_store),
+            hook_judgement_store: Some(hook_judgement_store),
             neuron_manager,
             chat,
             agent,
@@ -694,7 +768,7 @@ impl Gateway {
         session_tracker.register(&conversation_id, None)?;
 
         // ConversationMode 路由按 mode 委托各业务 session 文件（业务逻辑不进 Gateway）：
-        // - Assistant → assistant_session.converse（课题 hooks 编排在 AssistantHooks）
+        // - Assistant → assistant_session.converse（课题路由/选型经注入点 hook 编排）
         // - Chat     → chat_session.send（直连，无选型/无工具）
         // - Agent    → agent_session.agent_loop（全工具多轮循环 + 护栏）
         let result = match mode {
@@ -1011,6 +1085,13 @@ impl Gateway {
         self.topic_store
             .clone()
             .ok_or_else(|| AppError::StorageError("TopicStore not initialized".into()))
+    }
+
+    /// Access the HookJudgementStore for commands / AssistantSession.
+    pub fn hook_judgement_store(&self) -> AppResult<Arc<Mutex<HookJudgementStore>>> {
+        self.hook_judgement_store
+            .clone()
+            .ok_or_else(|| AppError::StorageError("HookJudgementStore not initialized".into()))
     }
 
     /// Access the NeuronStore for TUI commands.

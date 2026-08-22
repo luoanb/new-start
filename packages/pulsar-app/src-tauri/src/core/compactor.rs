@@ -110,6 +110,10 @@ impl Compactor {
     /// Execute automatic compaction: summarize old messages and insert a Compaction entry.
     /// Original messages are NOT removed — they are kept in the conversation.
     /// Returns `Ok(true)` if compaction was performed, `Ok(false)` if not needed.
+    ///
+    /// 压缩对模型输入生效的关键在投影层：`ModelCallInput::project_history` 遇 `Compaction`
+    /// 会跳过 `summary_of` 覆盖的旧消息 timestamp（详见 model_call_input.rs），因此插入的
+    /// 摘要真正代表旧消息，模型输入 token 显著下降（不投影旧消息逐条放大）。
     pub async fn ensure_fits(
         &self,
         conversation: &mut Conversation,
@@ -213,6 +217,7 @@ impl Compactor {
                     enabled: Some(false),
                     effort: None,
                 }),
+                response_format: None,
             })
             .await
             .map_err(|e| AppError::CompactionFailed(format!("LLM summary call failed: {e}")))?;

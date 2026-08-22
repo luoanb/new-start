@@ -12,7 +12,8 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 
 use crate::core::{
-    app_log, insert_catalog::InsertCatalog, providers::ProviderConfigView,
+    app_log, hook::hook_defs_meta, hook_judgement_store::HookJudgementFilter,
+    insert_catalog::InsertCatalog, providers::ProviderConfigView,
     tool_config::ToolConfigView,
     AppError, AppResult, ChatOptions, ConversationMode,
     ModelCallRequest, NeuronCreate, NeuronKindFilter, NeuronUpdate, SessionBehavior, SessionSeed,
@@ -88,6 +89,23 @@ fn with_topic<T>(
     f(&guard).map_err(RpcErrorBody::from)
 }
 
+fn with_hook_judgement<T>(
+    state: &NetState,
+    f: impl FnOnce(&crate::core::hook_judgement_store::HookJudgementStore) -> AppResult<T>,
+) -> Result<T, RpcErrorBody> {
+    let store = state
+        .gateway
+        .hook_judgement_store()
+        .map_err(RpcErrorBody::from)?;
+    let guard = store.lock().map_err(|_| {
+        RpcErrorBody {
+            code: "lock_failed".into(),
+            message: "HookJudgementStore lock failed".into(),
+        }
+    })?;
+    f(&guard).map_err(RpcErrorBody::from)
+}
+
 fn with_poller<T>(
     state: &NetState,
     f: impl FnOnce(&mut crate::core::Poller) -> AppResult<T>,
@@ -152,6 +170,12 @@ struct ClearConversationParams {
 #[serde(rename_all = "camelCase")]
 struct TopicListParams {
     status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HookJudgementsListParams {
+    filters: Option<HookJudgementFilter>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -533,6 +557,17 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
             let p: IdParams = from_params(params)?;
             let topic = with_topic(state, |store| store.resume(&p.id))?;
             value(topic)
+        }
+
+        // ── Hook Judgements ──
+        "hook_judgements_list" => {
+            let p: HookJudgementsListParams = from_params(params)?;
+            let filter = p.filters.unwrap_or_default();
+            let records = with_hook_judgement(state, |store| store.list(&filter))?;
+            value(records)
+        }
+        "hook_defs_list" => {
+            value(hook_defs_meta())
         }
 
         // ── Poller ──

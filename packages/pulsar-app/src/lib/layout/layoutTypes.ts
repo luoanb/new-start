@@ -65,7 +65,7 @@ export const DEFAULT_LAYOUT: LayoutState = {
     // v5/v6: topics 曾默认在 panel/topics 位置演变；v7: topics 与 tools 默认归位左侧 sidebar
     // v10: 新增 files（文件管理）默认归位左侧 sidebar（sessions 之后，VSCode 资源管理器语义）
     // v11: 新增 terminal（集成终端面板）默认归位底部 panel（poller/logs 之后，VS Code 底部终端语义）
-    sidebar: { views: ["sessions", "files", "topics", "tools"], activeView: "sessions" },
+    sidebar: { views: ["sessions", "files", "topics", "hook-judgements", "tools"], activeView: "sessions" },
     // v10: providers+models 聚合为单个视图 providers-models（服务商分组 + 模型子项）
     info: { views: ["providers-models", "neurons-list"], activeView: "providers-models" },
     panel: { views: ["poller", "logs", "terminal"], activeView: "poller" },

@@ -18,6 +18,14 @@ const storage: LayoutStorage = new LocalStorageLayoutStorage();
 
 const state = $state<LayoutState>(storage.load() ?? DEFAULT_LAYOUT);
 
+/** 待定位锚点：面板「在会话中定位」请求 → ChatArea 消费后清除。 */
+export type LocateAnchor = {
+  conversationId: string;
+  messageIndex: number;
+};
+
+let locateAnchor = $state<LocateAnchor | null>(null);
+
 function persist() {
   storage.save(state);
 }
@@ -65,6 +73,16 @@ function detachView(viewId: string): void {
 
 export const layoutStore = {
   state,
+  /** 待定位锚点（响应式）：非空时 ChatArea 应滚动高亮该会话的锚点消息。 */
+  locateAnchor,
+
+  /** 请求定位：跳到指定会话并滚动高亮锚点消息（ChatArea 消费后自动清除）。 */
+  requestLocate(conversationId: string, messageIndex: number) {
+    locateAnchor = { conversationId, messageIndex };
+  },
+  clearLocate() {
+    locateAnchor = null;
+  },
 
   /** 拖动结束后手动持久化（拖动中 setXxx(persistNow=false) 避免高频写入） */
   persistNow: persist,

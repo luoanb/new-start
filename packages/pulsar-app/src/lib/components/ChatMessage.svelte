@@ -15,6 +15,8 @@
     onCopy,
     onRate,
     canRate,
+    /** 消息列表全局索引：裁决卡锚点定位 / 滚动高亮的查询目标。 */
+    anchorIndex,
   }: {
     message: Message;
     streaming?: boolean;
@@ -22,6 +24,7 @@
     onCopy?: (msg: Message) => void;
     onRate?: (score: number) => void;
     canRate?: boolean;
+    anchorIndex?: number;
   } = $props();
 
   const isUser = $derived(message.role === "user");
@@ -96,6 +99,7 @@
 
 <div
   class="message"
+  data-message-index={anchorIndex ?? undefined}
   class:user={isUser}
   class:assistant={isAssistant}
   class:system={isSystem}

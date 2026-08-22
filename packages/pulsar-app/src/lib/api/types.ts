@@ -24,7 +24,8 @@ export type StateEventKind =
   | "tools"
   | "workspaces"
   | "git"
-  | "git_confirm";
+  | "git_confirm"
+  | "hook_judgements";
 
 export type StateChangePayload =
   | { kind: "topics" }
@@ -55,6 +56,15 @@ export type StateChangePayload =
       op_kind: string;
       title: string;
       detail: unknown;
+    }
+  | {
+      kind: "hook_judgements";
+      conversation_id: string;
+      /** 锚点消息索引（裁决卡挂载位置）；未绑定消息为 null。 */
+      anchor_message_index: number | null;
+      id: string;
+      /** pending / ok / retried_ok / downgraded。 */
+      status: string;
     };
 
 /** 服务器运行信息：桌面 IPC `server_info` 与远程 `GET /config` 共用（后端 net::ServerInfo 同构）。 */

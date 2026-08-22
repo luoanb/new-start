@@ -68,6 +68,7 @@ async fn run() -> AppResult<()> {
                         enabled: Some(false),
                         effort: None,
                     }),
+                    response_format: None,
                 })
                 .await?;
             println!("provider: {}", response.provider_id);

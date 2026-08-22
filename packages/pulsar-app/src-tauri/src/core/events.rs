@@ -60,6 +60,15 @@ pub enum StateChange {
         title: String,
         detail: serde_json::Value,
     },
+    /// 裁决记录两阶段事件（锚点驱动）：开始 = status "pending"（前端就地渲染「裁决中」卡），
+    /// 结束 = status 收敛为终态（ok / retried_ok / downgraded）。事件源收敛于
+    /// `HookJudgementStore::emit_change`，前端原地收敛，不重拉全量。
+    HookJudgements {
+        conversation_id: String,
+        anchor_message_index: Option<i64>,
+        id: String,
+        status: String,
+    },
 }
 
 /// 状态事件发射器：由 `lib.rs` setup 构造（捕获 AppHandle），
@@ -98,6 +107,33 @@ mod tests {
         assert_eq!(
             json,
             r#"{"kind":"message_delta","conversation_id":"c1","message_index":3,"content":"hello","reasoning":"think","done":false}"#
+        );
+    }
+
+    #[test]
+    fn hook_judgements_serializes_pending_and_terminal() {
+        let pending = serde_json::to_string(&StateChange::HookJudgements {
+            conversation_id: "c1".into(),
+            anchor_message_index: Some(3),
+            id: "hj_1".into(),
+            status: "pending".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            pending,
+            r#"{"kind":"hook_judgements","conversation_id":"c1","anchor_message_index":3,"id":"hj_1","status":"pending"}"#
+        );
+
+        let terminal = serde_json::to_string(&StateChange::HookJudgements {
+            conversation_id: "c1".into(),
+            anchor_message_index: None,
+            id: "hj_2".into(),
+            status: "retried_ok".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            terminal,
+            r#"{"kind":"hook_judgements","conversation_id":"c1","anchor_message_index":null,"id":"hj_2","status":"retried_ok"}"#
         );
     }
 }

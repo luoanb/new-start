@@ -554,6 +554,7 @@ impl TuiApp {
                             enabled: Some(false),
                             effort: None,
                         }),
+                        response_format: None,
                     })
                     .await
                 {
