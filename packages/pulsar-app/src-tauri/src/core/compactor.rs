@@ -8,10 +8,23 @@ use super::{
     providers::ProviderRegistry,
 };
 
-/// Rough token estimation: 1 token ≈ 4 characters.
-/// This is intentionally simple and conservative.
+/// Rough token estimation: 1 ASCII token ≈ 4 characters; CJK/multibyte ≈ 1 token/char.
+/// `chars/4` alone underestimates Chinese text (which is ~1 token per char), delaying
+/// compaction until it's too late. This split is still simple but far closer for mixed text.
 fn estimate_tokens(text: &str) -> usize {
-    text.chars().count() / 4
+    let mut ascii_run = 0usize;
+    let mut tokens = 0usize;
+    for ch in text.chars() {
+        if ch.is_ascii() {
+            ascii_run += 1;
+        } else {
+            // 非 ASCII（中文等多字节）：约 1 字符 ≈ 1 token。
+            tokens += ascii_run / 4;
+            ascii_run = 0;
+            tokens += 1;
+        }
+    }
+    tokens + ascii_run / 4
 }
 
 /// Build the compaction summary prompt.
@@ -33,6 +46,23 @@ fn compaction_prompt(messages: &[Message]) -> String {
 
     format!(
         "Please summarize the following conversation concisently, preserving key information, decisions, and context:\n\n{conversation_text}\n\n---\nSummary:"
+    )
+}
+
+/// 单条消息截断（wire 层兜底）：按 token 预算换算为字符预算后 head/tail 截断 + 标记。
+/// 截断后的消息仍保留头部信息与尾部结论，中段用「已截断，请缩小范围重试」提示占位。
+fn cap_single_message(text: &str, token_budget: usize) -> String {
+    let char_budget = token_budget * 4;
+    let total = text.chars().count();
+    if total <= char_budget {
+        return text.to_string();
+    }
+    let head_budget = char_budget * 2 / 3;
+    let head: String = text.chars().take(head_budget).collect();
+    let tail_start = total.saturating_sub(char_budget / 3);
+    let tail: String = text.chars().skip(tail_start).collect();
+    format!(
+        "{head}\n…[truncated: 单条消息估算 {total} 字符 > 预算 {char_budget} 字符（~{token_budget} token）；中段已省略，如需完整内容请用更精确参数重试]…\n{tail}"
     )
 }
 
@@ -81,11 +111,14 @@ impl Compactor {
     }
 
     /// Determine the cutoff index: messages before this index should be summarized.
-    /// Keeps the last `keep_last` user-assistant exchanges.
+    /// Keeps the last `keep_last` user-assistant exchanges (tail verbatim).
+    ///
+    /// 判据改为**体量感知**：不再用「消息数 ≤ keep_last×2 就不压缩」拦截——
+    /// 单条超大消息（如 3MB grep 结果）即使消息数很少也会撑爆上下文，
+    /// 体量超阈值就必须给压缩机会；keep_last 仍保证 tail 完整性。
     fn compaction_boundary(&self, conversation: &Conversation) -> usize {
         let total = conversation.messages.len();
-        if total <= self.config.keep_last * 2 {
-            // Not enough messages to warrant compaction
+        if total <= 1 {
             return 0;
         }
 
@@ -107,6 +140,25 @@ impl Compactor {
         cutoff
     }
 
+    /// 单条消息强制降级（wire 层）：扫描所有消息，估算 token 超过
+    /// `single_message_token_budget` 的做 head/tail 截断 + 标记。
+    ///
+    /// 覆盖压缩的结构性盲区：最新超大单条永远在 keep_last 保留区间内，
+    /// 摘要够不到；此处在发送前直接把单条压到预算内。返回是否发生截断。
+    pub fn force_fit_single_message(&self, msgs: &mut [Message], budget: usize) -> bool {
+        let mut changed = false;
+        for msg in msgs.iter_mut() {
+            let estimated = estimate_tokens(msg.text());
+            if estimated <= budget {
+                continue;
+            }
+            let capped = cap_single_message(msg.text(), budget);
+            msg.map_content(|_| capped);
+            changed = true;
+        }
+        changed
+    }
+
     /// Execute automatic compaction: summarize old messages and insert a Compaction entry.
     /// Original messages are NOT removed — they are kept in the conversation.
     /// Returns `Ok(true)` if compaction was performed, `Ok(false)` if not needed.
@@ -121,13 +173,20 @@ impl Compactor {
         model: &super::models::ChatModelSelection,
         context_window: u32,
     ) -> AppResult<bool> {
+        // 先做单条兜底：最新超大单条永远在 keep_last 保留区间内、摘要够不到，
+        // 必须在压缩判定之前直接截断到预算内（wire 层，不动真相源）。
+        let force_fitted = self.force_fit_single_message(
+            &mut conversation.messages,
+            self.config.single_message_token_budget,
+        );
+
         if !self.needs_compaction(conversation, context_window) {
-            return Ok(false);
+            return Ok(force_fitted);
         }
 
         let cutoff = self.compaction_boundary(conversation);
         if cutoff == 0 {
-            return Ok(false);
+            return Ok(force_fitted);
         }
 
         // Take a reference to old messages for summarization (don't drain)

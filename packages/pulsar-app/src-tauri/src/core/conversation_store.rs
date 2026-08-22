@@ -1,6 +1,6 @@
 use super::{
     error::{AppError, AppResult},
-    models::{Conversation, ConversationMode, Message, MessageRole},
+    models::{Conversation, ConversationMode, Message, MessageBody, MessageRole},
     storage,
 };
 use std::{
@@ -204,6 +204,40 @@ impl ConversationStore {
 
         fs::remove_file(path)?;
         Ok(())
+    }
+
+    /// 存量止损（幂等）：扫描全部会话，单条消息正文超 `max_chars` → 落库截断。
+    ///
+    /// 事故背景：`conv_1787253076882845861` 有一条 3MB grep 工具结果在统一截断落地前
+    /// 已写入存储；L3 压缩虽会在发送时强制降级，但真相源仍滞留巨型消息。本方法
+    /// 在启动时执行一次：工具结果走 `cap_tool_result`（带重试提示），其余正文走
+    /// `cap_text`。返回实际被截断的消息条数（0 = 无存量超限，正常不写盘）。
+    pub fn sanitize_oversized_messages(&self, max_chars: usize) -> AppResult<usize> {
+        let mut trimmed = 0usize;
+        for mut conversation in self.list_conversations()? {
+            let mut changed = false;
+            for message in conversation.messages.iter_mut() {
+                let total = message.text().chars().count();
+                if total <= max_chars {
+                    continue;
+                }
+                let tool_name = match &message.body {
+                    MessageBody::ToolResult { tool_name, .. } => Some(tool_name.clone()),
+                    _ => None,
+                };
+                message.map_content(|content| match tool_name.as_deref() {
+                    Some(name) => super::context_safety::cap_tool_result(name, content.to_string(), max_chars),
+                    None => super::context_safety::cap_text(content, max_chars),
+                });
+                changed = true;
+            }
+            if changed {
+                conversation.updated_at = now_ms();
+                self.save_conversation(&conversation)?;
+                trimmed += 1;
+            }
+        }
+        Ok(trimmed)
     }
 
     fn conversation_path(&self, conversation_id: &str) -> PathBuf {
@@ -423,5 +457,58 @@ mod tests {
             "",
             "new placeholder must not be polluted by old round's final write"
         );
+    }
+
+    /// 存量止损：巨型工具结果 / 超大正文落库截断；短消息不动；幂等（二次清理无变更）。
+    #[test]
+    fn sanitize_trims_oversized_and_leaves_short_untouched() {
+        let store = ConversationStore::new(test_root("sanitize_oversized")).unwrap();
+        let conv = store
+            .create_conversation(None, ConversationMode::Chat)
+            .unwrap();
+        let id = conv.id.clone();
+        // 短消息（不截断）。
+        store
+            .add_message(&id, text_message(MessageRole::User, "hi"))
+            .unwrap();
+        // 巨型工具结果（事故形态：3MB grep 结果）。
+        let big_tool = "X".repeat(3_000_000);
+        store
+            .add_message(
+                &id,
+                Message {
+                    role: MessageRole::Tool,
+                    body: MessageBody::ToolResult {
+                        tool_call_id: "call-1".into(),
+                        tool_name: "grep".into(),
+                        content: big_tool,
+                    },
+                    timestamp: now_ms(),
+                    neuron_id: None,
+                },
+            )
+            .unwrap();
+        // 超大普通正文。
+        let big_text = "Y".repeat(30_000);
+        store
+            .add_message(&id, text_message(MessageRole::User, &big_text))
+            .unwrap();
+
+        let trimmed = store.sanitize_oversized_messages(12_000).unwrap();
+        assert_eq!(trimmed, 1, "one conversation had oversized messages");
+
+        let conv = store.require_conversation(&id).unwrap();
+        assert_eq!(conv.messages[0].text(), "hi", "short message untouched");
+        let tool_text = conv.messages[1].text();
+        assert!(tool_text.chars().count() <= 12_000, "tool result trimmed");
+        assert!(
+            tool_text.contains("3000000 chars") || tool_text.contains("[truncated"),
+            "tool result carries truncation marker"
+        );
+        assert!(conv.messages[2].text().chars().count() <= 12_000, "text trimmed");
+
+        // 幂等：二次清理不再返回截断会话。
+        let again = store.sanitize_oversized_messages(12_000).unwrap();
+        assert_eq!(again, 0, "second run is a no-op");
     }
 }

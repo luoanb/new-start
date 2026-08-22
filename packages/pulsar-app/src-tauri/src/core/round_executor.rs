@@ -58,6 +58,8 @@ impl ModelCaller for super::providers::ProviderRegistry {
 pub struct RoundExecutor {
     model_caller: Arc<dyn ModelCaller>,
     tool_registry: Arc<RwLock<ToolRegistry>>,
+    /// 单条工具结果截断上限（字符）；来自 config.json `context` 节，缺省回落内置默认。
+    tool_result_max_chars: usize,
 }
 
 impl std::fmt::Debug for RoundExecutor {
@@ -70,10 +72,12 @@ impl RoundExecutor {
     pub fn new(
         model_caller: Arc<dyn ModelCaller>,
         tool_registry: Arc<RwLock<ToolRegistry>>,
+        tool_result_max_chars: usize,
     ) -> Self {
         Self {
             model_caller,
             tool_registry,
+            tool_result_max_chars,
         }
     }
 
@@ -339,6 +343,13 @@ impl RoundExecutor {
                     tool = %call.name,
                     result_len = result.len(),
                     "tool executed"
+                );
+                // 统一上下文安全兜底：任何工具结果超上限 → head/tail 截断 + 提示。
+                // 落库点执行（结果随后既落库又拼进本轮输出，一处截断两头受益）。
+                let result = super::context_safety::cap_tool_result(
+                    &call.name,
+                    result,
+                    self.tool_result_max_chars,
                 );
                 tool_results.push(ToolResultItem {
                     tool_call_id: call.id.clone(),

@@ -6,6 +6,7 @@
 //! - IP-1 AfterLoadContext：`assistant.round.before`（匹配/切换会话、简报推进、打分）
 //! - IP-5 AfterPersistOutcome：`assistant.round.after`（范围修订、进度验收、计数）
 
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::{
     atomic::Ordering,
@@ -101,6 +102,14 @@ pub struct AssistantSession {
     session_tracker: SessionTracker,
     /// 与 Poller 共享的轮询并发推进数量（运行时可变，前端可调）。
     poll_parallelism: SharedPollParallelism,
+    /// 会话级 poller 失败状态机（熔断/退避，见 context_safety）。仅 poller 路径读写。
+    failure_states: Mutex<HashMap<String, crate::core::context_safety::SessionFailureState>>,
+    /// 熔断配置（config.json `context` 节，缺省回落内置默认）：
+    /// 连续失败 ≥ poll_backoff_after 开始指数退避；≥ poll_pause_after 熔断暂停。
+    poll_backoff_after: u32,
+    poll_pause_after: u32,
+    /// 单次退避最多跳过的 poll tick 数。
+    backoff_max_skips: u32,
 }
 
 impl fmt::Debug for AssistantSession {
@@ -122,6 +131,9 @@ impl AssistantSession {
         step_tx: UnboundedSender<AssistantStepRequest>,
         session_tracker: SessionTracker,
         poll_parallelism: SharedPollParallelism,
+        poll_backoff_after: u32,
+        poll_pause_after: u32,
+        backoff_max_skips: u32,
     ) -> Self {
         Self {
             store,
@@ -134,6 +146,10 @@ impl AssistantSession {
             step_tx,
             session_tracker,
             poll_parallelism,
+            failure_states: Mutex::new(HashMap::new()),
+            poll_backoff_after,
+            poll_pause_after,
+            backoff_max_skips,
         }
     }
 
@@ -484,6 +500,8 @@ impl AssistantSession {
                 None, // 用户聊天窗口发起：保留思考配置（跟随前端勾选）
             )
             .await?;
+        // 用户手动推进成功 = 熔断恢复（等效 HALF_OPEN 探测成功 → CLOSED）。
+        self.reset_failure_state(session_id);
         tracing::info!(
             phase = "assistant_converse",
             session_id = %response.conversation_id,
@@ -551,8 +569,19 @@ impl AssistantSession {
                 }),
             )
             .await?;
+        // 用户手动推进成功 = 熔断恢复（等效 HALF_OPEN 探测成功 → CLOSED）。
+        self.reset_failure_state(session_id);
         tracing::info!(phase = "assistant_step", session_id, "step ok");
         Ok(response)
+    }
+
+    /// 重置会话熔断状态（用户手动推进成功 / 恢复操作）。
+    fn reset_failure_state(&self, session_id: &str) {
+        if let Ok(mut states) = self.failure_states.lock() {
+            if let Some(state) = states.get_mut(session_id) {
+                state.record_success();
+            }
+        }
     }
 
     /// 轮询推进一轮（Poller）：落 nudge 消息，简报作为本轮指令。
@@ -631,6 +660,25 @@ impl AssistantSession {
                         skipped += 1;
                         continue;
                     }
+                    // 熔断/退避跳过：连续失败进入 BACKOFF/COOLDOWN 的会话跳过本轮 tick，
+                    // 防止同一失败无限空转烧 token。
+                    if let Ok(mut states) = self.failure_states.lock() {
+                        if let Some(state) = states.get_mut(&session_id) {
+                            if state.should_skip() {
+                                state.consume_skip();
+                                tracing::info!(
+                                    phase = "assistant_poll_handler",
+                                    session_id,
+                                    consecutive_failures = state.consecutive_failures,
+                                    backoff_skips_remaining = state.backoff_skips_remaining,
+                                    paused = state.paused,
+                                    "skip topic: session in backoff/cooldown"
+                                );
+                                skipped += 1;
+                                continue;
+                            }
+                        }
+                    }
                     let topic_id = topic.id;
                     // 跳过已在运行的会话（用户手动 converse 推进中 / 上一批尚未收尾），
                     // 避免对同一会话重复发起推进。
@@ -664,20 +712,47 @@ impl AssistantSession {
                             .session_tracker
                             .update_step(&session_id, "polling");
                         match assistant.step_poller(&session_id, &model).await {
-                            Ok(response) => tracing::info!(
-                                phase = "assistant_poll_handler",
-                                topic_id,
-                                session_id,
-                                response_len = response.response.len(),
-                                "poll step ok"
-                            ),
-                            Err(error) => tracing::error!(
-                                phase = "assistant_poll_handler",
-                                topic_id,
-                                session_id,
-                                error = %error,
-                                "poll step failed"
-                            ),
+                            Ok(response) => {
+                                // 成功：熔断状态归零（等效 HALF_OPEN 探测成功 → CLOSED）。
+                                if let Ok(mut states) = assistant.failure_states.lock() {
+                                    if let Some(state) = states.get_mut(&session_id) {
+                                        state.record_success();
+                                    }
+                                }
+                                tracing::info!(
+                                    phase = "assistant_poll_handler",
+                                    topic_id,
+                                    session_id,
+                                    response_len = response.response.len(),
+                                    "poll step ok"
+                                )
+                            }
+                            Err(error) => {
+                                // 失败：错误分类并推进熔断状态机（连续失败退避 → 暂停）。
+                                let class =
+                                    crate::core::context_safety::classify_error(&error);
+                                let skip_next = {
+                                    let mut states = assistant.failure_states.lock().unwrap();
+                                    states
+                                        .entry(session_id.clone())
+                                        .or_default()
+                                        .record_failure(
+                                            class,
+                                            assistant.poll_backoff_after,
+                                            assistant.poll_pause_after,
+                                            assistant.backoff_max_skips,
+                                        )
+                                };
+                                tracing::error!(
+                                    phase = "assistant_poll_handler",
+                                    topic_id,
+                                    session_id,
+                                    error_class = ?class,
+                                    skip_next_tick = skip_next,
+                                    error = %error,
+                                    "poll step failed; circuit state updated"
+                                )
+                            }
                         }
                         assistant.session_tracker.unregister(&session_id);
                         if let Ok(mut list) = touched.lock() {
@@ -2485,6 +2560,7 @@ mod tests {
         let executor = Arc::new(RoundExecutor::new(
             Arc::clone(&caller) as Arc<dyn ModelCaller>,
             Arc::clone(&tool_registry),
+            crate::core::context_safety::DEFAULT_TOOL_RESULT_MAX_CHARS,
         ));
         let runner = ConversationRunner::new(
             conversation_store.clone(),
@@ -2504,6 +2580,9 @@ mod tests {
             step_tx,
             SessionTracker::new(),
             new_shared_poll_parallelism(1),
+            crate::core::context_safety::DEFAULT_POLL_BACKOFF_AFTER,
+            crate::core::context_safety::DEFAULT_POLL_PAUSE_AFTER,
+            crate::core::context_safety::DEFAULT_BACKOFF_MAX_SKIPS,
         ));
         JudgementHarness {
             root,

@@ -25,6 +25,10 @@ pub const DEFAULT_READ_CHUNK_BYTES: u64 = 256 * 1024;
 pub const MAX_WRITE_BYTES: u64 = 16 * 1024 * 1024;
 /// grep 结果上限（防爆量）。
 pub const MAX_GREP_MATCHES: usize = 2000;
+/// grep 单条匹配行最大字符数（超长行 head/tail 截断，防止产物/压缩文件整行灌入）。
+pub const MAX_GREP_LINE_CHARS: usize = 2000;
+/// grep context 每边最大行数（防膨胀：2000 条 × 大 context 会失控）。
+pub const MAX_GREP_CONTEXT_LINES: usize = 3;
 /// glob 结果上限。
 pub const MAX_GLOB_RESULTS: usize = 1000;
 /// 二进制检测探测字节数。
@@ -136,6 +140,16 @@ fn to_rel(root: &Path, abs: &Path) -> String {
 
 fn is_binary(bytes: &[u8]) -> bool {
     bytes[..bytes.len().min(BINARY_PROBE_BYTES)].contains(&0)
+}
+
+/// 按字符数截断单行（保留头部 + 截断标记），用于 grep 匹配行与 context 行，
+/// 防止 minified/产物文件整行（可达数 MB）灌入工具结果。
+fn truncate_line_chars(line: &str, max_chars: usize) -> String {
+    if line.chars().count() <= max_chars {
+        return line.to_string();
+    }
+    let head: String = line.chars().take(max_chars).collect();
+    format!("{head}…[truncated: original line {} chars]", line.chars().count())
 }
 
 fn mtime_ms(meta: &fs::Metadata) -> i64 {
@@ -271,27 +285,32 @@ impl FileSystem {
         let total_lines = lines.len();
         let start = offset.unwrap_or(0).min(total_lines);
         // 未指定 offset/limit 时按 256KB 阈值截断；否则按行精确切片。
+        // 两者都受字符预算约束：limit 模式也按字符数封顶，防止单次拉回近 64MB。
         let mut truncated = false;
-        let end = match limit {
+        let mut end = match limit {
             Some(limit) if limit > 0 => {
                 let end = (start + limit).min(total_lines);
                 truncated = end < total_lines;
                 end
             }
-            _ => {
-                let mut char_count = 0usize;
-                let mut end = total_lines;
-                for (idx, line) in lines.iter().enumerate().skip(start) {
-                    char_count += line.chars().count() + 1; // +1 换行
-                    if char_count as u64 > DEFAULT_READ_CHUNK_BYTES {
-                        end = idx;
-                        truncated = true;
-                        break;
-                    }
-                }
-                end
-            }
+            _ => total_lines,
         };
+        // 字符预算封顶：无论哪种模式，累计字符超 DEFAULT_READ_CHUNK_BYTES 即截断。
+        let mut char_count = 0usize;
+        for (idx, line) in lines.iter().enumerate().skip(start) {
+            if idx >= end {
+                break;
+            }
+            char_count += line.chars().count() + 1; // +1 换行
+            if char_count as u64 > DEFAULT_READ_CHUNK_BYTES {
+                end = idx;
+                truncated = true;
+                break;
+            }
+        }
+        if end < start {
+            end = start;
+        }
         let selected = &lines[start..end];
         let content = if selected.is_empty() {
             String::new()
@@ -569,11 +588,26 @@ impl FileSystem {
                 .map(|g| g.compile_matcher())
                 .ok()
         }).flatten();
+        // context clamp：防 2000 条 × 大 context 膨胀失控。
+        let context = context.min(MAX_GREP_CONTEXT_LINES);
+        // ignore 规则 = 工作区自定义 + 系统默认（保证产物目录永远被跳过，即使存量工作区缺项）。
+        let mut ignore_rules = workspace.ignore.clone();
+        for pat in super::workspace::default_ignore() {
+            if !ignore_rules.contains(&pat) {
+                ignore_rules.push(pat);
+            }
+        }
 
         let mut matches = Vec::new();
         for entry in walkdir::WalkDir::new(&base)
             .follow_links(false)
             .into_iter()
+            .filter_entry(|e| {
+                // 与 list_directory 同源：跳过 ignore 规则命中的目录/文件（含产物目录）。
+                let abs = e.path();
+                let rel = to_rel(root, abs);
+                !is_ignored(&rel, &ignore_rules)
+            })
             .filter_map(|e| e.ok())
         {
             if matches.len() >= MAX_GREP_MATCHES {
@@ -610,7 +644,7 @@ impl FileSystem {
                             .rev()
                             .take(context)
                             .rev()
-                            .map(|l| l.to_string())
+                            .map(|l| truncate_line_chars(l, MAX_GREP_LINE_CHARS))
                             .collect()
                     } else {
                         Vec::new()
@@ -619,7 +653,7 @@ impl FileSystem {
                         lines[idx + 1..]
                             .iter()
                             .take(context)
-                            .map(|l| l.to_string())
+                            .map(|l| truncate_line_chars(l, MAX_GREP_LINE_CHARS))
                             .collect()
                     } else {
                         Vec::new()
@@ -628,7 +662,7 @@ impl FileSystem {
                         path: rel.clone(),
                         line: idx + 1,
                         column: captured.start(),
-                        text: line.to_string(),
+                        text: truncate_line_chars(line, MAX_GREP_LINE_CHARS),
                         context_before: before,
                         context_after: after,
                     });

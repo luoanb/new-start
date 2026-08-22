@@ -41,10 +41,21 @@ pub struct WorkspaceView {
 
 /// 新工作区默认过滤规则（用户可改）。
 pub fn default_ignore() -> Vec<String> {
-    vec![".git", "node_modules", "target", "dist", ".pulsar", ".DS_Store"]
-        .into_iter()
-        .map(String::from)
-        .collect()
+    vec![
+        ".git",
+        "node_modules",
+        "target",
+        "dist",
+        ".pulsar",
+        ".DS_Store",
+        // 构建产物目录（本次事故根因：minified JS 整行 3MB）。
+        "build",
+        "out",
+        "coverage",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
 }
 
 /// 当前 Unix 毫秒时间戳（i64，供 created_at 使用）。

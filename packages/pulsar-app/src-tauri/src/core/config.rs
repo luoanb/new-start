@@ -39,9 +39,32 @@ pub struct AppConfigFile {
     /// git 领域配置（顶层 `git` 键）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git: Option<GitSection>,
+    /// 上下文安全配置（顶层 `context` 键）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<ContextSection>,
     /// 尚未建模的顶层字段原样保留，写回时不丢数据。
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+/// 上下文安全配置（顶层 `context` 键）：工具结果统一上限 + poller 熔断阈值。
+///
+/// 缺省字段回落 `core/context_safety.rs` 内置默认（`DEFAULT_*` 常量），保证未配置
+/// 时行为与硬编码时代一致。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ContextSection {
+    /// 单条工具结果截断上限（字符）。默认 12_000。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_result_max_chars: Option<usize>,
+    /// poller 连续失败开始指数退避的阈值。默认 3。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub poll_backoff_after: Option<u32>,
+    /// poller 连续失败熔断暂停阈值（需手动恢复）。默认 6。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub poll_pause_after: Option<u32>,
+    /// 单次退避最多跳过的 poll tick 数。默认 8。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backoff_max_skips: Option<u32>,
 }
 
 /// git 领域配置（顶层 `git` 键）。
@@ -206,5 +229,42 @@ mod tests {
         assert!(json.contains("future_key"));
         // git 键被类型化承载后不再落入 extra。
         assert!(config.extra.get("git").is_none());
+    }
+
+    #[test]
+    fn context_section_defaults_to_none() {
+        // 无 `context` 键 → None（gateway 回落内置默认常量）。
+        assert!(parse(r#"{"server":{"enabled":false}}"#).context.is_none());
+    }
+
+    #[test]
+    fn context_section_parses_full_fields() {
+        let config = parse(
+            r#"{"context":{"tool_result_max_chars":8000,"poll_backoff_after":2,"poll_pause_after":4,"backoff_max_skips":6}}"#,
+        );
+        let context = config.context.expect("context present");
+        assert_eq!(context.tool_result_max_chars, Some(8000));
+        assert_eq!(context.poll_backoff_after, Some(2));
+        assert_eq!(context.poll_pause_after, Some(4));
+        assert_eq!(context.backoff_max_skips, Some(6));
+    }
+
+    #[test]
+    fn context_section_absent_fields_are_none() {
+        let config = parse(r#"{"context":{"tool_result_max_chars":8000}}"#);
+        let context = config.context.expect("context present");
+        assert_eq!(context.tool_result_max_chars, Some(8000));
+        assert!(context.poll_backoff_after.is_none());
+        assert!(context.poll_pause_after.is_none());
+        assert!(context.backoff_max_skips.is_none());
+    }
+
+    #[test]
+    fn context_section_roundtrips_with_extra() {
+        let config = parse(r#"{"context":{"tool_result_max_chars":8000},"future_key":42}"#);
+        let json = serde_json::to_string(&config).expect("serialize");
+        assert!(json.contains("tool_result_max_chars"));
+        assert!(json.contains("future_key"));
+        assert!(config.extra.get("context").is_none());
     }
 }

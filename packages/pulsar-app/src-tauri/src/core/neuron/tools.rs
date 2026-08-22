@@ -228,7 +228,7 @@ impl Tool for GetNetworkTool {
             "type": "object",
             "properties": {
                 "id": {"type": "string"},
-                "max_depth": {"type": "integer", "minimum": 0, "default": 3}
+                "max_depth": {"type": "integer", "minimum": 0, "maximum": 5, "default": 3}
             },
             "required": ["id"]
         })
@@ -236,7 +236,12 @@ impl Tool for GetNetworkTool {
 
     async fn execute(&self, args: Value) -> AppResult<String> {
         let id = required_str(&args, "id")?;
-        let max_depth = args.get("max_depth").and_then(Value::as_u64).unwrap_or(3) as usize;
+        // clamp：防止过深遍历使结果量级失控。
+        let max_depth = args
+            .get("max_depth")
+            .and_then(Value::as_u64)
+            .unwrap_or(3)
+            .min(5) as usize;
         serde_json::to_string(&self.manager.get_network(id, max_depth)?)
             .map_err(|e| AppError::StorageError(e.to_string()))
     }
@@ -314,7 +319,7 @@ impl Tool for SelectNeuronCandidatesTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "n": {"type": "integer", "minimum": 0},
+                "n": {"type": "integer", "minimum": 0, "maximum": 50},
                 "source_id": {"type": "string"},
                 "min_new": {"type": "integer", "minimum": 0, "default": 0}
             },
@@ -328,6 +333,8 @@ impl Tool for SelectNeuronCandidatesTool {
             .and_then(Value::as_u64)
             .ok_or_else(|| AppError::InvalidInput("Missing or invalid: n".into()))?
             as usize;
+        // clamp：模型可能传超大 n，结果若全量返回会撑爆上下文。
+        let n = n.min(50);
         let query = CandidateQuery {
             n,
             source_id: args

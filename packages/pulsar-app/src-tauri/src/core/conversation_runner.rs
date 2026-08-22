@@ -1118,6 +1118,7 @@ mod tests {
         let executor = Arc::new(RoundExecutor::new(
             Arc::clone(&echo),
             Arc::clone(&tool_registry),
+            crate::core::context_safety::DEFAULT_TOOL_RESULT_MAX_CHARS,
         ));
         Harness {
             store,
@@ -1965,6 +1966,7 @@ mod tests {
         let executor = Arc::new(RoundExecutor::new(
             Arc::clone(&caller),
             Arc::clone(&h.tool_registry),
+            crate::core::context_safety::DEFAULT_TOOL_RESULT_MAX_CHARS,
         ));
         let runner = ConversationRunner::new(
             store.clone(),
@@ -2045,6 +2047,7 @@ mod tests {
         let executor = Arc::new(RoundExecutor::new(
             Arc::clone(&caller),
             Arc::clone(&h.tool_registry),
+            crate::core::context_safety::DEFAULT_TOOL_RESULT_MAX_CHARS,
         ));
         let runner = ConversationRunner::new(
             store.clone(),

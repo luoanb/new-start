@@ -31,6 +31,8 @@ const MAX_REPOS: usize = 50;
 const MAX_DIFF_FILES: usize = 200;
 const MAX_DIFF_HUNKS: usize = 500;
 const MAX_DIFF_LINES: usize = 20_000;
+/// blame 解析上限（大文件 blame 可达数万行，防结果撑爆上下文）。
+const MAX_BLAME_LINES: usize = 5_000;
 
 pub struct CliGitBackend {
     semaphore: Semaphore,
@@ -829,7 +831,17 @@ impl GitBackend for CliGitBackend {
             .run_git_ok(&root, &["blame", "--porcelain", "--", &rel])
             .await?;
         // 用完整输出解析：blame porcelain 行数多，truncate 后（64KB）会丢尾部行。
-        let lines = parse_blame(&String::from_utf8_lossy(&out.stdout_bytes));
+        let mut lines = parse_blame(&String::from_utf8_lossy(&out.stdout_bytes));
+        // 解析行数上限：数万行 blame 若全量返回会撑爆模型上下文，超出标记 truncated。
+        if lines.len() > MAX_BLAME_LINES {
+            lines.truncate(MAX_BLAME_LINES);
+            tracing::warn!(
+                target: "gitops",
+                path = %path,
+                limit = MAX_BLAME_LINES,
+                "git blame truncated to limit lines"
+            );
+        }
         tracing::info!(
             target: "gitops",
             path = %path,

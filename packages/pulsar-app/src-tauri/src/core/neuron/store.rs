@@ -13,6 +13,9 @@ use crate::core::{
 
 static NEURON_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// get_network BFS 结果节点上限（稠密网络防结果撑爆上下文）。
+pub const MAX_NETWORK_NODES: usize = 500;
+
 pub struct NeuronStore {
     conn: Arc<Mutex<Connection>>,
 }
@@ -1015,6 +1018,7 @@ impl NeuronStore {
     ///
     /// Neighborhood expansion follows undirected adjacency (in + out edges).
     /// Returned `connections` only include edges whose both endpoints are in `neurons`.
+    /// BFS 节点数受 `MAX_NETWORK_NODES` 上限约束（稠密网络防结果撑爆上下文）。
     pub fn get_network(&self, seed_id: &str, max_depth: usize) -> AppResult<NeuronSubgraph> {
         let mut visited = std::collections::HashSet::new();
         let mut neurons: Vec<Neuron> = Vec::new();
@@ -1031,6 +1035,9 @@ impl NeuronStore {
             // Only add to result if it's a valid neuron (skip errors gracefully)
             if let Some(neuron) = self.get_neuron(&current_id)? {
                 neurons.push(neuron);
+                if neurons.len() >= MAX_NETWORK_NODES {
+                    break;
+                }
             }
 
             if depth >= max_depth {

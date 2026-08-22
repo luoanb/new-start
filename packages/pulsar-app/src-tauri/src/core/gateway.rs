@@ -311,6 +311,25 @@ impl Gateway {
 
         let compactor = Compactor::new(CompactionConfig::default());
 
+        // 上下文安全配置（`context` 节缺省回落内置默认）：工具结果上限 + poller 熔断阈值。
+        let context_safety = ConfigStore::new(store.root().to_path_buf())
+            .read()?
+            .context
+            .as_ref()
+            .map(crate::core::context_safety::ContextSafetyConfig::from_section)
+            .unwrap_or_default();
+
+        // 存量止损：统一截断落地前的巨型历史消息（如 conv_1787253076882845861 的 3MB
+        // grep 结果）启动时落库截断一次。幂等：无超限时返回 0 且不写盘。
+        let trimmed_sessions = store.sanitize_oversized_messages(context_safety.tool_result_max_chars)?;
+        if trimmed_sessions > 0 {
+            tracing::warn!(
+                sessions = trimmed_sessions,
+                max_chars = context_safety.tool_result_max_chars,
+                "sanitized oversized legacy messages at startup"
+            );
+        }
+
         let (step_tx, step_rx) = mpsc::unbounded_channel::<AssistantStepRequest>();
 
         let poller_settings = PollerConfigReader::new(store.root().to_path_buf()).load()?;
@@ -336,6 +355,7 @@ impl Gateway {
                 None => Arc::new(providers.clone()) as Arc<dyn ModelCaller>,
             },
             Arc::clone(&tool_registry),
+            context_safety.tool_result_max_chars,
         ));
 
         // 单轮编排 + 业务接入（各业务独立文件，业务逻辑不进入 Gateway）。
@@ -362,6 +382,9 @@ impl Gateway {
             step_tx,
             session_tracker.clone(),
             Arc::clone(&poll_parallelism),
+            context_safety.poll_backoff_after,
+            context_safety.poll_pause_after,
+            context_safety.backoff_max_skips,
         ));
         // 课题路由 / 简报推进 / 打分（IP-1）与 范围修订 / 验收 / 计数（IP-5）随装配注册。
         // IP-1 组内顺序敏感：先课题路由（可能切换会话 / 计算 reselect），再选型。

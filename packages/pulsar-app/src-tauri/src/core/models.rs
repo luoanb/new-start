@@ -74,6 +74,21 @@ impl Message {
         }
     }
 
+    /// 保留消息结构、替换正文 content（压缩/截断用，不动其他字段）。
+    pub fn map_content(&mut self, f: impl FnOnce(&str) -> String) {
+        let f = |body: &mut MessageBody| match body {
+            MessageBody::Text { content, .. }
+            | MessageBody::ToolResult { content, .. }
+            | MessageBody::Compaction { content, .. }
+            | MessageBody::Nudge { content }
+            | MessageBody::RoleContext { content } => {
+                let next = f(content);
+                *content = next;
+            }
+        };
+        f(&mut self.body);
+    }
+
     /// 是否为工具相关消息（调用或返回）。
     /// 统一类型后：`Text.tool_calls` 非空即工具调用，或 `ToolResult`。
     pub fn is_tool(&self) -> bool {
@@ -358,14 +373,22 @@ pub struct CompactionConfig {
     pub threshold_ratio: f64,
     #[serde(default = "default_keep_last")]
     pub keep_last: usize,
+    /// 单条消息估算 token 预算（超过则 wire 层强制 head/tail 截断）。
+    #[serde(default = "default_single_message_token_budget")]
+    pub single_message_token_budget: usize,
+}
+
+fn default_single_message_token_budget() -> usize {
+    32_000
 }
 
 impl Default for CompactionConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            threshold_ratio: 0.7,
+            threshold_ratio: 0.8,
             keep_last: 10,
+            single_message_token_budget: default_single_message_token_budget(),
         }
     }
 }

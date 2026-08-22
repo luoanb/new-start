@@ -8,6 +8,7 @@ pub mod config;
 pub mod current_time;
 pub mod conversation_runner;
 pub mod conversation_store;
+pub mod context_safety;
 pub mod dynamic_tool;
 pub mod error;
 pub mod events;

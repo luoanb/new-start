@@ -15,7 +15,7 @@
 
 当任务命中某项能力时，先读取对应 `SKILL.md`，再进入计划或执行：
 
-- 日常 checkpoint-driven coding / 文档协作：`.cursor/skills/sdd-riper-one-light/SKILL.md`
+- 日常(轻量sdd) checkpoint-driven coding / 文档协作：`.cursor/skills/sdd-riper-one-light/SKILL.md`
 - SDD 需求迭代与 `docs/sdd-lab` 管理：`.cursor/skills/sdd-lab/SKILL.md`
 - 技术方案落盘与最小实现桥接：`.cursor/skills/sdd-exec-scheme/SKILL.md`
 - 轻量 PRD / 交互需求文档：`.cursor/skills/prd-generator-light/SKILL.md`
