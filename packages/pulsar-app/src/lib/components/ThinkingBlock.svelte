@@ -18,18 +18,33 @@
 
 <div class="thinking-block" class:expanded>
   <div class="block-header">
-    <button class="summary" onclick={toggle}>
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div
+      class="summary"
+      role="button"
+      tabindex="0"
+      onclick={toggle}
+      onkeydown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          toggle();
+        }
+      }}
+    >
+      <span class="label">🧠 {t("thinking.title")}</span>
+      {#if streaming}
+        <span class="streaming-dot"></span>
+      {/if}
+      <span class="block-header-actions" onclick={(e) => e.stopPropagation()}>
+        <CopyButton text={reasoning} />
+      </span>
       <span class="toggle-icon" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="m9 18 6-6-6-6" />
         </svg>
       </span>
-      <span class="label">🧠 {t("thinking.title")}</span>
-      {#if streaming}
-        <span class="streaming-dot"></span>
-      {/if}
-    </button>
-    <CopyButton text={reasoning} />
+    </div>
   </div>
 
   {#if expanded}
@@ -40,17 +55,18 @@
 </div>
 
 <style>
+  /* 消息区卡片统一规范：surface 底 + 淡边框 + radius-sm，无 accent 竖条/动画。 */
   .thinking-block {
     margin-top: var(--space-2);
-    border-radius: var(--radius-md);
-    background: color-mix(in srgb, var(--color-surface) 45%, var(--color-bg));
-    border: var(--border-width) solid color-mix(in srgb, var(--color-border) 45%, transparent);
-    border-left: 3px solid color-mix(in srgb, var(--color-warning) 55%, transparent);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface);
+    border: var(--border-width) solid var(--color-border);
     overflow: hidden;
   }
-  .block-header { display: flex; align-items: center; gap: var(--space-1); padding-right: var(--space-1); }
-  .summary { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; padding: var(--space-2) var(--space-3); border: none; background: transparent; color: var(--color-text); font-size: var(--fs-sm); cursor: pointer; text-align: left; transition: background var(--duration-fast) var(--ease-out); }
+  .block-header { display: flex; }
+  .summary { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; width: 100%; padding: var(--space-1) var(--space-2); border: none; background: transparent; color: var(--color-text); font-size: var(--fs-xs); cursor: pointer; text-align: left; border-radius: var(--radius-sm); transition: background var(--duration-fast) var(--ease-out); }
   .summary:hover { background: var(--color-hover); }
+  .block-header-actions { flex-shrink: 0; display: inline-flex; align-items: center; }
   .toggle-icon {
     display: inline-flex;
     align-items: center;
@@ -70,7 +86,7 @@
   .expanded .toggle-icon { transform: rotate(90deg); }
   .label { font-family: var(--font-mono, monospace); font-size: var(--fs-xs); color: var(--color-text-muted); }
   .streaming-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-primary); animation: thinking-pulse 1.2s ease-in-out infinite; }
-  .detail { border-top: var(--border-width) solid var(--color-border); padding: var(--space-2) var(--space-3); max-height: 400px; overflow-y: auto; }
-  .detail pre { margin: 0; font-family: var(--font-mono, monospace); font-size: var(--fs-xs); line-height: 1.5; color: var(--color-text-muted); white-space: pre-wrap; word-break: break-word; }
+  .detail { border-top: var(--border-width) solid var(--color-border); padding: var(--space-2); max-height: 400px; overflow-y: auto; }
+  .detail pre { margin: 0; font-family: var(--font-mono, monospace); font-size: var(--fs-xs); line-height: 1.5; color: var(--color-text); white-space: pre-wrap; word-break: break-word; }
   @keyframes thinking-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
 </style>

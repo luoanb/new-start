@@ -187,9 +187,10 @@
   .status-row .label { color: var(--color-text-muted); }
   .status-row .value { font-weight: 600; font-family: monospace; }
   .status-row .value.pending { color: var(--color-warning, #f59e0b); }
-  .state-badge { font-size: var(--fs-xs); font-weight: 600; padding: 1px 10px; border-radius: var(--radius-sm); color: #fff; }
-  .state-badge.running { background: var(--color-success, #22c55e); }
-  .state-badge.paused { background: var(--color-warning, #f59e0b); }
+  /* 状态徽标：克制——小号文字 + 语义色文字色，无实底/圆点（对齐面板统一规范）。 */
+  .state-badge { flex-shrink: 0; font-size: var(--fs-xs); color: var(--color-text-muted); }
+  .state-badge.running { color: var(--color-success, #22c55e); }
+  .state-badge.paused { color: var(--color-warning, #f59e0b); }
 
   .parallelism-card { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2); background: var(--color-bg); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-md); }
   .parallelism-header { display: flex; justify-content: space-between; align-items: center; font-size: var(--fs-xs); }

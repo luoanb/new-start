@@ -19,15 +19,45 @@
 
 <div class="toolcall-block" class:expanded>
   <div class="block-header">
-    <button class="summary" onclick={toggle}>
-      <span class="label">🛠 {summary}</span>
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div
+      class="summary"
+      role="button"
+      tabindex="0"
+      onclick={toggle}
+      onkeydown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          toggle();
+        }
+      }}
+    >
+      <span class="label">
+        <svg
+          class="label-ico"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <polyline points="4 17 10 11 4 5" />
+          <line x1="12" x2="20" y1="19" y2="19" />
+        </svg>
+        <span class="label-text">{summary}</span>
+      </span>
+      <span class="block-header-actions" onclick={(e) => e.stopPropagation()}>
+        <CopyButton text={copyText} />
+      </span>
       <span class="toggle-icon" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="m9 18 6-6-6-6" />
         </svg>
       </span>
-    </button>
-    <CopyButton text={copyText} />
+    </div>
   </div>
 
   {#if expanded}
@@ -49,25 +79,28 @@
 </div>
 
 <style>
-  .toolcall-block { margin-top: var(--space-2); }
-  .block-header { display: inline-flex; align-items: center; gap: 2px; }
+  /* 消息区卡片统一规范：surface 底 + 淡边框 + radius-sm，无 accent 竖条/动画。 */
+  .toolcall-block { margin-top: var(--space-2); border-radius: var(--radius-sm); background: var(--color-surface); border: var(--border-width) solid var(--color-border); overflow: hidden; }
+  .block-header { display: flex; }
   .summary {
-    display: inline-flex;
+    display: flex;
     align-items: center;
     gap: 6px;
-    max-width: 100%;
+    flex: 1;
     min-width: 0;
-    padding: var(--space-1) var(--space-1);
+    width: 100%;
+    padding: var(--space-1) var(--space-2);
     border: none;
     background: transparent;
     color: var(--color-text);
-    font-size: var(--fs-sm);
+    font-size: var(--fs-xs);
     cursor: pointer;
     text-align: left;
     border-radius: var(--radius-sm);
     transition: background var(--duration-fast) var(--ease-out);
   }
   .summary:hover { background: var(--color-hover); }
+  .block-header-actions { flex-shrink: 0; display: inline-flex; align-items: center; }
   .toggle-icon {
     display: inline-flex;
     align-items: center;
@@ -86,14 +119,28 @@
   }
   .expanded .toggle-icon { transform: rotate(90deg); }
   .label {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
     font-family: var(--font-mono, monospace);
     font-size: var(--fs-xs);
+    color: var(--color-text);
+  }
+  .label-ico {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
     color: var(--color-text-muted);
-    white-space: nowrap;
+  }
+  .label-text {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .detail { padding: var(--space-1) var(--space-3) var(--space-2); max-height: 400px; overflow-y: auto; }
+  .detail { border-top: var(--border-width) solid var(--color-border); padding: var(--space-2); max-height: 400px; overflow-y: auto; }
   .call-item { margin-bottom: var(--space-2); }
   .call-item:last-child { margin-bottom: 0; }
   .call-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-1); }

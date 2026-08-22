@@ -49,22 +49,53 @@
 
 <div class="toolresult-block" class:expanded class:cmd-shape={isCmdShape}>
   <div class="block-header">
-    <button class="summary" onclick={toggle}>
-      <span class="label">🖥 {label}</span>
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div
+      class="summary"
+      role="button"
+      tabindex="0"
+      onclick={toggle}
+      onkeydown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          toggle();
+        }
+      }}
+    >
+      <span class="label">
+        <svg
+          class="label-ico"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <rect width="20" height="14" x="2" y="3" rx="2" />
+          <line x1="8" x2="16" y1="21" y2="21" />
+          <line x1="12" x2="12" y1="17" y2="21" />
+        </svg>
+        <span class="label-text">{label}</span>
+      </span>
       {#if isCmdShape}
         {#if result!.timed_out}
           <span class="badge timeout">{t("toolResult.timedOut")}</span>
         {/if}
         <span class="exit" class:error={!isSuccess}>{result!.exit_code}</span>
       {/if}
+      <span class="block-header-actions" onclick={(e) => e.stopPropagation()}>
+        <!-- 工具结果的复制：仅复制工具输出（content） -->
+        <CopyButton text={content} />
+      </span>
       <span class="toggle-icon" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="m9 18 6-6-6-6" />
         </svg>
       </span>
-    </button>
-    <!-- 工具结果的复制：仅复制工具输出（content） -->
-    <CopyButton text={content} />
+    </div>
   </div>
 
   {#if expanded}
@@ -93,19 +124,21 @@
 </div>
 
 <style>
-  .toolresult-block { margin-top: var(--space-2); }
-  .block-header { display: inline-flex; align-items: center; gap: 2px; }
+  /* 消息区卡片统一规范：surface 底 + 淡边框 + radius-sm，无 accent 竖条/动画。 */
+  .toolresult-block { margin-top: var(--space-2); border-radius: var(--radius-sm); background: var(--color-surface); border: var(--border-width) solid var(--color-border); overflow: hidden; }
+  .block-header { display: flex; }
   .summary {
-    display: inline-flex;
+    display: flex;
     align-items: center;
     gap: 6px;
-    max-width: 100%;
+    flex: 1;
     min-width: 0;
-    padding: var(--space-1) var(--space-1);
+    width: 100%;
+    padding: var(--space-1) var(--space-2);
     border: none;
     background: transparent;
     color: var(--color-text);
-    font-size: var(--fs-sm);
+    font-size: var(--fs-xs);
     cursor: pointer;
     text-align: left;
     border-radius: var(--radius-sm);
@@ -114,6 +147,7 @@
   .summary:hover {
     background: var(--color-hover);
   }
+  .block-header-actions { flex-shrink: 0; display: inline-flex; align-items: center; }
   .toggle-icon {
     display: inline-flex;
     align-items: center;
@@ -132,35 +166,44 @@
   }
   .expanded .toggle-icon { transform: rotate(90deg); }
   .label {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
     font-family: var(--font-mono, monospace);
     font-size: var(--fs-xs);
+    color: var(--color-text);
+  }
+  .label-ico {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
     color: var(--color-text-muted);
-    white-space: nowrap;
+  }
+  .label-text {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .badge {
     font-size: var(--fs-xs);
-    font-family: var(--font-mono, monospace);
-    padding: 1px 8px;
-    border-radius: 999px;
-    background: oklch(0.35 0.09 75);
-    color: #fff;
+    color: var(--color-error);
+    flex-shrink: 0;
   }
   .exit {
     font-family: var(--font-mono, monospace);
     font-size: var(--fs-xs);
-    padding: 1px 8px;
-    border-radius: 999px;
-    background: oklch(0.28 0.06 150);
-    color: oklch(0.85 0.08 150);
+    color: var(--color-success);
+    flex-shrink: 0;
   }
   .exit.error {
-    background: oklch(0.32 0.12 25);
-    color: oklch(0.85 0.1 25);
+    color: var(--color-error);
   }
   .detail {
-    padding: var(--space-1) var(--space-3) var(--space-2);
+    border-top: var(--border-width) solid var(--color-border);
+    padding: var(--space-2);
     max-height: 400px;
     overflow-y: auto;
   }
@@ -193,7 +236,7 @@
     overflow-x: auto;
   }
   .output.stderr {
-    border-left: 3px solid oklch(0.55 0.16 25);
+    color: oklch(0.82 0.11 25);
   }
   .output.fallback {
     margin-top: var(--space-2);

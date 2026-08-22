@@ -64,11 +64,11 @@
 
 ```
 ┌────────────────────────────────┐
-│ [类型 ▾] [状态 ▾] [搜索…] (12)  │  ← 过滤工具条（行高 36px，底部 border）
-├────────────────────────────────┤
-│ 10:24:03                       │  ← 时间线条目（--fs-xs 时间戳）
-│ [complete_scope] ✓ ok          │  ← hook 徽标 + 三态终态徽标
-│  “分析电池健康度”               │  ← 会话标题摘要（truncate）
+│ [类型 ▾] [状态 ▾] (12)         │  ← 过滤工具条 + 计数
+│ ─────────────────────────────────────────────     │
+│ 10:24:03                       │  ← 时间线条目（--fs-xs 时间戳，短格式 HH:mm:ss）
+│ [complete_scope] ✓ ok          │  ← hook 徽标 + 四态终态徽标
+│  {decision 摘要}               │  ← 决策/错误摘要（truncate）
 │   ▸ 展开详情                    │  ← 点击条目展开/折叠
 │   [在会话中定位]                │  ← 次要操作
 │ ───────────────────────────────│
@@ -79,8 +79,9 @@
 ```
 
 * 容器：`--color-surface` 背景，`overflow-y: auto`；列表条目行高 28px、`--fs-sm`，hover 时 `--color-hover` 背景。
-* **过滤工具条**（最上层固定）：三个过滤控件 + 计数。类型下拉（`hook_defs_list` 驱动，4 个 hook：complete_scope / match_topic / revise_topic / score_feedback + 「全部」）；状态下拉（三态终态 + 「全部」）；会话搜索输入框（按会话标题模糊匹配）。结果计数显示在条末（`--fs-xs` `--color-text-muted`）；`↻` 刷新按钮重拉列表。过滤条件变化即时重渲染，不改变时间倒序主序。
-* **时间线条目**：`created_at` 倒序（新在上）。行内容 = 时间戳（`--fs-xs` `--color-text-muted`）+ hook 徽标（类型短名，等宽 `--font-mono`，底色 `--color-elevated`）+ 终态徽标（见 §3 映射）+ 会话标题摘要（单行 truncate）。终态徽标是最强视觉锚点，颜色即语义。
+* **过滤工具条**（面板标题栏下方，对齐课题面板 `filter-bar` 词汇：surface 底 + 圆角容器）：两个过滤控件 + 结果计数。类型下拉（`hook_defs_list` 驱动，4 个 hook：complete_scope / match_topic / revise_topic / score_feedback + 「全部」）；状态下拉（四态 + 「全部」）。结果计数显示在条末（`--fs-xs` `--color-text-muted`）。过滤条件变化即时重渲染，不改变时间倒序主序。
+* **面板标题栏**（对齐 ToolPanel / TopicPanel `panel-toolbar` 词汇）：标题 `views.hookJudgements` + 刷新按钮（`icon-btn` 词汇，26px 方形）。注：裁决记录无会话标题字段，不做会话搜索框（需求收敛，见 lifecycle 记录）。
+* **时间线条目**：`created_at` 倒序（新在上）。行内容 = 短时间戳（`HH:mm:ss` `--fs-xs` `--color-text-muted`，完整时间 title 悬停）+ hook 徽标（i18n 短名，等宽 `--font-mono`，底色 `--color-elevated`）+ 终态徽标（见 §3 映射，小号文字 + 语义色文字色，无底色/圆点/动画）+ 决策/错误摘要（单行 truncate，`--fs-xs`）。
 * **详情展开**（点击条目行任意处切换）：展开区为条目下方缩进块（`--color-elevated` 背景、`--radius-sm`、`--space-2` 内边距），分字段展示：
   * 元信息行：模型名、耗时 `duration_ms`、尝试次数 `attempts`（`--fs-xs` `--color-text-muted`）。
   * `payload`（裁决输入）与 `decision`（裁决输出/降级值）：等宽字体 `--font-mono` 的折叠代码块（JSON 原样，`--fs-xs`），超出面板宽度横向滚动。
@@ -94,40 +95,39 @@
 ```
 …消息 n（锚点）…
 ┌─────────────────────────────────────────────┐
-│ ⟳ 裁决中 · complete_scope          [⏱ 1.2s] │  ← pending：spinner + 动态耗时
+│ ◌ complete_scope · 1.2s             ▸      │  ← pending 折叠行：◌ + hook 名 + 动态耗时
 └─────────────────────────────────────────────┘
 ┌─────────────────────────────────────────────┐
-│ ✓ ok · complete_scope                ▸      │  ← 终态：徽标 + 摘要 + 展开箭头
-│   ┌─ 展开详情（--elevated 背景）──────────┐  │
-│   │ 模型 gpt-4o-flash · 1 次 · 486ms      │  │
-│   │ payload: { … }  decision: { … }       │  │
-│   └─────────────────────────────────────┘  │
-└─────────────────────────────────────────────┘
-┌─────────────────────────────────────────────┐
-│ ⚠ downgraded · complete_scope       ▸      │  ← 降级态：黄色徽标 + 悬停原因
-│  降级原因：JSON 解析失败，已用默认值兜底     │
+│ complete_scope                      ▸      │  ← 终态折叠行：类型锚点（正文色）+ chevron
+│ ┌─ 展开 ──────────────────────────────────┐ │
+│ │ ✓ 成功 · 1.2s          ← 第一眼：结果行   │ │
+│ │ 决策依据摘要（decision / error）          │ │
+│ │ 模型 gpt-4o-flash · 1 次 · 486ms         │ │
+│ │ payload / attempts_detail / raw / …      │ │
+│ └─────────────────────────────────────────┘ │
 └─────────────────────────────────────────────┘
 ```
 
 * **锚点语义**：卡片渲染在触发裁决的锚点消息（`anchor_message_index = round.startIndex + mi`）块下方，与消息共享左右内边距；**不进入 `rounds` 消息数组**，作为该消息附属渲染块（`{@render}` / 独立组件插槽）挂载，因此不改变消息序号、不影响虚拟滚动。
-* **两阶段实时进度**（由 `StateChange::HookJudgements` 事件驱动，`pending` → 终态二选一推送）：
-  * `pending`：行内 spinner（CSS 旋转圆环，`--color-text-muted`）+ 「裁决中 · <hook 名>」+ 动态耗时（`--fs-xs`）；终态事件到达后原子替换为终态卡，不做动画过渡。
-  * 终态三选一：`ok` / `retried_ok` / `downgraded`（徽标映射见 §3）。
-* **终态卡结构**：单行 = 状态徽标（字符 + 语义色）+ hook 名 + 右侧 `▸` 展开箭头（点击整卡切换）。悬停（桌面）显示 tooltip：`ok` = 「一次成功」；`retried_ok` = 「首次失败，重试后成功」；`downgraded` = 「重试后仍失败，使用降级值兜底」。
-* **展开详情**：点击卡片展开（`--color-elevated` 背景、`--radius-sm`），内容与面板详情同源同格式：元信息行（模型 / 尝试次数 / 耗时）+ `payload` / `decision` 等宽 JSON 折叠块 + `attempts_detail`（重试明细）+ `error`（降级原因，`--color-warning`）。卡片宽度随消息区，内容横向滚动。
-* **降级态附加提示**：`downgraded` 卡默认在徽标行下方展示一行降级原因摘要（`--fs-xs` `--color-warning`，截断 + 展开查看全文），让用户无需展开即可感知「裁决未按预期执行」。
-* 视觉基线：卡 `--fs-sm`、行高 28px、内边距 `--space-2`、边框 `--color-border` 淡描边、圆角 `--radius-sm`；状态色仅作用于徽标字符与降级提示行，卡片背景保持 surface，不整卡染色（避免喧宾夺主）。
+* **信息层级（用户确认）**：折叠行锚定「类型 + 是否执行中」——终态只显示 hook 名（正文色 `--color-text`，与其他卡片折叠行主体一致，无徽标底色）；`pending` 时额外显示静态 ◌（muted）+ 动态耗时，保证执行进度在折叠行实时可见。结果留给展开第一眼。
+* **展开第一眼 = 结果行**（`.verdict`，`border-bottom` 分隔）：状态字符（✓/↻/⚠/◌，小号非加粗）+ 状态文字（语义色）+ pending 动态耗时；紧随其后为决策依据（decision 摘要正文色 / error 错误色），再往下才是元信息与各详情折叠块（payload / attempts_detail / raw_response / decision / error，`--color-elevated` 底 + `--radius-sm`，与面板详情同源同格式）。
+* **两阶段实时进度**（由 `StateChange::HookJudgements` 事件驱动，`pending` → 终态二选一推送）：pending 折叠行 = 「◌ hook 名 · 耗时」（静态字符，无 spinner 动画）；终态事件到达后原子替换为纯类型折叠行，不做动画过渡。
+* **悬停语义提示**（桌面）：结果行 title：`ok` = 「一次成功」；`retried_ok` = 「首次失败，重试后成功」；`downgraded` = 「重试后仍失败，使用降级值兜底」。
+* 视觉基线：工具类应用克制原则——中性表面 `--color-surface` + 淡边框 + 圆角 `--radius-sm`，**无**左侧彩色 accent、无整卡染色、无动画闪烁；语义色仅用于小号状态字符（✓/↻/⚠，非加粗）；折叠条 = `summary` 按钮 + `toggle-icon` chevron（展开旋转 90°）；左右 `margin` 对齐消息正文（`--space-4`），正文信息（状态文字 / 决策摘要）用 `--color-text` 与消息正文一致，`--color-text-muted` 仅用于时间戳等次要信息。
+* 消息区卡片统一规范（适用于 JudgementCard / NudgeBlock / ThinkingBlock / ToolCallBlock / ToolResultBlock 全部内联块）：`--color-surface` 底 + `--color-border` 边框 + `--radius-sm`，无 accent 竖条、无混合底色、无装饰动画；折叠条为整行可点 `summary`（div，`role="button"`，padding `space-1 space-2`、fs-xs、hover 背景），行内唯一独立按钮是 CopyButton（`stopPropagation`），行尾 chevron 为**纯装饰 span**（非按钮，旋转指示展开态）；正文信息 `--color-text`，类型标签/元信息 `--color-text-muted`；展开详情 `border-top` 分隔 + `space-2` padding。代码输出块（JSON/stdout）保留深色 oklch 底（功能性）。交互模型与课题面板一致：整行可点 + 行内独立操作按钮。
+* **折叠行统一布局**（5 卡一致）：`[图标?] 主体文字(flex:1 + truncate) → CopyButton → chevron`。CopyButton 为 22px 定高，即折叠行高度基准（上下 padding `space-1` → 总高 30px，所有卡片一致）；JudgementCard 同样提供 CopyButton（复制完整裁决记录 JSON），`.summary` 均含 `width:100%` + `border-radius`。工具卡图标去 emoji：工具执行（ToolCallBlock）= lucide `terminal` 14px stroke SVG、工具返回（ToolResultBlock）= lucide `monitor` 14px stroke SVG；图标 muted（装饰性），主体工具名正文色。
+* **详情折叠块（`details.field`）统一**：隐藏原生 marker（`list-style:none` + `::-webkit-details-marker{display:none}`），summary 为 flex 行 + 前置 `.field-chevron`（与折叠行 `toggle-icon` 同一 chevron 词汇：14px 容器 / 12px svg / muted，`[open]` 旋转 90°），杜绝浏览器默认 🔻 三角。JudgementCard 与 HookJudgementPanel 两处 `.field` 全部对齐。
 
 ### 3. 状态汇总 token 映射表
 
 | 状态 | 语义 | 色 token | 徽标字符 | 面板条目 | 内联卡 | 典型场景 |
 | ---- | ---- | -------- | -------- | -------- | ------ | -------- |
-| pending | 执行中 | `--color-text-muted` | spinner（⟳） | —（不落终态列表主色，同列表展示为进行中） | 旋转圆环 + 动态耗时 | 首条事件已发、裁决未返回 |
-| ok | 一次成功 | `--color-success` | ✓ | `✓ ok` | `✓ ok · <hook>` | 首次调用即结构化解析成功 |
-| retried_ok | 重试后成功 | `--color-primary` | ↻ | `↻ retried_ok` | `↻ retried_ok · <hook>` | 首次失败、带反馈重试 1 次后成功 |
-| downgraded | 降级兜底 | `--color-warning` | ⚠ | `⚠ downgraded` | `⚠ downgraded · <hook>` + 原因行 | 重试后仍失败，使用 neutral_fallback |
+| pending | 执行中 | `--color-text-muted` | ◌（静态） | —（列表展示为进行中） | 折叠行 `◌ hook 名 · 耗时`；展开结果行「裁决中 + 耗时」 | 首条事件已发、裁决未返回 |
+| ok | 一次成功 | `--color-success` | ✓ | `✓ 成功` | 展开结果行 `✓ 成功` | 首次调用即结构化解析成功 |
+| retried_ok | 重试后成功 | `--color-primary` | ↻ | `↻ 重试成功` | 展开结果行 `↻ 重试成功` | 首次失败、带反馈重试 1 次后成功 |
+| downgraded | 降级兜底 | `--color-warning` | ⚠ | `⚠ 已降级` | 展开结果行 `⚠ 已降级` + 原因 | 重试后仍失败，使用 neutral_fallback |
 
-* 次要信息（时间戳 / 元信息 / hook 名）：`--color-text-muted`；hook 徽标底色：`--color-elevated`。
+* 次要信息（时间戳 / 元信息 / 面板 hook 类型标签）：`--color-text-muted`；消息卡折叠行主体（hook 名）为正文色 `--color-text`，无徽标底色。
 * 降级原因 / 错误字段：`--color-warning`（原因）与 `--color-error`（仅渲染于展开详情错误块，条目行不使用）。
 * 字体：列表与卡片正文 `--fs-sm`；时间戳/元信息/展开 JSON `--fs-xs`；JSON 与 hook 名 `--font-mono`。
 

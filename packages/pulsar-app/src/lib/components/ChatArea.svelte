@@ -3,7 +3,7 @@
   import JudgementCard from "./JudgementCard.svelte";
   import ChatInput from "./ChatInput.svelte";
   import type { Message, SamplingParams, ThinkingConfig } from "$lib/types";
-  import type { HookJudgementRecord } from "$lib/types";
+  import type { HookDefMeta, HookJudgementRecord } from "$lib/types";
   import { t } from "$lib/i18n";
   import { errorMessage } from "$lib/errorMessage";
   import { useViewContext } from "$lib/layout/viewContext";
@@ -218,6 +218,7 @@
 
   // ── 消息内联裁决卡：锚点附属渲染块（旁路列表，不插入消息数组）──
   let judgements = $state<HookJudgementRecord[]>([]);
+  let hookDefs = $state<HookDefMeta[]>([]);
   let unlistenJudgements: (() => void) | null = null;
 
   /** 拉取当前会话的裁决记录（按 conversationId 过滤，后端倒序）。 */
@@ -227,10 +228,14 @@
       return;
     }
     try {
-      const list = await api.call(c.hookJudgementsList, {
-        filters: { conversationId: activeConversationId },
-      });
+      const [list, defs] = await Promise.all([
+        api.call(c.hookJudgementsList, {
+          filters: { conversationId: activeConversationId },
+        }),
+        api.call(c.hookDefsList, undefined),
+      ]);
       judgements = list;
+      hookDefs = defs;
     } catch {
       // 裁决卡为附属展示，拉取失败静默降级（不影响主消息渲染）。
       judgements = [];
@@ -258,6 +263,12 @@
   /** 某条消息索引关联的裁决记录（同一锚点可能挂载多个 hook 裁决，全量渲染）。 */
   function judgementsFor(messageIndex: number): HookJudgementRecord[] {
     return judgements.filter((j) => j.anchor_message_index === messageIndex);
+  }
+
+  /** hook 展示名（label 是 i18n key；未知类型回退 system_type 原文）。 */
+  function hookLabelFor(record: HookJudgementRecord): string {
+    const def = hookDefs.find((d) => d.system_type === record.hook_type);
+    return def ? t(def.label) : record.hook_type;
   }
 </script>
 
@@ -293,7 +304,7 @@
             />
             {#each judgementsFor(round.startIndex + mi) as record (record.id)}
               <!-- 裁决卡：锚点消息附属渲染块（旁路列表，不插入消息数组、不影响 message_index） -->
-              <JudgementCard {record} />
+              <JudgementCard {record} hookLabel={hookLabelFor(record)} />
             {/each}
           {/each}
           {#if isRunning && i === rounds.length - 1}

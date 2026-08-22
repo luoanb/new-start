@@ -44,6 +44,8 @@
     }),
   );
 
+  const hasFilter = $derived(filterHookType !== "" || filterStatus !== "");
+
   /** 全量拉取（后端按 created_at 倒序返回）。 */
   async function refresh() {
     loading = true;
@@ -78,7 +80,22 @@
 
   // ── 工具 ──
 
-  function formatTime(tsMs: number): string {
+  /** 列表条目短时间戳（HH:mm:ss）；完整时间用于 title 悬停。 */
+  function formatTimeShort(tsMs: number): string {
+    try {
+      return new Intl.DateTimeFormat("zh-CN", {
+        timeZone: "Asia/Shanghai",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      }).format(new Date(tsMs));
+    } catch {
+      return String(tsMs);
+    }
+  }
+
+  function formatTimeFull(tsMs: number): string {
     try {
       return new Intl.DateTimeFormat("zh-CN", {
         timeZone: "Asia/Shanghai",
@@ -99,6 +116,20 @@
   function hookLabel(record: HookJudgementRecord): string {
     const def = hookDefs.find((d) => d.system_type === record.hook_type);
     return def ? t(def.label) : record.hook_type;
+  }
+
+  /** 状态文本（i18n 映射）。 */
+  function statusLabelOf(record: HookJudgementRecord): string {
+    switch (record.status) {
+      case "pending":
+        return t("judgement.status.pending");
+      case "ok":
+        return t("judgement.status.ok");
+      case "retried_ok":
+        return t("judgement.status.retriedOk");
+      default:
+        return t("judgement.status.downgraded");
+    }
   }
 
   /** 解析 attempts_detail JSON（全量原文保留，解析失败显示原文）。 */
@@ -134,31 +165,40 @@
     <button class="error-banner" type="button" onclick={() => (errorMsg = "")}>{errorMsg}</button>
   {/if}
 
-  <div class="toolbar">
-    <label>
-      {t("judgement.hookType")}
-      <Select
-        bind:value={filterHookType}
-        options={hookTypeOptions}
-        onchange={(v) => (filterHookType = String(v))}
-      />
-    </label>
-    <label>
-      {t("judgement.statusLabel")}
-      <Select
-        bind:value={filterStatus}
-        options={statusOptions}
-        onchange={(v) => (filterStatus = String(v))}
-      />
-    </label>
-    <button type="button" class="refresh-btn" onclick={() => refresh()} disabled={loading}>
-      {loading ? "…" : "↻"}
-    </button>
+  <!-- 面板标题栏：对齐 ToolPanel / TopicPanel 的 panel-toolbar 词汇 -->
+  <div class="panel-toolbar">
+    <span class="panel-title">{t("views.hookJudgements")}</span>
+    <div class="toolbar-actions">
+      <button
+        class="icon-btn"
+        onclick={() => refresh()}
+        disabled={loading}
+        title={t("judgement.refresh")}
+        aria-label={t("judgement.refresh")}
+      >
+        <svg class="icon" aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- 过滤条：类型 / 状态下拉 + 结果计数 -->
+  <div class="filter-bar">
+    <Select
+      bind:value={filterHookType}
+      options={hookTypeOptions}
+      onchange={(v) => (filterHookType = String(v))}
+    />
+    <Select
+      bind:value={filterStatus}
+      options={statusOptions}
+      onchange={(v) => (filterStatus = String(v))}
+    />
+    <span class="count">{filtered.length}</span>
   </div>
 
   <div class="list">
     {#if filtered.length === 0}
-      <p class="empty">{t("judgement.empty")}</p>
+      <p class="empty">{hasFilter ? t("judgement.noMatch") : t("judgement.empty")}</p>
     {:else}
       {#each filtered as record (record.id)}
         <div
@@ -170,40 +210,23 @@
             class="row"
             onclick={() => (expandedId = expandedId === record.id ? null : record.id)}
           >
-            <span class="status-badge {record.status}">
-              {record.status === "pending"
-                ? t("judgement.status.pending")
-                : record.status === "ok"
-                  ? t("judgement.status.ok")
-                  : record.status === "retried_ok"
-                    ? t("judgement.status.retriedOk")
-                    : t("judgement.status.downgraded")}
+            <span class="time" title={formatTimeFull(record.created_at)}>
+              {formatTimeShort(record.created_at)}
             </span>
-            <span class="hook-type" title={record.hook_type}>{hookLabel(record)}</span>
-            <span class="time">{formatTime(record.created_at)}</span>
-            <span class="summary">
-              {#if record.status === "pending"}
-                <span class="pending-dot" aria-hidden="true"></span>
-              {:else if record.error}
+            <span class="hook-badge" title={record.hook_type}>{hookLabel(record)}</span>
+            <span class="status-badge {record.status}">{statusLabelOf(record)}</span>
+            <span class="summary-txt">
+              {#if record.error}
                 {record.error}
-              {:else}
-                {record.decision ? prettyJson(record.decision).replace(/\s+/g, " ").slice(0, 80) : ""}
+              {:else if record.decision}
+                {prettyJson(record.decision).replace(/\s+/g, " ").slice(0, 80)}
               {/if}
             </span>
-            <svg
-              class="chevron"
-              class:flip={expandedId === record.id}
-              viewBox="0 0 24 24"
-              width="14"
-              height="14"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
+            <span class="toggle-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m9 18 6-6-6-6" />
+              </svg>
+            </span>
           </button>
 
           {#if expandedId === record.id}
@@ -217,20 +240,32 @@
                   {record.model_provider ?? "-"}/{record.model_id ?? "-"}
                 </span>
                 {#if record.anchor_message_index != null}
-                  <button type="button" class="locate-btn" onclick={() => locate(record)}>
+                  <button type="button" class="btn btn-sm locate-btn" onclick={() => locate(record)}>
                     {t("judgement.locate")}
                   </button>
                 {/if}
               </div>
 
               <details class="field">
-                <summary>{t("judgement.payload")}</summary>
+                <summary>
+                  <span class="field-chevron" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="m9 18 6-6-6-6" />
+                    </svg>
+                  </span>
+                  {t("judgement.payload")}
+                </summary>
                 <pre>{prettyJson(record.payload)}</pre>
               </details>
 
               {#if parseAttempts(record.attempts_detail).length > 0}
                 <details class="field">
                   <summary>
+                    <span class="field-chevron" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="m9 18 6-6-6-6" />
+                      </svg>
+                    </span>
                     {t("judgement.attemptsDetail")}
                     <span class="attempts-count">({parseAttempts(record.attempts_detail).length})</span>
                   </summary>
@@ -247,20 +282,41 @@
               {/if}
 
               <details class="field">
-                <summary>{t("judgement.rawResponse")}</summary>
+                <summary>
+                  <span class="field-chevron" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="m9 18 6-6-6-6" />
+                    </svg>
+                  </span>
+                  {t("judgement.rawResponse")}
+                </summary>
                 <pre>{record.raw_response}</pre>
               </details>
 
               {#if record.decision}
                 <details class="field">
-                  <summary>{t("judgement.decision")}</summary>
+                  <summary>
+                    <span class="field-chevron" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="m9 18 6-6-6-6" />
+                      </svg>
+                    </span>
+                    {t("judgement.decision")}
+                  </summary>
                   <pre>{prettyJson(record.decision)}</pre>
                 </details>
               {/if}
 
               {#if record.error}
                 <details class="field">
-                  <summary>{t("judgement.error")}</summary>
+                  <summary>
+                    <span class="field-chevron" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="m9 18 6-6-6-6" />
+                      </svg>
+                    </span>
+                    {t("judgement.error")}
+                  </summary>
                   <pre>{record.error}</pre>
                 </details>
               {/if}
@@ -273,6 +329,7 @@
 </div>
 
 <style>
+  /* 面板容器：对齐 ToolPanel / TopicPanel 间距（padding / gap / flex 约束） */
   .judgement-panel {
     display: flex;
     flex-direction: column;
@@ -280,28 +337,64 @@
     min-height: 0;
     gap: var(--space-2);
     padding: var(--space-2);
+    overflow: auto;
   }
-  .toolbar {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-    align-items: end;
+  .error-banner {
+    background: var(--color-error);
+    color: #fff;
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-md);
+    font-size: var(--fs-xs);
+    cursor: pointer;
   }
-  .toolbar label {
+  /* 面板标题栏：对齐 panel-toolbar / panel-title / toolbar-actions / icon-btn 词汇 */
+  .panel-toolbar {
     display: flex;
-    flex-direction: column;
-    gap: 2px;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .panel-title {
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    color: var(--color-text);
+  }
+  .toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+  .icon-btn {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    width: 26px;
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-muted);
+    transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+  }
+  .icon-btn:hover:not(:disabled) { background: var(--color-hover); color: var(--color-text); }
+  .icon-btn:disabled { opacity: 0.4; cursor: default; }
+  .icon-btn .icon { display: block; }
+  /* 过滤条：surface 底 + 圆角容器（对齐 TopicPanel filter-bar 词汇） */
+  .filter-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 2px;
+    border: var(--border-width) solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+  }
+  .filter-bar .count {
+    margin-left: auto;
+    padding: 0 var(--space-1);
     font-size: var(--fs-xs);
     color: var(--color-text-muted);
-  }
-  .refresh-btn {
-    height: 28px;
-    padding: 0 8px;
-    border: var(--border-width) solid var(--color-border);
-    border-radius: var(--radius-sm);
-    background: var(--color-surface);
-    color: var(--color-text);
-    cursor: pointer;
   }
   .list {
     flex: 1;
@@ -309,22 +402,22 @@
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    font-size: var(--fs-xs);
+    gap: var(--space-1);
+    font-size: var(--fs-sm);
   }
   .empty {
     padding: var(--space-4);
     color: var(--color-text-muted);
+    font-size: var(--fs-xs);
   }
+  /* 时间线条目卡片：对齐 topic-card（bg 底 + radius-md） */
   .record {
     border: var(--border-width) solid var(--color-border);
-    border-radius: var(--radius-sm);
-    background: var(--color-surface);
+    border-radius: var(--radius-md);
+    background: var(--color-bg);
     overflow: hidden;
   }
-  .record.expanded {
-    border-color: var(--color-primary);
-  }
+  .record.expanded { border-color: var(--color-primary); }
   .row {
     display: flex;
     align-items: center;
@@ -337,53 +430,56 @@
     cursor: pointer;
     text-align: left;
   }
-  .row:hover {
-    background: var(--color-hover);
-  }
-  .status-badge {
-    flex-shrink: 0;
-    padding: 1px 6px;
-    border-radius: var(--radius-sm);
-    font-weight: 600;
-    white-space: nowrap;
-  }
-  .status-badge.pending { background: var(--color-hover); color: var(--color-text-muted); }
-  .status-badge.ok { background: rgba(46, 160, 67, 0.16); color: #2ea043; }
-  .status-badge.retried_ok { background: rgba(33, 139, 253, 0.16); color: #218bfd; }
-  .status-badge.downgraded { background: rgba(214, 137, 16, 0.18); color: #d68910; }
-  .hook-type {
-    flex-shrink: 0;
-    color: var(--color-text);
-    font-weight: 500;
-  }
+  .row:hover { background: var(--color-hover); }
   .time {
     flex-shrink: 0;
+    font-size: var(--fs-xs);
+    font-family: var(--font-mono, monospace);
     color: var(--color-text-muted);
   }
-  .summary {
+  .hook-badge {
+    flex-shrink: 0;
+    font-family: var(--font-mono, monospace);
+    font-size: var(--fs-xs);
+    color: var(--color-text-muted);
+    white-space: nowrap;
+  }
+  /* 状态徽标：克制——小号文字 + 语义色文字色，无底色/圆点/动画。 */
+  .status-badge {
+    flex-shrink: 0;
+    font-size: var(--fs-xs);
+    color: var(--color-text-muted);
+    white-space: nowrap;
+  }
+  .status-badge.ok { color: var(--color-success); }
+  .status-badge.retried_ok { color: var(--color-primary); }
+  .status-badge.downgraded { color: var(--color-warning); }
+  .summary-txt {
     flex: 1;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--color-text-muted);
+    font-size: var(--fs-xs);
   }
-  .pending-dot {
-    display: inline-block;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--color-primary);
-    animation: blink 1s ease-in-out infinite;
-    vertical-align: middle;
-  }
-  @keyframes blink { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
-  .chevron {
-    flex-shrink: 0;
+  .toggle-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
     color: var(--color-text-muted);
+    flex-shrink: 0;
     transition: transform var(--duration-fast) var(--ease-out);
+    transform-origin: center;
   }
-  .chevron.flip { transform: rotate(180deg); }
+  .toggle-icon svg {
+    width: 12px;
+    height: 12px;
+    display: block;
+  }
+  .expanded .toggle-icon { transform: rotate(90deg); }
 
   .detail {
     border-top: 1px solid var(--color-border);
@@ -404,30 +500,43 @@
     color: var(--color-text);
   }
   .locate-btn {
-    padding: 2px 8px;
-    border: var(--border-width) solid var(--color-primary);
-    border-radius: var(--radius-sm);
-    background: transparent;
     color: var(--color-primary);
-    cursor: pointer;
+    border-color: color-mix(in oklch, var(--color-primary) 35%, transparent);
   }
-  .locate-btn:hover {
-    background: var(--color-primary);
-    color: var(--color-bg);
+  .locate-btn:hover:not(:disabled) {
+    background: color-mix(in oklch, var(--color-primary) 10%, transparent);
   }
   .field {
     border: var(--border-width) solid var(--color-border);
     border-radius: var(--radius-sm);
-    background: var(--color-bg);
+    background: var(--color-elevated);
   }
   .field summary {
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
     padding: var(--space-1) var(--space-2);
     cursor: pointer;
     color: var(--color-text-muted);
     user-select: none;
   }
+  .field summary::-webkit-details-marker { display: none; }
   .field summary:hover { color: var(--color-text); }
   .attempts-count { color: var(--color-text-muted); }
+  .field-chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    color: var(--color-text-muted);
+    transition: transform var(--duration-fast) var(--ease-out);
+    transform-origin: center;
+  }
+  .field-chevron svg { width: 12px; height: 12px; display: block; }
+  .field[open] .field-chevron { transform: rotate(90deg); }
   .field pre {
     margin: 0;
     padding: var(--space-2);
@@ -449,9 +558,4 @@
   }
   .attempt-no { font-weight: 600; }
   .attempt-error { color: var(--color-error, #c0392b); }
-  .error-banner {
-    font-size: var(--fs-xs);
-    color: var(--color-error, #c0392b);
-    cursor: pointer;
-  }
 </style>

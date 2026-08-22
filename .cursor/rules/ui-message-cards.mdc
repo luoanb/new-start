@@ -1,0 +1,80 @@
+---
+description: 消息区内联卡片（裁决/简报/思考/工具执行/工具返回）的统一视觉与交互规范
+globs: "**/*.svelte"
+alwaysApply: true
+---
+
+# UI — 消息区内联卡片设计规范
+
+适用于消息区 5 个内联折叠块：`JudgementCard`（裁决）/ `NudgeBlock`（轮询简报）/ `ThinkingBlock`（思考过程）/ `ToolCallBlock`（工具执行）/ `ToolResultBlock`（工具返回）。改动这些组件或新增同类卡片时必须遵循。
+
+## 原则
+
+工具类应用，设计克制：**中性表面 + 淡边框 + 小号文字，语义色只用于小号状态文字**。无 accent 竖条、无混合底色、无彩底徽标、无装饰动画。
+
+## 容器
+
+```css
+margin-top: var(--space-2);           /* 裁决卡额外左右 margin var(--space-4) 对齐消息正文 */
+border-radius: var(--radius-sm);
+background: var(--color-surface);
+border: var(--border-width) solid var(--color-border);
+overflow: hidden;
+```
+
+## 折叠行（collapsed row）
+
+- **整行可点**：`div.summary[role=button][tabindex=0]` + `onclick` + `onkeydown`（Enter/Space 切换，`preventDefault`），配 `svelte-ignore a11y_*` 注释。
+- **统一布局**：`[图标?] 主体文字(flex:1 + truncate) → CopyButton → chevron`，`gap: 6px`。
+- **高度**：CopyButton 22px 定高为基准 + 上下 padding `var(--space-1)` → 折叠行总高 30px，全卡一致。
+- summary 样式：`width:100%`、`padding: var(--space-1) var(--space-2)`、`font-size: var(--fs-xs)`、`border-radius: var(--radius-sm)`、hover `var(--color-hover)`。
+- **CopyButton**（行内唯一独立按钮，置于 chevron 左侧）：内嵌 12px SVG，`stopPropagation`；桌面 `@media (hover:hover)` 下 hover/focus-within 才显示，触屏始终可见（见 `ui-hover-reveal.mdc`）。
+- **chevron 是纯装饰 span**（`toggle-icon`，非按钮）：14px 容器 / 12px SVG / muted / `stroke-width="2.5"`，`.expanded` 时 `rotate(90deg)`。
+
+## 颜色层级
+
+- 折叠行**主体信息**（工具名 / 简报摘要 / hook 名）：`--color-text`。
+- **类型标签 / 元信息**（🧠 思考过程 label、call-id、section-label、耗时、exit-code 前缀等）：`--color-text-muted`。
+- **语义色仅用于小号状态文字**：成功 `--color-success`（exit 0）；失败 `--color-error`（exit≠0、timeout）；重试成功 `--color-primary`；降级 `--color-warning`。无底色 / 无圆点 / 无动画。
+
+## 图标
+
+- **去 emoji**，用 lucide 风格 14px inline SVG（`fill=none`、`stroke=currentColor`、`stroke-width=2`、`stroke-linecap/join=round`、`aria-hidden`）。
+- 图标为装饰，用 muted 色；主体文字保持正文色。
+- 已定：工具执行 = `terminal`；工具返回 = `monitor`。
+
+## 展开详情（expanded）
+
+```css
+border-top: var(--border-width) solid var(--color-border);
+padding: var(--space-2);
+max-height: 400px;
+overflow-y: auto;
+```
+
+## 详情折叠块（`details.field`）
+
+- **隐藏原生 marker**：`summary { list-style: none }` + `summary::-webkit-details-marker { display: none }`，杜绝浏览器默认三角。
+- summary 为 flex 行 + 前置 `.field-chevron`（与折叠行 `toggle-icon` 同一词汇：14px 容器 / 12px SVG / muted / `[open]` 旋转 90°）。
+- 容器：`--color-elevated` 底 + 淡边框 + `--radius-sm`。
+
+## 代码输出块（JSON / stdout / stderr）
+
+功能性深色底（唯一允许的异色块）：
+
+```css
+background: oklch(0.20 0.005 75);
+color: oklch(0.88 0.004 75);      /* stderr: oklch(0.82 0.11 25) */
+font-family: var(--font-mono, monospace);
+font-size: var(--fs-xs);
+```
+
+## 复制内容约定（CopyButton text）
+
+- 简报 / 思考 / 工具输出：复制自身 `content` 全文。
+- 工具执行：完整工具调用负载 JSON（工具名 + 参数）。
+- 裁决：完整裁决记录 JSON（含决策 / 错误 / 明细）。
+
+## 交互模型
+
+与课题面板一致：**整行可点展开/折叠 + 行内独立操作按钮**；不把 chevron 做成按钮，不把复制做成行级操作。

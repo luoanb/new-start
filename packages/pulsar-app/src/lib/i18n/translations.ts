@@ -405,6 +405,7 @@ export type Translations = {
     git: string;
     gitDiff: string;
     search: string;
+    hookJudgements: string;
   };
   searchPanel: {
     placeholder: string;
@@ -417,7 +418,6 @@ export type Translations = {
     loadFailed: string;
     results: string;
     blocks: string;
-    hookJudgements: string;
   };
   judgement: {
     status: {
@@ -440,6 +440,15 @@ export type Translations = {
     error: string;
     locate: string;
     empty: string;
+    noMatch: string;
+    running: string;
+    refresh: string;
+    tooltip: {
+      pending: string;
+      ok: string;
+      retriedOk: string;
+      downgraded: string;
+    };
     loadFailed: string;
   };
   hook: {
@@ -1051,6 +1060,7 @@ export const en: Translations = {
     git: "Git",
     gitDiff: "Diff",
     search: "Search",
+    hookJudgements: "Hook Judgements",
   },
   searchPanel: {
     placeholder: "Search symbols, functions, types…",
@@ -1063,7 +1073,6 @@ export const en: Translations = {
     loadFailed: "Search failed: {error}",
     results: "{n} results",
     blocks: "{n} blocks indexed · {ms} ms",
-    hookJudgements: "Hook Judgements",
   },
   judgement: {
     status: {
@@ -1086,6 +1095,15 @@ export const en: Translations = {
     error: "Error",
     locate: "Locate in conversation",
     empty: "No hook judgement records yet",
+    noMatch: "No matching records",
+    running: "Judging · {hook}",
+    refresh: "Refresh",
+    tooltip: {
+      pending: "Judgement in progress",
+      ok: "Succeeded on first try",
+      retriedOk: "Failed once, succeeded on retry",
+      downgraded: "Retries failed; fell back to neutral default",
+    },
     loadFailed: "Failed to load: {error}",
   },
   hook: {
@@ -1717,6 +1735,7 @@ export const zh: Translations = {
     git: "Git",
     gitDiff: "差异",
     search: "搜索",
+    hookJudgements: "Hook 判定",
   },
   searchPanel: {
     placeholder: "搜索符号、函数、类型…",
@@ -1729,7 +1748,6 @@ export const zh: Translations = {
     loadFailed: "搜索失败：{error}",
     results: "{n} 个结果",
     blocks: "索引 {n} 块 · {ms} ms",
-    hookJudgements: "Hook 判定",
   },
   judgement: {
     status: {
@@ -1752,13 +1770,22 @@ export const zh: Translations = {
     error: "错误",
     locate: "在会话中定位",
     empty: "暂无 Hook 判定记录",
+    noMatch: "无匹配记录",
+    running: "裁决中 · {hook}",
+    refresh: "刷新",
+    tooltip: {
+      pending: "裁决执行中",
+      ok: "一次成功",
+      retriedOk: "首次失败，重试后成功",
+      downgraded: "重试后仍失败，使用降级值兜底",
+    },
     loadFailed: "加载失败：{error}",
   },
   hook: {
-    completeScope: "范围完成裁决",
-    matchTopic: "课题匹配裁决",
-    reviseTopic: "课题修订裁决",
-    scoreFeedback: "评分反馈裁决",
+    completeScope: "范围完成",
+    matchTopic: "课题匹配",
+    reviseTopic: "课题修订",
+    scoreFeedback: "评分反馈",
   },
   fileExplorer: {
     addWorkspace: "添加工作区",

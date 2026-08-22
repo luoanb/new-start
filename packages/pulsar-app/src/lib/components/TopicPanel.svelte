@@ -478,27 +478,20 @@
     transition: opacity var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
   }
   .topic-name { font-size: var(--fs-xs); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 状态徽标：克制——小号文字 + 语义色文字色，无底色/圆点/动画（对齐面板统一规范）。 */
   .status-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
+    flex-shrink: 0;
     font-size: var(--fs-xs);
-    font-weight: 600;
-    padding: 1px 8px;
-    border-radius: var(--radius-sm);
-    background: var(--color-hover);
     color: var(--color-text-muted);
     white-space: nowrap;
   }
-  .status-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-  .status-badge.todo { color: var(--color-text-muted); }
-  .status-badge.in_progress { background: color-mix(in oklch, var(--color-primary) 12%, transparent); color: var(--color-primary); }
-  .status-badge.paused { background: color-mix(in oklch, var(--color-warning) 12%, transparent); color: var(--color-warning); }
-  .status-badge.done { background: color-mix(in oklch, var(--color-success) 12%, transparent); color: var(--color-success); }
-  .status-badge.cancelled { background: color-mix(in oklch, var(--color-error) 12%, transparent); color: var(--color-error); }
-  .status-badge.waiting_user { background: color-mix(in oklch, var(--color-warning) 12%, transparent); color: var(--color-warning); }
-  .status-badge.wrapping_up { background: color-mix(in oklch, var(--color-primary) 12%, transparent); color: var(--color-primary); }
-  .status-badge.blocked { background: color-mix(in oklch, var(--color-warning) 12%, transparent); color: var(--color-warning); }
+  .status-badge.in_progress { color: var(--color-primary); }
+  .status-badge.paused { color: var(--color-warning); }
+  .status-badge.done { color: var(--color-success); }
+  .status-badge.cancelled { color: var(--color-error); }
+  .status-badge.waiting_user { color: var(--color-warning); }
+  .status-badge.wrapping_up { color: var(--color-primary); }
+  .status-badge.blocked { color: var(--color-warning); }
   .progress-row { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-1); }
   .progress-bar-bg { flex: 1; height: 4px; background: var(--color-border); border-radius: 2px; overflow: hidden; }
   .progress-bar-fill { height: 100%; background: var(--color-primary); border-radius: 2px; transition: width var(--duration-normal) var(--ease-out); }
