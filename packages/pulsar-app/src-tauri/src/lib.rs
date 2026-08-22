@@ -36,6 +36,8 @@ use crate::fileops::gitops::{
     ConflictTake, GitBlameLine, GitBranchItem, GitCommitInfo, GitDiff, GitFileDiff, GitRepo,
     GitResetMode, GitResetPreview, GitShowFile, GitStashAction, GitStashEntry, GitStatusView,
 };
+use crate::fileops::search::chunk::SemanticSearchResult;
+use crate::fileops::search::retriever::Retriever;
 use crate::fileops::workspace::{WorkspaceEntry, WorkspaceView};
 use crate::net::{NetState, ServerConfig, ServerInfo};
 use crate::terminal::commands::{
@@ -956,16 +958,17 @@ async fn git_diff(
         .map_err(|error| error.payload())
 }
 
-/// 最近提交历史，默认 30 条。
+/// 最近提交历史，默认 30 条；`offset` 支持分页（`git log --skip`）。
 #[tauri::command]
 async fn git_log(
     gateway: State<'_, Gateway>,
     limit: Option<usize>,
+    offset: Option<usize>,
 ) -> TauriResult<Vec<GitCommitInfo>> {
     let svc = gateway.inner().git_service();
     let repo = svc.active_repo().await.map_err(|error| error.payload())?;
     svc.backend()
-        .log(&repo, limit.unwrap_or(30))
+        .log(&repo, limit.unwrap_or(30), offset.unwrap_or(0))
         .await
         .map_err(|error| error.payload())
 }
@@ -1582,6 +1585,20 @@ async fn fs_grep(
 }
 
 #[tauri::command]
+async fn fs_semantic_search(
+    gateway: State<'_, Gateway>,
+    query: String,
+    top_k: Option<usize>,
+    path: Option<String>,
+) -> TauriResult<SemanticSearchResult> {
+    let store = gateway.inner().workspace_store();
+    let ws = require_active_workspace(&store)?;
+    let index_root = gateway.inner().search_index_root();
+    Retriever::search(&index_root, &ws, &query, top_k, path.as_deref())
+        .map_err(|error| error.payload())
+}
+
+#[tauri::command]
 async fn fs_info(
     gateway: State<'_, Gateway>,
     path: String,
@@ -1915,6 +1932,7 @@ pub fn run() {
             fs_move,
             fs_glob,
             fs_grep,
+            fs_semantic_search,
             fs_info,
             get_home_dir,
             fs_suggest_abs,

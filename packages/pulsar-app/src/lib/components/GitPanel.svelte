@@ -210,6 +210,17 @@
     });
   }
 
+  /** 追加加载更早的提交历史（分页）。 */
+  async function loadMoreLog() {
+    await run(() => dataStore.loadMoreGitLog());
+  }
+
+  /** 把某提交中该文件的 diff 作为新面板打开到主区域。 */
+  function openCommitDiffPanel(f: GitShowFile) {
+    if (!activeRepo || !openCommit) return;
+    dataStore.openCommitDiff(activeRepo.id, openCommit, f.path);
+  }
+
   // ── 危险写开关 ──
   async function setDangerous(checked: boolean) {
     await run(() => dataStore.setDangerousWrites(checked));
@@ -476,10 +487,18 @@
           {:else}
             {#each commitFiles as f (f.path)}
               {@const { name, dir } = splitPath(f.path)}
-              <button
+              <div
                 class="commit-file"
                 class:open={openFile === f.path}
+                role="button"
+                tabindex="0"
                 onclick={() => void toggleFile(f)}
+                onkeydown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void toggleFile(f);
+                  }
+                }}
                 title={f.path}
               >
                 <span class="cf-name">{name}</span>
@@ -489,7 +508,18 @@
                 {:else}
                   <span class="cf-stat"><i class="add">+{f.additions}</i> <i class="del">-{f.deletions}</i></span>
                 {/if}
-              </button>
+                <button
+                  class="cf-open"
+                  disabled={f.is_binary}
+                  title={t("git.openCommitDiff")}
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    void openCommitDiffPanel(f);
+                  }}
+                >
+                  <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2h8v8" /><path d="M2 6v8h8" /><path d="m2 14 12-12" /></svg>
+                </button>
+              </div>
               {#if openFile === f.path}
                 {#if f.is_binary}
                   <p class="hint-muted">{t("git.binaryDiff")}</p>
@@ -514,6 +544,9 @@
       {/each}
       {#if (git?.log?.length ?? 0) === 0}
         <p class="hint-muted">{t("git.logEmpty")}</p>
+      {/if}
+      {#if git?.logHasMore}
+        <button class="log-more" onclick={() => void loadMoreLog()}>{t("git.logMore")}</button>
       {/if}
     {/if}
 
@@ -984,6 +1017,50 @@
     font-family: var(--font-mono);
     font-size: var(--fs-xs);
     overflow-x: auto;
+    /* 固定高度：详情区恒定高度，内容过长内部滚动，不受文件大小/布局影响 */
+    height: 320px;
+    overflow-y: auto;
+    /* .git-panel 是 flex 列布局；不加会因默认 flex-shrink:1 被压缩（overflow:auto 使 min-height 归零） */
+    flex-shrink: 0;
+  }
+  /* commit-file 行右侧「在主区域打开」icon 按钮 */
+  .cf-open {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    opacity: 0.6;
+  }
+  .cf-open:hover:not(:disabled) {
+    opacity: 1;
+    color: var(--color-primary);
+    background: var(--color-hover);
+  }
+  .cf-open:disabled { opacity: 0.3; cursor: default; }
+  /* 提交记录「加载更多」 */
+  .log-more {
+    display: block;
+    width: calc(100% - var(--space-8));
+    margin: var(--space-1) var(--space-4);
+    padding: var(--space-1);
+    border: var(--border-width) dashed var(--color-border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-muted);
+    font-size: var(--fs-xs);
+    cursor: pointer;
+  }
+  .log-more:hover {
+    color: var(--color-primary);
+    border-color: var(--color-primary);
   }
   .hunk-header {
     padding: 2px var(--space-2);

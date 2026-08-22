@@ -404,6 +404,19 @@ export type Translations = {
     fileEditor: string;
     git: string;
     gitDiff: string;
+    search: string;
+  };
+  searchPanel: {
+    placeholder: string;
+    search: string;
+    indexing: string;
+    noWorkspace: string;
+    noQuery: string;
+    empty: string;
+    openInEditor: string;
+    loadFailed: string;
+    results: string;
+    blocks: string;
     hookJudgements: string;
   };
   judgement: {
@@ -500,6 +513,8 @@ export type Translations = {
     groupLog: string;
     logEmpty: string;
     logLoading: string;
+    logMore: string;
+    openCommitDiff: string;
     /** git 状态码 → 精炼说明（徽标 hover 提示，按 trim 后的码匹配） */
     status: Record<string, string>;
     /** 单字符状态含义（通用模板兜底拆解） */
@@ -1035,6 +1050,19 @@ export const en: Translations = {
     fileEditor: "File Editor",
     git: "Git",
     gitDiff: "Diff",
+    search: "Search",
+  },
+  searchPanel: {
+    placeholder: "Search symbols, functions, types…",
+    search: "Search",
+    indexing: "Indexing workspace… first search may take a while",
+    noWorkspace: "No workspace added",
+    noQuery: "Enter keywords to search",
+    empty: "No matching blocks",
+    openInEditor: "Open in editor",
+    loadFailed: "Search failed: {error}",
+    results: "{n} results",
+    blocks: "{n} blocks indexed · {ms} ms",
     hookJudgements: "Hook Judgements",
   },
   judgement: {
@@ -1131,6 +1159,8 @@ export const en: Translations = {
     groupLog: "Commits",
     logEmpty: "No commits",
     logLoading: "Loading…",
+    logMore: "Load more",
+    openCommitDiff: "Open in main area",
     status: {
       "??": "Untracked",
       M: "Modified",
@@ -1686,6 +1716,19 @@ export const zh: Translations = {
     fileEditor: "文件编辑",
     git: "Git",
     gitDiff: "差异",
+    search: "搜索",
+  },
+  searchPanel: {
+    placeholder: "搜索符号、函数、类型…",
+    search: "搜索",
+    indexing: "正在构建工作区索引…首次搜索耗时略长",
+    noWorkspace: "尚未添加工作区",
+    noQuery: "输入关键词开始搜索",
+    empty: "未找到匹配块",
+    openInEditor: "在编辑器中打开",
+    loadFailed: "搜索失败：{error}",
+    results: "{n} 个结果",
+    blocks: "索引 {n} 块 · {ms} ms",
     hookJudgements: "Hook 判定",
   },
   judgement: {
@@ -1782,6 +1825,8 @@ export const zh: Translations = {
     groupLog: "提交记录",
     logEmpty: "无提交记录",
     logLoading: "加载中…",
+    logMore: "加载更多",
+    openCommitDiff: "在主区域打开",
     status: {
       "??": "未跟踪",
       M: "已修改",

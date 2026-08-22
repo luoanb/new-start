@@ -764,13 +764,14 @@ impl GitBackend for CliGitBackend {
         Ok(parse_diff(&out.stdout, false))
     }
 
-    async fn log(&self, repo: &GitRepo, limit: usize) -> AppResult<Vec<GitCommitInfo>> {
+    async fn log(&self, repo: &GitRepo, limit: usize, offset: usize) -> AppResult<Vec<GitCommitInfo>> {
         let root = Self::repo_root(repo)?;
         let n = limit.clamp(1, 200).to_string();
+        let skip = offset.to_string();
         let out = self
             .run_git_ok(
                 &root,
-                &["log", "-n", &n, "--format=%H%x09%h%x09%an%x09%aI%x09%s"],
+                &["log", "-n", &n, "--skip", &skip, "--format=%H%x09%h%x09%an%x09%aI%x09%s"],
             )
             .await?;
         Ok(parse_log(&out.stdout, limit.clamp(1, 200)))
@@ -1537,7 +1538,7 @@ filename path/to/file.rs
             .await
             .expect("stage");
         backend.commit(&repo, "feat: add x.txt").await.expect("commit");
-        let logs = backend.log(&repo, 5).await.expect("log");
+        let logs = backend.log(&repo, 5, 0).await.expect("log");
         assert_eq!(logs[0].subject, "feat: add x.txt");
         std::fs::remove_dir_all(&root).ok();
     }

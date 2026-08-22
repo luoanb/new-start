@@ -214,11 +214,15 @@ impl Gateway {
         // 文件管理：工作区存储（workspaces.json 持久化）+ 文件操作层（含「已读清单」护栏）。
         // 文件 AI 工具与前端文件视图共用，装配时注入 tool registry。
         let workspace_store = Arc::new(WorkspaceStore::new(store.root())?);
-        let file_system = Arc::new(FileSystem::new());
-        let file_ctx = Arc::new(FileToolContext::new(
-            Arc::clone(&workspace_store),
-            Arc::clone(&file_system),
-        ));
+        // 注入状态发射器：文件变更（编辑器保存 / AI 工具等任何来源）后广播 Git，
+        // 驱动前端 git 面板及时刷新。
+        let mut file_system = FileSystem::new();
+        file_system.set_emitter(state_emit.clone());
+        let file_system = Arc::new(file_system);
+        let file_ctx = Arc::new(
+            FileToolContext::new(Arc::clone(&workspace_store), Arc::clone(&file_system))
+                .with_search_index_root(store.root().join("search")),
+        );
 
         // git 能力：CliGitBackend + 确认服务 + active repo + 危险写开关。
         // 开关默认关，可经 config.json 顶层 `git.dangerous_writes` 开启
@@ -709,10 +713,13 @@ impl Gateway {
     /// 通过装配互斥与启动期后台装配串行化，保证「以最后一次为准」。
     async fn assemble_and_replace(&self) -> AppResult<()> {
         let _guard = self.assemble_lock.lock().await;
-        let file_ctx = Arc::new(FileToolContext::new(
-            Arc::clone(&self.workspace_store),
-            Arc::clone(&self.file_system),
-        ));
+        let file_ctx = Arc::new(
+            FileToolContext::new(
+                Arc::clone(&self.workspace_store),
+                Arc::clone(&self.file_system),
+            )
+            .with_search_index_root(self.store.root().join("search")),
+        );
         let git_ctx = Arc::new(GitToolContext::new(Arc::clone(&self.git_service)));
         let mut base_registry = assemble_local_tools(
             &self.store.root(),
@@ -1171,6 +1178,11 @@ impl Gateway {
     /// 文件管理：文件操作层（Tauri 命令与文件 AI 工具共用，含「已读清单」）。
     pub fn file_system(&self) -> Arc<FileSystem> {
         Arc::clone(&self.file_system)
+    }
+
+    /// 语义搜索索引根（应用数据目录，按项目 hash 分目录）。
+    pub fn search_index_root(&self) -> std::path::PathBuf {
+        self.store.root().join("search")
     }
 
     pub fn git_service(&self) -> Arc<GitService> {
