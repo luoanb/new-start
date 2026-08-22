@@ -1321,6 +1321,7 @@ export const zh: Translations = {
     selectAll: "全选",
     clickToCopy: "点击复制",
     copied: "已复制",
+    copyFailed: "复制失败",
     mainEmpty: "从左侧入口打开一个面板开始使用",
     newPane: "新建分栏",
     confirm: "确认",

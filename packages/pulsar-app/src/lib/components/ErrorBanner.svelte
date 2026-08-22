@@ -3,18 +3,39 @@
   let { message, onDismiss }: { message: string; onDismiss: () => void } = $props();
 
   let copied = $state(false);
+  let copyFailed = $state(false);
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
 
-  // 点击错误文案复制到剪贴板，短暂显示「已复制」反馈后恢复。
+  // 点击错误文案复制到剪贴板：优先 Clipboard API，非安全上下文/WebKitGTK 下回退 execCommand。
   async function copyMessage() {
     if (!message) return;
+    let ok = false;
     try {
       await navigator.clipboard.writeText(message);
-      copied = true;
-      clearTimeout(copyTimer);
-      copyTimer = setTimeout(() => (copied = false), 1500);
+      ok = true;
     } catch {
-      // 复制失败：保持原文案
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = message;
+        ta.setAttribute("readonly", "");
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+      } catch {
+        ok = false;
+      }
+    }
+    clearTimeout(copyTimer);
+    if (ok) {
+      copied = true;
+      copyFailed = false;
+      copyTimer = setTimeout(() => (copied = false), 1500);
+    } else {
+      copyFailed = true;
+      copyTimer = setTimeout(() => (copyFailed = false), 1500);
     }
   }
 
@@ -40,7 +61,7 @@
         }
       }}
       title={t("common.clickToCopy")}
-    >{copied ? t("common.copied") : message}</span>
+    >{copied ? t("common.copied") : copyFailed ? t("common.copyFailed") : message}</span>
     <button class="dismiss-btn" onclick={onDismiss}>×</button>
   </div>
 {/if}

@@ -279,6 +279,13 @@ struct OpenSessionParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SetSessionModelParams {
+    conversation_id: String,
+    selection: crate::core::ChatModelSelection,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ListNeuronsPageParams {
     page: usize,
     page_size: usize,
@@ -721,6 +728,17 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
         }
 
         // ── Session Specs ──
+        "set_session_model" => {
+            let p: SetSessionModelParams = from_params(params)?;
+            state
+                .gateway
+                .set_session_model(&p.conversation_id, &p.selection)
+                .map_err(RpcErrorBody::from)?;
+            (state.state_emit)(StateChange::Conversations {
+                affected: vec![p.conversation_id],
+            });
+            value(())
+        }
         "open_session" => {
             let p: OpenSessionParams = from_params(params)?;
             let conv_mode = conv_mode(&p.mode);
