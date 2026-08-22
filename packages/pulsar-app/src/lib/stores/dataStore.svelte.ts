@@ -136,6 +136,9 @@ async function refreshWorkspaces(): Promise<void> {
   state.workspacesVersion++;
 }
 
+/** git log 分页每页条数。 */
+const GIT_LOG_PAGE = 30;
+
 /** 空 git 视图（无仓库 / 拉取失败兜底）。 */
 function emptyGitView(): GitView {
   return {
@@ -145,6 +148,7 @@ function emptyGitView(): GitView {
     status: null,
     branches: [],
     log: [],
+    logHasMore: false,
     stash: [],
     confirmConfig: { dangerous_writes: false },
   };
@@ -184,7 +188,7 @@ async function refreshGit(): Promise<void> {
       repos.length > 0
         ? await Promise.all([
             api.call(c.gitBranches, undefined).catch(() => []),
-            api.call(c.gitLog, undefined).catch(() => []),
+            api.call(c.gitLog, { offset: 0 }).catch(() => []),
             api.call(c.gitStashList, undefined).catch(() => []),
             api
               .call(c.gitGetConfirmConfig, undefined)
@@ -198,6 +202,7 @@ async function refreshGit(): Promise<void> {
       status: activeRepoId ? (statusByRepo[activeRepoId] ?? null) : null,
       branches,
       log,
+      logHasMore: log.length >= GIT_LOG_PAGE,
       stash,
       confirmConfig: confirmConfig ?? { dangerous_writes: false },
     };
@@ -731,6 +736,11 @@ function openGitDiff(repoId: string, relPath: string, range: "staged" | "unstage
   layoutStore.insertPanel("git-diff", undefined, `git-diff:${repoId}:${relPath}:${range}`);
 }
 
+/** 在 main 区打开某提交中单个文件的 diff 面板（实例 key = `commit-diff:${repoId}:${hash}:${path}`）。 */
+function openCommitDiff(repoId: string, hash: string, path: string): void {
+  layoutStore.insertPanel("commit-diff", undefined, `commit-diff:${repoId}:${hash}:${path}`);
+}
+
 /** 某提交的变更文件统计列表（懒加载，不入全局 state）。 */
 async function gitShowFiles(hash: string): Promise<GitShowFile[]> {
   return await api.call(c.gitShowFiles, { hash });
@@ -739,6 +749,20 @@ async function gitShowFiles(hash: string): Promise<GitShowFile[]> {
 /** 某提交中单个文件的 unified diff（懒加载）。 */
 async function gitShowDiff(hash: string, path: string): Promise<GitFileDiff> {
   return await api.call(c.gitShowDiff, { hash, path });
+}
+
+/** 追加加载更早的提交历史（分页；offset = 已加载条数）。 */
+async function loadMoreGitLog(): Promise<void> {
+  if (!state.git) return;
+  const offset = state.git.log.length;
+  const more = await api.call(c.gitLog, { limit: GIT_LOG_PAGE, offset });
+  const seen = new Set(state.git.log.map((x) => x.hash));
+  const fresh = more.filter((x) => !seen.has(x.hash));
+  state.git = {
+    ...state.git,
+    log: [...state.git.log, ...fresh],
+    logHasMore: more.length >= GIT_LOG_PAGE,
+  };
 }
 
 export const dataStore = {
@@ -783,7 +807,9 @@ export const dataStore = {
   setDangerousWrites,
   gitShowFiles,
   gitShowDiff,
+  loadMoreGitLog,
   openGitDiff,
+  openCommitDiff,
   // 神经元统一管理（列表 ←→ 画布共享）
   setNeuronSelection,
   toggleNeuronSelection,

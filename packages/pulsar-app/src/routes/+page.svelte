@@ -376,9 +376,20 @@
     return pane.panels.map((p) => {
       const isFile = p.type === "file-editor";
       const isGitDiff = p.type === "git-diff";
+      const isCommitDiff = p.type === "commit-diff";
       // git-diff 实例 key = `git-diff:${repoId}:${relPath}`；title = 文件名，tooltip = 相对路径
       const gitRelPath = isGitDiff ? p.id.slice("git-diff:".length).split(":").slice(1).join(":") : "";
       const gitTitle = isGitDiff ? (gitRelPath.split("/").pop() || gitRelPath) : undefined;
+      // commit-diff 实例 key = `commit-diff:${repoId}:${hash}:${path}`；title = 文件名，tooltip = 相对路径
+      const commitRaw = isCommitDiff ? p.id.slice("commit-diff:".length) : "";
+      const commitPath = isCommitDiff
+        ? (() => {
+            const a = commitRaw.indexOf(":");
+            const b = a >= 0 ? commitRaw.indexOf(":", a + 1) : -1;
+            return b >= 0 ? commitRaw.slice(b + 1) : commitRaw;
+          })()
+        : "";
+      const commitTitle = isCommitDiff ? (commitPath.split("/").pop() || commitPath) : undefined;
       return {
         id: p.id,
         label: mainPanelMeta[p.type].label,
@@ -394,10 +405,18 @@
               ? fileEditorStore.titleOf(p.id)
               : isGitDiff
                 ? gitTitle
-                : undefined,
+                : isCommitDiff
+                  ? commitTitle
+                  : undefined,
         truncate: p.type === "chat",
         dirty: isFile ? fileEditorStore.isDirty(p.id) : false,
-        tooltip: isFile ? fileEditorStore.pathOf(p.id) : isGitDiff ? gitRelPath : undefined,
+        tooltip: isFile
+          ? fileEditorStore.pathOf(p.id)
+          : isGitDiff
+            ? gitRelPath
+            : isCommitDiff
+              ? commitPath
+              : undefined,
       };
     });
   }

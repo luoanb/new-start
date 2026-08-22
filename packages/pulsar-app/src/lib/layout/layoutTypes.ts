@@ -14,7 +14,8 @@ export type MainPanelType =
   | "tool-editor"
   | "provider-manager"
   | "file-editor"
-  | "git-diff";
+  | "git-diff"
+  | "commit-diff";
 
 /** main 区面板实例（insertPanel 返回其 id，供外部关闭）。 */
 export type MainPanel = {

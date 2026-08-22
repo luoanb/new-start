@@ -936,16 +936,17 @@ async fn git_diff(
         .map_err(|error| error.payload())
 }
 
-/// 最近提交历史，默认 30 条。
+/// 最近提交历史，默认 30 条；`offset` 支持分页（`git log --skip`）。
 #[tauri::command]
 async fn git_log(
     gateway: State<'_, Gateway>,
     limit: Option<usize>,
+    offset: Option<usize>,
 ) -> TauriResult<Vec<GitCommitInfo>> {
     let svc = gateway.inner().git_service();
     let repo = svc.active_repo().await.map_err(|error| error.payload())?;
     svc.backend()
-        .log(&repo, limit.unwrap_or(30))
+        .log(&repo, limit.unwrap_or(30), offset.unwrap_or(0))
         .await
         .map_err(|error| error.payload())
 }

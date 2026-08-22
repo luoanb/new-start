@@ -581,6 +581,8 @@ export type GitView = {
   status: GitStatusView | null;
   branches: GitBranchItem[];
   log: GitCommitInfo[];
+  /** 是否还有更早提交可加载（分页「加载更多」按钮）。 */
+  logHasMore: boolean;
   stash: GitStashEntry[];
   confirmConfig: { dangerous_writes: boolean };
 };

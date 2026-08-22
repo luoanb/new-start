@@ -262,7 +262,7 @@ pub trait GitBackend: Send + Sync {
     // ── 只读 ──
     async fn status(&self, repo: &GitRepo) -> AppResult<GitStatusView>;
     async fn diff(&self, repo: &GitRepo, cached: bool, path: Option<&str>) -> AppResult<GitDiff>;
-    async fn log(&self, repo: &GitRepo, limit: usize) -> AppResult<Vec<GitCommitInfo>>;
+    async fn log(&self, repo: &GitRepo, limit: usize, offset: usize) -> AppResult<Vec<GitCommitInfo>>;
     /// 某提交的变更文件统计列表（`git show --numstat`）。
     async fn show_files(&self, repo: &GitRepo, hash: &str) -> AppResult<Vec<GitShowFile>>;
     /// 某提交中单个文件的 unified diff（复用 `parse_diff` 结构）。

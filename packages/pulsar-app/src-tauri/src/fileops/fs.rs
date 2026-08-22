@@ -10,6 +10,7 @@
 //! - 保存前外部修改检测（磁盘 mtime != 已读时 mtime → 拒绝）。
 
 use crate::core::error::{AppError, AppResult};
+use crate::core::events::{StateChange, StateEmitter};
 use super::workspace::WorkspaceStore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -122,10 +123,27 @@ struct ReadMark {
 
 /// 文件操作层。所有写操作前校验：
 /// 1. 越界（resolve_in_workspace）；2. 大小上限；3. 覆盖已存在须已读且未外部修改。
-#[derive(Debug, Default)]
 pub struct FileSystem {
     /// canonicalized 绝对路径 → 读取时 mtime。
     read_marks: RwLock<HashMap<PathBuf, ReadMark>>,
+    /// 状态事件发射器：文件变更后广播 `Git`，驱动前端 git 面板及时刷新。
+    /// 编辑器保存、AI 工具等所有写入路径共用同一 FileSystem 实例。
+    emit: Option<StateEmitter>,
+}
+
+impl std::fmt::Debug for FileSystem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FileSystem")
+            .field("read_marks", &self.read_marks)
+            .field("emit", &self.emit.is_some())
+            .finish()
+    }
+}
+
+impl Default for FileSystem {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 fn to_rel(root: &Path, abs: &Path) -> String {
@@ -176,6 +194,20 @@ impl FileSystem {
     pub fn new() -> Self {
         Self {
             read_marks: RwLock::new(HashMap::new()),
+            emit: None,
+        }
+    }
+
+    /// 注入状态事件发射器（Gateway 装配时调用；无发射器时所有变更静默）。
+    pub fn set_emitter(&mut self, emit: Option<StateEmitter>) {
+        self.emit = emit;
+    }
+
+    /// 文件变更后广播 `Git` 事件：编辑器保存、AI 工具等任何来源修改文件，
+    /// 前端 git 面板都会及时重拉状态（repos/status/log/stash）。
+    fn notify_git_changed(&self) {
+        if let Some(emit) = &self.emit {
+            emit(StateChange::Git);
         }
     }
 
@@ -356,6 +388,7 @@ impl FileSystem {
         if let Ok(mut guard) = self.read_marks.write() {
             guard.insert(abs, ReadMark { mtime_ms: new_mtime });
         }
+        self.notify_git_changed();
         Ok(FsWriteResult { mtime_ms: new_mtime })
     }
 
@@ -367,6 +400,7 @@ impl FileSystem {
     ) -> AppResult<()> {
         let abs = WorkspaceStore::resolve_in_workspace(&workspace.root, path)?;
         fs::create_dir_all(&abs)?;
+        self.notify_git_changed();
         Ok(())
     }
 
@@ -400,6 +434,7 @@ impl FileSystem {
                 guard.remove(&abs);
             }
         }
+        self.notify_git_changed();
         Ok(())
     }
 
@@ -457,6 +492,7 @@ impl FileSystem {
         if let Ok(mut guard) = self.read_marks.write() {
             guard.insert(abs, ReadMark { mtime_ms: new_mtime });
         }
+        self.notify_git_changed();
         Ok(true)
     }
 
@@ -494,6 +530,7 @@ impl FileSystem {
                 guard.insert(dst, mark);
             }
         }
+        self.notify_git_changed();
         Ok(())
     }
 

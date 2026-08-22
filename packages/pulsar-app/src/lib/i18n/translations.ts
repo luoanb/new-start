@@ -470,6 +470,8 @@ export type Translations = {
     groupLog: string;
     logEmpty: string;
     logLoading: string;
+    logMore: string;
+    openCommitDiff: string;
     /** git 状态码 → 精炼说明（徽标 hover 提示，按 trim 后的码匹配） */
     status: Record<string, string>;
     /** 单字符状态含义（通用模板兜底拆解） */
@@ -1071,6 +1073,8 @@ export const en: Translations = {
     groupLog: "Commits",
     logEmpty: "No commits",
     logLoading: "Loading…",
+    logMore: "Load more",
+    openCommitDiff: "Open in main area",
     status: {
       "??": "Untracked",
       M: "Modified",
@@ -1692,6 +1696,8 @@ export const zh: Translations = {
     groupLog: "提交记录",
     logEmpty: "无提交记录",
     logLoading: "加载中…",
+    logMore: "加载更多",
+    openCommitDiff: "在主区域打开",
     status: {
       "??": "未跟踪",
       M: "已修改",

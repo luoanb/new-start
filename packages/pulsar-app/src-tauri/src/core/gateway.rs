@@ -201,7 +201,11 @@ impl Gateway {
         // 文件管理：工作区存储（workspaces.json 持久化）+ 文件操作层（含「已读清单」护栏）。
         // 文件 AI 工具与前端文件视图共用，装配时注入 tool registry。
         let workspace_store = Arc::new(WorkspaceStore::new(store.root())?);
-        let file_system = Arc::new(FileSystem::new());
+        // 注入状态发射器：文件变更（编辑器保存 / AI 工具等任何来源）后广播 Git，
+        // 驱动前端 git 面板及时刷新。
+        let mut file_system = FileSystem::new();
+        file_system.set_emitter(state_emit.clone());
+        let file_system = Arc::new(file_system);
         let file_ctx = Arc::new(FileToolContext::new(
             Arc::clone(&workspace_store),
             Arc::clone(&file_system),

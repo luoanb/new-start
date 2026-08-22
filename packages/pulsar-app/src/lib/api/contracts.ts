@@ -190,7 +190,7 @@ export const c = {
   gitSetActiveRepo: def<{ repoId: string }, void>("git_set_active_repo"),
   gitStatus: def<{ repoId: string }, GitStatusView>("git_status"),
   gitDiff: def<{ repoId: string; path: string; cached: boolean }, GitDiff>("git_diff"),
-  gitLog: def<undefined, GitCommitInfo[]>("git_log"),
+  gitLog: def<{ limit?: number; offset?: number }, GitCommitInfo[]>("git_log"),
   gitShowFiles: def<{ hash: string }, GitShowFile[]>("git_show_files"),
   gitShowDiff: def<{ hash: string; path: string }, GitFileDiff>("git_show_diff"),
   gitBranches: def<undefined, GitBranchItem[]>("git_branches"),

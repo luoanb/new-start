@@ -179,13 +179,15 @@ git_ro_tool!(
     {
         "type": "object",
         "properties": {
-            "limit": {"type": "number", "description": "Max commits to return; default 30, clamped to [1,200]"}
+            "limit": {"type": "number", "description": "Max commits to return; default 30, clamped to [1,200]"},
+            "offset": {"type": "number", "description": "Commits to skip for pagination (`git log --skip`); default 0"}
         },
         "additionalProperties": false
     },
     |ctx: Arc<GitToolContext>, repo: GitRepo, args: Value| async move {
         let limit = opt_usize(&args, "limit").unwrap_or(30);
-        ctx.service.backend().log(&repo, limit).await
+        let offset = opt_usize(&args, "offset").unwrap_or(0);
+        ctx.service.backend().log(&repo, limit, offset).await
     }
 );
 

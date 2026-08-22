@@ -23,6 +23,7 @@ import FileEditor from "$lib/components/FileEditor.svelte";
 import FileExplorer from "$lib/components/FileExplorer.svelte";
 import GitPanel from "$lib/components/GitPanel.svelte";
 import GitDiff from "$lib/components/GitDiff.svelte";
+import CommitDiff from "$lib/components/CommitDiff.svelte";
 import type { MainPanelType } from "./layoutTypes";
 
 export type { ViewContainerId } from "./layoutTypes";
@@ -139,6 +140,7 @@ export const mainViews: ViewRegistration[] = [
   { id: "provider-manager", title: "views.providerManager", component: ProviderManager },
   { id: "file-editor", title: "views.fileEditor", component: FileEditor },
   { id: "git-diff", title: "views.gitDiff", component: GitDiff },
+  { id: "commit-diff", title: "views.gitDiff", component: CommitDiff },
 ];
 
 /** Activity Bar 入口（icon 轨）。chat 用于向 main 区插入会话面板。 */
@@ -181,6 +183,10 @@ export const mainPanelMeta: Record<MainPanelType, { label: string; icon: string 
     icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
   },
   "git-diff": {
+    label: "views.gitDiff",
+    icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="9" x2="18" y2="9"/><line x1="6" y1="15" x2="18" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>',
+  },
+  "commit-diff": {
     label: "views.gitDiff",
     icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="9" x2="18" y2="9"/><line x1="6" y1="15" x2="18" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>',
   },

@@ -983,7 +983,7 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
             let repo = svc.active_repo().await.map_err(RpcErrorBody::from)?;
             let commits = svc
                 .backend()
-                .log(&repo, p.limit.unwrap_or(30))
+                .log(&repo, p.limit.unwrap_or(30), p.offset.unwrap_or(0))
                 .await
                 .map_err(RpcErrorBody::from)?;
             value(commits)
@@ -1464,6 +1464,7 @@ struct GitDiffParams {
 #[serde(rename_all = "camelCase")]
 struct GitLogParams {
     limit: Option<usize>,
+    offset: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
