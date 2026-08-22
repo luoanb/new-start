@@ -404,6 +404,19 @@ export type Translations = {
     fileEditor: string;
     git: string;
     gitDiff: string;
+    search: string;
+  };
+  searchPanel: {
+    placeholder: string;
+    search: string;
+    indexing: string;
+    noWorkspace: string;
+    noQuery: string;
+    empty: string;
+    openInEditor: string;
+    loadFailed: string;
+    results: string;
+    blocks: string;
   };
   fileExplorer: {
     addWorkspace: string;
@@ -1007,6 +1020,19 @@ export const en: Translations = {
     fileEditor: "File Editor",
     git: "Git",
     gitDiff: "Diff",
+    search: "Search",
+  },
+  searchPanel: {
+    placeholder: "Search symbols, functions, types…",
+    search: "Search",
+    indexing: "Indexing workspace… first search may take a while",
+    noWorkspace: "No workspace added",
+    noQuery: "Enter keywords to search",
+    empty: "No matching blocks",
+    openInEditor: "Open in editor",
+    loadFailed: "Search failed: {error}",
+    results: "{n} results",
+    blocks: "{n} blocks indexed · {ms} ms",
   },
   fileExplorer: {
     addWorkspace: "Add Workspace",
@@ -1630,6 +1656,19 @@ export const zh: Translations = {
     fileEditor: "文件编辑",
     git: "Git",
     gitDiff: "差异",
+    search: "搜索",
+  },
+  searchPanel: {
+    placeholder: "搜索符号、函数、类型…",
+    search: "搜索",
+    indexing: "正在构建工作区索引…首次搜索耗时略长",
+    noWorkspace: "尚未添加工作区",
+    noQuery: "输入关键词开始搜索",
+    empty: "未找到匹配块",
+    openInEditor: "在编辑器中打开",
+    loadFailed: "搜索失败：{error}",
+    results: "{n} 个结果",
+    blocks: "索引 {n} 块 · {ms} ms",
   },
   fileExplorer: {
     addWorkspace: "添加工作区",

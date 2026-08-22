@@ -27,6 +27,7 @@ import type {
   PollerStatus,
   RunningSession,
   SamplingParams,
+  SemanticSearchResult,
   ThinkingConfig,
   ChatModelSelection,
   WorkspaceView,
@@ -648,6 +649,15 @@ async function updateWorkspaceIgnore(id: string, ignore: string[]): Promise<void
   await refreshWorkspaces();
 }
 
+/** 语义搜索：懒索引 + FTS5 块级检索（首次调用建索引，后续增量）。 */
+async function semanticSearch(
+  query: string,
+  top_k?: number,
+  path?: string,
+): Promise<SemanticSearchResult> {
+  return await api.call(c.fsSemanticSearch, { query, top_k, path });
+}
+
 // ── Git actions（写操作后依赖 StateChange::Git 事件刷新 + 兜底 refreshGit）──
 
 /** 切换当前操作仓库（git 面板作用域；不改变文件树）。 */
@@ -791,6 +801,7 @@ export const dataStore = {
   removeWorkspace,
   setActiveWorkspace,
   updateWorkspaceIgnore,
+  semanticSearch,
   // Git
   setActiveGitRepo,
   gitAdd,

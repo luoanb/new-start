@@ -455,6 +455,30 @@ export type FsInfo = {
   is_binary: boolean;
 };
 
+// ── 语义搜索（对齐后端 fileops/search/chunk.rs DTO）──
+
+export type SearchBlock = {
+  /** 相对 workspace 根（`/` 分隔，无前导斜杠）。 */
+  path: string;
+  /** 1-based 起始行。 */
+  start_line: number;
+  /** 1-based 结束行（含）。 */
+  end_line: number;
+  /** 块类型：Function/Struct/Class/Impl/Trait/Enum/Interface/File/Unknown。 */
+  block_type: string;
+  /** 相关度（bm25 + 块类型加权，越大越相关）。 */
+  score: number;
+  content: string;
+};
+
+export type SemanticSearchResult = {
+  results: SearchBlock[];
+  /** 本次索引的块总数（含增量重建）。 */
+  indexed_blocks: number;
+  /** 建索引耗时（毫秒）。 */
+  index_duration_ms: number;
+};
+
 // ── Git（对齐后端 fileops/gitops/mod.rs DTO）──
 
 export type GitRepo = {

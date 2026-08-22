@@ -10,6 +10,7 @@
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::core::{
@@ -18,22 +19,40 @@ use crate::core::{
 };
 use super::{
     fs::FileSystem,
+    search::tools::SemanticSearchTool,
     workspace::{WorkspaceEntry, WorkspaceStore},
 };
 
-/// 文件工具共享上下文：工作区存储 + 文件操作层。
+/// 文件工具共享上下文：工作区存储 + 文件操作层 + 语义搜索索引根。
 pub struct FileToolContext {
     store: Arc<WorkspaceStore>,
     fs: Arc<FileSystem>,
+    /// 语义搜索索引根（应用数据目录，按项目 hash 分目录）。未装配时搜索工具报错。
+    search_index_root: Option<PathBuf>,
 }
 
 impl FileToolContext {
     pub fn new(store: Arc<WorkspaceStore>, fs: Arc<FileSystem>) -> Self {
-        Self { store, fs }
+        Self {
+            store,
+            fs,
+            search_index_root: None,
+        }
+    }
+
+    /// 注入语义搜索索引根（Gateway 装配时以应用数据目录计算）。
+    pub fn with_search_index_root(mut self, root: PathBuf) -> Self {
+        self.search_index_root = Some(root);
+        self
+    }
+
+    /// 语义搜索索引根（`None` = 未配置）。
+    pub fn search_index_root(&self) -> Option<PathBuf> {
+        self.search_index_root.clone()
     }
 
     /// 取当前 active 工作区（工具统一以 active workspace 为根）。
-    fn active(&self) -> AppResult<WorkspaceEntry> {
+    pub(crate) fn active(&self) -> AppResult<WorkspaceEntry> {
         self.store
             .active()?
             .ok_or_else(|| AppError::InvalidInput(
@@ -51,6 +70,7 @@ pub fn register_file_tools(registry: &mut ToolRegistry, ctx: Arc<FileToolContext
     registry.register_core(DeleteFileTool::new(Arc::clone(&ctx)));
     registry.register_core(GlobTool::new(Arc::clone(&ctx)));
     registry.register_core(GrepTool::new(Arc::clone(&ctx)));
+    registry.register_core(SemanticSearchTool::new(Arc::clone(&ctx)));
     registry.register_core(FileInfoTool::new(Arc::clone(&ctx)));
     registry.register_core(CreateDirectoryTool::new(Arc::clone(&ctx)));
     registry.register_core(RenameTool::new(Arc::clone(&ctx)));

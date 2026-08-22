@@ -40,6 +40,7 @@ import type {
   RunningSession,
   RuntimeStatus,
   SamplingParams,
+  SemanticSearchResult,
   SkillInfo,
   ThinkingConfig,
   ToolConfigView,
@@ -226,6 +227,10 @@ export const c = {
   fsRename: def<{ from: string; to: string }, void>("fs_rename"),
   fsMove: def<{ from: string; to: string }, void>("fs_move"),
   getHomeDir: def<undefined, string>("get_home_dir"),
+  fsSemanticSearch: def<
+    { query: string; top_k?: number; path?: string },
+    SemanticSearchResult
+  >("fs_semantic_search"),
 
   // ── 日志 ──
   logsSnapshot: def<undefined, LogEntry[]>("logs_snapshot"),

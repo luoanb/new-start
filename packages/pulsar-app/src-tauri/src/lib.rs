@@ -34,6 +34,8 @@ use crate::fileops::gitops::{
     ConflictTake, GitBlameLine, GitBranchItem, GitCommitInfo, GitDiff, GitFileDiff, GitRepo,
     GitResetMode, GitResetPreview, GitShowFile, GitStashAction, GitStashEntry, GitStatusView,
 };
+use crate::fileops::search::chunk::SemanticSearchResult;
+use crate::fileops::search::retriever::Retriever;
 use crate::fileops::workspace::{WorkspaceEntry, WorkspaceView};
 use crate::net::{NetState, ServerConfig, ServerInfo};
 use crate::terminal::commands::{
@@ -1563,6 +1565,20 @@ async fn fs_grep(
 }
 
 #[tauri::command]
+async fn fs_semantic_search(
+    gateway: State<'_, Gateway>,
+    query: String,
+    top_k: Option<usize>,
+    path: Option<String>,
+) -> TauriResult<SemanticSearchResult> {
+    let store = gateway.inner().workspace_store();
+    let ws = require_active_workspace(&store)?;
+    let index_root = gateway.inner().search_index_root();
+    Retriever::search(&index_root, &ws, &query, top_k, path.as_deref())
+        .map_err(|error| error.payload())
+}
+
+#[tauri::command]
 async fn fs_info(
     gateway: State<'_, Gateway>,
     path: String,
@@ -1882,6 +1898,7 @@ pub fn run() {
             fs_move,
             fs_glob,
             fs_grep,
+            fs_semantic_search,
             fs_info,
             get_home_dir,
             fs_suggest_abs,

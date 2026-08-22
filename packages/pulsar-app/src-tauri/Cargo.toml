@@ -62,6 +62,16 @@ walkdir = "2"
 portable-pty = "0.9"
 # WS 帧内二进制载荷（终端输出字节流）base64 编码。
 base64 = "0.22"
+tree-sitter = "0.26.12"
+tree-sitter-rust = "0.24.2"
+tree-sitter-typescript = "0.23.2"
+tree-sitter-javascript = "0.25.0"
+tree-sitter-go = "0.25.0"
+tree-sitter-python = "0.25.0"
+tree-sitter-java = "0.23.5"
+tree-sitter-c = "0.24.2"
+tree-sitter-cpp = "0.23.4"
+sha2 = "0.11.0"
 
 [dev-dependencies]
 # 仅测试用：本地 mock MCP server（stdio 走 in-memory duplex；http 走 axum 暴露的 streamable-http server）。

@@ -7,4 +7,5 @@
 pub mod fs;
 pub mod fs_tools;
 pub mod gitops;
+pub mod search;
 pub mod workspace;

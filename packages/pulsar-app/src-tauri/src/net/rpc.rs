@@ -18,6 +18,8 @@ use crate::core::{
     ModelCallRequest, NeuronCreate, NeuronKindFilter, NeuronUpdate, SessionBehavior, SessionSeed,
     StateChange, TopicStatus, TopicUpdate,
 };
+use crate::fileops::search::chunk::SemanticSearchResult;
+use crate::fileops::search::retriever::Retriever;
 use crate::fileops::workspace::{WorkspaceEntry, WorkspaceStore};
 use crate::fileops::gitops::confirm::{ConfirmOutcome, GitOpKind};
 use crate::fileops::gitops::{ConflictTake, GitResetMode, GitStashAction};
@@ -931,6 +933,21 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
                 .map_err(RpcErrorBody::from)?;
             value(matches)
         }
+        "fs_semantic_search" => {
+            let p: FsSemanticSearchParams = from_params(params)?;
+            let store = state.gateway.workspace_store();
+            let ws = require_active(&store)?;
+            let index_root = state.gateway.search_index_root();
+            let result: SemanticSearchResult = Retriever::search(
+                &index_root,
+                &ws,
+                &p.query,
+                p.top_k,
+                p.path.as_deref(),
+            )
+            .map_err(RpcErrorBody::from)?;
+            value(result)
+        }
         "fs_info" => {
             let p: FsPathParams = from_params(params)?;
             let store = state.gateway.workspace_store();
@@ -1442,6 +1459,14 @@ struct FsGrepParams {
     multiline: Option<bool>,
     glob: Option<String>,
     context: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FsSemanticSearchParams {
+    query: String,
+    top_k: Option<usize>,
+    path: Option<String>,
 }
 
 // ── Git 参数（字段名与前端 invoke 一致）──

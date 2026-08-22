@@ -24,6 +24,7 @@ import FileExplorer from "$lib/components/FileExplorer.svelte";
 import GitPanel from "$lib/components/GitPanel.svelte";
 import GitDiff from "$lib/components/GitDiff.svelte";
 import CommitDiff from "$lib/components/CommitDiff.svelte";
+import SearchPanel from "$lib/components/SearchPanel.svelte";
 import type { MainPanelType } from "./layoutTypes";
 
 export type { ViewContainerId } from "./layoutTypes";
@@ -128,6 +129,14 @@ export const viewRegistry: Record<string, ViewRegistration> = {
     title: "views.git",
     icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>',
     component: GitPanel,
+    movableTo: "*",
+  },
+  // 语义搜索（sidebar，VSCode 全局搜索语义；文件管理域能力，与 Grep 同族）
+  search: {
+    id: "search",
+    title: "views.search",
+    icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
+    component: SearchPanel,
     movableTo: "*",
   },
 };
