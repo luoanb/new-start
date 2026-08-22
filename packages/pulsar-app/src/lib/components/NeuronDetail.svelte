@@ -103,7 +103,7 @@
             <label for="edit-content">{t("neuronPanel.content")}</label>
             <textarea id="edit-content" bind:value={editContent} disabled={saving} rows="4"></textarea>
             <div class="edit-actions">
-              <button class="btn btn-primary" onclick={handleSave} disabled={saving}>
+              <button class="btn btn-sm btn-primary" onclick={handleSave} disabled={saving}>
                 {saving ? t("neuronPanel.saving") : t("neuronPanel.save")}
               </button>
               <button class="btn" onclick={() => (editing = false)} disabled={saving}>
@@ -136,7 +136,7 @@
               </div>
             {/if}
           </div>
-          <button class="btn" onclick={() => (editing = true)}>{t("neuronPanel.edit")}</button>
+          <button class="btn btn-sm" onclick={() => (editing = true)}>{t("neuronPanel.edit")}</button>
         {/if}
       </div>
     </div>
@@ -161,7 +161,7 @@
     </div>
 
     <!-- Network action -->
-    <button class="btn btn-primary network-btn" onclick={() => { if (neuron) onViewNetwork(neuron.id); }}>
+    <button class="btn btn-sm btn-primary network-btn" onclick={() => { if (neuron) onViewNetwork(neuron.id); }}>
       {t("neuronPanel.viewNetwork")}
     </button>
   {/if}
@@ -198,8 +198,4 @@
   .conn-arrow { color: var(--color-text-muted); }
   .conn-weight { font-weight: 600; color: var(--color-text-muted); min-width: 40px; text-align: center; }
   .network-btn { align-self: flex-start; }
-
-  .btn { font-size: var(--fs-xs); padding: 2px 10px; border: var(--border-width) solid var(--color-border); border-radius: var(--radius-sm); background: transparent; color: var(--color-text); cursor: pointer; }
-  .btn-primary { background: var(--color-primary); color: var(--color-on-primary); border-color: var(--color-primary); }
-  .btn:disabled { opacity: 0.4; cursor: default; }
 </style>

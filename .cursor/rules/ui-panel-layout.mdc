@@ -1,0 +1,60 @@
+---
+description: 左侧 sidebar、底部、右侧面板（布局三区视图）的统一视觉与交互规范
+globs: "**/*.svelte"
+alwaysApply: true
+---
+
+# UI — 布局三区面板设计规范
+
+适用于布局三区内的全部视图面板：**左侧 sidebar**（SessionList / FileExplorer / GitPanel / TopicPanel / PollerPanel / ToolPanel / NeuronListPanel / NeuronIndex / SearchPanel / HookJudgementPanel）、**底部**（TerminalPanel / LogPanel / StatusBar）、**右侧 info / panel**（NeuronDetail / NeuronDetailDrawer / CommitDiff 等）。
+
+设计基准：**FileExplorer 的简洁语言**——通栏结构、高密度扁平行、微圆角、hover 仅 tint、克制信息密度。
+
+## 原则
+
+工具类应用，克制。面板是"高密度信息容器"：**通栏铺开、扁平行、hover 只 tint、状态只留文字色**。无装饰性色块、无圆点脉冲、无大号标题。
+
+## 面板结构
+
+- **通栏无根 padding**：面板根容器 `height:100%` + `overflow` 由自身控制；内容直接铺满，不在根上套 `padding: space-2`。
+- **头部**：自带 `padding: var(--space-1) var(--space-2)` + `border-bottom`，与 `ViewContainer` 的 32px 容器头衔接。
+- **工具栏统一为 `panel-toolbar` 词汇**：`panel-title`（`--fs-sm` / 600）+ 右侧操作区（26px `icon-btn`）。无标题面板（Poller / Search / Terminal 等）补齐同款头部，禁止再发明第 9 种工具栏形态。
+- 双工具条允许（FileExplorer 的 ws-bar + tree-bar），但每条都遵循上述头部规范。
+
+## 列表行（扁平范式）
+
+- **默认无边框、无卡片**：行 = `display:flex; align-items:center; gap: var(--space-2)`。
+- **行高统一 24px**：`padding: var(--space-1) var(--space-2)` + `font-size: var(--fs-sm)`（13px 行高 16px + 上下 4px = 24px）。多行/需要展开内容的面板例外处理，不突破单行密度。
+- **hover 仅 tint**：`background: var(--color-hover)`，无边框变化。
+- **选中/激活态**：`color-mix(in oklch, var(--color-primary) 14%, transparent)`，无边框、无竖条（SessionList 的 3px 指示条与 NeuronIndex 的 type-bar 一并废弃，激活信息由 tint + 文字色承担）。
+- **缩进**：树形每级 `14px`（对齐 FileExplorer），基础缩进 `10px`。
+- **图标**：行首图标 14px 线框 SVG（muted），chevron 14px 容器 / 10-12px SVG / 展开旋转 90°。
+
+## 按钮与操作
+
+- **icon-btn 统一 26×26 方形**：`width/height: 26px`、`border-radius: var(--radius-sm)`、hover `--color-hover` + 文字色、默认 `--color-text-muted`。FileExplorer 的文字型按钮（3px 6px）收敛到本规格。
+- 行内操作按钮：22px 一档（`--radius-sm`），配合 hover-reveal（见 `ui-hover-reveal.mdc`）；GitPanel 常显的 `.op` 收敛到同一模式。
+- **按钮全部走全局 `.btn` / `.btn-sm` token**，禁止本地重定义 `.btn`（PollerPanel / NeuronDetail / NeuronDetailDrawer 的本地规格全部移除）。
+
+## 徽标
+
+- **状态徽标 = `--fs-xs` + 语义色文字色**，无底色、无圆点、无动画（延续消息卡规范）。ToolPanel 圆点、SearchPanel 描边、NeuronListPanel 实底彩、SessionList mode-badge tinted 全部收敛。
+- **计数类徽标**（git 计数、文件 badge）保留 `mono + `--fs-xs` + tinted 底`（`color-mix` 12-14%），这是唯一允许的底色徽标。
+
+## 文字层级
+
+- 列表主文本（文件名 / 会话标题 / 工具名）：`--fs-sm`。
+- 次要信息（路径 / 时间 / 描述 / 计数）：`--fs-xs` + `--color-text-muted`。
+- 分组标题：`--fs-xs` / 600 / uppercase / `letter-spacing: 0.04em`（统一，废弃 ToolPanel 0.08em 与 GitPanel fs-sm 非大写两种变体）。
+
+## 约束
+
+- **禁止硬编码色值与圆角**：`#c0392b`、`#d68910`、`radius: 8px`、`2px` 等一律换 `--color-error` / `--color-warning` / `--radius-md` 等 token（LogPanel / TerminalPanel / NeuronIndex / NeuronDetailDrawer 待清理）。
+- **卡片式（border + `--radius-md` + `--color-elevated`）仅保留给"需要展开的聚合单元"**：裁决记录、课题卡片、轮询卡。普通列表一律扁平。
+- **错误提示条**统一柔和型：`--color-error-bg` 底 + `--color-error` 文字 + `--fs-sm`（ToolPanel / GitPanel 形态，废弃实底红与纯文字两种变体）。
+- **hover-reveal** 统一按 `ui-hover-reveal.mdc` 执行（桌面隐藏、触屏常显）。
+
+## 与其它规范的关系
+
+- 消息区内联卡：见 `ui-message-cards.mdc`（布局三区与消息区是两套独立场景，卡片/徽标词汇各自收敛）。
+- design tokens：唯一事实来源 `packages/pulsar-app/src/app.html`，本规范不新增 token。

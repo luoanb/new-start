@@ -625,11 +625,6 @@
     padding: 12px 14px;
     border-bottom: 1px solid var(--color-border);
   }
-  .type-bar {
-    width: 4px;
-    height: 18px;
-    border-radius: 2px;
-  }
   .title {
     flex: 1;
     font-weight: 600;
@@ -641,12 +636,12 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 24px;
-    height: 24px;
+    width: 26px;
+    height: 26px;
     padding: 0;
     background: none;
     border: none;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     color: var(--color-text-muted);
     cursor: pointer;
     transition:
@@ -664,12 +659,12 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 24px;
-    height: 24px;
+    width: 26px;
+    height: 26px;
     padding: 0;
     background: none;
     border: none;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     color: var(--color-text-muted);
     cursor: pointer;
     opacity: 0;
@@ -715,12 +710,12 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 24px;
-    height: 24px;
+    width: 26px;
+    height: 26px;
     padding: 0;
     background: none;
     border: none;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     color: var(--color-text-muted);
     cursor: pointer;
     transition:
@@ -796,10 +791,10 @@
   }
   .copy-btn {
     flex-shrink: 0;
-    border: 1px solid var(--color-border);
+    border: var(--border-width) solid var(--color-border);
     background: var(--color-bg);
     color: var(--color-text-muted);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     padding: 2px 8px;
     font-size: var(--fs-xs);
     cursor: pointer;
@@ -817,8 +812,8 @@
     gap: 6px;
     max-height: 160px;
     overflow-y: auto;
-    border: 1px solid var(--color-border);
-    border-radius: 8px;
+    border: var(--border-width) solid var(--color-border);
+    border-radius: var(--radius-md);
     padding: 8px;
     background: var(--color-bg);
   }
@@ -851,8 +846,8 @@
     width: 100%;
     background: var(--color-bg);
     color: var(--color-text);
-    border: 1px solid var(--color-border);
-    border-radius: 8px;
+    border: var(--border-width) solid var(--color-border);
+    border-radius: var(--radius-md);
     padding: 6px 8px;
     font-size: var(--fs-sm);
     font-family: inherit;
@@ -930,7 +925,7 @@
     width: 72px;
     padding: 4px 6px;
     border: 1px solid var(--color-border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--color-bg);
     color: var(--color-text);
     font-size: var(--fs-sm);
@@ -990,7 +985,7 @@
   .btn {
     flex: 1;
     padding: 7px 10px;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     border: 1px solid var(--color-border);
     background: var(--color-surface);
     color: var(--color-text);
@@ -1021,7 +1016,7 @@
     font-size: var(--fs-xs);
     font-weight: 600;
     padding: 2px 8px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     color: var(--color-on-primary, #fff);
     max-width: 180px;
     overflow: hidden;
@@ -1046,8 +1041,8 @@
     min-width: 0;
     background: var(--color-bg);
     color: var(--color-text);
-    border: 1px solid var(--color-border);
-    border-radius: 6px;
+    border: var(--border-width) solid var(--color-border);
+    border-radius: var(--radius-sm);
     padding: 4px 8px;
     font-size: var(--fs-sm);
     font-family: var(--font-mono);
@@ -1057,8 +1052,8 @@
     border-color: var(--color-primary);
   }
   .behavior-block {
-    border: 1px solid var(--color-border);
-    border-radius: 8px;
+    border: var(--border-width) solid var(--color-border);
+    border-radius: var(--radius-md);
     padding: 8px 10px;
     background: var(--color-bg);
   }
@@ -1077,8 +1072,8 @@
   .confirm-box {
     width: min(300px, 90%);
     background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: 10px;
+    border: var(--border-width) solid var(--color-border);
+    border-radius: var(--radius-lg);
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
     padding: 14px;
     display: flex;

@@ -392,7 +392,7 @@
     padding: var(--space-2);
     overflow: auto;
   }
-  .error-banner { background: var(--color-error); color: #fff; padding: var(--space-1) var(--space-2); border-radius: var(--radius-md); font-size: var(--fs-xs); cursor: pointer; }
+  .error-banner { background: var(--color-error-bg); color: var(--color-error); padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); font-size: var(--fs-sm); cursor: pointer; }
   /* 面板标题栏：对齐 ToolPanel 的 panel-toolbar / panel-title / toolbar-actions 词汇 */
   .panel-toolbar {
     display: flex;
@@ -477,7 +477,7 @@
   .topic-header-actions .icon-btn {
     transition: opacity var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
   }
-  .topic-name { font-size: var(--fs-xs); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .topic-name { font-size: var(--fs-sm); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* 状态徽标：克制——小号文字 + 语义色文字色，无底色/圆点/动画（对齐面板统一规范）。 */
   .status-badge {
     flex-shrink: 0;

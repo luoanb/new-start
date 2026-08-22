@@ -143,7 +143,6 @@
                 class:failed={server.status === "failed"}
                 class:disabled={server.status === "disabled"}
               >
-                <span class="status-dot" aria-hidden="true"></span>
                 {tMap("toolPanel.status", server.status)}
               </span>
             </li>
@@ -180,7 +179,6 @@
                 </span>
               {/if}
               <span class="source" class:src-native={tool.source === "native"} class:src-config={tool.source === "config"} class:src-mcp={tool.source === "mcp"}>
-                <span class="source-dot" aria-hidden="true"></span>
                 {sourceLabel(tool.source)}
               </span>
             </li>
@@ -258,7 +256,7 @@
     text-align: left;
     border: none;
     padding: var(--space-2) var(--space-3);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-sm);
     background: var(--color-error-bg);
     color: var(--color-error);
     font-size: var(--fs-sm);
@@ -298,7 +296,7 @@
   .section-title {
     font-size: var(--fs-xs);
     font-weight: 600;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--color-text-muted);
   }
@@ -342,7 +340,6 @@
   .server-name,
   .tool-name {
     font-size: var(--fs-sm);
-    font-weight: 500;
     color: var(--color-text);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -363,50 +360,28 @@
     white-space: nowrap;
   }
 
-  /* 状态与来源：小圆点 + 文本，克制配色 */
+  /* 状态与来源：语义色文字，克制配色 */
   .status {
     display: inline-flex;
     align-items: center;
     gap: var(--space-1);
     font-size: var(--fs-xs);
-    font-weight: 500;
     color: var(--color-text-muted);
     flex-shrink: 0;
   }
-  .status-dot,
-  .source-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: var(--radius-full);
-    background: var(--color-text-muted);
-  }
-  .status.connected .status-dot { background: var(--color-success); }
-  .status.connecting .status-dot {
-    background: var(--color-warning);
-    animation: status-pulse 1.2s ease-in-out infinite;
-  }
+  .status.connected { color: var(--color-success); }
   .status.connecting { color: var(--color-warning); }
-  .status.failed .status-dot { background: var(--color-error); }
   .status.failed { color: var(--color-error); }
   .status.disabled { opacity: 0.6; }
-  @keyframes status-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.35; }
-  }
 
   .source {
     display: inline-flex;
     align-items: center;
     gap: var(--space-1);
     font-size: var(--fs-xs);
-    font-weight: 500;
     color: var(--color-text-muted);
     flex-shrink: 0;
   }
-  .source.src-native .source-dot { background: var(--color-primary); }
-  .source.src-config .source-dot { background: var(--color-warning); }
-  .source.src-mcp .source-dot { background: var(--color-success); }
-
   /* 标签（core / system；normal 不显式显示）：弱化展示，仅文字区分 */
   .tag {
     display: inline-flex;

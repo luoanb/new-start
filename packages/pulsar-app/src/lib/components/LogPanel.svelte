@@ -242,8 +242,8 @@
   }
   .ts { color: var(--color-text-muted); }
   .level { font-weight: 600; text-transform: uppercase; }
-  .level-error .level { color: #c0392b; }
-  .level-warn .level { color: #d68910; }
+  .level-error .level { color: var(--color-error); }
+  .level-warn .level { color: var(--color-warning); }
   .level-info .level { color: var(--color-primary); }
   .level-debug .level,
   .level-trace .level { color: var(--color-text-muted); }
@@ -260,7 +260,7 @@
   }
   .error-banner {
     font-size: var(--fs-xs);
-    color: #c0392b;
+    color: var(--color-error);
     cursor: pointer;
   }
 </style>

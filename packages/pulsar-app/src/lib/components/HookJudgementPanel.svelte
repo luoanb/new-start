@@ -423,7 +423,7 @@
     align-items: center;
     gap: var(--space-2);
     width: 100%;
-    padding: var(--space-2);
+    padding: var(--space-1) var(--space-2);
     border: none;
     background: transparent;
     color: var(--color-text);
@@ -440,8 +440,8 @@
   .hook-badge {
     flex-shrink: 0;
     font-family: var(--font-mono, monospace);
-    font-size: var(--fs-xs);
-    color: var(--color-text-muted);
+    font-size: var(--fs-sm);
+    color: var(--color-text);
     white-space: nowrap;
   }
   /* 状态徽标：克制——小号文字 + 语义色文字色，无底色/圆点/动画。 */

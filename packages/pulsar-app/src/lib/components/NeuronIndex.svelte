@@ -46,7 +46,9 @@
     {#each groups as group (group.type)}
       <div class="group">
         <button class="group-head" onclick={() => toggle(group.type)}>
-          <span class="caret" class:open={!collapsed[group.type]}>▸</span>
+          <span class="caret" class:open={!collapsed[group.type]} aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6" /></svg>
+          </span>
           <span class="type-name">{group.type}</span>
           <span class="type-count">{group.items.length}</span>
         </button>
@@ -58,10 +60,6 @@
               onclick={() => onSelect(n.id)}
               title={n.desc}
             >
-              <span
-                class="type-bar"
-                style:background={`var(--color-system-${n.system_type || "default"}, var(--color-system-default))`}
-              ></span>
               <span class="row-main">
                 <span class="row-name">{n.desc || n.id}</span>
                 <span class="row-meta">
@@ -88,7 +86,7 @@
     flex-direction: column;
     height: 100%;
     overflow-y: auto;
-    padding: 6px 4px 16px;
+    padding: var(--space-1) 0 var(--space-4);
     gap: 2px;
   }
 
@@ -111,7 +109,7 @@
     background: none;
     border: none;
     cursor: pointer;
-    padding: 4px 6px;
+    padding: var(--space-1) var(--space-2);
     color: var(--color-text-muted);
     font-size: var(--fs-xs);
     text-transform: uppercase;
@@ -122,8 +120,18 @@
   }
 
   .caret {
-    transition: transform 0.18s ease;
-    font-size: 9px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    color: var(--color-text-muted);
+    transition: transform var(--duration-fast) var(--ease-out);
+  }
+  .caret svg {
+    width: 10px;
+    height: 10px;
   }
   .caret.open {
     transform: rotate(90deg);
@@ -144,27 +152,21 @@
   .index-row {
     display: flex;
     align-items: stretch;
-    gap: 8px;
+    gap: var(--space-2);
     width: 100%;
     background: none;
     border: none;
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    padding: 5px 6px 5px 4px;
+    padding: var(--space-1) var(--space-2);
     text-align: left;
-    transition: background 0.15s ease;
+    transition: background var(--duration-fast) var(--ease-out);
   }
   .index-row:hover {
     background: var(--color-hover);
   }
   .index-row.selected {
-    background: color-mix(in oklch, var(--color-primary) 8%, transparent);
-  }
-
-  .type-bar {
-    width: 3px;
-    border-radius: 2px;
-    flex-shrink: 0;
+    background: color-mix(in oklch, var(--color-primary) 14%, transparent);
   }
 
   .row-main {
@@ -176,7 +178,7 @@
   }
 
   .row-name {
-    font-size: var(--fs-xs);
+    font-size: var(--fs-sm);
     color: var(--color-text);
     overflow: hidden;
     text-overflow: ellipsis;

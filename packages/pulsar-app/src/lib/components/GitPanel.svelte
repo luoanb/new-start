@@ -680,7 +680,7 @@
     align-items: center;
     gap: var(--space-1);
     padding: var(--space-1) var(--space-2);
-    border-bottom: 1px solid var(--color-border);
+    border-bottom: var(--border-width) solid var(--color-border);
     min-height: 36px;
   }
   .toolbar-select {
@@ -738,13 +738,15 @@
     align-items: center;
     gap: var(--space-1);
     width: 100%;
-    height: 28px;
+    height: 24px;
     padding: 0 var(--space-3);
     border: none;
     background: transparent;
     color: var(--color-text-muted);
-    font-size: var(--fs-sm);
+    font-size: var(--fs-xs);
     font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
     text-align: left;
     cursor: pointer;
   }
@@ -776,7 +778,7 @@
     display: flex;
     align-items: center;
     gap: var(--space-1);
-    height: 28px;
+    height: 24px;
     padding: 0 var(--space-2) 0 var(--space-3);
     font-size: var(--fs-sm);
   }
@@ -848,7 +850,7 @@
     color: var(--color-text-muted);
     font-size: var(--fs-base);
     cursor: pointer;
-    transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+    transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), opacity var(--duration-fast) var(--ease-out);
   }
   .op:hover { background: var(--color-hover); color: var(--color-text); }
   .op.danger:hover { color: var(--color-error); }
@@ -884,7 +886,7 @@
     align-items: center;
     gap: var(--space-1);
     width: 100%;
-    height: 28px;
+    height: 24px;
     padding: 0 var(--space-3);
     border: none;
     background: transparent;
@@ -913,7 +915,7 @@
     display: flex;
     align-items: center;
     gap: var(--space-1);
-    height: 28px;
+    height: 24px;
     padding: 0 var(--space-3);
     font-size: var(--fs-sm);
   }
@@ -932,7 +934,7 @@
     align-items: center;
     gap: var(--space-2);
     width: 100%;
-    height: 28px;
+    height: 24px;
     padding: 0 var(--space-3);
     border: none;
     background: transparent;
@@ -972,7 +974,7 @@
     align-items: center;
     gap: var(--space-1);
     width: 100%;
-    height: 26px;
+    height: 24px;
     padding: 0 var(--space-3) 0 var(--space-5);
     border: none;
     background: transparent;
@@ -1029,22 +1031,47 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 20px;
-    height: 20px;
+    width: 22px;
+    height: 22px;
     padding: 0;
     border: none;
     border-radius: var(--radius-sm);
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
-    opacity: 0.6;
+    transition: opacity var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
   }
   .cf-open:hover:not(:disabled) {
-    opacity: 1;
     color: var(--color-primary);
     background: var(--color-hover);
   }
   .cf-open:disabled { opacity: 0.3; cursor: default; }
+  /* 行操作按钮 hover-reveal：桌面 hover/聚焦显示，触屏常显（见 .cursor/rules/ui-hover-reveal.mdc） */
+  @media (hover: hover) {
+    .op,
+    .cf-open {
+      opacity: 0;
+      visibility: hidden;
+    }
+    .item:hover .op,
+    .item:focus-within .op,
+    .stash-item:hover .op,
+    .stash-item:focus-within .op,
+    .group-row:hover .op,
+    .group-row:focus-within .op,
+    .commit-file:hover .cf-open,
+    .commit-file:focus-within .cf-open {
+      opacity: 1;
+      visibility: visible;
+    }
+  }
+  @media (hover: none) {
+    .op,
+    .cf-open {
+      opacity: 1;
+      visibility: visible;
+    }
+  }
   /* 提交记录「加载更多」 */
   .log-more {
     display: block;

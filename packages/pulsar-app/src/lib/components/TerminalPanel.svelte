@@ -372,12 +372,12 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .tab-exited { color: #c0392b; font-size: 10px; }
+  .tab-exited { color: var(--color-error); font-size: var(--fs-xs); }
   .tab-close {
     font-size: 12px;
     line-height: 1;
     padding: 0 2px;
-    border-radius: 2px;
+    border-radius: var(--radius-sm);
   }
   .tab-close:hover { background: var(--color-border); }
   .tab-new {
@@ -406,7 +406,7 @@
   }
   .error-banner {
     font-size: var(--fs-xs);
-    color: #c0392b;
+    color: var(--color-error);
     cursor: pointer;
     padding: 4px 8px;
     background: var(--color-surface);
@@ -419,6 +419,6 @@
     border-bottom: var(--border-width) solid var(--color-border);
   }
   .conn-banner.disconnected {
-    color: #c0392b;
+    color: var(--color-error);
   }
 </style>

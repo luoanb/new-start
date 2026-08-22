@@ -224,23 +224,17 @@
     gap: var(--space-2);
   }
   .type-badge {
-    padding: 0 6px;
-    border-radius: var(--radius-sm);
     font-size: var(--fs-xs);
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.03em;
-    background: var(--color-surface);
-    border: var(--border-width) solid var(--color-border);
     color: var(--color-text-muted);
   }
   .type-badge.primary {
     color: var(--color-primary);
-    border-color: var(--color-primary);
   }
   .type-badge.accent {
     color: var(--color-accent, var(--color-primary));
-    border-color: var(--color-accent, var(--color-primary));
   }
   .type-badge.muted {
     color: var(--color-text-muted);

@@ -956,14 +956,19 @@
     flex-shrink: 0;
   }
   .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
     border: none;
     background: transparent;
-    line-height: 1;
-    padding: 3px 6px;
     border-radius: var(--radius-sm);
     color: var(--color-text-muted);
     cursor: pointer;
     font-size: var(--fs-base);
+    transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
   }
   .icon-btn:hover {
     background: var(--color-hover);
@@ -999,13 +1004,17 @@
     flex-shrink: 0;
   }
   .tool-btn {
+    display: inline-flex;
+    align-items: center;
+    height: 26px;
     border: none;
     background: transparent;
     font-size: var(--fs-xs);
     color: var(--color-text-muted);
-    padding: 3px 6px;
+    padding: 0 var(--space-2);
     border-radius: var(--radius-sm);
     cursor: pointer;
+    transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
   }
   .tool-btn:hover {
     background: var(--color-hover);
@@ -1027,7 +1036,7 @@
     display: flex;
     align-items: center;
     gap: var(--space-1);
-    padding: 3px var(--space-2) 3px 0;
+    padding: var(--space-1) var(--space-2) var(--space-1) 0;
     cursor: pointer;
     border-radius: var(--radius-sm);
     user-select: none;
@@ -1038,7 +1047,7 @@
     background: var(--color-hover);
   }
   .row.selected {
-    background: color-mix(in oklch, var(--color-primary) 18%, transparent);
+    background: color-mix(in oklch, var(--color-primary) 14%, transparent);
   }
   .row.drop-target {
     outline: 1.5px dashed var(--color-primary);
@@ -1072,6 +1081,8 @@
     font-size: var(--fs-sm);
   }
   .row-more {
+    width: 22px;
+    height: 22px;
     opacity: 0;
     flex-shrink: 0;
   }

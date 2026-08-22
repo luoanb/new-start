@@ -219,7 +219,7 @@
             <span
               class="type-badge"
               class:normal={!n.system_type}
-              style:background={systemTypeColor(n.system_type)}
+              style:color={systemTypeColor(n.system_type)}
             >
               {n.system_type ?? t("neuronListPanel.kindNormal")}
             </span>
@@ -347,7 +347,11 @@
     display: flex;
     align-items: center;
     gap: var(--space-1);
-    padding: 0 var(--space-2) var(--space-2);
+    margin: 0 var(--space-2);
+    padding: var(--space-1);
+    border: var(--border-width) solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
     flex-wrap: wrap;
   }
   .search {
@@ -401,23 +405,20 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
-    padding: var(--space-2);
-    border-radius: var(--radius-md);
-    background: var(--color-bg);
-    border: var(--border-width) solid var(--color-border);
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    border: none;
     color: var(--color-text);
     text-align: left;
     cursor: pointer;
-    transition:
-      border-color 0.15s ease,
-      background 0.15s ease;
+    transition: background var(--duration-fast) var(--ease-out);
   }
   .item:hover {
-    border-color: var(--color-primary);
+    background: var(--color-hover);
   }
   .item.selected {
-    border-color: var(--color-primary);
-    background: color-mix(in srgb, var(--color-primary) 10%, var(--color-bg));
+    background: color-mix(in oklch, var(--color-primary) 14%, transparent);
   }
   .item-top {
     display: flex;
@@ -435,24 +436,18 @@
     flex-shrink: 0;
     font-size: var(--fs-xs);
     font-weight: 600;
-    padding: 1px 6px;
-    border-radius: var(--radius-sm);
-    color: var(--color-on-primary, #fff);
-    opacity: 0.92;
     max-width: 110px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .type-badge.normal {
-    background: var(--color-text-muted);
-    opacity: 0.65;
+    color: var(--color-text-muted);
   }
   .item-desc {
     flex: 1;
     min-width: 0;
-    font-size: var(--fs-xs);
-    font-weight: 600;
+    font-size: var(--fs-sm);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -483,8 +478,8 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 20px;
-    height: 20px;
+    width: 22px;
+    height: 22px;
     border-radius: var(--radius-sm);
     color: var(--color-text-muted);
     cursor: pointer;

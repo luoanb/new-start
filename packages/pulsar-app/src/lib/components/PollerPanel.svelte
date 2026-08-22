@@ -172,8 +172,8 @@
 </div>
 
 <style>
-  .poller-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: var(--space-2); padding: var(--space-3); overflow-y: auto; }
-  .error-banner { background: var(--color-error); color: #fff; padding: var(--space-1) var(--space-2); border-radius: var(--radius-md); font-size: var(--fs-xs); cursor: pointer; }
+  .poller-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: var(--space-2); padding: var(--space-2); overflow-y: auto; }
+  .error-banner { background: var(--color-error-bg); color: var(--color-error); padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); font-size: var(--fs-sm); cursor: pointer; }
   .empty { text-align: center; color: var(--color-text-muted); font-size: var(--fs-xs); padding: var(--space-4); }
 
   /* 左右分栏：窄容器（侧栏/信息栏）下自动换行堆叠 */
@@ -202,8 +202,6 @@
   .parallelism-hint { font-size: var(--fs-xs); color: var(--color-text-muted); line-height: 1.4; }
 
   .controls { display: flex; align-items: center; gap: var(--space-1); margin-left: auto; }
-  .btn { font-size: var(--fs-sm); padding: var(--space-1) var(--space-3); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-sm); background: transparent; color: var(--color-text); cursor: pointer; }
-  .btn-primary { background: var(--color-primary); color: var(--color-on-primary); border-color: var(--color-primary); }
-  .btn-warning { background: var(--color-warning, #f59e0b); color: #fff; border-color: var(--color-warning, #f59e0b); }
-  .btn:disabled { opacity: 0.4; cursor: default; }
+  /* 按钮统一走全局 .btn / .btn-primary token；仅 .btn-warning 为全局缺失变体，保留本地定义。 */
+  .btn-warning { background: var(--color-warning); color: var(--color-on-primary); border-color: var(--color-warning); }
 </style>
