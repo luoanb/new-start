@@ -203,8 +203,11 @@
       theme: terminalTheme(themeName),
       // 等宽栈：Linux(WebKitGTK) 不识别 ui-monospace/Menlo/Consolas。
       // Ubuntu Mono / Liberation Mono 字形比 DejaVu Sans Mono 更紧凑，优先命中。
+      // 已装字体前移：WebKitGTK 对未安装族名走 fontconfig 弱绑定回退（实测落到 Noto Sans
+      // CJK 全角，字距明显变宽），而 Chrome 按 CSS 规范跳过未命中族；把系统已装字体放
+      // 栈首可让两个引擎命中同一字体（Ubuntu Mono），消除字距差异。
       fontFamily:
-        '"JetBrains Mono", "Fira Code", "Cascadia Mono", "Ubuntu Mono", "Liberation Mono", "Noto Sans Mono", "DejaVu Sans Mono", Consolas, Menlo, Monaco, monospace',
+        '"Ubuntu Mono", "Liberation Mono", "Noto Sans Mono", "DejaVu Sans Mono", "JetBrains Mono", "Fira Code", "Cascadia Mono", Consolas, Menlo, Monaco, monospace',
       fontSize: 11,
       lineHeight: 1.0,
       letterSpacing: 0,
