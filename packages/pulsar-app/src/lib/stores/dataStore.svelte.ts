@@ -238,7 +238,7 @@ const GIT_LOG_PAGE = 30;
 const CONVERSATION_PAGE_SIZE = 50;
 
 /** 消息历史分页每页条数（消息区上滑加载粒度）。 */
-const MESSAGE_PAGE_SIZE = 100;
+const MESSAGE_PAGE_SIZE = 30;
 
 /** 空 git 视图（无仓库 / 拉取失败兜底）。 */
 function emptyGitView(): GitView {

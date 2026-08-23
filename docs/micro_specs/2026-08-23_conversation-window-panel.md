@@ -36,6 +36,9 @@
   无激活分栏（main 为空）时 `"new"` 新开一栏。
 - 已存在同会话窗口：仅激活，不重复开、不重拉消息（避免打断正在看的滚动位置）。
 - 主窗口（无绑定）仍 `insertPanel("chat")` 单实例，行为不变。
+- **回归修复**：`insertPanel("chat")`（无 instanceId）查找「同类型已存在面板」时跳过绑定窗口
+  （`chat:${conversationId}`，type 同为 chat），绑定窗口只经 instanceId 精确匹配——
+  否则点击会话/activity 会误激活绑定窗口，主窗口永不创建（删除主会话后点击会话不再显示主会话）。
 
 ### 3. ChatArea.svelte：主 / 绑定双模式
 

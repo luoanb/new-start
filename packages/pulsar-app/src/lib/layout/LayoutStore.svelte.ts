@@ -164,8 +164,10 @@ export const layoutStore = {
   /**
    * 插入/激活一个 main 区面板。
    * - 默认同一类型全局唯一：已存在（任意分栏）则仅激活其所在分栏与该面板。
-   * - 多实例类型（如 file-editor）：传入 `instanceId` 时按实例 id 区分——
+   * - 多实例类型（如 file-editor / 绑定 chat 窗口）：传入 `instanceId` 时按实例 id 区分——
    *   已存在同 instanceId 的面板则激活；否则新建面板并以其为 id。
+   *   chat 绑定窗口实例 id = `chat:${conversationId}`；无 instanceId 的 insertPanel("chat")
+   *   只匹配**非绑定**主 chat 面板（绑定窗口必须经 instanceId 精确匹配，防止误激活）。
    * - target：目标分栏索引（0 基）；"new" 或 >= 当前栏数 → 新增一栏；默认 0；非法值收敛。
    * - 插入到既有栏时追加到该栏 panels[] 并激活（同一分栏可 tab 切换多个面板）。
    * @returns 面板实例 id（供 closePanel 关闭）。
@@ -173,7 +175,13 @@ export const layoutStore = {
   insertPanel(type: MainPanelType, target?: number | "new", instanceId?: string): string {
     const existing = state.main.panes
       .flatMap((p) => p.panels.map((x) => ({ pane: p, panel: x })))
-      .find((x) => (instanceId ? x.panel.id === instanceId : x.panel.type === type));
+      .find((x) => {
+        if (instanceId) return x.panel.id === instanceId;
+        // 主 chat 面板（无绑定）跳过绑定窗口（chat:${conversationId} 多实例），
+        // 避免点击会话/activity 时激活错误的绑定窗口、主窗口永不创建。
+        if (x.panel.type === "chat" && x.panel.id.startsWith("chat:")) return false;
+        return x.panel.type === type;
+      });
     if (existing) {
       state.main.activePaneId = existing.pane.id;
       existing.pane.activePanelId = existing.panel.id;
