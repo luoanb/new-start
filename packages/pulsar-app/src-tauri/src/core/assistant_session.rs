@@ -1697,6 +1697,10 @@ fn parse_scope_in_from_decision(decision: &serde_json::Value) -> AppResult<Vec<S
     let Some(value) = decision.get("scope_in") else {
         return Ok(Vec::new());
     };
+    // strict 模式下可选字段为 `["array","null"]` 联合：null 与缺失同语义。
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
     let items: Vec<ScopeInItem> = serde_json::from_value(value.clone())
         .map_err(|e| AppError::InvalidInput(format!("match topic invalid scope_in: {e}")))?;
     Ok(items)

@@ -106,20 +106,34 @@ pub const COMPLETE_SCOPE_SCHEMA: &str = r#"{
     "completed_item_ids": { "type": "array", "items": { "type": "string" } },
     "blocked_item_ids": { "type": "array", "items": { "type": "string" } }
   },
-  "required": ["completed_item_ids", "blocked_item_ids"]
+  "required": ["completed_item_ids", "blocked_item_ids"],
+  "additionalProperties": false
 }"#;
 
 /// match_topic：switch（切已有课题）/ create（新建）/ none（不创建不切换）。
+/// strict 兼容：全字段 required，可选用 `["T","null"]` 联合表达。
 pub const MATCH_TOPIC_SCHEMA: &str = r#"{
   "type": "object",
   "properties": {
     "action": { "type": "string", "enum": ["switch", "create", "none"] },
-    "topic_id": { "type": "string" },
-    "name": { "type": "string" },
-    "description": { "type": "string" },
-    "scope_in": { "type": "array" }
+    "topic_id": { "type": ["string", "null"] },
+    "name": { "type": ["string", "null"] },
+    "description": { "type": ["string", "null"] },
+    "scope_in": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object",
+        "properties": {
+          "goal": { "type": "string" },
+          "done_contract": { "type": "string" }
+        },
+        "required": ["goal", "done_contract"],
+        "additionalProperties": false
+      }
+    }
   },
-  "required": ["action"]
+  "required": ["action", "topic_id", "name", "description", "scope_in"],
+  "additionalProperties": false
 }"#;
 
 /// revise_topic：scope_in 增删改 + 修订原因。
@@ -135,7 +149,8 @@ pub const REVISE_TOPIC_SCHEMA: &str = r#"{
           "goal": { "type": "string" },
           "done_contract": { "type": "string" }
         },
-        "required": ["goal", "done_contract"]
+        "required": ["goal", "done_contract"],
+        "additionalProperties": false
       }
     },
     "remove_item_ids": { "type": "array", "items": { "type": "string" } },
@@ -148,11 +163,13 @@ pub const REVISE_TOPIC_SCHEMA: &str = r#"{
           "goal": { "type": "string" },
           "done_contract": { "type": "string" }
         },
-        "required": ["id"]
+        "required": ["id"],
+        "additionalProperties": false
       }
     }
   },
-  "required": ["reason", "add_items", "remove_item_ids", "update_items"]
+  "required": ["reason", "add_items", "remove_item_ids", "update_items"],
+  "additionalProperties": false
 }"#;
 
 /// score_feedback：干预区间打分（-5..=5，非 0）。
@@ -161,7 +178,8 @@ pub const SCORE_FEEDBACK_SCHEMA: &str = r#"{
   "properties": {
     "score": { "type": "integer", "minimum": -5, "maximum": 5 }
   },
-  "required": ["score"]
+  "required": ["score"],
+  "additionalProperties": false
 }"#;
 
 // ── 中性降级默认值（A 方案兜底语义，逐 hook 固化）────────────────────────────
@@ -198,28 +216,40 @@ pub static HOOK_DEFS: &[HookDef] = &[
         system_type: SYSTEM_TYPE_COMPLETE_SCOPE,
         label: "hook.completeScope",
         inject_point: InjectPointId::AfterPersistOutcome.as_str(),
-        response_format: Some(ResponseFormatSpec::JsonSchema(Cow::Borrowed(COMPLETE_SCOPE_SCHEMA))),
+        response_format: Some(ResponseFormatSpec::JsonSchema {
+            name: Cow::Borrowed("complete_scope"),
+            schema: Cow::Borrowed(COMPLETE_SCOPE_SCHEMA),
+        }),
         neutral_fallback: fallback_complete_scope,
     },
     HookDef {
         system_type: SYSTEM_TYPE_MATCH_TOPIC,
         label: "hook.matchTopic",
         inject_point: InjectPointId::AfterLoadContext.as_str(),
-        response_format: Some(ResponseFormatSpec::JsonSchema(Cow::Borrowed(MATCH_TOPIC_SCHEMA))),
+        response_format: Some(ResponseFormatSpec::JsonSchema {
+            name: Cow::Borrowed("match_topic"),
+            schema: Cow::Borrowed(MATCH_TOPIC_SCHEMA),
+        }),
         neutral_fallback: fallback_match_topic,
     },
     HookDef {
         system_type: SYSTEM_TYPE_REVISE_TOPIC,
         label: "hook.reviseTopic",
         inject_point: InjectPointId::AfterPersistOutcome.as_str(),
-        response_format: Some(ResponseFormatSpec::JsonSchema(Cow::Borrowed(REVISE_TOPIC_SCHEMA))),
+        response_format: Some(ResponseFormatSpec::JsonSchema {
+            name: Cow::Borrowed("revise_topic"),
+            schema: Cow::Borrowed(REVISE_TOPIC_SCHEMA),
+        }),
         neutral_fallback: fallback_revise_topic,
     },
     HookDef {
         system_type: SYSTEM_TYPE_SCORE_FEEDBACK,
         label: "hook.scoreFeedback",
         inject_point: InjectPointId::AfterLoadContext.as_str(),
-        response_format: Some(ResponseFormatSpec::JsonSchema(Cow::Borrowed(SCORE_FEEDBACK_SCHEMA))),
+        response_format: Some(ResponseFormatSpec::JsonSchema {
+            name: Cow::Borrowed("score_feedback"),
+            schema: Cow::Borrowed(SCORE_FEEDBACK_SCHEMA),
+        }),
         neutral_fallback: fallback_score_feedback,
     },
 ];
@@ -278,8 +308,28 @@ mod tests {
     fn each_hook_carries_response_format_schema() {
         for def in HOOK_DEFS {
             assert!(
-                matches!(def.response_format, Some(ResponseFormatSpec::JsonSchema(_))),
+                matches!(def.response_format, Some(ResponseFormatSpec::JsonSchema { .. })),
                 "{} should carry a json_schema",
+                def.system_type
+            );
+        }
+    }
+
+    #[test]
+    fn schemas_are_valid_strict_json_schema() {
+        // strict 模式要求：可解析为对象、顶层含 additionalProperties: false。
+        for def in HOOK_DEFS {
+            let ResponseFormatSpec::JsonSchema { schema, .. } =
+                def.response_format.as_ref().expect("hook carries schema")
+            else {
+                unreachable!()
+            };
+            let parsed = serde_json::from_str::<serde_json::Value>(schema.as_ref())
+                .unwrap_or_else(|e| panic!("{} schema must parse: {e}", def.system_type));
+            assert_eq!(
+                parsed["additionalProperties"],
+                serde_json::json!(false),
+                "{} schema must declare additionalProperties:false",
                 def.system_type
             );
         }

@@ -6,12 +6,13 @@ use super::{
         ThinkingCapability, ThinkingConfig, ThinkingEffort,
     },
     openai_compat::{
-        self, ChatMessage, ChatRequest, FunctionCallWire, FunctionDef, ResponseFormatSpec,
-        ToolCallWire, ToolDef,
+        self, ChatMessage, ChatRequest, FunctionCallWire, FunctionDef, MessageContent,
+        ResponseFormatSpec, ToolCallWire, ToolDef,
     },
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet},
     fs,
     path::PathBuf,
@@ -1119,17 +1120,26 @@ fn apply_thinking(req: &mut ChatRequest, thinking: Option<&ThinkingConfig>) {
 }
 
 /// 结构化输出契约 → extra 透传（与 `apply_thinking` 同级）：`response_format` 经
-/// `#[serde(flatten)]` 展平为请求体顶层字段。wire 形态：
-/// - `JsonSchema` → `{"type":"json_schema","json_schema":{...}}`（schema 为 JSON 对象）
+/// `#[serde(flatten)]` 展平为请求体顶层字段。wire 形态严格对齐 OpenAI 官方
+/// Structured Outputs 契约（provider 对外 API 以官方规范为准）：
+/// - `JsonSchema` → `{"type":"json_schema","json_schema":{"name","strict","schema":{...}}}`
+///   （`name` 为调用方给定的 schema 标识，本层只透传；`schema` 为反序列化后的对象）
 /// - `JsonObject` → `{"type":"json_object"}`
 fn apply_response_format(req: &mut ChatRequest, format: Option<&ResponseFormatSpec>) {
     let Some(format) = format else { return };
     let value = match format {
-        ResponseFormatSpec::JsonSchema(schema) => {
-            // schema 是 `&'static str` 常量；反序列化为对象后注入（服务商要求对象形态）。
-            let json_schema = serde_json::from_str::<serde_json::Value>(schema.as_ref())
+        ResponseFormatSpec::JsonSchema { name, schema } => {
+            // schema 是 `&'static str` 常量；反序列化为对象后注入（官方要求 schema 为对象形态）。
+            let schema_obj = serde_json::from_str::<serde_json::Value>(schema.as_ref())
                 .unwrap_or_else(|_| serde_json::json!({ "schema": schema.as_ref() }));
-            serde_json::json!({ "type": "json_schema", "json_schema": json_schema })
+            serde_json::json!({
+                "type": "json_schema",
+                "json_schema": {
+                    "name": name.as_ref(),
+                    "strict": true,
+                    "schema": schema_obj
+                }
+            })
         }
         ResponseFormatSpec::JsonObject => serde_json::json!({ "type": "json_object" }),
     };
@@ -1527,6 +1537,63 @@ mod tests {
         registry.save_config(view).expect("save should succeed");
         let disk = fs::read_to_string(root.join("config.json")).unwrap();
         assert!(!disk.contains("my-llm"), "disabled custom provider is removed");
+    }
+
+    #[test]
+    fn apply_response_format_json_schema_uses_official_wire() {
+        let mut req = ChatRequest::new(
+            "m",
+            vec![ChatMessage {
+                role: "user".into(),
+                content: Some(MessageContent::Text("hi".into())),
+                ..Default::default()
+            }],
+        );
+        let schema = r#"{"type":"object","properties":{"a":{"type":"string"}},"required":["a"],"additionalProperties":false}"#;
+        apply_response_format(
+            &mut req,
+            Some(&ResponseFormatSpec::JsonSchema {
+                name: Cow::Borrowed("my_schema"),
+                schema: Cow::Borrowed(schema),
+            }),
+        );
+
+        let rf = req.extra.get("response_format").expect("response_format set");
+        assert_eq!(rf["type"], serde_json::json!("json_schema"));
+        let js = &rf["json_schema"];
+        assert_eq!(js["name"], serde_json::json!("my_schema"));
+        assert_eq!(js["strict"], serde_json::json!(true));
+        // schema 为对象形态，且与原始 schema 一致。
+        assert_eq!(js["schema"], serde_json::from_str::<serde_json::Value>(schema).unwrap());
+    }
+
+    #[test]
+    fn apply_response_format_json_object_keeps_shape() {
+        let mut req = ChatRequest::new(
+            "m",
+            vec![ChatMessage {
+                role: "user".into(),
+                content: Some(MessageContent::Text("hi".into())),
+                ..Default::default()
+            }],
+        );
+        apply_response_format(&mut req, Some(&ResponseFormatSpec::JsonObject));
+        let rf = req.extra.get("response_format").expect("response_format set");
+        assert_eq!(rf, &serde_json::json!({ "type": "json_object" }));
+    }
+
+    #[test]
+    fn apply_response_format_none_is_noop() {
+        let mut req = ChatRequest::new(
+            "m",
+            vec![ChatMessage {
+                role: "user".into(),
+                content: Some(MessageContent::Text("hi".into())),
+                ..Default::default()
+            }],
+        );
+        apply_response_format(&mut req, None);
+        assert!(!req.extra.contains_key("response_format"));
     }
 
     fn test_root(name: &str) -> PathBuf {

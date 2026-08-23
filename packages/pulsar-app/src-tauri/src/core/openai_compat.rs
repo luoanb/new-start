@@ -26,13 +26,19 @@ pub enum MessageContent {
 
 /// 结构化输出契约（值类型，随 hook 走，不持有 hook 业务数据）。
 ///
-/// wire 形态（经 `extra` 扁平透传为请求体顶层 `response_format`）：
-/// - `JsonSchema` → `{"type":"json_schema","json_schema":{...}}`
+/// wire 形态（经 `extra` 扁平透传为请求体顶层 `response_format`，严格对齐 OpenAI
+/// 官方 Structured Outputs 契约）：
+/// - `JsonSchema` → `{"type":"json_schema","json_schema":{"name","strict","schema":{...}}}`
+///   （`name` 由调用方提供，本层只透传）
 /// - `JsonObject` → `{"type":"json_object"}`
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ResponseFormatSpec {
-    /// 显式 JSON Schema（schema 原文，服务商要求对象形态时反序列化后注入）。
-    JsonSchema(Cow<'static, str>),
+    /// 显式 JSON Schema（`name` 为调用方给出的 schema 标识；`schema` 为 schema 原文，
+    /// 服务商要求对象形态时反序列化后注入）。
+    JsonSchema {
+        name: Cow<'static, str>,
+        schema: Cow<'static, str>,
+    },
     /// 仅要求输出 JSON 对象（不校验结构）。
     JsonObject,
 }
