@@ -103,7 +103,20 @@
     title={t("common.noModel")}
   >
     <span class="model-label">{modelLabel}</span>
-    <span class="arrow">{modelOpen ? "▴" : "▾"}</span>
+    <svg
+      class="arrow"
+      class:open={modelOpen}
+      viewBox="0 0 24 24"
+      width="12"
+      height="12"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <polyline points="9 18 15 12 9 6" />
+    </svg>
   </button>
 
   {#if modelOpen}
@@ -114,23 +127,20 @@
         <div class="dropdown-empty">{t("sidePanel.noProviders")}</div>
       {:else}
         {#each providers as p}
-          <div class="provider-group">
-            <div class="provider-name">{p.display_name}</div>
-            {#each models.filter((m) => m.provider_id === p.id) as m}
-              <button
-                class="model-option"
-                class:active={selectedProviderId === p.id && selectedModelId === m.id}
-                onclick={() => selectModel(p.id, m.id)}
-              >
-                <span class="model-option-name">{m.display_name}</span>
-                <span class="model-option-caps">
-                  {#if m.capabilities.tools}tools {/if}
-                  {#if m.thinking?.supported}thinking {/if}
-                  {#if m.context_window}({m.context_window}ctx){/if}
-                </span>
-              </button>
-            {/each}
-          </div>
+          {#if models.some((m) => m.provider_id === p.id)}
+            <div class="provider-group">
+              <div class="provider-name">{p.display_name}</div>
+              {#each models.filter((m) => m.provider_id === p.id) as m}
+                <button
+                  class="model-option"
+                  class:active={selectedProviderId === p.id && selectedModelId === m.id}
+                  onclick={() => selectModel(p.id, m.id)}
+                >
+                  <span class="model-option-name">{m.display_name}</span>
+                </button>
+              {/each}
+            </div>
+          {/if}
         {/each}
       {/if}
     </div>
@@ -225,22 +235,29 @@
   .model-trigger {
     display: flex;
     align-items: center;
-    gap: var(--space-1);
-    padding: 3px var(--space-2);
-    border: var(--border-width) solid var(--color-border);
-    border-radius: var(--radius-sm);
-    background: var(--color-bg);
+    gap: 2px;
+    padding: 2px var(--space-1);
+    border: none;
+    background: transparent;
     color: var(--color-text);
     font-size: var(--fs-xs);
     font-family: var(--font-mono, monospace);
     cursor: pointer;
     white-space: nowrap;
-    transition: border-color var(--duration-fast) var(--ease-out);
+    transition: color var(--duration-fast) var(--ease-out);
     max-width: 220px;
+    border-radius: var(--radius-sm);
   }
 
-  .model-trigger:hover { border-color: var(--color-primary); }
-  .model-trigger.no-model { color: var(--color-error); border-color: var(--color-error); }
+  .model-trigger:hover { color: var(--color-text); background: var(--color-hover); }
+  .model-trigger.no-model { color: var(--color-error); }
+
+  .model-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .arrow {
+    flex-shrink: 0;
+    transition: transform var(--duration-fast) var(--ease-out);
+  }
+  .arrow.open { transform: rotate(90deg); }
 
   .params-trigger {
     display: inline-flex; align-items: center; justify-content: center;
@@ -254,8 +271,7 @@
   }
   .params-trigger:hover { border-color: var(--color-primary); color: var(--color-primary); }
 
-  .model-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .arrow { font-size: 10px; flex-shrink: 0; }
+  .model-option-name { font-weight: 500; }
 
   .model-backdrop { position: fixed; inset: 0; z-index: 10; }
 
@@ -324,6 +340,4 @@
   .model-option:hover { background: var(--color-hover); }
   .model-option.active { background: var(--color-primary); color: var(--color-on-primary); }
   .model-option-name { font-weight: 500; }
-  .model-option-caps { font-size: var(--fs-xs); opacity: 0.6; }
-  .model-option.active .model-option-caps { opacity: 0.8; }
 </style>

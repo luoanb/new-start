@@ -23,7 +23,7 @@
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
   import { hotkeyService } from "$lib/hotkey/hotkeyService";
   import { dataStore } from "$lib/stores/dataStore.svelte";
-  import { discoverRemote, isTauriEnv, switchConn } from "$lib/api";
+  import { discoverRemote, isTauriEnv, switchConn, api, c } from "$lib/api";
   import type { SamplingParams, ThinkingConfig, ChatModelSelection } from "$lib/types";
 
   // ── 统一数据（dataStore 驱动：bootstrap + 事件订阅刷新）──
@@ -132,6 +132,8 @@
     await dataStore.subscribe();
     // 首启默认会话回显后端持有的会话级模型选择（后端权威）。
     echoSessionModel(dataStore.state.activeConversationId);
+    // 仍未选中模型（无本地持久化、会话也无模型）→ 回退全局默认模型。
+    await applyGlobalDefaultModel();
     setupHotkeys();
     void setWindowIcon();
   });
@@ -262,6 +264,23 @@
     ui.activeThinking = model.thinking ?? undefined;
     localStorage.setItem("pulsar:providerId", model.provider_id);
     localStorage.setItem("pulsar:modelId", model.model_id);
+  }
+
+  /** 初始化兜底：本地无持久化选择、当前会话也无模型时，回退全局默认模型（config.json defaults）。 */
+  async function applyGlobalDefaultModel() {
+    if (ui.activeProviderId && ui.activeModelId) return;
+    try {
+      const config = await api.call(c.getProviderConfig, undefined);
+      const defaults = config.defaults;
+      if (!defaults?.provider || !defaults?.model) return;
+      ui.activeProviderId = defaults.provider;
+      ui.activeModelId = defaults.model;
+      localStorage.setItem("pulsar:providerId", defaults.provider);
+      localStorage.setItem("pulsar:modelId", defaults.model);
+    } catch (e) {
+      // 静默：读取默认模型失败不阻塞启动，用户可手动选择。
+      console.warn("applyGlobalDefaultModel failed:", e);
+    }
   }
 
   function handleModelChange(
