@@ -11,3 +11,4 @@ packages/pulsar-app/.pulsar/config.json
 packages/pulsar-app/.pulsar/app.db
 packages/pulsar-app/src-tauri/.pulsar/app.db
 packages/pulsar-app/.pulsar/logs/pulsar.log*
+packages/pulsar-app/.pulsar/search
