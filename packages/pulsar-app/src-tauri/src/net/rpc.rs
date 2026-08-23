@@ -12,7 +12,9 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 
 use crate::core::{
-    app_log, hook::hook_defs_meta, hook_judgement_store::HookJudgementFilter,
+    app_log,
+    hook::hook_defs_meta,
+    hook_judgement_store::{HookJudgementFilter, HookJudgementListResult},
     insert_catalog::InsertCatalog, providers::ProviderConfigView,
     tool_config::ToolConfigView,
     AppError, AppResult, ChatOptions, ConversationMode,
@@ -615,8 +617,9 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
         "hook_judgements_list" => {
             let p: HookJudgementsListParams = from_params(params)?;
             let filter = p.filters.unwrap_or_default();
-            let records = with_hook_judgement(state, |store| store.list(&filter))?;
-            value(records)
+            let result: HookJudgementListResult =
+                with_hook_judgement(state, |store| store.list_with_total(&filter))?;
+            value(result)
         }
         "hook_defs_list" => {
             value(hook_defs_meta())

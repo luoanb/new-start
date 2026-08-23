@@ -68,6 +68,35 @@ pub struct HookJudgementFilter {
     pub offset: Option<i64>,
 }
 
+/// 分页列表出参：记录 + 过滤后总数（供前端计数与 hasMore 判断）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookJudgementListResult {
+    pub records: Vec<HookJudgementRecord>,
+    pub total: i64,
+}
+
+/// 构建过滤 WHERE 片段与参数（`hook_type` / `status` / `conversation_id`；
+/// `limit` / `offset` 由调用方按需追加）。`list` 与 `list_with_total` 共用，避免逻辑漂移。
+fn build_where(
+    filter: &HookJudgementFilter,
+) -> (Vec<String>, Vec<Box<dyn rusqlite::types::ToSql>>) {
+    let mut where_clauses: Vec<String> = Vec::new();
+    let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    if let Some(ref hook_type) = filter.hook_type {
+        where_clauses.push("hook_type = ?".to_string());
+        param_values.push(Box::new(hook_type.clone()));
+    }
+    if let Some(ref status) = filter.status {
+        where_clauses.push("status = ?".to_string());
+        param_values.push(Box::new(status.clone()));
+    }
+    if let Some(ref conversation_id) = filter.conversation_id {
+        where_clauses.push("conversation_id = ?".to_string());
+        param_values.push(Box::new(conversation_id.clone()));
+    }
+    (where_clauses, param_values)
+}
+
 /// HookJudgementStore manages the `hook_judgements` table in the shared App-level SQLite database.
 pub struct HookJudgementStore {
     conn: Arc<Mutex<Connection>>,
@@ -281,47 +310,68 @@ impl HookJudgementStore {
         }
     }
 
-    /// 列表查询（按 `created_at` 倒序）。空过滤 = 全量。
+    /// 列表查询（按 `created_at` 倒序）。空过滤 = 全量。兼容既有消费方（无总数）。
     pub fn list(&self, filter: &HookJudgementFilter) -> AppResult<Vec<HookJudgementRecord>> {
+        Ok(self.list_with_total(filter)?.records)
+    }
+
+    /// 分页列表查询（按 `created_at` 倒序）：单锁内先 `COUNT(*)`（同过滤）再分页 `SELECT`，
+    /// 返回记录与过滤后总数。供面板分页与计数消费。
+    pub fn list_with_total(
+        &self,
+        filter: &HookJudgementFilter,
+    ) -> AppResult<HookJudgementListResult> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| AppError::StorageError(format!("Failed to lock database: {}", e)))?;
 
-        let mut where_clauses: Vec<String> = Vec::new();
-        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        if let Some(ref hook_type) = filter.hook_type {
-            where_clauses.push("hook_type = ?".to_string());
-            param_values.push(Box::new(hook_type.clone()));
+        let (where_clauses, filter_params) = build_where(filter);
+
+        // COUNT（同过滤，不含 limit/offset）。
+        let mut count_sql = String::from("SELECT COUNT(*) FROM hook_judgements");
+        if !where_clauses.is_empty() {
+            count_sql.push_str(" WHERE ");
+            count_sql.push_str(&where_clauses.join(" AND "));
         }
-        if let Some(ref status) = filter.status {
-            where_clauses.push("status = ?".to_string());
-            param_values.push(Box::new(status.clone()));
-        }
-        if let Some(ref conversation_id) = filter.conversation_id {
-            where_clauses.push("conversation_id = ?".to_string());
-            param_values.push(Box::new(conversation_id.clone()));
-        }
+        let mut count_stmt = conn
+            .prepare(&count_sql)
+            .map_err(|e| AppError::StorageError(format!("Failed to prepare count query: {}", e)))?;
+        let total: i64 = count_stmt
+            .query_row(rusqlite::params_from_iter(filter_params.iter()), |r| r.get(0))
+            .map_err(|e| AppError::StorageError(format!("Failed to count hook judgements: {}", e)))?;
+
+        // 分页 SELECT。
         let mut sql = String::from(SELECT_COLUMNS);
         if !where_clauses.is_empty() {
             sql.push_str(" WHERE ");
             sql.push_str(&where_clauses.join(" AND "));
         }
         sql.push_str(" ORDER BY created_at DESC");
-        if let Some(limit) = filter.limit {
-            sql.push_str(" LIMIT ?");
-            param_values.push(Box::new(limit));
-        }
-        if let Some(offset) = filter.offset {
-            sql.push_str(" OFFSET ?");
-            param_values.push(Box::new(offset));
+        // LIMIT/OFFSET 组合拼接：单独 OFFSET 时用 `LIMIT -1 OFFSET ?`（SQLite 无限制占位）。
+        let mut sel_params: Vec<Box<dyn rusqlite::types::ToSql>> = filter_params;
+        match (filter.limit, filter.offset) {
+            (Some(limit), Some(offset)) => {
+                sql.push_str(" LIMIT ? OFFSET ?");
+                sel_params.push(Box::new(limit));
+                sel_params.push(Box::new(offset));
+            }
+            (Some(limit), None) => {
+                sql.push_str(" LIMIT ?");
+                sel_params.push(Box::new(limit));
+            }
+            (None, Some(offset)) => {
+                sql.push_str(" LIMIT -1 OFFSET ?");
+                sel_params.push(Box::new(offset));
+            }
+            (None, None) => {}
         }
 
         let mut stmt = conn
             .prepare(&sql)
             .map_err(|e| AppError::StorageError(format!("Failed to prepare query: {}", e)))?;
         let rows = stmt
-            .query_map(rusqlite::params_from_iter(param_values.iter()), row_to_record)
+            .query_map(rusqlite::params_from_iter(sel_params.iter()), row_to_record)
             .map_err(|e| AppError::StorageError(format!("Failed to query hook judgements: {}", e)))?;
 
         let mut records = Vec::new();
@@ -330,7 +380,7 @@ impl HookJudgementStore {
                 row.map_err(|e| AppError::StorageError(format!("Failed to read hook judgement row: {}", e)))?,
             );
         }
-        Ok(records)
+        Ok(HookJudgementListResult { records, total })
     }
 }
 
@@ -523,5 +573,100 @@ mod tests {
             })
             .unwrap();
         assert_eq!(pending.len(), 3);
+    }
+
+    #[test]
+    fn test_list_with_total_pagination() {
+        let store = test_store("list_with_total");
+        // 插 7 条 pending：conv_0 3 条、conv_1 4 条。
+        for i in 0..7 {
+            let id = new_hook_judgement_id();
+            store
+                .insert_start(
+                    &id,
+                    &format!("conv_{}", i % 2),
+                    None,
+                    Some(i),
+                    "assistant_match_topic",
+                    Some("after_load_context"),
+                    &serde_json::json!({"n": i}),
+                    None,
+                    None,
+                )
+                .unwrap();
+        }
+        // 取时间线倒序前 2 条收敛为 ok 终态，验证状态过滤下的 total。
+        let first_two = store
+            .list(&HookJudgementFilter {
+                limit: Some(2),
+                offset: None,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(first_two.len(), 2);
+        for rec in &first_two {
+            store
+                .finish(
+                    &rec.id,
+                    "ok",
+                    1,
+                    &[],
+                    "{}",
+                    Some(&serde_json::json!({})),
+                    None,
+                    10,
+                )
+                .unwrap();
+        }
+
+        // 全量：total=7 且 records 全量。
+        let all = store
+            .list_with_total(&HookJudgementFilter::default())
+            .unwrap();
+        assert_eq!(all.total, 7);
+        assert_eq!(all.records.len(), 7);
+
+        // 状态过滤：status=ok → total=2。
+        let ok = store
+            .list_with_total(&HookJudgementFilter {
+                status: Some("ok".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(ok.total, 2);
+        assert_eq!(ok.records.len(), 2);
+
+        // 分页：limit=2 offset=2 → records=2 且 total 仍为 7（计数不受分页影响）。
+        let page = store
+            .list_with_total(&HookJudgementFilter {
+                limit: Some(2),
+                offset: Some(2),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(page.total, 7);
+        assert_eq!(page.records.len(), 2);
+
+        // 过滤 + 分页组合：hook_type 过滤 total=7，limit=3 只取 3 条。
+        let filtered_page = store
+            .list_with_total(&HookJudgementFilter {
+                hook_type: Some("assistant_match_topic".into()),
+                limit: Some(3),
+                offset: None,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(filtered_page.total, 7);
+        assert_eq!(filtered_page.records.len(), 3);
+
+        // offset 越界 → 空记录但 total 正确。
+        let past_end = store
+            .list_with_total(&HookJudgementFilter {
+                offset: Some(100),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(past_end.total, 7);
+        assert!(past_end.records.is_empty());
     }
 }

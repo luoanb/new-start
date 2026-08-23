@@ -414,6 +414,12 @@ export type HookJudgementFilter = {
   offset?: number;
 };
 
+/** `hook_judgements_list` 分页出参：记录 + 过滤后总数（供计数与 hasMore 判断）。 */
+export type HookJudgementListResult = {
+  records: HookJudgementRecord[];
+  total: number;
+};
+
 /** `hook_defs_list` 出参：hook 元信息（面板过滤下拉数据源）。 */
 export type HookDefMeta = {
   system_type: string;

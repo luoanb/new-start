@@ -13,7 +13,9 @@ use crate::core::{
     conversation_store::ConversationStore,
     error::AppErrorPayload,
     hook::hook_defs_meta,
-    hook_judgement_store::{HookJudgementFilter, HookJudgementRecord, HookJudgementStore},
+    hook_judgement_store::{
+        HookJudgementFilter, HookJudgementListResult, HookJudgementStore,
+    },
     insert_catalog::{InsertCatalog, InsertInfo},
     neuron_manager::NeuronManager,
     poller::Poller,
@@ -504,14 +506,15 @@ async fn resume_topic(
 
 // ── Hook Judgements ──
 
-/// 裁决记录列表（时间线倒序）。空过滤 = 全量；面板与消息卡锚点查询共用。
+/// 裁决记录分页列表（时间线倒序）。空过滤 = 全量；面板与消息卡锚点查询共用。
+/// 出参为 `{ records, total }`，total 为过滤后总数，供面板分页（滚动加载）与计数消费。
 #[tauri::command]
 async fn hook_judgements_list(
     hook_judgement_store: State<'_, Arc<StdMutex<HookJudgementStore>>>,
     filters: Option<HookJudgementFilter>,
-) -> TauriResult<Vec<HookJudgementRecord>> {
+) -> TauriResult<HookJudgementListResult> {
     let filter = filters.unwrap_or_default();
-    with_hook_judgement_store(&hook_judgement_store, |store| store.list(&filter))
+    with_hook_judgement_store(&hook_judgement_store, |store| store.list_with_total(&filter))
 }
 
 /// Hook 元信息表（`HOOK_DEFS` 静态表出参：面板过滤下拉的数据源）。
