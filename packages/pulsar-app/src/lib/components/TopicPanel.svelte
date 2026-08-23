@@ -179,6 +179,9 @@
     {/each}
   </div>
 
+  <!-- 内容区独立滚动：标题栏/筛选栏固定不随滚动（参考 SessionList / ToolPanel）。 -->
+  <div class="panel-scroll">
+
   <!-- Create form -->
   {#if showCreateForm}
     <div class="create-form">
@@ -379,6 +382,7 @@
       {/each}
     </div>
   {/if}
+  </div>
 </div>
 
 <style>
@@ -389,8 +393,21 @@
     flex: 1;
     min-height: 0;
     gap: var(--space-2);
-    padding: var(--space-2);
-    overflow: auto;
+    /* 右侧无 padding：滚动条贴面板右边缘（右边距已在 .panel-scroll 内部提供）。 */
+    padding: var(--space-2) 0 var(--space-2) var(--space-2);
+    /* 滚动交由 .panel-scroll 单层容器（标题栏/筛选栏固定，参考 SessionList / ToolPanel）。 */
+    overflow: hidden;
+  }
+  /* 内容区（创建表单 + 课题列表）独立滚动容器。 */
+  .panel-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    /* 内容与滚动条之间留出右边距（滚动条在 padding 外侧，参考 SessionList）。 */
+    padding-right: var(--space-2);
   }
   .error-banner { background: var(--color-error-bg); color: var(--color-error); padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); font-size: var(--fs-sm); cursor: pointer; }
   /* 面板标题栏：对齐 ToolPanel 的 panel-toolbar / panel-title / toolbar-actions 词汇 */
@@ -398,6 +415,8 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    /* 头部右侧留白，与 .panel-scroll 内部右边距对齐（外层右侧无 padding）。 */
+    padding-right: var(--space-2);
   }
   .panel-title {
     font-size: var(--fs-sm);
@@ -416,6 +435,8 @@
     border: var(--border-width) solid var(--color-border);
     border-radius: var(--radius-md);
     background: var(--color-surface);
+    /* 与 .panel-scroll 内部右边距对齐（外层右侧无 padding）。 */
+    margin-right: var(--space-2);
   }
   .filter-btn {
     flex: 1;

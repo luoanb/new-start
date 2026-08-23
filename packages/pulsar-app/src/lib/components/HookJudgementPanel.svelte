@@ -382,7 +382,8 @@
     flex: 1;
     min-height: 0;
     gap: var(--space-2);
-    padding: var(--space-2);
+    /* 右侧无 padding：滚动条贴面板右边缘（右边距已在 .list 内部提供）。 */
+    padding: var(--space-2) 0 var(--space-2) var(--space-2);
     /* hidden：滚动交由 .list 单层容器，避免双层 overflow 嵌套导致滚动条错位、行被挤没。 */
     overflow: hidden;
   }
@@ -399,6 +400,8 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    /* 头部右侧留白，与 .list 内部右边距对齐（外层右侧无 padding）。 */
+    padding-right: var(--space-2);
   }
   .panel-title {
     font-size: var(--fs-sm);
@@ -433,9 +436,10 @@
     align-items: center;
     gap: var(--space-1);
     padding: 2px;
-    border: var(--border-width) solid var(--color-border);
     border-radius: var(--radius-md);
     background: var(--color-surface);
+    /* 与 .list 内部右边距对齐（外层右侧无 padding）。 */
+    margin-right: var(--space-2);
   }
   .filter-bar .count {
     margin-left: auto;
@@ -451,6 +455,8 @@
     flex-direction: column;
     gap: var(--space-2);
     font-size: var(--fs-sm);
+    /* 内容与滚动条之间留出右边距（滚动条在 padding 外侧，参考 SessionList）。 */
+    padding-right: var(--space-2);
   }
   .empty {
     padding: var(--space-4);

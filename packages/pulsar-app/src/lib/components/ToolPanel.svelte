@@ -118,74 +118,77 @@
   {#if loading}
     <p class="empty">{t("toolPanel.loading")}</p>
   {:else}
-    <section class="section">
-      <div class="section-header">
-        <span class="section-title">{t("toolPanel.mcpSection")}</span>
-        <span class="section-count">{mcpServers.length}</span>
-      </div>
-      {#if mcpServers.length === 0}
-        <p class="empty">{t("toolPanel.noMcpServers")}</p>
-      {:else}
-        <ul class="server-list">
-          {#each mcpServers as server (server.name)}
-            <li class="server-item">
-              <div class="server-main">
-                <span class="server-name">{server.name}</span>
-                <span class="server-meta">
-                  <span class="transport">{server.transport}</span>
-                  <span class="tool-count">{t("toolPanel.toolsCount", { count: server.tool_count })}</span>
-                </span>
-              </div>
-              <span
-                class="status"
-                class:connecting={server.status === "connecting"}
-                class:connected={server.status === "connected"}
-                class:failed={server.status === "failed"}
-                class:disabled={server.status === "disabled"}
-              >
-                {tMap("toolPanel.status", server.status)}
-              </span>
-            </li>
-            {#if server.error}
-              <li class="server-error" title={server.error}>{server.error}</li>
-            {/if}
-          {/each}
-        </ul>
-      {/if}
-    </section>
-
-    <section class="section">
-      <div class="section-header">
-        <span class="section-title">{t("toolPanel.toolsSection")}</span>
-        <span class="section-count">{tools.length}</span>
-      </div>
-      {#if tools.length === 0}
-        <p class="empty">{t("toolPanel.noTools")}</p>
-      {:else}
-        <ul class="tool-list">
-          {#each tools as tool (tool.name)}
-            <li class="tool-item">
-              <div class="tool-main">
-                <span class="tool-name" title={tool.name}>{tool.name}</span>
-                <span class="tool-desc" title={tool.description}>{tool.description}</span>
-              </div>
-              {#if tool.tag !== "normal"}
+    <!-- 内容区独立滚动：标题栏固定不随滚动（参考 SessionList header + 列表滚动结构）。 -->
+    <div class="panel-scroll">
+      <section class="section">
+        <div class="section-header">
+          <span class="section-title">{t("toolPanel.mcpSection")}</span>
+          <span class="section-count">{mcpServers.length}</span>
+        </div>
+        {#if mcpServers.length === 0}
+          <p class="empty">{t("toolPanel.noMcpServers")}</p>
+        {:else}
+          <ul class="server-list">
+            {#each mcpServers as server (server.name)}
+              <li class="server-item">
+                <div class="server-main">
+                  <span class="server-name">{server.name}</span>
+                  <span class="server-meta">
+                    <span class="transport">{server.transport}</span>
+                    <span class="tool-count">{t("toolPanel.toolsCount", { count: server.tool_count })}</span>
+                  </span>
+                </div>
                 <span
-                  class="tag"
-                  class:tag-core={tool.tag === "core"}
-                  class:tag-system={tool.tag === "system"}
+                  class="status"
+                  class:connecting={server.status === "connecting"}
+                  class:connected={server.status === "connected"}
+                  class:failed={server.status === "failed"}
+                  class:disabled={server.status === "disabled"}
                 >
-                  {tool.tag}
+                  {tMap("toolPanel.status", server.status)}
                 </span>
+              </li>
+              {#if server.error}
+                <li class="server-error" title={server.error}>{server.error}</li>
               {/if}
-              <span class="source" class:src-native={tool.source === "native"} class:src-config={tool.source === "config"} class:src-mcp={tool.source === "mcp"}>
-                {sourceLabel(tool.source)}
-              </span>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-    </section>
+            {/each}
+          </ul>
+        {/if}
+      </section>
+
+      <section class="section">
+        <div class="section-header">
+          <span class="section-title">{t("toolPanel.toolsSection")}</span>
+          <span class="section-count">{tools.length}</span>
+        </div>
+        {#if tools.length === 0}
+          <p class="empty">{t("toolPanel.noTools")}</p>
+        {:else}
+          <ul class="tool-list">
+            {#each tools as tool (tool.name)}
+              <li class="tool-item">
+                <div class="tool-main">
+                  <span class="tool-name" title={tool.name}>{tool.name}</span>
+                  <span class="tool-desc" title={tool.description}>{tool.description}</span>
+                </div>
+                {#if tool.tag !== "normal"}
+                  <span
+                    class="tag"
+                    class:tag-core={tool.tag === "core"}
+                    class:tag-system={tool.tag === "system"}
+                  >
+                    {tool.tag}
+                  </span>
+                {/if}
+                <span class="source" class:src-native={tool.source === "native"} class:src-config={tool.source === "config"} class:src-mcp={tool.source === "mcp"}>
+                  {sourceLabel(tool.source)}
+                </span>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </section>
+    </div>
   {/if}
 </div>
 
@@ -196,14 +199,29 @@
     flex: 1;
     min-height: 0;
     gap: var(--space-2);
-    padding: var(--space-2);
-    overflow: auto;
+    /* 右侧无 padding：滚动条贴面板右边缘（右边距已在 .panel-scroll 内部提供）。 */
+    padding: var(--space-2) 0 var(--space-2) var(--space-2);
+    /* 滚动交由 .panel-scroll 单层容器（标题栏固定不随滚动，参考 SessionList）。 */
+    overflow: hidden;
+  }
+  /* 内容区（两个 section）独立滚动容器。 */
+  .panel-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    /* 内容与滚动条之间留出右边距（滚动条在 padding 外侧，参考 SessionList）。 */
+    padding-right: var(--space-2);
   }
 
   .panel-toolbar {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    /* 头部右侧留白，与 .panel-scroll 内部右边距对齐（外层右侧无 padding）。 */
+    padding-right: var(--space-2);
   }
   .panel-title {
     font-size: var(--fs-sm);

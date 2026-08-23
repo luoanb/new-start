@@ -218,6 +218,8 @@
     term.loadAddon(fit);
 
     let destroyed = false;
+    // 触摸拖动滚动的监听清理器（在 init 内注册，destroy 时统一移除）。
+    let touchDisposers: (() => void)[] = [];
     const init = () => {
       if (destroyed) return;
       term.open(node);
@@ -231,6 +233,41 @@
           errorMsg = t("terminal.writeFailed", { error: `${e}` });
         });
       });
+
+      // 移动端触摸拖动滚动：xterm 6.0 的 Viewport 触摸处理只有类型声明而无实现
+      // （IViewport.handleTouchStart/handleTouchMove），移动端需自行桥接。
+      // 单指垂直拖动 → preventDefault 抑制原生滚动 + term.scrollLines() 换算行数；
+      // 多指忽略（pinch 缩放放行给浏览器，由 .term-host 的 touch-action 允许）。
+      let touchAnchorY: number | null = null;
+      const onTouchStart = (e: TouchEvent) => {
+        touchAnchorY = e.touches.length === 1 ? e.touches[0].clientY : null;
+      };
+      const onTouchMove = (e: TouchEvent) => {
+        if (e.touches.length !== 1 || touchAnchorY === null) return;
+        e.preventDefault();
+        const rowsEl = term.element?.querySelector<HTMLElement>(".xterm-rows");
+        const cellHeight = rowsEl ? rowsEl.clientHeight / term.rows : 14;
+        const delta = touchAnchorY - e.touches[0].clientY;
+        const lines = Math.trunc(delta / cellHeight);
+        if (lines !== 0) {
+          term.scrollLines(lines);
+          // 消费掉的像素推进基线，子行余量留待下次 move 累计。
+          touchAnchorY -= lines * cellHeight;
+        }
+      };
+      const onTouchEnd = () => {
+        touchAnchorY = null;
+      };
+      const termEl = term.element!;
+      termEl.addEventListener("touchstart", onTouchStart, { passive: true });
+      termEl.addEventListener("touchmove", onTouchMove); // 非 passive：需 preventDefault
+      termEl.addEventListener("touchend", onTouchEnd);
+      touchDisposers = [
+        () => termEl.removeEventListener("touchstart", onTouchStart),
+        () => termEl.removeEventListener("touchmove", onTouchMove),
+        () => termEl.removeEventListener("touchend", onTouchEnd),
+      ];
+
       term.focus();
     };
     const fontsReady = document.fonts
@@ -263,6 +300,8 @@
     return {
       destroy() {
         destroyed = true;
+        for (const fn of touchDisposers) fn();
+        touchDisposers = [];
         ro.disconnect();
         observers.delete(sessionId);
         terms.delete(sessionId);
@@ -401,7 +440,15 @@
     padding: 6px;
     overflow: hidden;
   }
-  .term-host { width: 100%; height: 100%; }
+  /* 移动端手势策略：垂直拖动由 JS（scrollLines）接管，水平 pan 与双指缩放放行浏览器
+     （touch-action 取交集作用于整个手势区域）；overscroll-behavior 阻止滚动到头时
+     触发浏览器下拉刷新/橡皮筋滚动链。 */
+  .term-host {
+    width: 100%;
+    height: 100%;
+    touch-action: pan-x pinch-zoom;
+    overscroll-behavior: contain;
+  }
   .empty {
     padding: var(--space-3);
     color: var(--color-text-muted);
