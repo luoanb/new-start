@@ -1,0 +1,77 @@
+name: 'publish-pulsar-app'
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - release
+
+# 参考官方示例：https://v2.tauri.app/distribute/pipelines/github/
+# 构建目标：Windows x64、Linux x64、Linux Arm64、macOS x64（Intel）和 macOS Arm64（Apple Silicon）。
+jobs:
+  publish-tauri:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'macos-latest' # macOS Arm（Apple Silicon）
+            args: '--target aarch64-apple-darwin'
+          - platform: 'macos-latest' # macOS x64（Intel）
+            args: '--target x86_64-apple-darwin'
+          - platform: 'ubuntu-22.04' # Linux x64
+            args: ''
+          - platform: 'ubuntu-22.04-arm' # Linux Arm64（该 runner 仅公共仓库可用）
+            args: ''
+          - platform: 'windows-latest' # Windows x64
+            args: ''
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: install dependencies (ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04' || matrix.platform == 'ubuntu-22.04-arm' # 必须与上方 platform 值一致
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+
+      - name: setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: setup node
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: 'pnpm'
+
+      - name: install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # 这两个 target 只在 macos runner 上使用，放在 if 中可略微加速 windows/linux 构建。
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          # 与项目布局对应：Tauri 工程位于 packages/pulsar-app/src-tauri。
+          workspaces: './packages/pulsar-app/src-tauri -> target'
+
+      - name: install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # pulsar-app 位于 monorepo 子目录；tauriScript 显式指定 pnpm 以避免 lockfile 在仓库根目录导致的自动检测偏差。
+          projectPath: './packages/pulsar-app'
+          tauriScript: pnpm tauri
+          tagName: pulsar-v__VERSION__ # 该 action 会自动将 __VERSION__ 替换为应用版本。
+          releaseName: 'Pulsar v__VERSION__'
+          releaseBody: 'See the assets to download this version and install.'
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
