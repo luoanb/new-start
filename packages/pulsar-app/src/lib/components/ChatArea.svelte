@@ -14,6 +14,11 @@
   // 视图数据/命令统一来自 ViewContext（容器与内容解耦，无 props）。
   const ctx = useViewContext();
   let messages = $derived(ctx.stores.data.state.messages);
+  // 分页窗口：messagesOffset = 首条已加载消息在整段历史中的绝对下标
+  // （评分/裁决卡锚点/定位均消费绝对下标；streamingIndex 保持窗口内下标语义）。
+  let messagesOffset = $derived(ctx.stores.data.state.messagesOffset);
+  let messagesHasMore = $derived(ctx.stores.data.state.messagesHasMore);
+  let messagesLoadingOlder = $derived(ctx.stores.data.state.messagesLoadingOlder);
   let providers = $derived(ctx.stores.data.state.providers);
   let models = $derived(ctx.stores.data.state.models);
   let selectedProviderId = $derived(ctx.ui.activeProviderId);
@@ -78,6 +83,28 @@
     userScrolled = distanceFromBottom > 5;
     // 用户主动滚动即结束吸顶展示期，交还控制权。
     if (userScrolled) stickyRound = false;
+    // 上滑近顶部：追加加载更早消息（滚动位置由 loadOlderMessages 按高度差恢复）。
+    if (el.scrollTop <= 40) {
+      void loadOlderMessages();
+    }
+  }
+
+  /**
+   * 加载更早消息（前插到窗口头部）。前插前记录容器高度与 scrollTop，
+   * 前插后以高度差补偿 scrollTop，保持用户当前阅读位置不跳变。
+   */
+  async function loadOlderMessages(): Promise<void> {
+    const el = containerEl;
+    if (!el || !messagesHasMore || messagesLoadingOlder) return;
+    const prevScrollHeight = el.scrollHeight;
+    const prevScrollTop = el.scrollTop;
+    await ctx.stores.data.loadMoreMessages();
+    // 等待 DOM 按新数组完成一轮渲染后再补偿滚动位置。
+    requestAnimationFrame(() => {
+      if (containerEl) {
+        containerEl.scrollTop = containerEl.scrollHeight - prevScrollHeight + prevScrollTop;
+      }
+    });
   }
 
   function scrollToNewest() {
@@ -201,21 +228,33 @@
   }
 
   // ── 锚点定位：面板「在会话中定位」→ 滚动高亮锚点消息 ──
-  // 会话切换后消息异步加载，目标元素可能未就绪；待当前会话匹配且元素存在时执行。
+  // 会话切换后消息异步加载，目标元素可能未就绪；锚点消息若不在已加载窗口
+  // （分页前插后仍未覆盖），自动续拉更早页直到命中或拉完。
   $effect(() => {
     const anchor = ctx.stores.layout.locateAnchor;
     if (!anchor || anchor.conversationId !== activeConversationId) return;
     ctx.stores.layout.clearLocate();
-    requestAnimationFrame(() => {
-      const target = containerEl?.querySelector(
-        `[data-message-index="${anchor.messageIndex}"]`,
-      ) as HTMLElement | undefined;
-      if (!target) return;
-      scrollToTopOf(target);
-      target.classList.add("locate-flash");
-      setTimeout(() => target.classList.remove("locate-flash"), 2200);
-    });
+    void locateToMessage(anchor.messageIndex);
   });
+
+  async function locateToMessage(messageIndex: number): Promise<void> {
+    for (let i = 0; i < 20; i++) {
+      // 等待一轮渲染（初次查询/前插后 DOM 对齐），避免命中已加载但未渲染的消息。
+      await new Promise((r) => requestAnimationFrame(r));
+      const target = containerEl?.querySelector(
+        `[data-message-index="${messageIndex}"]`,
+      ) as HTMLElement | undefined;
+      if (target) {
+        scrollToTopOf(target);
+        target.classList.add("locate-flash");
+        setTimeout(() => target.classList.remove("locate-flash"), 2200);
+        return;
+      }
+      // 目标不在窗口内：续拉更早页（全部拉完仍无 → 静默放弃）。
+      if (!messagesHasMore) return;
+      await loadOlderMessages();
+    }
+  }
 
   // ── 消息内联裁决卡：锚点附属渲染块（旁路列表，不插入消息数组）──
   let judgements = $state<HookJudgementRecord[]>([]);
@@ -293,17 +332,18 @@
           style={i === rounds.length - 1 ? `min-height: ${viewportH}px` : undefined}
         >
           {#each round.messages as msg, mi}
+            {@const absIndex = messagesOffset + round.startIndex + mi}
             <ChatMessage
               message={msg}
               // 紧邻上一条工具回复时压缩纵向间距，让一轮内的多条工具结果更像连续列表
               compactTool={mi > 0 && round.messages[mi - 1].body.kind === "tool_result"}
               streaming={ctx.stores.data.state.streamingIndex === round.startIndex + mi}
               canRate={rateable}
-              anchorIndex={round.startIndex + mi}
+              anchorIndex={absIndex}
               onCopy={handleCopy}
-              onRate={(score) => handleRate(round.startIndex + mi, score)}
+              onRate={(score) => handleRate(absIndex, score)}
             />
-            {#each judgementsFor(round.startIndex + mi) as record (record.id)}
+            {#each judgementsFor(absIndex) as record (record.id)}
               <!-- 裁决卡：锚点消息附属渲染块（旁路列表，不插入消息数组、不影响 message_index） -->
               <JudgementCard {record} hookLabel={hookLabelFor(record)} />
             {/each}

@@ -35,6 +35,7 @@ export type Translations = {
     running: string;
     copyId: string;
     closeSession: string;
+    loadingMore: string;
     collapseSidebar: string;
     expandSidebar: string;
   };
@@ -672,6 +673,7 @@ export const en: Translations = {
     running: "Running",
     copyId: "Copy session ID",
     closeSession: "Close session",
+    loadingMore: "Loading more...",
     collapseSidebar: "Collapse sidebar",
     expandSidebar: "Expand sidebar",
   },
@@ -1348,6 +1350,7 @@ export const zh: Translations = {
     running: "运行中",
     copyId: "复制会话 ID",
     closeSession: "关闭会话",
+    loadingMore: "加载更多...",
     collapseSidebar: "收起侧栏",
     expandSidebar: "展开侧栏",
   },

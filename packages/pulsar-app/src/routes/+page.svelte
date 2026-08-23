@@ -351,17 +351,13 @@
     fileEditorStore.dispose(panelId);
   }
 
-  /** 对话标题：复用会话侧栏规则（首条 user/assistant 文本消息，无则占位）。 */
+  /** 对话标题：复用会话侧栏规则（后端摘要 preview = 首条 user/assistant 文本消息，无则占位）。 */
   let activeConversationTitle = $derived.by(() => {
     const conv = dataStore.state.conversations.find(
       (c) => c.id === dataStore.state.activeConversationId,
     );
     if (!conv) return t("views.chat");
-    const textMsg = conv.messages.find(
-      (m) => m.body.kind === "text" && (m.role === "user" || m.role === "assistant"),
-    );
-    const content = textMsg?.body.kind === "text" ? textMsg.body.content.trim() : "";
-    return content || t("sessionList.newSession");
+    return conv.preview?.trim() || t("sessionList.newSession");
   });
 
   /** 当前对话模式：chat tab 的 icon 跟随（字母 + 色调）。 */

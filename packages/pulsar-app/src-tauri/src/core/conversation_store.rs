@@ -1,8 +1,13 @@
 use super::{
     error::{AppError, AppResult},
-    models::{Conversation, ConversationMode, Message, MessageBody, MessageRole},
+    models::{
+        Conversation, ConversationMode, ConversationSummary, ConversationSummaryPage, Message,
+        MessageBody, MessagePage, MessageRole,
+    },
     storage,
 };
+use serde::de::{IgnoredAny, MapAccess, SeqAccess, Visitor};
+use serde::Deserialize;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -117,6 +122,93 @@ impl ConversationStore {
 
         conversations.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
         Ok(conversations)
+    }
+
+    /// 会话列表摘要分页：只读元信息（消息条数 + 首条文本摘要），不解析/传输消息正文。
+    ///
+    /// 排序与 `list_conversations` 一致（`updated_at` 倒序）；分页为页码制
+    /// （前端追加加载时 page = 已加载条数 / page_size），`has_more` 指示是否还有更早会话。
+    pub fn list_conversation_summaries(
+        &self,
+        page: usize,
+        page_size: usize,
+    ) -> AppResult<ConversationSummaryPage> {
+        let _guard = self.lock.lock();
+        let mut summaries = Vec::new();
+
+        for entry in fs::read_dir(&self.sessions_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(content) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(light) = serde_json::from_str::<ConversationLight>(&content) else {
+                continue;
+            };
+            summaries.push(ConversationSummary {
+                id: light.id,
+                mode: light.mode,
+                message_count: light.messages.count,
+                preview: light.messages.first_text,
+                created_at: light.created_at,
+                updated_at: light.updated_at,
+                extra: light.extra,
+            });
+        }
+
+        summaries.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        let total = summaries.len();
+        let start = page.saturating_mul(page_size);
+        let end = start.saturating_add(page_size).min(total);
+        let items = if start >= total {
+            Vec::new()
+        } else {
+            summaries[start..end].to_vec()
+        };
+        Ok(ConversationSummaryPage {
+            items,
+            total,
+            has_more: end < total,
+        })
+    }
+
+    /// 轻量统计会话数量（仅统计 `sessions/*.json` 文件数，不解析内容；`status` 等轻量场景用）。
+    pub fn conversation_count(&self) -> AppResult<usize> {
+        let _guard = self.lock.lock();
+        let mut count = 0usize;
+        for entry in fs::read_dir(&self.sessions_dir)? {
+            let entry = entry?;
+            if entry.path().extension().and_then(|v| v.to_str()) == Some("json") {
+                count += 1;
+            }
+        }
+        Ok(count)
+    }
+
+    /// 消息历史分页：从最新倒推切片（`offset` = 已加载条数，`limit` = 本次条数），
+    /// 避免整段历史全量返回；`has_more` 指示是否还有更早消息。
+    pub fn history_page(
+        &self,
+        conversation_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> AppResult<MessagePage> {
+        let _guard = self.lock.lock();
+        let conversation = self.require_conversation(conversation_id)?;
+        let total = conversation.messages.len();
+        let limit = limit.max(1);
+        let end = total.saturating_sub(offset);
+        let start = end.saturating_sub(limit);
+        let messages = conversation.messages[start..end].to_vec();
+        Ok(MessagePage {
+            messages,
+            total,
+            offset,
+            has_more: start > 0,
+        })
     }
 
     pub fn add_message(&self, conversation_id: &str, message: Message) -> AppResult<Conversation> {
@@ -242,6 +334,153 @@ impl ConversationStore {
 
     fn conversation_path(&self, conversation_id: &str) -> PathBuf {
         self.sessions_dir.join(format!("{conversation_id}.json"))
+    }
+}
+
+// ── 会话文件轻量反序列化（列表专用）──────────────────────────
+
+/// 会话文件的轻量结构：`messages` 只产出条数 + 首条文本摘要，不保留消息正文。
+#[derive(Debug, Deserialize)]
+struct ConversationLight {
+    id: String,
+    #[serde(default)]
+    mode: ConversationMode,
+    #[serde(default, deserialize_with = "deserialize_message_summary")]
+    messages: MessageSummarySeed,
+    created_at: u128,
+    updated_at: u128,
+    #[serde(default)]
+    extra: Option<serde_json::Value>,
+}
+
+fn deserialize_message_summary<'de, D>(deserializer: D) -> Result<MessageSummarySeed, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    MessageSummarySeed::deserialize(deserializer)
+}
+
+/// 首条文本摘要状态：找到摘要后，后续消息只计数、整条跳过（巨型工具结果/长正文不再解析）。
+#[derive(Debug, Default)]
+struct MessageSummarySeed {
+    count: usize,
+    first_text: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for MessageSummarySeed {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct SeqVisitor;
+
+        impl<'de> Visitor<'de> for SeqVisitor {
+            type Value = MessageSummarySeed;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a sequence of messages")
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut seed = MessageSummarySeed::default();
+                loop {
+                    if seed.first_text.is_none() {
+                        // 尚未取得摘要：逐条解析 role（body 按角色决定是否解析）。
+                        match seq.next_element::<MessageSeed>()? {
+                            Some(msg) => {
+                                seed.count += 1;
+                                if let Some(text) = msg.first_text() {
+                                    seed.first_text = Some(text);
+                                }
+                            }
+                            None => break,
+                        }
+                    } else {
+                        // 已取得摘要：后续消息只计数、整条跳过。
+                        match seq.next_element::<IgnoredAny>()? {
+                            Some(_) => seed.count += 1,
+                            None => break,
+                        }
+                    }
+                }
+                Ok(seed)
+            }
+        }
+
+        deserializer.deserialize_seq(SeqVisitor)
+    }
+}
+
+/// 单条消息的轻量视图：role 必读，body 仅在角色为 user/assistant 时解析（取首条摘要用）。
+#[derive(Debug)]
+struct MessageSeed {
+    role: Option<MessageRole>,
+    body: Option<serde_json::Value>,
+}
+
+impl MessageSeed {
+    fn first_text(&self) -> Option<String> {
+        match self.role {
+            Some(MessageRole::User) | Some(MessageRole::Assistant) => {}
+            _ => return None,
+        }
+        let body = self.body.as_ref()?;
+        if body.get("kind")?.as_str() != Some("text") {
+            return None;
+        }
+        body.get("content").and_then(|v| v.as_str()).map(str::to_owned)
+    }
+}
+
+impl<'de> Deserialize<'de> for MessageSeed {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct MapVisitor;
+
+        impl<'de> Visitor<'de> for MapVisitor {
+            type Value = MessageSeed;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a message object")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut role: Option<MessageRole> = None;
+                let mut body: Option<serde_json::Value> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "role" => role = Some(map.next_value()?),
+                        "body" => {
+                            // role 未知（防御字段乱序）或为 user/assistant 时解析正文；
+                            // 超大工具结果/系统提示词（tool/system/compaction）整体跳过。
+                            let need_body = matches!(
+                                role,
+                                None | Some(MessageRole::User) | Some(MessageRole::Assistant)
+                            );
+                            if need_body {
+                                body = Some(map.next_value()?);
+                            } else {
+                                let _: IgnoredAny = map.next_value()?;
+                            }
+                        }
+                        _ => {
+                            let _: IgnoredAny = map.next_value()?;
+                        }
+                    }
+                }
+                Ok(MessageSeed { role, body })
+            }
+        }
+
+        deserializer.deserialize_map(MapVisitor)
     }
 }
 
@@ -510,5 +749,128 @@ mod tests {
         // 幂等：二次清理不再返回截断会话。
         let again = store.sanitize_oversized_messages(12_000).unwrap();
         assert_eq!(again, 0, "second run is a no-op");
+    }
+
+    #[test]
+    fn history_page_slices_from_latest() {
+        let store = ConversationStore::new(test_root("history_page")).unwrap();
+        let conv = store
+            .create_conversation(None, ConversationMode::Chat)
+            .unwrap();
+        for (i, role) in [
+            MessageRole::User,
+            MessageRole::Assistant,
+            MessageRole::User,
+            MessageRole::Assistant,
+            MessageRole::User,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            store
+                .add_message(&conv.id, text_message(role, &format!("m{i}")))
+                .unwrap();
+        }
+
+        // offset=0：最新一页（末尾 2 条），has_more=true。
+        let p0 = store.history_page(&conv.id, 2, 0).unwrap();
+        assert_eq!(p0.total, 5);
+        assert_eq!(
+            p0.messages.iter().map(|m| m.text()).collect::<Vec<_>>(),
+            ["m3", "m4"]
+        );
+        assert!(p0.has_more);
+
+        // offset=2：倒推第 3-4 条。
+        let p1 = store.history_page(&conv.id, 2, 2).unwrap();
+        assert_eq!(
+            p1.messages.iter().map(|m| m.text()).collect::<Vec<_>>(),
+            ["m1", "m2"]
+        );
+        assert!(p1.has_more);
+
+        // offset=4：最老 1 条，has_more=false。
+        let p2 = store.history_page(&conv.id, 2, 4).unwrap();
+        assert_eq!(
+            p2.messages.iter().map(|m| m.text()).collect::<Vec<_>>(),
+            ["m0"]
+        );
+        assert!(!p2.has_more);
+
+        // offset 超界：返回空页且不再有更多。
+        let p3 = store.history_page(&conv.id, 2, 99).unwrap();
+        assert!(p3.messages.is_empty());
+        assert!(!p3.has_more);
+    }
+
+    #[test]
+    fn list_conversation_summaries_light_parse_and_paginate() {
+        let store = ConversationStore::new(test_root("summary_light")).unwrap();
+        // 会话 A：首条即巨型工具结果（应整体跳过，不参与摘要），随后是首条 user 文本。
+        let a = store
+            .create_conversation(None, ConversationMode::Chat)
+            .unwrap();
+        store
+            .add_message(
+                &a.id,
+                Message {
+                    role: MessageRole::Tool,
+                    body: MessageBody::ToolResult {
+                        tool_call_id: "t1".into(),
+                        tool_name: "grep".into(),
+                        content: "T".repeat(50_000),
+                    },
+                    timestamp: now_ms(),
+                    neuron_id: None,
+                },
+            )
+            .unwrap();
+        store
+            .add_message(&a.id, text_message(MessageRole::User, "hello world"))
+            .unwrap();
+        // 会话 B：无 user/assistant 文本（纯工具），preview 应为 None。
+        let b = store
+            .create_conversation(None, ConversationMode::Chat)
+            .unwrap();
+        store
+            .add_message(
+                &b.id,
+                Message {
+                    role: MessageRole::Tool,
+                    body: MessageBody::ToolResult {
+                        tool_call_id: "t2".into(),
+                        tool_name: "read".into(),
+                        content: "R".repeat(50_000),
+                    },
+                    timestamp: now_ms(),
+                    neuron_id: None,
+                },
+            )
+            .unwrap();
+
+        // 第 0 页：最新（b 在后创建 → updated_at 更大排前）1 条。
+        let page0 = store.list_conversation_summaries(0, 1).unwrap();
+        assert_eq!(page0.total, 2);
+        assert_eq!(page0.items.len(), 1);
+        assert!(page0.has_more);
+        assert_eq!(page0.items[0].id, b.id);
+        assert_eq!(page0.items[0].message_count, 1);
+        assert_eq!(page0.items[0].preview, None, "纯工具会话无文本摘要");
+
+        // 第 1 页：会话 A，preview = 首条 user 文本（巨型工具结果被跳过，未误取）。
+        let page1 = store.list_conversation_summaries(1, 1).unwrap();
+        assert_eq!(page1.items.len(), 1);
+        assert!(!page1.has_more);
+        assert_eq!(page1.items[0].id, a.id);
+        assert_eq!(page1.items[0].message_count, 2);
+        assert_eq!(page1.items[0].preview.as_deref(), Some("hello world"));
+    }
+
+    #[test]
+    fn conversation_count_counts_files_only() {
+        let store = ConversationStore::new(test_root("conversation_count")).unwrap();
+        store.create_conversation(None, ConversationMode::Chat).unwrap();
+        store.create_conversation(None, ConversationMode::Chat).unwrap();
+        assert_eq!(store.conversation_count().unwrap(), 2);
     }
 }

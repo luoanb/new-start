@@ -77,14 +77,15 @@ pub use model_call_input::{ModelAppendTemplate, ModelCallInput};
 pub use round_types::{RoundOutcome, SessionSeed, SessionState};
 pub use models::{
     AssistantCandidateScope, BootstrapReport, CandidateQuery, ChatModelSelection, ChatOptions,
-    ChatResponse, CompactionConfig, Connection, Conversation, ConversationMode, CreateNeuronInput,
-    EnsureSystemOpts, GeneratedNeuronDraft, Message, MessageBody, MessageRole, ModelCallRequest,
-    ModelCallResponse, ModelCapabilities, ModelInfo, ModelMessage, ModelMessageRole,
-    NeighborhoodPoolPolicy, Neuron, NeuronCreate, NeuronKindFilter, NeuronPage, NeuronSubgraph,
-    NeuronUpdate, ProviderInfo, ProviderKind, RuntimeStatus, SamplingParams, ScopeInItem,
-    SelectionPolicy, SessionBehavior, SkillInfo, SystemPromptStatus, ThinkingCapability,
-    ThinkingConfig, ThinkingEffort, ToolCall, ToolDefinition, ToolInfo, ToolPolicy,
-    ToolSource, Topic, TopicStatus, TopicUpdate, DEFAULT_ASSISTANT_GLOBAL_LIMIT,
+    ChatResponse, CompactionConfig, Connection, Conversation, ConversationMode,
+    ConversationSummaryPage, CreateNeuronInput, EnsureSystemOpts, GeneratedNeuronDraft, Message,
+    MessageBody, MessagePage, MessageRole, ModelCallRequest, ModelCallResponse, ModelCapabilities,
+    ModelInfo, ModelMessage, ModelMessageRole, NeighborhoodPoolPolicy, Neuron, NeuronCreate,
+    NeuronKindFilter, NeuronPage, NeuronSubgraph, NeuronUpdate, ProviderInfo, ProviderKind,
+    RuntimeStatus, SamplingParams, ScopeInItem, SelectionPolicy, SessionBehavior, SkillInfo,
+    SystemPromptStatus, ThinkingCapability, ThinkingConfig, ThinkingEffort, ToolCall,
+    ToolDefinition, ToolInfo, ToolPolicy, ToolSource, Topic, TopicStatus, TopicUpdate,
+    DEFAULT_ASSISTANT_GLOBAL_LIMIT,
 };
 pub use poller::{
     PollHandler, Poller, PollerConfigReader, PollerRunState, PollerSettings, PollerStatus,

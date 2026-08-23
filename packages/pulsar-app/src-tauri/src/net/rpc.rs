@@ -170,6 +170,33 @@ struct ClearConversationParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ConversationSummariesParams {
+    #[serde(default)]
+    page: usize,
+    #[serde(default = "default_summaries_page_size")]
+    page_size: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryPageParams {
+    conversation_id: Option<String>,
+    #[serde(default = "default_message_page_size")]
+    limit: usize,
+    #[serde(default)]
+    offset: usize,
+}
+
+fn default_summaries_page_size() -> usize {
+    50
+}
+
+fn default_message_page_size() -> usize {
+    100
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct TopicListParams {
     status: Option<String>,
 }
@@ -478,6 +505,22 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
                 .history(p.conversation_id)
                 .map_err(RpcErrorBody::from)?;
             value(messages)
+        }
+        "list_conversation_summaries" => {
+            let p: ConversationSummariesParams = from_params(params)?;
+            let page = state
+                .gateway
+                .list_conversation_summaries(p.page, p.page_size)
+                .map_err(RpcErrorBody::from)?;
+            value(page)
+        }
+        "history_page" => {
+            let p: HistoryPageParams = from_params(params)?;
+            let page = state
+                .gateway
+                .history_page(p.conversation_id, p.limit, p.offset)
+                .map_err(RpcErrorBody::from)?;
+            value(page)
         }
         "clear_conversation" => {
             let p: ClearConversationParams = from_params(params)?;

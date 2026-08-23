@@ -1,7 +1,7 @@
 <script lang="ts">
   import { t } from "$lib/i18n";
   import { useViewContext } from "$lib/layout/viewContext";
-  import type { Conversation } from "$lib/types";
+  import type { ConversationSummary } from "$lib/types";
   import { CopyToClipboard } from "$lib/utils";
 
   // 数据/命令统一来自 ViewContext；collapsed 是纯视觉 prop（窄侧栏形态）。
@@ -10,9 +10,22 @@
 
   let activeId = $derived(ctx.stores.data.state.activeConversationId ?? "");
   let conversations = $derived(ctx.stores.data.state.conversations);
+  let hasMore = $derived(ctx.stores.data.state.conversationsHasMore);
+  let loadingMore = $derived(ctx.stores.data.state.conversationsLoadingMore);
   let runningSessionIds = $derived(
     new Set(ctx.stores.data.state.runningSessions.map((s) => s.session_id)),
   );
+
+  // 侧栏滚动容器（滚动近底部时追加下一页会话）。
+  let listEl: HTMLDivElement | undefined = $state();
+
+  function handleScroll() {
+    const el = listEl;
+    if (!el) return;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 40) {
+      void ctx.stores.data.loadMoreConversations();
+    }
+  }
 
   // 复制反馈：记录最近复制成功的会话 id，短暂显示「已复制」。
   let copiedId = $state<string | null>(null);
@@ -52,13 +65,9 @@
     return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
   }
 
-  // 会话标题：取首条 user/assistant 文本消息，无则显示占位。
-  function sessionTitle(conv: Conversation): string {
-    const textMsg = conv.messages.find(
-      (m) => m.body.kind === "text" && (m.role === "user" || m.role === "assistant"),
-    );
-    const content = textMsg?.body.kind === "text" ? textMsg.body.content.trim() : "";
-    return content || t("sessionList.newSession");
+  // 会话标题：取首条 user/assistant 文本消息摘要（后端 summary.preview），无则显示占位。
+  function sessionTitle(conv: ConversationSummary): string {
+    return conv.preview?.trim() || t("sessionList.newSession");
   }
 </script>
 
@@ -85,7 +94,7 @@
   </div>
 
   {#if !collapsed}
-    <div class="session-list">
+    <div class="session-list" bind:this={listEl} onscroll={handleScroll}>
       {#if conversations.length === 0}
         <div class="empty">
           <svg class="empty-icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -110,7 +119,7 @@
                   <span class="running-badge" title={t("sessionList.running")}>{t("sessionList.running")}</span>
                 {/if}
                 <span class="mode-badge {conv.mode}">{modeLabel[conv.mode] ?? conv.mode}</span>
-                <span class="session-count">{conv.messages.length} {t("sessionList.msgs")}</span>
+                <span class="session-count">{conv.message_count} {t("sessionList.msgs")}</span>
                 <span class="session-time" title={new Date(conv.updated_at).toLocaleString()}>
                   {formatTime(conv.updated_at)}
                 </span>
@@ -147,6 +156,9 @@
             </div>
           </button>
         {/each}
+        {#if loadingMore}
+          <div class="loading-more">{t("sessionList.loadingMore")}</div>
+        {/if}
       {/if}
     </div>
   {/if}
@@ -163,6 +175,7 @@
   .icon-btn:hover { background: var(--color-hover); color: var(--color-text); }
   .ic { width: 14px; height: 14px; }
   .session-list { flex: 1; overflow-y: auto; padding: 0; }
+  .loading-more { padding: var(--space-2); text-align: center; font-size: var(--fs-xs); color: var(--color-text-muted); }
   .empty { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); text-align: center; padding: var(--space-8) var(--space-3); color: var(--color-text-muted); font-size: var(--fs-xs); }
   .empty-icon { opacity: 0.5; }
   .session-item { display: flex; align-items: center; gap: var(--space-2); width: 100%; padding: var(--space-2) var(--space-2); border-radius: var(--radius-sm); border: none; background: transparent; cursor: pointer; text-align: left; transition: background var(--duration-fast) var(--ease-out); color: var(--color-text); }

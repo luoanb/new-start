@@ -23,7 +23,8 @@ use crate::core::{
     tool_config::ToolConfigView,
     topic_store::TopicStore,
     ChatModelSelection, ChatOptions, ChatResponse, Connection, Conversation, ConversationMode,
-    Gateway, McpServerStatus, Message, ModelCallRequest, ModelCallResponse, ModelInfo, Neuron,
+    ConversationSummaryPage, Gateway, McpServerStatus, Message, MessagePage, ModelCallRequest,
+    ModelCallResponse, ModelInfo, Neuron,
     NeuronCreate, NeuronKindFilter, NeuronPage, NeuronSubgraph, NeuronUpdate, PollerStatus,
     ProviderInfo, RuntimeStatus, SamplingParams, SessionBehavior, SessionSeed, SkillInfo, StateChange,
     StateEmitter, ThinkingConfig, ToolInfo, Topic, TopicStatus, TopicUpdate, STATE_CHANGED_EVENT,
@@ -318,6 +319,33 @@ async fn history(
     gateway
         .inner()
         .history(conversation_id)
+        .map_err(|error| error.payload())
+}
+
+/// 会话列表摘要分页（前端会话侧栏）：只读元信息（含消息条数与首条文本摘要），不携带消息正文。
+#[tauri::command]
+async fn list_conversation_summaries(
+    store: State<'_, ConversationStore>,
+    page: Option<usize>,
+    page_size: Option<usize>,
+) -> TauriResult<ConversationSummaryPage> {
+    store
+        .inner()
+        .list_conversation_summaries(page.unwrap_or(0), page_size.unwrap_or(50))
+        .map_err(|error| error.payload())
+}
+
+/// 消息历史分页（前端消息区）：从最新倒推切片，`offset` = 已加载条数。
+#[tauri::command]
+async fn history_page(
+    gateway: State<'_, Gateway>,
+    conversation_id: Option<String>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> TauriResult<MessagePage> {
+    gateway
+        .inner()
+        .history_page(conversation_id, limit.unwrap_or(100), offset.unwrap_or(0))
         .map_err(|error| error.payload())
 }
 
@@ -1872,7 +1900,9 @@ pub fn run() {
             get_provider_config,
             save_provider_config,
             list_conversations,
+            list_conversation_summaries,
             history,
+            history_page,
             clear_conversation,
             status,
             // Topic

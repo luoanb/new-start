@@ -171,6 +171,43 @@ pub struct Conversation {
     pub extra: Option<serde_json::Value>,
 }
 
+// ── 会话列表摘要（列表分页专用，不携带 messages）─────────────
+
+/// 会话列表摘要：`message_count` / `preview` 由轻量反序列化产出（见 conversation_store.rs），
+/// 前端会话列表只消费本类型，避免全量传输会话内消息正文。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ConversationSummary {
+    pub id: String,
+    pub mode: ConversationMode,
+    pub message_count: usize,
+    /// 首条 user/assistant 文本消息正文（会话列表标题源；无文本消息时为 None）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
+    pub created_at: u128,
+    pub updated_at: u128,
+    /// 会话级扩展（与 `Conversation.extra` 同源，前端切换会话回显模型选择）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra: Option<serde_json::Value>,
+}
+
+/// 会话列表摘要分页结果：`offset` 语义为「从最新倒推的已加载条数」，`has_more` 指示是否还有更早会话。
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationSummaryPage {
+    pub items: Vec<ConversationSummary>,
+    pub total: usize,
+    pub has_more: bool,
+}
+
+/// 消息历史分页结果：`offset` 语义为「从最新倒推的已加载条数」（= 本页在整段历史中的起点），
+/// 前端以 `total - messages.len()` 得出首条已加载消息的绝对下标。
+#[derive(Debug, Clone, Serialize)]
+pub struct MessagePage {
+    pub messages: Vec<Message>,
+    pub total: usize,
+    pub offset: usize,
+    pub has_more: bool,
+}
+
 // ── Session behavior (system neuron with behavior) ─────────────
 
 /// 系统神经元的提示词取用策略（通用：`session.%` 系统神经元与裁决类系统神经元一视同仁，

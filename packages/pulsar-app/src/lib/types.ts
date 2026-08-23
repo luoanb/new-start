@@ -26,6 +26,35 @@ export type Conversation = {
   } | null;
 };
 
+/** 会话列表摘要（分页列表专用，不携带 messages）：会话侧栏只消费本类型。 */
+export type ConversationSummary = {
+  id: string;
+  mode: "chat" | "agent" | "assistant" | "system";
+  /** 消息条数（侧栏"N 条"展示）。 */
+  message_count: number;
+  /** 首条 user/assistant 文本正文（会话列表标题源；无文本消息时为 null）。 */
+  preview?: string | null;
+  created_at: number;
+  updated_at: number;
+  /** 会话级扩展（与 Conversation.extra 同源，切换会话回显模型选择）。 */
+  extra?: Conversation["extra"];
+};
+
+/** 会话列表摘要分页结果：`has_more` 指示是否还有更早会话。 */
+export type ConversationSummaryPage = {
+  items: ConversationSummary[];
+  total: number;
+  has_more: boolean;
+};
+
+/** 消息历史分页结果：`offset` 为「从最新倒推的已加载条数」，`has_more` 指示是否还有更早消息。 */
+export type MessagePage = {
+  messages: Message[];
+  total: number;
+  offset: number;
+  has_more: boolean;
+};
+
 export type ToolCall = {
   id: string;
   name: string;

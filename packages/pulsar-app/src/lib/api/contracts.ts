@@ -12,6 +12,7 @@ import type {
   ConflictTake,
   Connection,
   Conversation,
+  ConversationSummaryPage,
   FsEntry,
   FsInfo,
   FsReadResult,
@@ -32,7 +33,7 @@ import type {
   HookJudgementRecord,
   LogEntry,
   McpServerStatus,
-  Message,
+  MessagePage,
   ModelInfo,
   Neuron,
   NeuronPage,
@@ -75,8 +76,13 @@ export type NeuronKindFilter = "all" | "system" | "normal";
 export const c = {
   // ── 会话 / 消息 ──
   listRunningSessions: def<undefined, RunningSession[]>("list_running_sessions"),
-  history: def<{ conversationId: string }, Message[]>("history"),
-  listConversations: def<undefined, Conversation[]>("list_conversations"),
+  historyPage: def<{ conversationId: string; limit: number; offset: number }, MessagePage>(
+    "history_page",
+  ),
+  listConversationSummaries: def<
+    { page: number; pageSize: number },
+    ConversationSummaryPage
+  >("list_conversation_summaries"),
   createConversation: def<{ mode: string }, string>("create_conversation"),
   closeSession: def<{ sessionId: string }, string>("close_session"),
   sendChatMessage: def<

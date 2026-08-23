@@ -17,9 +17,10 @@ use super::{
     error::{AppError, AppResult},
     mcp::{McpServerClient, McpServerStatus, McpServerStatusKind},
     models::{
-        ChatModelSelection, ChatOptions, ChatResponse, Conversation, ConversationMode, Message,
-        MessageBody, MessageRole, ModelCallRequest, ModelCallResponse, ModelInfo, ProviderInfo,
-        RuntimeStatus, SkillInfo, SystemPromptStatus, ToolInfo, ToolSource, ToolTag,
+        ChatModelSelection, ChatOptions, ChatResponse, Conversation, ConversationMode,
+        ConversationSummaryPage, Message, MessageBody, MessagePage, MessageRole, ModelCallRequest,
+        ModelCallResponse, ModelInfo, ProviderInfo, RuntimeStatus, SkillInfo, SystemPromptStatus,
+        ToolInfo, ToolSource, ToolTag,
     },
     neuron_config::NeuronConfigReader,
     neuron_manager::NeuronManager,
@@ -1066,6 +1067,26 @@ impl Gateway {
         Ok(self.store.require_conversation(&conversation_id)?.messages)
     }
 
+    /// 会话列表摘要分页（前端会话侧栏）：只读元信息，不携带消息正文。
+    pub fn list_conversation_summaries(
+        &self,
+        page: usize,
+        page_size: usize,
+    ) -> AppResult<ConversationSummaryPage> {
+        self.store.list_conversation_summaries(page, page_size)
+    }
+
+    /// 消息历史分页（前端消息区）：从最新倒推切片，`offset` = 已加载条数。
+    pub fn history_page(
+        &self,
+        conversation_id: Option<String>,
+        limit: usize,
+        offset: usize,
+    ) -> AppResult<MessagePage> {
+        let conversation_id = self.resolve_existing_conversation_id(conversation_id)?;
+        self.store.history_page(&conversation_id, limit, offset)
+    }
+
     pub fn clear_conversation(&self, conversation_id: Option<String>) -> AppResult<String> {
         let conversation_id = self.resolve_existing_conversation_id(conversation_id)?;
         self.store.clear_conversation(&conversation_id)?;
@@ -1106,7 +1127,7 @@ impl Gateway {
                 .read()
                 .map(|r| r.list_definitions().len())
                 .unwrap_or(0),
-            conversation_count: self.store.list_conversations()?.len(),
+            conversation_count: self.store.conversation_count()?,
         })
     }
 

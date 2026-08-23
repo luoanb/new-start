@@ -20,6 +20,7 @@ import type {
   ModelInfo,
   SkillInfo,
   Conversation,
+  ConversationSummary,
   Message,
   ChatResponse,
   RuntimeStatus,
@@ -54,9 +55,23 @@ const state = $state({
   providers: [] as ProviderInfo[],
   models: [] as ModelInfo[],
   skills: [] as SkillInfo[],
-  conversations: [] as Conversation[],
+  conversations: [] as ConversationSummary[],
+  /** 会话总数（后端分页 total；侧栏滚动加载判断用）。 */
+  conversationsTotal: 0,
+  /** 是否还有更早会话（侧栏滚动近底部时追加下一页）。 */
+  conversationsHasMore: false,
+  /** 会话分页加载中（防重入）。 */
+  conversationsLoadingMore: false,
   activeConversationId: null as string | null,
   messages: [] as Message[],
+  /** 当前会话消息总数（后端历史分页 total）。 */
+  messagesTotal: 0,
+  /** 首条已加载消息在整段历史中的绝对下标（= total - messages.length；评分/定位/裁决卡锚点用）。 */
+  messagesOffset: 0,
+  /** 是否还有更早消息（消息区上滑近顶部时追加加载）。 */
+  messagesHasMore: false,
+  /** 更早消息加载中（防重入）。 */
+  messagesLoadingOlder: false,
   /** 当前流式占位消息在 `messages` 中的 index（无流式进行中为 null）。 */
   streamingIndex: null as number | null,
   runtimeStatus: null as RuntimeStatus | null,
@@ -110,17 +125,72 @@ async function refreshRunningSessions(): Promise<void> {
 async function refreshMessages(): Promise<void> {
   if (!state.activeConversationId) {
     state.messages = [];
+    state.messagesTotal = 0;
+    state.messagesOffset = 0;
+    state.messagesHasMore = false;
     return;
   }
-  state.messages = await api.call(c.history, {
+  // 分页加载最新一页（offset=0 从最新倒推）；更早消息由 loadMoreMessages 追加。
+  const page = await api.call(c.historyPage, {
     conversationId: state.activeConversationId,
+    limit: MESSAGE_PAGE_SIZE,
+    offset: 0,
   });
+  state.messages = page.messages;
+  state.messagesTotal = page.total;
+  state.messagesOffset = page.total - page.messages.length;
+  state.messagesHasMore = page.has_more;
+  state.messagesLoadingOlder = false;
 }
 
+/** 会话列表摘要：重拉第 0 页（列表变更/事件刷新入口；滚动加载走 loadMoreConversations）。 */
 async function refreshConversations(): Promise<void> {
-  state.conversations = await api.call(c.listConversations, undefined);
+  const page = await api.call(c.listConversationSummaries, {
+    page: 0,
+    pageSize: CONVERSATION_PAGE_SIZE,
+  });
+  state.conversations = page.items;
+  state.conversationsTotal = page.total;
+  state.conversationsHasMore = page.has_more;
+  state.conversationsLoadingMore = false;
   // 会话变化往往伴随消息变化（发送/清空/后台推进），同步刷新当前会话消息。
   await refreshMessages();
+}
+
+/** 追加加载更早会话（侧栏滚动近底部触发；页码 = 已加载条数 / 页大小，按 id 去重防混插）。 */
+async function loadMoreConversations(): Promise<void> {
+  if (!state.conversationsHasMore || state.conversationsLoadingMore) return;
+  state.conversationsLoadingMore = true;
+  try {
+    const page = await api.call(c.listConversationSummaries, {
+      page: Math.floor(state.conversations.length / CONVERSATION_PAGE_SIZE),
+      pageSize: CONVERSATION_PAGE_SIZE,
+    });
+    const seen = new Set(state.conversations.map((x) => x.id));
+    const fresh = page.items.filter((x) => !seen.has(x.id));
+    state.conversations = [...state.conversations, ...fresh];
+    state.conversationsHasMore = page.has_more;
+  } finally {
+    state.conversationsLoadingMore = false;
+  }
+}
+
+/** 追加加载更早消息（消息区上滑近顶部触发；offset = 已加载条数，从最新倒推），前插并重算绝对下标。 */
+async function loadMoreMessages(): Promise<void> {
+  if (!state.activeConversationId || !state.messagesHasMore || state.messagesLoadingOlder) return;
+  state.messagesLoadingOlder = true;
+  try {
+    const page = await api.call(c.historyPage, {
+      conversationId: state.activeConversationId,
+      limit: MESSAGE_PAGE_SIZE,
+      offset: state.messages.length,
+    });
+    state.messages = [...page.messages, ...state.messages];
+    state.messagesOffset = page.total - state.messages.length;
+    state.messagesHasMore = page.has_more;
+  } finally {
+    state.messagesLoadingOlder = false;
+  }
 }
 
 async function refreshTopics(): Promise<void> {
@@ -139,6 +209,12 @@ async function refreshWorkspaces(): Promise<void> {
 
 /** git log 分页每页条数。 */
 const GIT_LOG_PAGE = 30;
+
+/** 会话列表分页每页条数（侧栏滚动加载粒度）。 */
+const CONVERSATION_PAGE_SIZE = 50;
+
+/** 消息历史分页每页条数（消息区上滑加载粒度）。 */
+const MESSAGE_PAGE_SIZE = 100;
 
 /** 空 git 视图（无仓库 / 拉取失败兜底）。 */
 function emptyGitView(): GitView {
@@ -233,8 +309,15 @@ async function handleStateChanged(payload: StateChangePayload): Promise<void> {
       // affected 为实际发生写入的会话；空转轮询后端不 emit，这里仅防御。
       const affected = payload.affected ?? [];
       if (affected.length === 0) return;
-      // 会话列表摘要始终重拉（标题/最后消息/时间可能变）。
-      state.conversations = await api.call(c.listConversations, undefined);
+      // 会话列表摘要始终重拉（标题/条数/时间可能变）。
+      const page = await api.call(c.listConversationSummaries, {
+        page: 0,
+        pageSize: CONVERSATION_PAGE_SIZE,
+      });
+      state.conversations = page.items;
+      state.conversationsTotal = page.total;
+      state.conversationsHasMore = page.has_more;
+      state.conversationsLoadingMore = false;
       // 仅当受影响会话含当前激活会话时才重拉消息，
       // 避免后台推进其他会话时误触发当前会话重拉与滚动。
       if (state.activeConversationId && affected.includes(state.activeConversationId)) {
@@ -341,7 +424,7 @@ async function bootstrap(): Promise<void> {
       api.call(c.listProviders, undefined),
       api.call(c.listModels, undefined),
       api.call(c.listSkills, undefined),
-      api.call(c.listConversations, undefined),
+      api.call(c.listConversationSummaries, { page: 0, pageSize: CONVERSATION_PAGE_SIZE }),
       api.call(c.status, undefined),
       api.call(c.listTopics, undefined),
       api.call(c.pollStatus, undefined),
@@ -352,7 +435,9 @@ async function bootstrap(): Promise<void> {
     state.providers = providersRes;
     state.models = modelsRes;
     state.skills = skillsRes;
-    state.conversations = convsRes;
+    state.conversations = convsRes.items;
+    state.conversationsTotal = convsRes.total;
+    state.conversationsHasMore = convsRes.has_more;
     state.runtimeStatus = statusRes;
     state.topics = topicsRes;
     state.poller = pollerRes;
@@ -364,8 +449,8 @@ async function bootstrap(): Promise<void> {
     await refreshGit();
 
     // 默认选中第一个会话（若存在），并加载其消息。
-    if (!state.activeConversationId && convsRes.length > 0) {
-      state.activeConversationId = convsRes[0].id;
+    if (!state.activeConversationId && convsRes.items.length > 0) {
+      state.activeConversationId = convsRes.items[0].id;
       await refreshMessages();
     }
   } catch (e) {
@@ -782,6 +867,8 @@ export const dataStore = {
   unsubscribe,
   refreshTopics,
   refreshConversations,
+  loadMoreConversations,
+  loadMoreMessages,
   refreshPoller,
   refreshRunningSessions,
   refreshProvidersModels,
