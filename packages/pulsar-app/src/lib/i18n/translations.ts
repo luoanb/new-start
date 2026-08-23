@@ -633,7 +633,9 @@ export type Translations = {
     disableProvider: string;
     customDeleteHint: string;
     selectProvider: string;
-    defaultsHint: string;
+    defaultModel: string;
+    defaultProvider: string;
+    defaultClear: string;
     noDefaults: string;
     cancel: string;
     save: string;
@@ -703,7 +705,7 @@ export const en: Translations = {
   },
   sidePanel: {
     providers: "Providers",
-    models: "Model Manager",
+    models: "Models",
     noProviders: "No providers configured.",
     noModels: "No models available.",
     id: "ID",
@@ -1063,8 +1065,8 @@ export const en: Translations = {
     neurons: "Neurons",
     toolEditor: "Tool config",
     neuronsList: "Neurons",
-    providersModels: "Model Manager",
-    providerManager: "Model Manager",
+    providersModels: "Models",
+    providerManager: "Models",
     files: "Files",
     fileEditor: "File Editor",
     git: "Git",
@@ -1283,7 +1285,7 @@ export const en: Translations = {
     cancel: "Cancel",
   },
   providerManager: {
-    modalTitle: "Model Manager",
+    modalTitle: "Models",
     loading: "Loading config…",
     providers: "Providers",
     addProvider: "Add provider",
@@ -1314,7 +1316,9 @@ export const en: Translations = {
     disableProvider: "Disable provider",
     customDeleteHint: "Deleting a custom provider removes it from config.json entirely.",
     selectProvider: "Select a provider on the left to edit.",
-    defaultsHint: "Default model: {provider} / {model}",
+    defaultModel: "Default model",
+    defaultProvider: "Default provider",
+    defaultClear: "Clear default",
     noDefaults: "No default model configured.",
     cancel: "Cancel",
     save: "Save",
@@ -1384,7 +1388,7 @@ export const zh: Translations = {
   },
   sidePanel: {
     providers: "服务商",
-    models: "模型管理",
+    models: "模型",
     noProviders: "未配置服务商。",
     noModels: "无可用模型。",
     id: "ID",
@@ -1744,8 +1748,8 @@ export const zh: Translations = {
     neurons: "神经元",
     toolEditor: "工具配置",
     neuronsList: "神经元",
-    providersModels: "模型管理",
-    providerManager: "模型管理",
+    providersModels: "模型",
+    providerManager: "模型",
     files: "文件",
     fileEditor: "文件编辑",
     git: "Git",
@@ -1964,7 +1968,7 @@ export const zh: Translations = {
     cancel: "取消",
   },
   providerManager: {
-    modalTitle: "模型管理",
+    modalTitle: "模型",
     loading: "加载配置中…",
     providers: "服务商",
     addProvider: "新增服务商",
@@ -1995,7 +1999,9 @@ export const zh: Translations = {
     disableProvider: "禁用该服务商",
     customDeleteHint: "删除自定义服务商将彻底从 config.json 移除。",
     selectProvider: "在左侧选择一个服务商进行编辑。",
-    defaultsHint: "默认模型：{provider} / {model}",
+    defaultModel: "默认模型",
+    defaultProvider: "默认服务商",
+    defaultClear: "清除默认",
     noDefaults: "未配置默认模型。",
     cancel: "取消",
     save: "保存",

@@ -142,6 +142,48 @@
     view.providers.splice(idx, 1);
     if (selectedId === id) selectedId = null;
   }
+
+  // ── 默认模型设置 ──
+
+  const defaultProviderOptions = $derived(
+    view.providers
+      .filter((p) => p.enabled)
+      .map((p) => ({ value: p.id, label: p.display_name || p.id })),
+  );
+
+  const defaultModelOptions = $derived.by(() => {
+    const p = view.providers.find((x) => x.id === view.defaults?.provider);
+    return p
+      ? p.models.map((m) => ({ value: m.id, label: m.display_name || m.id }))
+      : [];
+  });
+
+  function setDefaultProvider(v: string) {
+    if (!v) {
+      view.defaults = null;
+      return;
+    }
+    const p = view.providers.find((x) => x.id === v);
+    const keepModel =
+      view.defaults?.provider === v ? view.defaults.model : "";
+    const model = p?.models.some((m) => m.id === keepModel)
+      ? keepModel
+      : (p?.models[0]?.id ?? "");
+    view.defaults = model ? { provider: v, model } : null;
+  }
+
+  function setDefaultModel(v: string) {
+    if (!view.defaults) return;
+    if (!v) {
+      view.defaults = null;
+      return;
+    }
+    view.defaults = { provider: view.defaults.provider, model: v };
+  }
+
+  function clearDefaults() {
+    view.defaults = null;
+  }
 </script>
 
 <div class="provider-manager">
@@ -159,6 +201,44 @@
   {#if loading}
     <p class="empty">{t("providerManager.loading")}</p>
   {:else}
+    <!-- 默认模型（全局）：不依赖左侧选中项，独立于服务商编辑区 -->
+    <div class="defaults-section">
+      <div class="form-section-title">
+        <span>{t("providerManager.defaultModel")}</span>
+        {#if view.defaults}
+          <button
+            class="text-btn"
+            type="button"
+            onclick={clearDefaults}
+            aria-label={t("providerManager.defaultClear")}
+          >
+            {t("providerManager.defaultClear")}
+          </button>
+        {/if}
+      </div>
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">{t("providerManager.defaultProvider")}</span>
+          <Select
+            value={view.defaults?.provider ?? ""}
+            options={defaultProviderOptions}
+            placeholder={t("providerManager.noDefaults")}
+            onchange={(v) => setDefaultProvider(v as string)}
+          />
+        </label>
+        <label class="field">
+          <span class="field-label">{t("providerManager.defaultModel")}</span>
+          <Select
+            value={view.defaults?.model ?? ""}
+            options={defaultModelOptions}
+            placeholder={t("providerManager.noDefaults")}
+            disabled={!view.defaults?.provider}
+            onchange={(v) => setDefaultModel(v as string)}
+          />
+        </label>
+      </div>
+    </div>
+
     <div class="manager-body">
       <!-- 左：服务商列表 -->
       <div class="provider-list">
@@ -432,9 +512,6 @@
     </div>
 
     <div class="manager-footer">
-      <span class="hint">
-        {view.defaults ? t("providerManager.defaultsHint", { provider: view.defaults.provider, model: view.defaults.model }) : t("providerManager.noDefaults")}
-      </span>
       <button class="btn" type="button" onclick={closeEditor} disabled={saving}>
         {t("providerManager.cancel")}
       </button>
@@ -536,6 +613,32 @@
     min-height: 0;
     gap: var(--space-3);
     overflow: hidden;
+  }
+
+  /* 默认模型（全局）设置区 */
+  .defaults-section {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    border: var(--border-width) solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    padding: var(--space-3);
+  }
+  .defaults-section .field-row {
+    align-items: flex-end;
+  }
+  .text-btn {
+    border: none;
+    background: transparent;
+    color: var(--color-primary);
+    font-size: var(--fs-xs);
+    cursor: pointer;
+    padding: 0;
+  }
+  .text-btn:hover {
+    text-decoration: underline;
   }
 
   /* 左侧服务商列表 */
@@ -762,15 +865,11 @@
   .manager-footer {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
     flex-shrink: 0;
     gap: var(--space-2);
     padding-top: var(--space-3);
     border-top: var(--border-width) solid var(--color-border);
-  }
-  .hint {
-    flex: 1;
-    font-size: var(--fs-xs);
-    color: var(--color-text-muted);
   }
 
   .btn {
