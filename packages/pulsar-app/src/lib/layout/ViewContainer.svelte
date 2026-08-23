@@ -199,7 +199,14 @@
   aria-label={CONTAINER_LABELS[containerId]}
 >
   <header class="container-header">
-    <div class="container-tabs">
+    <div
+      class="container-tabs"
+      onwheel={(e) => {
+        // hover 时滚轮 → 左右滚动 tab 栏（阻止页面纵向滚动），与主区域 EditorTabs 一致
+        e.preventDefault();
+        e.currentTarget.scrollLeft += e.deltaY + e.deltaX;
+      }}
+    >
       {#if registrations.length > 1}
         {#each registrations as reg (reg.id)}
           <button
