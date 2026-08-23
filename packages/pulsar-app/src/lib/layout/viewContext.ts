@@ -15,6 +15,8 @@ export const VIEW_CTX_KEY = "openclaw:view-ctx";
 /** 组合根（+page.svelte）提供的视图命令集合。 */
 export type ViewCommands = {
   sendMessage: (text: string) => Promise<void>;
+  /** 向指定会话发送消息（绑定会话窗口使用；复用模型选择与 sendingIds 防抖）。 */
+  sendMessageTo: (conversationId: string, text: string) => Promise<void>;
   /** 中断指定运行中的会话（后端 close_session 触发 abort）。 */
   stopRunningSession: (sessionId: string) => Promise<void>;
   selectConversation: (id: string) => void;

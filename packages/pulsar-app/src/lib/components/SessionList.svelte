@@ -43,6 +43,24 @@
   const onClose = (id: string) => void ctx.commands.closeSession(id);
   const onToggle = () => ctx.stores.layout.toggleSidebar();
 
+  /**
+   * 在 main 区打开绑定该会话的窗口（panel.id = `chat:${id}`，固定绑定，不可切换）。
+   * 插入当前激活分栏（作为新 tab）；无激活分栏时才新开一栏。
+   * 首次打开先加载该会话消息视图；已存在同会话窗口则直接激活，不重拉（避免打断滚动位置）。
+   */
+  const onOpenWindow = (id: string) => {
+    const instanceId = `chat:${id}`;
+    const layout = ctx.stores.layout;
+    const exists = layout.state.main.panes.some((p) =>
+      p.panels.some((x) => x.id === instanceId)
+    );
+    if (!exists) void ctx.stores.data.refreshMessages(id);
+    const activeIdx = layout.state.main.panes.findIndex(
+      (p) => p.id === layout.state.main.activePaneId,
+    );
+    layout.insertPanel("chat", activeIdx >= 0 ? activeIdx : "new", instanceId);
+  };
+
   const modeLabel: Record<string, string> = {
     chat: "Chat",
     agent: "Agent",
@@ -128,6 +146,16 @@
             <div class="session-actions">
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <span
+                class="open-btn"
+                role="button"
+                tabindex="-1"
+                onclick={(e) => { e.stopPropagation(); onOpenWindow(conv.id); }}
+                title={t("sessionList.openWindow")}
+              >
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+              </span>
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <span
                 class="copy-btn"
                 class:copied={copiedId === conv.id}
                 role="button"
@@ -194,6 +222,9 @@
   .session-count { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .session-time { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .session-actions { flex-shrink: 0; display: flex; align-items: center; gap: 2px; }
+  .open-btn { background: none; border: none; cursor: pointer; font-size: var(--fs-base); color: inherit; padding: 2px 4px; border-radius: var(--radius-sm); line-height: 1; display: inline-flex; align-items: center; justify-content: center; transition: opacity var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out); }
+  .open-btn svg { display: block; }
+  .open-btn:hover { opacity: 1 !important; background: var(--color-hover); }
   .copy-btn { background: none; border: none; cursor: pointer; font-size: var(--fs-base); color: inherit; padding: 2px 4px; border-radius: var(--radius-sm); line-height: 1; display: inline-flex; align-items: center; justify-content: center; transition: opacity var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out); }
   .copy-btn svg { display: block; }
   .copy-btn:hover { opacity: 1 !important; background: var(--color-hover); }
@@ -205,12 +236,15 @@
      触屏（hover: none）始终可见，保证可发现性。见 .cursor/rules/ui-hover-reveal.mdc */
   @media (hover: hover) {
     .copy-btn,
+    .open-btn,
     .close-btn {
       opacity: 0;
       visibility: hidden;
     }
     .session-item:hover .copy-btn,
     .session-item:focus-within .copy-btn,
+    .session-item:hover .open-btn,
+    .session-item:focus-within .open-btn,
     .session-item:hover .close-btn,
     .session-item:focus-within .close-btn {
       opacity: 0.6;

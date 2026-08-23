@@ -8,17 +8,30 @@
   import { errorMessage } from "$lib/errorMessage";
   import { CopyToClipboard } from "$lib/utils";
   import { useViewContext } from "$lib/layout/viewContext";
+  import type { MainPanel } from "$lib/layout/layoutTypes";
   import { api, c } from "$lib/api";
-  import { onDestroy, onMount } from "svelte";
+  import { getContext, onDestroy, onMount } from "svelte";
 
   // 视图数据/命令统一来自 ViewContext（容器与内容解耦，无 props）。
   const ctx = useViewContext();
-  let messages = $derived(ctx.stores.data.state.messages);
+
+  // 面板实例（ViewHost 注入）：绑定会话窗口的 panel.id = `chat:${conversationId}`；
+  // 无 `chat:` 前缀 = 主窗口（跟随全局激活会话）。
+  const panel = getContext<MainPanel | undefined>("pulsar:panel");
+  const boundConversationId = $derived(
+    panel?.id.startsWith("chat:") ? panel.id.slice("chat:".length) : null,
+  );
+  // 本窗口显示会话：绑定窗口固定绑定，主窗口跟随全局激活。
+  let activeConversationId = $derived(ctx.stores.data.state.activeConversationId ?? "");
+  let conversationId = $derived(boundConversationId ?? activeConversationId);
+  // 会话消息视图（主/绑定窗口共享同一份 chatViews[conversationId] 缓存）。
+  let view = $derived(ctx.stores.data.chatViews[conversationId]);
+  let messages = $derived(view?.messages ?? []);
   // 分页窗口：messagesOffset = 首条已加载消息在整段历史中的绝对下标
   // （评分/裁决卡锚点/定位均消费绝对下标；streamingIndex 保持窗口内下标语义）。
-  let messagesOffset = $derived(ctx.stores.data.state.messagesOffset);
-  let messagesHasMore = $derived(ctx.stores.data.state.messagesHasMore);
-  let messagesLoadingOlder = $derived(ctx.stores.data.state.messagesLoadingOlder);
+  let messagesOffset = $derived(view?.offset ?? 0);
+  let messagesHasMore = $derived(view?.hasMore ?? false);
+  let messagesLoadingOlder = $derived(view?.loadingOlder ?? false);
   let providers = $derived(ctx.stores.data.state.providers);
   let models = $derived(ctx.stores.data.state.models);
   let selectedProviderId = $derived(ctx.ui.activeProviderId);
@@ -28,18 +41,21 @@
 
   // 会话级运行状态：单一真相源 = 后端 runningSessions（多会话并行互不影响）。
   // 发送按钮防抖锁 sendingIds 不参与运行状态判定，避免其残留导致永久"思考中"。
-  let activeConversationId = $derived(ctx.stores.data.state.activeConversationId ?? "");
   let runningSession = $derived(
-    ctx.stores.data.state.runningSessions.find((s) => s.session_id === activeConversationId)
+    ctx.stores.data.state.runningSessions.find((s) => s.session_id === conversationId)
   );
   let isRunning = $derived(!!runningSession);
 
   const onSend = (text: string) => {
     pendingAlignTop = true;
-    void ctx.commands.sendMessage(text);
+    if (boundConversationId) {
+      void ctx.commands.sendMessageTo(boundConversationId, text);
+    } else {
+      void ctx.commands.sendMessage(text);
+    }
   };
   const onStop = () => {
-    if (activeConversationId) void ctx.commands.stopRunningSession(activeConversationId);
+    if (conversationId) void ctx.commands.stopRunningSession(conversationId);
   };
   const onModelChange = (
     providerId: string,
@@ -98,7 +114,7 @@
     if (!el || !messagesHasMore || messagesLoadingOlder) return;
     const prevScrollHeight = el.scrollHeight;
     const prevScrollTop = el.scrollTop;
-    await ctx.stores.data.loadMoreMessages();
+    await ctx.stores.data.loadMoreMessages(conversationId);
     // 等待 DOM 按新数组完成一轮渲染后再补偿滚动位置。
     requestAnimationFrame(() => {
       if (containerEl) {
@@ -179,9 +195,7 @@
   // 评价按钮：会话绑定 topic 时所有 assistant 消息均可评（评分定位所在介入区间，
   // 允许随时评分、重复评分；后端按 message_index 推导区间盖章神经元）。
   const rateable = $derived(
-    !!ctx.stores.data.state.topics.some(
-      (topic) => topic.session_id === ctx.stores.data.state.activeConversationId
-    )
+    !!ctx.stores.data.state.topics.some((topic) => topic.session_id === conversationId)
   );
 
   // ── 轮次分组（纯前端展示层，不改数据）──
@@ -217,10 +231,10 @@
   }
 
   async function handleRate(messageIndex: number, score: number): Promise<void> {
-    const conversationId = ctx.stores.data.state.activeConversationId;
-    if (!conversationId) return;
+    const cid = conversationId;
+    if (!cid) return;
     try {
-      await ctx.stores.data.scoreFeedback(conversationId, messageIndex, score);
+      await ctx.stores.data.scoreFeedback(cid, messageIndex, score);
     } catch (e) {
       ratingError = `评价失败: ${errorMessage(e)}`;
       setTimeout(() => (ratingError = ""), 3000);
@@ -232,7 +246,7 @@
   // （分页前插后仍未覆盖），自动续拉更早页直到命中或拉完。
   $effect(() => {
     const anchor = ctx.stores.layout.locateAnchor;
-    if (!anchor || anchor.conversationId !== activeConversationId) return;
+    if (!anchor || anchor.conversationId !== conversationId) return;
     ctx.stores.layout.clearLocate();
     void locateToMessage(anchor.messageIndex);
   });
@@ -263,14 +277,14 @@
 
   /** 拉取当前会话的裁决记录（按 conversationId 过滤，后端倒序）。 */
   async function refreshJudgements() {
-    if (!activeConversationId) {
+    if (!conversationId) {
       judgements = [];
       return;
     }
     try {
       const [list, defs] = await Promise.all([
         api.call(c.hookJudgementsList, {
-          filters: { conversationId: activeConversationId },
+          filters: { conversationId },
         }),
         api.call(c.hookDefsList, undefined),
       ]);
@@ -289,7 +303,7 @@
 
   onMount(() => {
     unlistenJudgements = api.subscribe((payload) => {
-      if (payload.kind === "hook_judgements" && payload.conversation_id === activeConversationId) {
+      if (payload.kind === "hook_judgements" && payload.conversation_id === conversationId) {
         void refreshJudgements();
       }
     });
@@ -337,7 +351,7 @@
               message={msg}
               // 紧邻上一条工具回复时压缩纵向间距，让一轮内的多条工具结果更像连续列表
               compactTool={mi > 0 && round.messages[mi - 1].body.kind === "tool_result"}
-              streaming={ctx.stores.data.state.streamingIndex === round.startIndex + mi}
+              streaming={(view?.streamingIndex ?? null) === round.startIndex + mi}
               canRate={rateable}
               anchorIndex={absIndex}
               onCopy={handleCopy}

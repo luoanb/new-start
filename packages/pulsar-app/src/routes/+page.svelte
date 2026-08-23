@@ -183,6 +183,37 @@
     }
   }
 
+  /** 向指定会话发送（绑定会话窗口）：逻辑同 handleSend，目标会话参数化。 */
+  async function handleSendToConversation(conversationId: string, text: string) {
+    if (!conversationId) {
+      error = "No active session. Create a new session first.";
+      return;
+    }
+    if (!hasModel) {
+      error = "Select a provider and model before sending.";
+      return;
+    }
+    if (ui.sendingIds.has(conversationId)) return;
+    error = "";
+    ui.sendingIds = new Set(ui.sendingIds).add(conversationId);
+    try {
+      await dataStore.sendMessage(
+        text,
+        ui.activeProviderId,
+        ui.activeModelId,
+        ui.activeParams,
+        ui.activeThinking,
+        conversationId,
+      );
+    } catch (e) {
+      error = `Send failed: ${formatInvokeError(e)}`;
+    } finally {
+      const next = new Set(ui.sendingIds);
+      next.delete(conversationId);
+      ui.sendingIds = next;
+    }
+  }
+
   async function handleCreateSession(mode: string) {
     showCreateModal = false;
     try {
@@ -283,6 +314,7 @@
     ui,
     commands: {
       sendMessage: handleSend,
+      sendMessageTo: handleSendToConversation,
       stopRunningSession: handleStopSession,
       selectConversation: handleSelectConversation,
       createSession: handleCreateSession,
@@ -373,6 +405,16 @@
       const isFile = p.type === "file-editor";
       const isGitDiff = p.type === "git-diff";
       const isCommitDiff = p.type === "commit-diff";
+      // 绑定会话窗口（panel.id = `chat:${conversationId}`）：tab 标题/icon 取该会话摘要；
+      // 主窗口（无绑定）沿用全局激活会话的标题与模式。
+      const isBoundChat = p.type === "chat" && p.id.startsWith("chat:");
+      const boundChatConv = isBoundChat
+        ? dataStore.state.conversations.find((c) => c.id === p.id.slice("chat:".length))
+        : undefined;
+      const chatMode = boundChatConv?.mode ?? activeConversationMode;
+      const chatTitle = boundChatConv
+        ? boundChatConv.preview?.trim() || t("sessionList.newSession")
+        : activeConversationTitle;
       // git-diff 实例 key = `git-diff:${repoId}:${relPath}`；title = 文件名，tooltip = 相对路径
       const gitRelPath = isGitDiff ? p.id.slice("git-diff:".length).split(":").slice(1).join(":") : "";
       const gitTitle = isGitDiff ? (gitRelPath.split("/").pop() || gitRelPath) : undefined;
@@ -390,13 +432,13 @@
         id: p.id,
         label: mainPanelMeta[p.type].label,
         // 文字 icon：对话 tab 取当前对话模式首字母，其余取面板类型首字母
-        icon: (p.type === "chat" ? activeConversationMode : p.type).charAt(0).toUpperCase(),
+        icon: (p.type === "chat" ? chatMode : p.type).charAt(0).toUpperCase(),
         // 对话 tab：色调跟随对话模式（对齐会话列表 mode-badge 色板）
-        iconTone: p.type === "chat" ? activeConversationMode : undefined,
+        iconTone: p.type === "chat" ? chatMode : undefined,
         // 对话 tab：展示对话标题（原始文本，截断显示）；文件 tab：展示文件名 + 未保存 ●
         title:
           p.type === "chat"
-            ? activeConversationTitle
+            ? chatTitle
             : isFile
               ? fileEditorStore.titleOf(p.id)
               : isGitDiff

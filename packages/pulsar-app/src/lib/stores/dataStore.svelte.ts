@@ -49,6 +49,40 @@ import { formatInvokeError } from "$lib/utils/formatInvokeError";
 
 export type { StateChangePayload } from "$lib/api/types";
 
+/**
+ * 会话消息视图状态（按会话缓存）。
+ * 主窗口（跟随 activeConversationId）与「会话列表 → 新开」的绑定窗口共享同一会话的视图，
+ * 消息/分页/流式标记天然实时一致；窗口只是同一份视图的不同展示面。
+ */
+export type ChatViewState = {
+  messages: Message[];
+  total: number;
+  offset: number;
+  hasMore: boolean;
+  loadingOlder: boolean;
+  streamingIndex: number | null;
+};
+
+/** 会话消息视图缓存：key = conversationId。仅在会话有窗口打开（主窗口选中或绑定窗口）时存在。 */
+const chatViews = $state<Record<string, ChatViewState>>({});
+
+/** 获取（必要时创建）指定会话的消息视图。 */
+function ensureView(conversationId: string): ChatViewState {
+  let v = chatViews[conversationId];
+  if (!v) {
+    v = {
+      messages: [],
+      total: 0,
+      offset: 0,
+      hasMore: false,
+      loadingOlder: false,
+      streamingIndex: null,
+    };
+    chatViews[conversationId] = v;
+  }
+  return v;
+}
+
 const state = $state({
   ready: false,
   error: "",
@@ -63,17 +97,6 @@ const state = $state({
   /** 会话分页加载中（防重入）。 */
   conversationsLoadingMore: false,
   activeConversationId: null as string | null,
-  messages: [] as Message[],
-  /** 当前会话消息总数（后端历史分页 total）。 */
-  messagesTotal: 0,
-  /** 首条已加载消息在整段历史中的绝对下标（= total - messages.length；评分/定位/裁决卡锚点用）。 */
-  messagesOffset: 0,
-  /** 是否还有更早消息（消息区上滑近顶部时追加加载）。 */
-  messagesHasMore: false,
-  /** 更早消息加载中（防重入）。 */
-  messagesLoadingOlder: false,
-  /** 当前流式占位消息在 `messages` 中的 index（无流式进行中为 null）。 */
-  streamingIndex: null as number | null,
   runtimeStatus: null as RuntimeStatus | null,
   topics: [] as Topic[],
   poller: null as PollerStatus | null,
@@ -122,25 +145,23 @@ async function refreshRunningSessions(): Promise<void> {
   state.runningSessions = list;
 }
 
-async function refreshMessages(): Promise<void> {
-  if (!state.activeConversationId) {
-    state.messages = [];
-    state.messagesTotal = 0;
-    state.messagesOffset = 0;
-    state.messagesHasMore = false;
-    return;
-  }
-  // 分页加载最新一页（offset=0 从最新倒推）；更早消息由 loadMoreMessages 追加。
+/** 刷新指定会话的消息视图（默认当前激活会话）：重拉最新一页（offset=0 从最新倒推）。 */
+async function refreshMessages(conversationId?: string): Promise<void> {
+  const cid = conversationId ?? state.activeConversationId;
+  if (!cid) return;
+  // 分页加载最新一页；更早消息由 loadMoreMessages 追加。
   const page = await api.call(c.historyPage, {
-    conversationId: state.activeConversationId,
+    conversationId: cid,
     limit: MESSAGE_PAGE_SIZE,
     offset: 0,
   });
-  state.messages = page.messages;
-  state.messagesTotal = page.total;
-  state.messagesOffset = page.total - page.messages.length;
-  state.messagesHasMore = page.has_more;
-  state.messagesLoadingOlder = false;
+  const v = ensureView(cid);
+  v.messages = page.messages;
+  v.total = page.total;
+  v.offset = page.total - page.messages.length;
+  v.hasMore = page.has_more;
+  v.loadingOlder = false;
+  v.streamingIndex = null;
 }
 
 /** 会话列表摘要：重拉第 0 页（列表变更/事件刷新入口；滚动加载走 loadMoreConversations）。 */
@@ -176,20 +197,23 @@ async function loadMoreConversations(): Promise<void> {
 }
 
 /** 追加加载更早消息（消息区上滑近顶部触发；offset = 已加载条数，从最新倒推），前插并重算绝对下标。 */
-async function loadMoreMessages(): Promise<void> {
-  if (!state.activeConversationId || !state.messagesHasMore || state.messagesLoadingOlder) return;
-  state.messagesLoadingOlder = true;
+async function loadMoreMessages(conversationId?: string): Promise<void> {
+  const cid = conversationId ?? state.activeConversationId;
+  if (!cid) return;
+  const v = ensureView(cid);
+  if (!v.hasMore || v.loadingOlder) return;
+  v.loadingOlder = true;
   try {
     const page = await api.call(c.historyPage, {
-      conversationId: state.activeConversationId,
+      conversationId: cid,
       limit: MESSAGE_PAGE_SIZE,
-      offset: state.messages.length,
+      offset: v.messages.length,
     });
-    state.messages = [...page.messages, ...state.messages];
-    state.messagesOffset = page.total - state.messages.length;
-    state.messagesHasMore = page.has_more;
+    v.messages = [...page.messages, ...v.messages];
+    v.offset = page.total - v.messages.length;
+    v.hasMore = page.has_more;
   } finally {
-    state.messagesLoadingOlder = false;
+    v.loadingOlder = false;
   }
 }
 
@@ -301,6 +325,54 @@ async function refreshProvidersModels(): Promise<void> {
 
 // ── 事件订阅 ──
 
+/**
+ * 流式增量合并到指定会话视图（主窗口与绑定窗口共用同一视图，逻辑与视图解耦）。
+ * done=false：增量合并到「最后一条 assistant text」（流式占位消息）——不用绝对 message_index：
+ * resolve 阶段角色切换会额外落库 RoleContext/System，后端占位 index 比前端乐观数组偏移，
+ * 绝对 index 无法对齐；占位始终是「本轮最后落库的 assistant」，工具轮 ToolResult 追加在
+ * 占位之后，从尾部倒数定位依然正确。
+ * done=true：全量重拉收敛为权威数据（兜底广播丢弃/积压）。
+ */
+function applyMessageDelta(
+  v: ChatViewState,
+  payload: Extract<StateChangePayload, { kind: "message_delta" }>,
+): void {
+  if (payload.done) {
+    v.streamingIndex = null;
+    void refreshMessages(payload.conversation_id);
+  } else {
+    let target = -1;
+    for (let i = v.messages.length - 1; i >= 0; i--) {
+      const m = v.messages[i];
+      if (m.role === "assistant" && m.body.kind === "text") {
+        target = i;
+        break;
+      }
+    }
+    // 兜底：无占位（乐观占位未生效/被覆盖）时补一条再合并。
+    if (target === -1) {
+      v.messages = [
+        ...v.messages,
+        { role: "assistant", body: { kind: "text", content: "" }, timestamp: Date.now() },
+      ];
+      target = v.messages.length - 1;
+    }
+    v.streamingIndex = target;
+    v.messages = v.messages.map((m, i) =>
+      i === target && m.body.kind === "text"
+        ? {
+            ...m,
+            body: {
+              ...m.body,
+              content: payload.content,
+              reasoning: payload.reasoning || undefined,
+            },
+          }
+        : m
+    );
+  }
+}
+
 async function handleStateChanged(payload: StateChangePayload): Promise<void> {
   try {
     if (payload.kind === "topics") {
@@ -318,54 +390,16 @@ async function handleStateChanged(payload: StateChangePayload): Promise<void> {
       state.conversationsTotal = page.total;
       state.conversationsHasMore = page.has_more;
       state.conversationsLoadingMore = false;
-      // 仅当受影响会话含当前激活会话时才重拉消息，
-      // 避免后台推进其他会话时误触发当前会话重拉与滚动。
-      if (state.activeConversationId && affected.includes(state.activeConversationId)) {
-        await refreshMessages();
-      }
+      // 消息视图按受影响会话分发：有打开视图（主窗口选中或绑定窗口）的会话全部刷新，
+      // 避免后台推进其他会话时误触发无关窗口的重拉与滚动。
+      await Promise.all(
+        affected.filter((cid) => chatViews[cid]).map((cid) => refreshMessages(cid)),
+      );
     } else if (payload.kind === "message_delta") {
-      // 流式增量：仅处理当前激活会话。
-      // done=false 增量合并到「最后一条 assistant text」（流式占位消息）——不用绝对
-      // message_index：resolve 阶段角色切换会额外落库 RoleContext/System，后端占位 index
-      // 比前端乐观数组偏移，绝对 index 无法对齐；占位始终是「本轮最后落库的 assistant」，
-      // 工具轮 ToolResult 追加在占位之后，从尾部倒数定位依然正确。
-      // done=true 全量重拉收敛为权威数据（兜底广播丢弃/积压）。
-      if (state.activeConversationId === payload.conversation_id) {
-        if (payload.done) {
-          state.streamingIndex = null;
-          await refreshMessages();
-        } else {
-          let target = -1;
-          for (let i = state.messages.length - 1; i >= 0; i--) {
-            const m = state.messages[i];
-            if (m.role === "assistant" && m.body.kind === "text") {
-              target = i;
-              break;
-            }
-          }
-          // 兜底：无占位（乐观占位未生效/被覆盖）时补一条再合并。
-          if (target === -1) {
-            state.messages = [
-              ...state.messages,
-              { role: "assistant", body: { kind: "text", content: "" }, timestamp: Date.now() },
-            ];
-            target = state.messages.length - 1;
-          }
-          state.streamingIndex = target;
-          state.messages = state.messages.map((m, i) =>
-            i === target && m.body.kind === "text"
-              ? {
-                  ...m,
-                  body: {
-                    ...m.body,
-                    content: payload.content,
-                    reasoning: payload.reasoning || undefined,
-                  },
-                }
-              : m
-          );
-        }
-      }
+      // 流式增量：按会话分发到打开的视图（主窗口选中或绑定窗口共享同一视图）。
+      // 视图不存在（无窗口显示该会话）时跳过，避免无效解析。
+      const v = chatViews[payload.conversation_id];
+      if (v) applyMessageDelta(v, payload);
     } else if (payload.kind === "poller") {
       state.poller = payload.status;
     } else if (payload.kind === "sessions") {
@@ -464,8 +498,7 @@ async function bootstrap(): Promise<void> {
 
 async function selectConversation(id: string): Promise<void> {
   state.activeConversationId = id;
-  state.streamingIndex = null;
-  await refreshMessages();
+  await refreshMessages(id);
 }
 
 async function createConversation(mode: string): Promise<string> {
@@ -480,8 +513,9 @@ async function closeSession(sessionId: string): Promise<void> {
   // 若关闭的是当前会话，先清空本地选中，让列表刷新后由回退逻辑接管。
   if (state.activeConversationId === sessionId) {
     state.activeConversationId = null;
-    state.messages = [];
   }
+  // 丢弃该会话全部视图（主窗口与绑定窗口随之显示空态；会话已删除不再复用）。
+  delete chatViews[sessionId];
   await refreshConversations();
 }
 
@@ -497,12 +531,13 @@ async function sendMessage(
   modelId: string,
   params?: SamplingParams,
   thinking?: ThinkingConfig,
+  conversationId: string = state.activeConversationId ?? "",
 ): Promise<ChatResponse> {
-  if (!state.activeConversationId) {
+  if (!conversationId) {
     throw new Error("No active session. Create a new session first.");
   }
-  const conversationId = state.activeConversationId;
-  state.streamingIndex = null; // 新轮开始：清除上一轮流式标记
+  const v = ensureView(conversationId);
+  v.streamingIndex = null; // 新轮开始：清除上一轮流式标记
   const userMsg: Message = {
     role: "user",
     body: { kind: "text", content: text },
@@ -511,8 +546,8 @@ async function sendMessage(
   // 乐观追加 user + 空 assistant 占位：与后端落库顺序（user → assistant 占位）对齐，
   // 保证流式 MessageDelta.message_index 与本地数组 index 一致（增量原地合并）。
   // 仅追加 user 会使本地数组比后端少一条占位，index 越界 → 增量被丢弃、回答整块出现。
-  state.messages = [
-    ...state.messages,
+  v.messages = [
+    ...v.messages,
     userMsg,
     {
       role: "assistant",
@@ -533,9 +568,7 @@ async function sendMessage(
   } finally {
     // 收敛/回滚统一走权威重拉：成功时兜底事件丢失（done:true / Conversations），
     // 失败时回滚乐观占位；不在本地追加 assistant——避免与 done:true 重拉竞态重复。
-    if (state.activeConversationId === conversationId) {
-      await refreshMessages();
-    }
+    await refreshMessages(conversationId);
   }
 }
 
@@ -862,12 +895,15 @@ async function loadMoreGitLog(): Promise<void> {
 
 export const dataStore = {
   state,
+  /** 会话消息视图缓存（key = conversationId）：ChatArea 主/绑定窗口统一从此读取。 */
+  chatViews,
   bootstrap,
   subscribe,
   unsubscribe,
   refreshTopics,
   refreshConversations,
   loadMoreConversations,
+  refreshMessages,
   loadMoreMessages,
   refreshPoller,
   refreshRunningSessions,

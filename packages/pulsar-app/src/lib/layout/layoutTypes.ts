@@ -5,7 +5,8 @@ export type SplitOrientation = "horizontal" | "vertical";
 /** 可承载可移动视图的容器。main 是编辑器区域，有独立 split 语义，不参与视图拖拽。 */
 export type ViewContainerId = "sidebar" | "info" | "panel";
 
-/** main 区可插入的面板类型。多数类型全局唯一（多个会话共享同一个 chat 面板）；
+/** main 区可插入的面板类型。多数类型全局唯一（主 chat 面板由多个会话共享）；
+ * `chat` 支持按会话多实例（绑定窗口，实例 id = `chat:${conversationId}`）；
  * `file-editor` 例外：按文件路径多实例（实例 id = 文件 key，见 LayoutStore.insertPanel）；
  * `git-diff` 复用同一实例语义（实例 id = `git-diff:${repoId}:${relPath}`，按文件路径多开）。 */
 export type MainPanelType =

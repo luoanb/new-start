@@ -34,6 +34,8 @@ export type Translations = {
     yesterday: string;
     running: string;
     copyId: string;
+    /** 会话列表项「在 main 新开绑定该会话的窗口」。 */
+    openWindow: string;
     closeSession: string;
     loadingMore: string;
     collapseSidebar: string;
@@ -672,6 +674,7 @@ export const en: Translations = {
     yesterday: "Yesterday",
     running: "Running",
     copyId: "Copy session ID",
+    openWindow: "Open in new window",
     closeSession: "Close session",
     loadingMore: "Loading more...",
     collapseSidebar: "Collapse sidebar",
@@ -1349,6 +1352,7 @@ export const zh: Translations = {
     yesterday: "昨天",
     running: "运行中",
     copyId: "复制会话 ID",
+    openWindow: "在新窗口打开",
     closeSession: "关闭会话",
     loadingMore: "加载更多...",
     collapseSidebar: "收起侧栏",
