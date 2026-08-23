@@ -226,7 +226,7 @@ impl ChatRequest {
 
 // ── 非流式响应 ──────────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ChatResponse {
     pub id: String,
@@ -244,7 +244,7 @@ pub struct ChatResponse {
     pub usage: Option<Usage>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ResponseChoice {
     #[serde(default)]
@@ -256,7 +256,7 @@ pub struct ResponseChoice {
     pub logprobs: Option<Value>,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub struct ResponseMessage {
     #[serde(default)]
@@ -272,7 +272,7 @@ pub struct ResponseMessage {
     pub refusal: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct Usage {
     #[serde(default)]
@@ -285,7 +285,7 @@ pub struct Usage {
     pub completion_tokens_details: Option<CompletionTokensDetails>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CompletionTokensDetails {
     #[serde(default)]
@@ -310,7 +310,7 @@ pub struct StreamChunk {
     pub usage: Option<Usage>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct StreamChoice {
     #[serde(default)]
@@ -321,7 +321,7 @@ pub struct StreamChoice {
     pub finish_reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub struct StreamDelta {
     #[serde(default)]
@@ -338,6 +338,30 @@ pub struct StreamDelta {
 pub type StreamResult = ChatResponse;
 
 // ── 客户端 ────────────────────────────────────────────────
+
+/// 诊断开关：打印发给模型的完整请求体与原始响应体。
+/// 排查"工具声明必填但模型返回空 arguments"等入参/出参问题时开启。
+const DUMP_LLM_WIRE: bool = true;
+
+fn dump_wire_request(body: &serde_json::Value) {
+    if DUMP_LLM_WIRE {
+        tracing::info!(
+            phase = "llm_request_out",
+            body = %serde_json::to_string(body).unwrap_or_default(),
+            "llm request body (full)"
+        );
+    }
+}
+
+fn dump_wire_response(bytes: &[u8]) {
+    if DUMP_LLM_WIRE {
+        tracing::info!(
+            phase = "llm_response_in",
+            body = %String::from_utf8_lossy(bytes),
+            "llm response body (full)"
+        );
+    }
+}
 
 /// 轻量 OpenAI 兼容客户端：仅负责 HTTP 发送与错误归一。
 #[derive(Debug, Clone)]
@@ -360,6 +384,7 @@ impl Client {
     pub async fn chat(&self, req: &ChatRequest) -> AppResult<ChatResponse> {
         let body = serde_json::to_value(req)
             .map_err(|e| AppError::LlmRequestFailed(format!("serialize request: {e}")))?;
+        dump_wire_request(&body);
         let response = self
             .http
             .post(self.endpoint())
@@ -369,6 +394,7 @@ impl Client {
             .await
             .map_err(|e| AppError::LlmRequestFailed(format!("request failed: {e}")))?;
         let bytes = self.read_body(response).await?;
+        dump_wire_response(&bytes);
         serde_json::from_slice(&bytes)
             .map_err(|e| AppError::LlmRequestFailed(format!("parse response: {e}")))
     }
@@ -384,6 +410,7 @@ impl Client {
         if let Some(obj) = body.as_object_mut() {
             obj.insert("stream".into(), serde_json::json!(true));
         }
+        dump_wire_request(&body);
         let response = self
             .http
             .post(self.endpoint())
@@ -489,6 +516,13 @@ impl Client {
             }
         }
         aggregated.choices = final_choice.into_iter().collect();
+        if DUMP_LLM_WIRE {
+            tracing::info!(
+                phase = "llm_response_in",
+                body = %serde_json::to_string(&aggregated).unwrap_or_default(),
+                "llm stream response (aggregated full)"
+            );
+        }
         Ok(aggregated)
     }
 
