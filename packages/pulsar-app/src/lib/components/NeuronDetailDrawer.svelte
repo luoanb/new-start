@@ -4,6 +4,7 @@
   import type { Connection, Neuron, SessionBehavior } from "$lib/types";
   import { t } from "$lib/i18n";
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
+  import { CopyToClipboard } from "$lib/utils";
   import BehaviorFields from "./BehaviorFields.svelte";
   import { systemTypeColor } from "$lib/features/neuron/systemTypeColor";
 
@@ -65,13 +66,11 @@
 
   async function copyId() {
     if (!neuron) return;
-    try {
-      await navigator.clipboard.writeText(neuron.id);
+    const ok = await CopyToClipboard.copyText(neuron.id);
+    if (ok) {
       copied = true;
       clearTimeout(copyTimer);
       copyTimer = setTimeout(() => (copied = false), 1500);
-    } catch {
-      // 忽略复制失败
     }
   }
 

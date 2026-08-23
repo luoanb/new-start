@@ -2,6 +2,7 @@
   import { t } from "$lib/i18n";
   import { useViewContext } from "$lib/layout/viewContext";
   import type { Conversation } from "$lib/types";
+  import { CopyToClipboard } from "$lib/utils";
 
   // 数据/命令统一来自 ViewContext；collapsed 是纯视觉 prop（窄侧栏形态）。
   const ctx = useViewContext();
@@ -18,19 +19,7 @@
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
 
   async function copyId(id: string) {
-    try {
-      await navigator.clipboard.writeText(id);
-    } catch {
-      // 非安全上下文 / WebKitGTK 下 Clipboard API 不可用时的兜底方案。
-      const ta = document.createElement("textarea");
-      ta.value = id;
-      ta.style.position = "fixed";
-      ta.style.opacity = "0";
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      ta.remove();
-    }
+    await CopyToClipboard.copyText(id);
     copiedId = id;
     clearTimeout(copyTimer);
     copyTimer = setTimeout(() => (copiedId = null), 1500);

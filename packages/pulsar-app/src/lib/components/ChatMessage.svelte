@@ -21,7 +21,7 @@
     message: Message;
     streaming?: boolean;
     compactTool?: boolean;
-    onCopy?: (msg: Message) => void;
+    onCopy?: (msg: Message) => Promise<boolean>;
     onRate?: (score: number) => void;
     canRate?: boolean;
     anchorIndex?: number;
@@ -79,9 +79,11 @@
   }
 
   async function handleCopy() {
-    await onCopy?.(message);
-    copied = true;
-    setTimeout(() => (copied = false), 1500);
+    const ok = (await onCopy?.(message)) !== false;
+    if (ok) {
+      copied = true;
+      setTimeout(() => (copied = false), 1500);
+    }
   }
 
   function handleRate(score: number) {

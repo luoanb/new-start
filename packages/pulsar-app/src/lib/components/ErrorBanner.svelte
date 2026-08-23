@@ -1,33 +1,16 @@
 <script lang="ts">
   import { t } from "$lib/i18n";
+  import { CopyToClipboard } from "$lib/utils";
   let { message, onDismiss }: { message: string; onDismiss: () => void } = $props();
 
   let copied = $state(false);
   let copyFailed = $state(false);
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
 
-  // 点击错误文案复制到剪贴板：优先 Clipboard API，非安全上下文/WebKitGTK 下回退 execCommand。
+  // 点击错误文案复制到剪贴板：统一走公共复制方法（Clipboard API + execCommand 兜底）。
   async function copyMessage() {
     if (!message) return;
-    let ok = false;
-    try {
-      await navigator.clipboard.writeText(message);
-      ok = true;
-    } catch {
-      try {
-        const ta = document.createElement("textarea");
-        ta.value = message;
-        ta.setAttribute("readonly", "");
-        ta.style.position = "fixed";
-        ta.style.opacity = "0";
-        document.body.appendChild(ta);
-        ta.select();
-        ok = document.execCommand("copy");
-        document.body.removeChild(ta);
-      } catch {
-        ok = false;
-      }
-    }
+    const ok = await CopyToClipboard.copyText(message);
     clearTimeout(copyTimer);
     if (ok) {
       copied = true;

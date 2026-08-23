@@ -1,24 +1,33 @@
 <script lang="ts">
   import { t } from "$lib/i18n";
+  import { CopyToClipboard } from "$lib/utils";
 
   let { text }: { text: string } = $props();
 
   let copied = $state(false);
+  let copyFailed = $state(false);
+  let copyTimer: ReturnType<typeof setTimeout> | undefined;
 
   async function handleCopy(event: MouseEvent) {
     event.stopPropagation();
-    await navigator.clipboard.writeText(text);
-    copied = true;
-    setTimeout(() => (copied = false), 1500);
+    const ok = await CopyToClipboard.copyText(text);
+    clearTimeout(copyTimer);
+    copied = ok;
+    copyFailed = !ok;
+    copyTimer = setTimeout(() => {
+      copied = false;
+      copyFailed = false;
+    }, 1500);
   }
 </script>
 
 <button
   class="copy-btn"
   class:copied
+  class:failed={copyFailed}
   onclick={handleCopy}
-  title={copied ? t("chatMessage.copied") : t("chatMessage.copy")}
-  aria-label={copied ? t("chatMessage.copied") : t("chatMessage.copy")}
+  title={copied ? t("chatMessage.copied") : copyFailed ? t("common.copyFailed") : t("chatMessage.copy")}
+  aria-label={copied ? t("chatMessage.copied") : copyFailed ? t("common.copyFailed") : t("chatMessage.copy")}
 >
   {#if copied}
     <svg
@@ -73,6 +82,12 @@
   .copy-btn.copied {
     opacity: 1;
     visibility: visible;
+  }
+  /* 复制失败显示警示色 */
+  .copy-btn.failed {
+    opacity: 1;
+    visibility: visible;
+    color: var(--color-error, #e5484d);
   }
   /* 仅支持 hover 的设备隐藏复制按钮（悬停折叠块或键盘聚焦时显示）；
      触屏（hover: none）始终可见，保证可发现性。见 .cursor/rules/ui-hover-reveal.mdc */

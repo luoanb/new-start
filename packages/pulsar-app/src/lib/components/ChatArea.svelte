@@ -6,6 +6,7 @@
   import type { HookDefMeta, HookJudgementRecord } from "$lib/types";
   import { t } from "$lib/i18n";
   import { errorMessage } from "$lib/errorMessage";
+  import { CopyToClipboard } from "$lib/utils";
   import { useViewContext } from "$lib/layout/viewContext";
   import { api, c } from "$lib/api";
   import { onDestroy, onMount } from "svelte";
@@ -184,8 +185,8 @@
     return groups;
   });
 
-  async function handleCopy(msg: Message): Promise<void> {
-    await navigator.clipboard.writeText(msg.body.content);
+  async function handleCopy(msg: Message): Promise<boolean> {
+    return CopyToClipboard.copyText(msg.body.content);
   }
 
   async function handleRate(messageIndex: number, score: number): Promise<void> {

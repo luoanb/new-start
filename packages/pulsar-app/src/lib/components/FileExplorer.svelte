@@ -9,6 +9,7 @@
   import { api, c, isTauriEnv } from "$lib/api";
   import { t } from "$lib/i18n";
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
+  import { CopyToClipboard } from "$lib/utils";
   import { dataStore } from "$lib/stores/dataStore.svelte";
   import { layoutStore } from "$lib/layout/LayoutStore.svelte";
   import { fileEditorStore, fileKey } from "$lib/stores/fileEditorStore.svelte";
@@ -448,27 +449,7 @@
 
   // ── 复制路径 ──
   async function copyText(text: string): Promise<boolean> {
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-        return true;
-      }
-    } catch {
-      // fallthrough → execCommand 回退
-    }
-    try {
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      ta.style.position = "fixed";
-      ta.style.opacity = "0";
-      document.body.appendChild(ta);
-      ta.select();
-      const ok = document.execCommand("copy");
-      ta.remove();
-      return ok;
-    } catch {
-      return false;
-    }
+    return CopyToClipboard.copyText(text);
   }
 
   async function copyPath(path: string) {

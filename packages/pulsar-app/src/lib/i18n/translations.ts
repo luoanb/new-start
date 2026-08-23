@@ -10,6 +10,7 @@ export type Translations = {
     selectAll: string;
     clickToCopy: string;
     copied: string;
+    copyFailed: string;
     mainEmpty: string;
     newPane: string;
     confirm: string;
@@ -646,6 +647,7 @@ export const en: Translations = {
     selectAll: "Select all",
     clickToCopy: "Click to copy",
     copied: "Copied",
+    copyFailed: "Copy failed",
     mainEmpty: "Open a panel from the activity bar to get started.",
     newPane: "New Pane",
     confirm: "Confirm",
