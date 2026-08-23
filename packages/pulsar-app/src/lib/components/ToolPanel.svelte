@@ -320,8 +320,9 @@
     display: flex;
     align-items: center;
     gap: var(--space-3);
+    /* 行高/圆角对齐其他 panel（TopicPanel 卡片标准）。 */
     padding: var(--space-2) var(--space-2);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-md);
     transition: background var(--duration-fast) var(--ease-out);
   }
   .server-item:hover,
@@ -334,11 +335,13 @@
     flex: 1;
     min-width: 0;
     display: flex;
-    flex-direction: column;
-    gap: 1px;
+    align-items: center;
+    gap: var(--space-2);
   }
   .server-name,
   .tool-name {
+    flex-shrink: 0;
+    max-width: 50%;
     font-size: var(--fs-sm);
     color: var(--color-text);
     overflow: hidden;
@@ -346,13 +349,17 @@
     white-space: nowrap;
   }
   .server-meta {
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     gap: var(--space-2);
     font-size: var(--fs-xs);
     color: var(--color-text-muted);
+    white-space: nowrap;
   }
   .tool-desc {
+    flex: 1;
+    min-width: 0;
     font-size: var(--fs-xs);
     color: var(--color-text-muted);
     overflow: hidden;

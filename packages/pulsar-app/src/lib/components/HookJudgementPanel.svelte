@@ -249,10 +249,10 @@
             class="row"
             onclick={() => (expandedId = expandedId === record.id ? null : record.id)}
           >
+            <span class="hook-badge" title={record.hook_type}>{hookLabel(record)}</span>
             <span class="time" title={formatTimeFull(record.created_at)}>
               {formatTimeShort(record.created_at)}
             </span>
-            <span class="hook-badge" title={record.hook_type}>{hookLabel(record)}</span>
             <span class="status-badge {record.status}">{statusLabelOf(record)}</span>
             <span class="summary-txt">
               {#if record.error}
@@ -449,7 +449,7 @@
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: var(--space-1);
+    gap: var(--space-2);
     font-size: var(--fs-sm);
   }
   .empty {
@@ -459,28 +459,29 @@
   }
   /* 分页底部提示：已载入 / 总数；居中、弱化，不占滚动空间。 */
   .list-footer {
+    flex-shrink: 0;
     margin: 0;
     padding: var(--space-2);
     text-align: center;
     color: var(--color-text-muted);
     font-size: var(--fs-xs);
   }
-  /* 时间线条目卡片：对齐 topic-card（bg 底 + radius-md） */
+  /* 列表条目（无卡片）：flex-shrink:0 关键——.list 是 flex 列 + overflow 滚动容器，
+     不加此行时记录多会按 flex-shrink:1 压缩行高，内容叠在一起而非滚动。 */
   .record {
-    border: var(--border-width) solid var(--color-border);
-    border-radius: var(--radius-md);
-    background: var(--color-bg);
-    overflow: hidden;
+    flex-shrink: 0;
   }
-  .record.expanded { border-color: var(--color-primary); }
+  /* 展开态：无卡片边框后以行背景高亮（hover 已有）。 */
+  .record.expanded .row { background: color-mix(in oklch, var(--color-primary) 10%, transparent); }
   .row {
     display: flex;
     align-items: center;
     gap: var(--space-2);
     width: 100%;
-    /* 紧凑行高：列表页密度优先，让更多行可见。 */
-    padding: 3px var(--space-2);
+    /* 行高/圆角对齐其他 panel（TopicPanel 卡片标准）。 */
+    padding: var(--space-2) var(--space-2);
     border: none;
+    border-radius: var(--radius-md);
     background: transparent;
     color: var(--color-text);
     cursor: pointer;
