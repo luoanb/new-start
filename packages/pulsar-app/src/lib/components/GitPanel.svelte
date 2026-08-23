@@ -818,10 +818,7 @@
     color: var(--color-primary);
   }
   .name-basename {
-    flex: 0 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    flex: 0 0 auto;
     white-space: nowrap;
   }
   .name-dir {
@@ -984,10 +981,7 @@
   .commit-file:hover { background: var(--color-hover); }
   .commit-file.open { background: var(--color-hover); }
   .cf-name {
-    flex: 0 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    flex: 0 0 auto;
     white-space: nowrap;
     font-size: var(--fs-sm);
     color: var(--color-text);

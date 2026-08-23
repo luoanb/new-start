@@ -417,6 +417,15 @@ impl ProviderRegistry {
                     .iter()
                     .filter_map(|tc| {
                         let name = tc.function.name.clone();
+                        // 诊断：记录模型返回的原始 arguments 字符串，区分 `""` 空串与 `"null"` 字面量。
+                        // 配合 apply_tools 的 tools_wire 日志，定位必填参数丢失发生在发送还是模型侧。
+                        tracing::info!(
+                            phase = "parse_tool_call",
+                            tool = %tc.function.name,
+                            args_str_len = tc.function.arguments.len(),
+                            raw_arguments = %tc.function.arguments,
+                            "raw tool call arguments from model"
+                        );
                         let args: serde_json::Value =
                             serde_json::from_str(&tc.function.arguments).unwrap_or_default();
                         Some(super::models::ToolCall {
@@ -1060,6 +1069,32 @@ fn apply_tools(req: &mut ChatRequest, tools: &Option<Vec<crate::core::models::To
                         },
                     })
                     .collect(),
+            );
+            // 诊断：确认发送给模型的工具 schema 是否完整（`required` 是否随 wire 传出）。
+            // 排查"工具声明了必填参数但模型仍输出空 arguments"时，比对这里与 parse 端日志。
+            let wire_summary: Vec<String> = req
+                .tools
+                .as_ref()
+                .map(|wire| {
+                    wire.iter()
+                        .map(|t| {
+                            let required = t
+                                .function
+                                .parameters
+                                .as_ref()
+                                .and_then(|p| p.get("required"))
+                                .map(ToString::to_string)
+                                .unwrap_or_else(|| "none".into());
+                            format!("{}[required={required}]", t.function.name)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            tracing::info!(
+                phase = "apply_tools",
+                tool_count = wire_summary.len(),
+                tools_wire = wire_summary.join(","),
+                "tools wire payload sent to model"
             );
         }
     }
