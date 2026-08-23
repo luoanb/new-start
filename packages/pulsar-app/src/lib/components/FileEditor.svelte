@@ -10,6 +10,8 @@
   import { EditorState, Compartment } from "@codemirror/state";
   import { basicSetup } from "codemirror";
   import { languages } from "@codemirror/language-data";
+  import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+  import { tags as lezerTags } from "@lezer/highlight";
   import type { LanguageSupport } from "@codemirror/language";
   import { api, c } from "$lib/api";
   import { t } from "$lib/i18n";
@@ -117,6 +119,7 @@
         extensions: [
           basicSetup,
           appTheme,
+          syntaxHighlighting(appHighlight),
           keymap.of([
             { key: "Mod-s", preventDefault: true, run: () => { void save(); return true; } },
           ]),
@@ -175,6 +178,29 @@
       borderLeftColor: "var(--color-primary)",
     },
   });
+
+  /**
+   * 语法高亮：用官方 HighlightStyle.define 定义 token 配色，颜色值全部走 CSS 变量（--tok-*），
+   * 随应用主题（html[data-theme]）自动切换深浅两套，无需 JS 重配置。
+   * 不用 CM6 默认 defaultHighlightStyle：它是面向浅色主题的深色字（keyword #708 等），夜间不可读。
+   * 注意：defaultHighlightStyle 的 token 颜色是随机生成类名，无法用 CSS 覆盖，必须自定义 HighlightStyle。
+   */
+  const appHighlight = HighlightStyle.define([
+    { tag: lezerTags.meta, color: "var(--tok-meta)" },
+    { tag: lezerTags.keyword, color: "var(--tok-keyword)" },
+    { tag: [lezerTags.atom, lezerTags.bool, lezerTags.url, lezerTags.contentSeparator, lezerTags.labelName], color: "var(--tok-atom)" },
+    { tag: [lezerTags.literal, lezerTags.inserted], color: "var(--tok-literal)" },
+    { tag: [lezerTags.string, lezerTags.deleted], color: "var(--tok-string)" },
+    { tag: [lezerTags.regexp, lezerTags.escape, lezerTags.special(lezerTags.string)], color: "var(--tok-string2)" },
+    { tag: lezerTags.definition(lezerTags.variableName), color: "var(--tok-var-def)" },
+    { tag: lezerTags.local(lezerTags.variableName), color: "var(--tok-var-local)" },
+    { tag: [lezerTags.typeName, lezerTags.namespace], color: "var(--tok-type)" },
+    { tag: lezerTags.className, color: "var(--tok-class)" },
+    { tag: [lezerTags.special(lezerTags.variableName), lezerTags.macroName], color: "var(--tok-var-special)" },
+    { tag: lezerTags.definition(lezerTags.propertyName), color: "var(--tok-property)" },
+    { tag: lezerTags.comment, color: "var(--tok-comment)" },
+    { tag: lezerTags.invalid, color: "var(--tok-invalid)" },
+  ]);
 
   /** 保存：先 fs_info 预检冲突，未冲突直接写；冲突弹确认。 */
   async function save(): Promise<void> {
@@ -296,6 +322,22 @@
     height: 100%;
     min-height: 0;
     background: var(--color-surface);
+    /* 语法高亮 token 色（浅色主题默认：对齐 CM6 defaultHighlightStyle 的浅底深字配色）；
+       夜间主题在下方 @media/[data-theme] 块整体覆盖为浅色字。 */
+    --tok-meta: #404740;
+    --tok-keyword: #708;
+    --tok-atom: #219;
+    --tok-literal: #164;
+    --tok-string: #a11;
+    --tok-string2: #e40;
+    --tok-var-def: #00f;
+    --tok-var-local: #30a;
+    --tok-type: #085;
+    --tok-class: #167;
+    --tok-var-special: #256;
+    --tok-property: #00c;
+    --tok-comment: #940;
+    --tok-invalid: #f00;
   }
 
   .editor-toolbar {
@@ -375,5 +417,47 @@
   }
   .ok {
     color: var(--color-success);
+  }
+
+  /* ── 夜间模式整体设计 ──
+     - muted 提亮：路径 / 状态栏 / CM 行号在深色表面 (oklch 0.20) 上对比度不足，局部覆盖 token；
+     - 语法高亮：CM6 默认 defaultHighlightStyle 是浅底深字（keyword #708 等），夜间不可读，
+       组件内以 HighlightStyle.define（见 script）引用 --tok-* 变量，此处整体覆盖为浅色系
+       （VS Code Dark+ 近似），手动 dark 与跟随系统暗色两种场景都覆盖。 */
+  :global([data-theme="dark"]) .file-editor {
+    --color-text-muted: oklch(0.74 0.012 265);
+    --tok-meta: #8a919e;
+    --tok-keyword: #c678dd;
+    --tok-atom: #d19a66;
+    --tok-literal: #98c379;
+    --tok-string: #98c379;
+    --tok-string2: #e06c75;
+    --tok-var-def: #61afef;
+    --tok-var-local: #61afef;
+    --tok-type: #e5c07b;
+    --tok-class: #e5c07b;
+    --tok-var-special: #d19a66;
+    --tok-property: #e06c75;
+    --tok-comment: #8a919e;
+    --tok-invalid: #ff6b6b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :global(:root:not([data-theme])) .file-editor {
+      --color-text-muted: oklch(0.74 0.012 265);
+      --tok-meta: #8a919e;
+      --tok-keyword: #c678dd;
+      --tok-atom: #d19a66;
+      --tok-literal: #98c379;
+      --tok-string: #98c379;
+      --tok-string2: #e06c75;
+      --tok-var-def: #61afef;
+      --tok-var-local: #61afef;
+      --tok-type: #e5c07b;
+      --tok-class: #e5c07b;
+      --tok-var-special: #d19a66;
+      --tok-property: #e06c75;
+      --tok-comment: #8a919e;
+      --tok-invalid: #ff6b6b;
+    }
   }
 </style>

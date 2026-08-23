@@ -1237,4 +1237,18 @@
   .move-item:hover {
     background: var(--color-hover);
   }
+
+  /* ── 夜间模式整体设计 ──
+     dark 主题下 --color-text-muted (oklch 0.62) 在深色表面 (oklch 0.20) 上对比度不足，
+     细线图标（目录箭头 / 文件·文件夹 / ⋮）、提示文字、Git 删除徽标等均偏暗。
+     组件内局部覆盖该 token（仅影响文件浏览），统一提亮一档，保持主次层级；
+     浅色模式与其它面板不受影响。 */
+  :global([data-theme="dark"]) .file-explorer {
+    --color-text-muted: oklch(0.74 0.012 265);
+  }
+  @media (prefers-color-scheme: dark) {
+    :global(:root:not([data-theme])) .file-explorer {
+      --color-text-muted: oklch(0.74 0.012 265);
+    }
+  }
 </style>
