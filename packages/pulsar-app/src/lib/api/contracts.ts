@@ -29,7 +29,7 @@ import type {
   GitStatusView,
   HookDefMeta,
   HookJudgementFilter,
-  HookJudgementRecord,
+  HookJudgementListResult,
   LogEntry,
   McpServerStatus,
   Message,
@@ -124,9 +124,10 @@ export const c = {
   ),
 
   // ── Hook 判定 ──
-  hookJudgementsList: def<{ filters?: HookJudgementFilter }, HookJudgementRecord[]>(
-    "hook_judgements_list",
-  ),
+  hookJudgementsList: def<
+    { filters?: HookJudgementFilter },
+    HookJudgementListResult
+  >("hook_judgements_list"),
   hookDefsList: def<undefined, HookDefMeta[]>("hook_defs_list"),
 
   // ── Poller ──

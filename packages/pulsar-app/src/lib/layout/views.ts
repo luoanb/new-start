@@ -90,7 +90,7 @@ export const viewRegistry: Record<string, ViewRegistration> = {
   // v12: Hook 判定（裁决记录全局时间线面板，与「会话/文件」同级）
   "hook-judgements": {
     id: "hook-judgements",
-    title: "views.hookJudgements",
+    title: "views.flowDecisions",
     icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
     component: HookJudgementPanel,
     movableTo: "*",

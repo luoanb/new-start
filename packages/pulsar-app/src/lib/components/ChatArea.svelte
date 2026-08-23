@@ -235,7 +235,7 @@
         }),
         api.call(c.hookDefsList, undefined),
       ]);
-      judgements = list;
+      judgements = list.records;
       hookDefs = defs;
     } catch {
       // 裁决卡为附属展示，拉取失败静默降级（不影响主消息渲染）。

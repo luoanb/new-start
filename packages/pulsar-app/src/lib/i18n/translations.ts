@@ -406,7 +406,7 @@ export type Translations = {
     git: string;
     gitDiff: string;
     search: string;
-    hookJudgements: string;
+    flowDecisions: string;
   };
   searchPanel: {
     placeholder: string;
@@ -451,6 +451,9 @@ export type Translations = {
       downgraded: string;
     };
     loadFailed: string;
+    loadingMore: string;
+    loadedOf: string;
+    allLoaded: string;
   };
   hook: {
     completeScope: string;
@@ -1062,7 +1065,7 @@ export const en: Translations = {
     git: "Git",
     gitDiff: "Diff",
     search: "Search",
-    hookJudgements: "Hook Judgements",
+    flowDecisions: "Flow Decisions",
   },
   searchPanel: {
     placeholder: "Search symbols, functions, types…",
@@ -1107,6 +1110,9 @@ export const en: Translations = {
       downgraded: "Retries failed; fell back to neutral default",
     },
     loadFailed: "Failed to load: {error}",
+    loadingMore: "Loading more…",
+    loadedOf: "{loaded} / {total} loaded",
+    allLoaded: "All {total} loaded",
   },
   hook: {
     completeScope: "Complete Scope",
@@ -1738,7 +1744,7 @@ export const zh: Translations = {
     git: "Git",
     gitDiff: "差异",
     search: "搜索",
-    hookJudgements: "Hook 判定",
+    flowDecisions: "流程决策",
   },
   searchPanel: {
     placeholder: "搜索符号、函数、类型…",
@@ -1783,6 +1789,9 @@ export const zh: Translations = {
       downgraded: "重试后仍失败，使用降级值兜底",
     },
     loadFailed: "加载失败：{error}",
+    loadingMore: "加载更多…",
+    loadedOf: "已载入 {loaded} / 共 {total}",
+    allLoaded: "共 {total} 条",
   },
   hook: {
     completeScope: "范围完成",

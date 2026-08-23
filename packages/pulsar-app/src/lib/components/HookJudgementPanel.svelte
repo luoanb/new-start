@@ -9,15 +9,21 @@
 
   const ctx = useViewContext();
 
-  // ── 数据 ──
+  // ── 数据（分页：后端过滤 + 滚动自动加载）──
+  const PAGE_SIZE = 50;
   let records = $state<HookJudgementRecord[]>([]);
+  /** 过滤后总数（后端 COUNT，支撑计数与 hasMore）。 */
+  let total = $state(0);
+  let hasMore = $state(false);
   let hookDefs = $state<HookDefMeta[]>([]);
   let loading = $state(false);
+  let loadingMore = $state(false);
   let errorMsg = $state("");
   let expandedId = $state<string | null>(null);
+  let listEl = $state<HTMLDivElement | null>(null);
   let unsubscribe: (() => void) | null = null;
 
-  // ── 过滤 ──
+  // ── 过滤（下沉后端，改动即重置重拉）──
   let filterHookType = $state(""); // "" = 全部
   let filterStatus = $state(""); // "" = 全部
 
@@ -36,40 +42,73 @@
     ...hookDefs.map((def) => ({ value: def.system_type, label: t(def.label) })),
   ]);
 
-  const filtered = $derived(
-    records.filter((r) => {
-      if (filterHookType && r.hook_type !== filterHookType) return false;
-      if (filterStatus && r.status !== filterStatus) return false;
-      return true;
-    }),
-  );
-
   const hasFilter = $derived(filterHookType !== "" || filterStatus !== "");
 
-  /** 全量拉取（后端按 created_at 倒序返回）。 */
-  async function refresh() {
-    loading = true;
+  /** 构造分页过滤入参（过滤条件下沉后端，limit/offset 走滚动分页）。 */
+  function buildFilter(offset: number) {
+    return {
+      filters: {
+        limit: PAGE_SIZE,
+        offset,
+        ...(filterHookType ? { hookType: filterHookType } : {}),
+        ...(filterStatus ? { status: filterStatus } : {}),
+      },
+    };
+  }
+
+  /**
+   * 分页拉取：reset=true 清空并拉第一页（过滤变更 / 刷新 / 事件重拉）；
+   * reset=false 追加下一页（滚动到底触发）。hasMore 由 records.length < total 判定。
+   */
+  async function loadPage(reset = false) {
+    if (!reset && !hasMore) return;
+    const offset = reset ? 0 : records.length;
+    loading = reset;
+    loadingMore = !reset;
     errorMsg = "";
     try {
-      const [list, defs] = await Promise.all([
-        api.call(c.hookJudgementsList, {}),
-        api.call(c.hookDefsList, undefined),
+      const [res, defs] = await Promise.all([
+        api.call(c.hookJudgementsList, buildFilter(offset)),
+        reset ? api.call(c.hookDefsList, undefined) : Promise.resolve(hookDefs),
       ]);
-      records = list;
+      records = reset ? res.records : [...records, ...res.records];
+      total = res.total;
+      hasMore = records.length < res.total;
       hookDefs = defs;
     } catch (e) {
       errorMsg = t("judgement.loadFailed", { error: errorMessage(e) });
     } finally {
       loading = false;
+      loadingMore = false;
     }
   }
 
+  /** 滚动距底 < 80px 自动加载下一页（未在加载中且有更多时）。 */
+  function onScroll() {
+    if (!listEl) return;
+    const el = listEl;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 80) {
+      if (!loading && !loadingMore && hasMore) void loadPage(false);
+    }
+  }
+
+  /** 过滤变化：重置第一页 + 列表滚动回顶（分页上下文重开）。 */
+  function applyFilter(key: "hookType" | "status", value: string) {
+    if (key === "hookType") {
+      filterHookType = value;
+    } else {
+      filterStatus = value;
+    }
+    if (listEl) listEl.scrollTop = 0;
+    void loadPage(true);
+  }
+
   onMount(() => {
-    void refresh();
+    void loadPage(true);
     // 两阶段事件驱动：pending（裁决开始）→ 终态（ok/retried_ok/downgraded）。
-    // 收到事件后全量重拉，保证列表与详情实时一致（裁决记录量级小，重拉开销可忽略）。
+    // 收到事件后重置重拉首页，保证列表与计数实时一致。
     unsubscribe = api.subscribe((payload) => {
-      if (payload.kind === "hook_judgements") void refresh();
+      if (payload.kind === "hook_judgements") void loadPage(true);
     });
   });
 
@@ -167,11 +206,11 @@
 
   <!-- 面板标题栏：对齐 ToolPanel / TopicPanel 的 panel-toolbar 词汇 -->
   <div class="panel-toolbar">
-    <span class="panel-title">{t("views.hookJudgements")}</span>
+    <span class="panel-title">{t("views.flowDecisions")}</span>
     <div class="toolbar-actions">
       <button
         class="icon-btn"
-        onclick={() => refresh()}
+        onclick={() => loadPage(true)}
         disabled={loading}
         title={t("judgement.refresh")}
         aria-label={t("judgement.refresh")}
@@ -181,26 +220,26 @@
     </div>
   </div>
 
-  <!-- 过滤条：类型 / 状态下拉 + 结果计数 -->
+  <!-- 过滤条：类型 / 状态下拉 + 结果计数（total = 过滤后总数） -->
   <div class="filter-bar">
     <Select
       bind:value={filterHookType}
       options={hookTypeOptions}
-      onchange={(v) => (filterHookType = String(v))}
+      onchange={(v) => applyFilter("hookType", String(v))}
     />
     <Select
       bind:value={filterStatus}
       options={statusOptions}
-      onchange={(v) => (filterStatus = String(v))}
+      onchange={(v) => applyFilter("status", String(v))}
     />
-    <span class="count">{filtered.length}</span>
+    <span class="count">{total}</span>
   </div>
 
-  <div class="list">
-    {#if filtered.length === 0}
+  <div class="list" bind:this={listEl} onscroll={onScroll}>
+    {#if records.length === 0}
       <p class="empty">{hasFilter ? t("judgement.noMatch") : t("judgement.empty")}</p>
     {:else}
-      {#each filtered as record (record.id)}
+      {#each records as record (record.id)}
         <div
           class="record {record.status}"
           class:expanded={expandedId === record.id}
@@ -324,6 +363,13 @@
           {/if}
         </div>
       {/each}
+      {#if loadingMore}
+        <p class="list-footer">{t("judgement.loadingMore")}</p>
+      {:else if hasMore}
+        <p class="list-footer">{t("judgement.loadedOf", { loaded: records.length, total })}</p>
+      {:else}
+        <p class="list-footer">{t("judgement.allLoaded", { total })}</p>
+      {/if}
     {/if}
   </div>
 </div>
@@ -337,7 +383,8 @@
     min-height: 0;
     gap: var(--space-2);
     padding: var(--space-2);
-    overflow: auto;
+    /* hidden：滚动交由 .list 单层容器，避免双层 overflow 嵌套导致滚动条错位、行被挤没。 */
+    overflow: hidden;
   }
   .error-banner {
     background: var(--color-error);
@@ -410,6 +457,14 @@
     color: var(--color-text-muted);
     font-size: var(--fs-xs);
   }
+  /* 分页底部提示：已载入 / 总数；居中、弱化，不占滚动空间。 */
+  .list-footer {
+    margin: 0;
+    padding: var(--space-2);
+    text-align: center;
+    color: var(--color-text-muted);
+    font-size: var(--fs-xs);
+  }
   /* 时间线条目卡片：对齐 topic-card（bg 底 + radius-md） */
   .record {
     border: var(--border-width) solid var(--color-border);
@@ -423,7 +478,8 @@
     align-items: center;
     gap: var(--space-2);
     width: 100%;
-    padding: var(--space-1) var(--space-2);
+    /* 紧凑行高：列表页密度优先，让更多行可见。 */
+    padding: 3px var(--space-2);
     border: none;
     background: transparent;
     color: var(--color-text);
