@@ -1,55 +1,97 @@
-# 🦞 Mini-Claw
+# 🦞 Pulsar（星脉）
 
-一个简化版的 OpenClaw 风格 AI 智能体框架，用于学习 Agent 开发原理。
+一个**自主推进的 AI Agent 桌面客户端**：Rust 核心 + Tauri GUI，同时提供 CLI、TUI 与 headless 网络服务三种附加入口，四种对话模式覆盖从普通对话到自主课题推进的完整光谱。
+
+## 特性
+
+- **四种对话模式**
+  - **Chat** — 普通对话，一问一答，不调用工具
+  - **Agent** — 可调用工具的对话，按需执行 tool-calling 循环
+  - **Assistant** — 自主推进模式，Poller 按 tick 调度，Neuron 驱动课题深入
+  - **System** — 系统模式，附加 System 标签工具，用于系统管理类会话
+- **Neuron 神经元系统** — 知识/行为节点，支持创建、进化、连接与权重调整、邻域选型、容量回收，模型参与自主评分
+- **Topic 课题管理** — 课题 CRUD、scope item 验收、状态机（todo / in_progress / paused / done / cancelled）
+- **Poller 后台推进** — 未完成课题按 tick 自主推进，并行度可调，会话状态实时跟踪
+- **统一 Provider / Model 管理** — 内置 + 自定义服务商，模型注册表，保存即热重载，API key 掩码回显
+- **工具系统** — 原生工具 + 动态工具（本机命令 / HTTP）+ MCP Server 统一装配，后台渐进加载不阻塞启动
+- **工作区文件管理** — 多工作区、文件树、读/写/改/删/移动、glob / grep / **语义搜索**
+- **Git 面板** — 仓库发现、diff、提交历史、分支、blame、stash、暂存/提交/推送/拉取/冲突解决，危险写操作二次确认
+- **终端面板** — 跨平台 PTY（Unix pty / Windows ConPTY），支持浏览器端 /ws 访问
+- **Hook 裁决记录** — 打分 / 课题匹配 / 验收等裁决全量留痕，可回溯过滤
+- **工程体验** — 中英双语 i18n、深浅主题、全局快捷键、运行日志面板、流式消息 + 思考过程展示
+
+## 技术栈
+
+| 层 | 技术 |
+|----|------|
+| 后端核心 | Rust（Tauri v2、tokio、axum、rusqlite/SQLite、reqwest、mlua、tree-sitter、portable-pty） |
+| 前端 | SvelteKit 2 + Svelte 5 + TypeScript + Vite 6 |
+| 存储 | `.pulsar/` 目录：`config.json` + `sessions/*.json` + SQLite `app.db` |
 
 ## 仓库结构
 
-本仓库采用 pnpm workspace 单包结构：
+pnpm workspace monorepo，应用包位于 `packages/pulsar-app`：
 
 ```
 .
 ├── packages/
-│   └── mini-claw/      # Mini-Claw 应用包
-│       ├── src/        # 源码
-│       │   ├── index.ts     # CLI 入口
-│       │   ├── gateway.ts   # 网关模块
-│       │   ├── agent.ts     # 智能体模块
-│       │   ├── memory.ts    # 记忆系统
-│       │   ├── skills.ts    # 技能系统
-│       │   └── types.ts     # 类型定义
-│       ├── .env.example     # 环境变量模板
-│       ├── package.json
-│       └── tsconfig.json
-├── .env                # 环境变量（根目录执行时使用）
-├── .mini-claw/         # 数据存储目录（自动创建，已配置 watch 排除）
-├── package.json        # workspace 根入口
+│   └── pulsar-app/
+│       ├── src/                      # 前端（SvelteKit）
+│       │   ├── routes/               # 单页入口（+page.svelte）
+│       │   └── lib/
+│       │       ├── api/              # API 客户端：tauriClient（IPC）/ httpClient（HTTP+SSE）
+│       │       ├── stores/           # dataStore：监听状态事件按 kind 重拉
+│       │       ├── components/       # ChatArea / NeuronNetworkGraph / GitPanel / ToolPanel ...
+│       │       ├── layout/           # 面板布局系统（views / resizable）
+│       │       ├── features/neuron/  # 网络图布局、系统类型配色
+│       │       ├── i18n/ hotkey/     # 国际化 / 全局快捷键
+│       │       └── ...
+│       ├── src-tauri/                # Rust 核心
+│       │   ├── src/
+│       │   │   ├── lib.rs            # Tauri Commands + 分域 State（默认 GUI 入口）
+│       │   │   ├── core/             # 业务核心：Gateway + 各领域模块
+│       │   │   │   ├── gateway.rs    # 编排器（可 Clone，无外层 Mutex）
+│       │   │   │   ├── neuron/       # Neuron 域（manager / store / selection ...）
+│       │   │   │   ├── topic_store.rs / topic_manager.rs
+│       │   │   │   ├── providers.rs  # Provider 域
+│       │   │   │   ├── tool_registry.rs / mcp.rs / dynamic_tool.rs
+│       │   │   │   ├── assistant_session.rs / poller.rs / session_tracker.rs
+│       │   │   │   └── storage.rs / config.rs / app_log.rs / events.rs
+│       │   │   ├── fileops/          # 文件 / Git / 语义搜索
+│       │   │   ├── net/              # 远程模式：axum /healthz /rpc /events + WS
+│       │   │   ├── terminal/         # 终端面板（PTY + WS bridge）
+│       │   │   ├── tui/              # TUI 界面（ratatui）
+│       │   │   └── bin/              # pulsar-cli / pulsar-tui / pulsar-server
+│       │   ├── inserts/              # 工具自描述契约（markdown）
+│       │   ├── Cargo.toml
+│       │   └── tauri.conf.json
+│       ├── .env.example              # DEV_PORT / DEV_HMR_PORT
+│       └── package.json
+├── docs/                             # 设计文档 / specs / micro_specs / sdd-lab
 ├── pnpm-workspace.yaml
 └── README.md
 ```
 
-> 根目录为 workspace 管理入口，应用源码位于 `packages/mini-claw`。后续拆分多包时，新增目录直接放在 `packages/` 下。
+> 仓库根为 workspace 管理入口，应用源码位于 `packages/pulsar-app`。
 
-## 核心架构
+## 多入口
 
-Mini-Claw 参考 OpenClaw 设计，包含四个核心组件：
+业务逻辑在 Rust core 实现一次，通过多个入口暴露：
 
-| 组件 | 功能 | 对应文件 |
-|------|------|----------|
-| **Gateway（网关）** | 消息路由、会话管理 | [packages/mini-claw/src/gateway.ts](packages/mini-claw/src/gateway.ts) |
-| **Agent（智能体）** | LLM 集成、推理逻辑 | [packages/mini-claw/src/agent.ts](packages/mini-claw/src/agent.ts) |
-| **Memory（记忆）** | 会话持久化、记忆管理 | [packages/mini-claw/src/memory.ts](packages/mini-claw/src/memory.ts) |
-| **Skills（技能）** | 工具注册、执行 | [packages/mini-claw/src/skills.ts](packages/mini-claw/src/skills.ts) |
-
-## 支持的 LLM 服务商
-
-| 服务商 | 说明 | 是否免费 |
-|--------|------|----------|
-| **OpenAI** | GPT-4、GPT-3.5 等 | 否 |
-| **Ollama** | 本地运行 Llama3、Qwen 等 | 是 |
-| **DeepSeek** | DeepSeek 模型 | 否 |
-| **Custom** | 任何兼容 OpenAI 格式的 API | - |
+| 入口 | 位置 | 说明 |
+|------|------|------|
+| **Tauri GUI**（默认） | `src-tauri/src/lib.rs` | 桌面客户端，前端走 Tauri IPC |
+| **pulsar-cli** | `src-tauri/src/bin/pulsar-cli.rs` | 命令行：chat / skills / providers / models / call-model 等 |
+| **pulsar-tui** | `src-tauri/src/bin/pulsar-tui.rs` | 交互式终端界面（ratatui） |
+| **pulsar-server** | `src-tauri/src/bin/pulsar-server.rs` | headless 网络服务：RPC + SSE + WS + 前端静态托管（需 `embed-static` 特性） |
 
 ## 快速开始
+
+### 环境要求
+
+- Node.js（LTS）+ [pnpm](https://pnpm.io/)（CI 使用 pnpm 11）
+- Rust stable
+- 各平台 Tauri 依赖（见 [Tauri v2 官方文档](https://v2.tauri.app/start/prerequisites/)；Linux 需 `libwebkit2gtk-4.1-dev` 等）
 
 ### 1. 安装依赖
 
@@ -59,88 +101,67 @@ pnpm install
 
 ### 2. 配置环境变量
 
-复制 `.env.example` 为 `.env` 并填入你的配置：
+```bash
+cp packages/pulsar-app/.env.example packages/pulsar-app/.env
+```
+
+- `DEV_PORT` / `DEV_HMR_PORT`：前端 dev server 端口（默认 1432 / 1433）
+- Provider API Key 等凭据可配置在 `.pulsar/config.json`，或通过环境变量（如 `OPENAI_API_KEY`）注入，优先于配置文件且不入库
+
+### 3. 运行
 
 ```bash
-cp .env.example .env
-# 编辑 .env 文件选择 LLM 服务商并配置
+# 桌面应用开发（推荐）
+cd packages/pulsar-app && pnpm tauri:dev
+
+# 仅前端开发
+cd packages/pulsar-app && pnpm dev
 ```
 
-#### 示例配置：
+## 常用命令
 
-**使用 OpenAI（默认）:**
-```env
-LLM_PROVIDER=openai
-LLM_MODEL=gpt-4o-mini
-LLM_API_KEY=your_openai_api_key_here
-```
-
-**使用 Ollama（本地免费）:**
-```env
-LLM_PROVIDER=ollama
-LLM_MODEL=llama3.1:8b
-LLM_BASE_URL=http://localhost:11434/v1
-```
-
-**使用 DeepSeek:**
-```env
-LLM_PROVIDER=deepseek
-LLM_MODEL=deepseek-chat
-LLM_API_KEY=your_deepseek_api_key_here
-```
-
-### 3. 运行程序
-
-```bash
-pnpm dev
-```
-
-## 使用方式
-
-启动程序后，你可以：
-
-- **直接对话** - 输入任何问题进行交流
-- **`/help`** - 查看帮助信息
-- **`/skills`** - 列出所有可用技能
-- **`/history`** - 查看会话历史
-- **`/clear`** - 清空当前会话
-- **`/info`** - 查看当前会话信息
-- **`/exit`** - 退出程序
-
-## 内置技能
-
-| 技能 | 功能 | 示例 |
-|------|------|------|
-| `get_current_time` | 获取当前时间 | "现在几点了？" |
-| `calculate` | 数学计算 | "计算 25 * 4 + 10" |
-| `echo` | 回显消息 | "echo 你好" |
-
-## 开发命令
+在 `packages/pulsar-app` 目录下执行：
 
 | 命令 | 说明 |
 |------|------|
-| `pnpm dev` | 开发运行（根目录触发） |
-| `pnpm dev:watch` | watch 模式（已排除 `.mini-claw`） |
-| `pnpm build` | TypeScript 编译 |
-| `pnpm start` | 运行编译产物 |
+| `pnpm dev` | 仅前端 dev server（vite，端口 1432） |
+| `pnpm tauri:dev` | 完整桌面开发（Tauri + 前端热更新） |
+| `pnpm build` | 构建前端产物 |
+| `pnpm check` | Svelte 类型检查（svelte-check） |
+| `pnpm cli` | 运行 `pulsar-cli` |
+| `pnpm tui` | 运行 `pulsar-tui` |
+| `pnpm server:dev` | 本地 headless server（`127.0.0.1:8899`，内嵌前端静态资源） |
+| `pnpm server:run` | release headless server（端口取 config / 默认 9999） |
+| `pnpm server:prod` | 局域网生产模式（`0.0.0.0:9999`） |
+| `pnpm server:build` | 构建 headless server（release + embed-static） |
 
-也可进入 `packages/mini-claw` 目录直接使用同组命令。
+> `server:*` 与 GUI 共享同一套 core 与存储，方便浏览器前端通过 RPC + SSE 连接同一实例。
 
-## 扩展开发
+## 数据存储
 
-### 添加新技能
+数据根目录为 `<storage_root>/.pulsar/`（旧版 `.agent-app` 目录首次启动自动迁移）：
 
-在 [packages/mini-claw/src/skills.ts](packages/mini-claw/src/skills.ts) 中添加新技能对象，然后在 Gateway 构造函数中注册。
+```text
+.pulsar/
+  config.json          # providers / models / poller / neurons.bootstrap / server 等配置
+  sessions/<id>.json   # 会话与消息（JSON）
+  app.db               # SQLite：Topic + Neuron 存储
+  dynamic_tools.json   # 动态工具配置
+  mcp_servers.json     # MCP server 配置
+```
 
-### 学习要点
+## 发布
 
-这个项目展示了 Agent 开发的核心概念：
-- 如何通过工具调用（Skills）扩展 LLM 能力
-- 如何实现会话记忆（Memory）持久化
-- 如何通过 Gateway 协调各组件
-- 如何设计灵活的插件架构
+GitHub Actions（`.github/workflows/publish-pulsar-app.yml`）在 `release` 分支自动构建并发布：
+Windows x64、Linux x64 / Arm64、macOS x64 / Arm64，产物以 `pulsar-v<版本>` 标签发布为 GitHub Release（draft）。
 
-## 参考资源
+## 文档索引
 
-- [OpenClaw 官方文档](https://agentopenclaw.io/)
-- [OpenAI API 文档](https://platform.openai.com/docs/)
+| 文档 | 内容 |
+|------|------|
+| [docs/pulsar/architecture.md](docs/pulsar/architecture.md) | 架构设计、数据流、锁纪律 |
+| [docs/pulsar/storage.md](docs/pulsar/storage.md) | 存储布局与配置字段 |
+| [docs/pulsar/roadmap.md](docs/pulsar/roadmap.md) | 里程碑规划 |
+| [docs/specs/](docs/specs/) | 正式规格 |
+| [docs/micro_specs/](docs/micro_specs/) | 微规格 |
+| [docs/sdd-lab/](docs/sdd-lab/) | SDD 需求迭代记录 |
