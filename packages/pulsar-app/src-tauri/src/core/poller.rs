@@ -41,7 +41,7 @@ pub struct PollerSettings {
 impl Default for PollerSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             base_interval_ms: DEFAULT_POLLER_BASE_INTERVAL_MS,
             assistant_interval_ticks: DEFAULT_ASSISTANT_POLL_TICKS,
             assistant_poll_parallelism: DEFAULT_ASSISTANT_POLL_PARALLELISM,
@@ -66,7 +66,8 @@ impl PollerConfigReader {
         let config = self.store.read()?;
         let section = config.poller.unwrap_or_default();
         Ok(PollerSettings {
-            enabled: section.enabled.unwrap_or(false),
+            // 缺省自动轮询开启（2026-08-28 翻转：显式 enabled:false 才关闭）。
+            enabled: section.enabled.unwrap_or(true),
             base_interval_ms: section
                 .base_interval_ms
                 .unwrap_or(DEFAULT_POLLER_BASE_INTERVAL_MS)
@@ -307,6 +308,8 @@ mod tests {
         ));
         fs::create_dir_all(&root).unwrap();
         let reader = PollerConfigReader::new(root.clone());
+        // 缺省（无 config.json / 无 poller 段）：自动轮询开启（2026-08-28 翻转）。
+        assert!(reader.load().unwrap().enabled);
         assert_eq!(reader.load().unwrap(), PollerSettings::default());
 
         fs::write(
@@ -318,6 +321,23 @@ mod tests {
         assert!(loaded.enabled);
         assert_eq!(loaded.base_interval_ms, 500);
         assert_eq!(loaded.assistant_interval_ticks, 10);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn config_reader_explicit_disabled_stays_paused() {
+        // 显式 enabled:false 仍是关闭（覆盖缺省开启的翻转）。
+        let root = std::env::temp_dir().join(format!(
+            "pulsar-poller-config-disabled-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("config.json"), r#"{"poller":{"enabled":false}}"#).unwrap();
+        let reader = PollerConfigReader::new(root.clone());
+        assert!(!reader.load().unwrap().enabled);
         fs::remove_dir_all(root).unwrap();
     }
 

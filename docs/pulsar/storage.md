@@ -112,7 +112,7 @@ Configuration fields:
 
 - `defaults.provider`: provider selected by TUI session chat on startup.
 - `defaults.model`: model selected by TUI session chat on startup.
-- `poller.enabled`: whether automatic polling starts as Running (`true`) or Paused (`false`, default). Manual step / `poll_trigger` still work when paused; runtime pause/resume APIs can override until next restart.
+- `poller.enabled`: whether automatic polling starts as Running (`true`, default since 2026-08-28; `false` to keep Paused). Manual step / `poll_trigger` still work when paused; runtime pause/resume APIs can override until next restart.
 - `poller.base_interval_ms`: scheduler tick interval in milliseconds (default `1000`, minimum `1`).
 - `poller.assistant_interval_ticks`: Assistant `PollAll` every N ticks (default `30`, minimum `1`). Effective auto-advance period ≈ `base_interval_ms × assistant_interval_ticks`.
 - `providers.<id>.api_key`: provider API key. Environment variables override this value.

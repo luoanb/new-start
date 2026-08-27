@@ -1,4 +1,5 @@
 use super::{
+    config::{AppConfigFile, ConfigStore},
     error::{AppError, AppResult},
     models::{
         ChatModelSelection, ModelCallRequest, ModelCallResponse, ModelCapabilities, ModelInfo,
@@ -14,7 +15,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
-    fs,
     path::PathBuf,
     sync::{Arc, RwLock},
 };
@@ -712,42 +712,54 @@ impl ProviderRegistry {
         Ok(ResolvedProviderConfig { api_key, api_base })
     }
 
+    /// 经 ConfigStore 读取 config.json 的 `defaults` / `providers` 段
+    /// （ConfigStore 对这两段保持 Value 级承载，此处反序列化为内部类型）。
     fn read_config(&self) -> AppResult<AppConfig> {
-        let path = self.storage_root.join("config.json");
-        if !path.exists() {
-            return Ok(AppConfig::default());
-        }
-
-        let content = fs::read_to_string(path)?;
-        serde_json::from_str(&content).map_err(Into::into)
+        let file = ConfigStore::new(self.storage_root.clone()).read()?;
+        Ok(app_config_from_file(&file))
     }
 
-    /// 原子写回 config.json：只更新 `defaults` / `providers` 两个键，其余顶层键（poller 等）原样保留。
+    /// 经 ConfigStore 原子写回：只更新 `defaults` / `providers` 两个键，其余顶层键原样保留。
+    /// 写盘由 ConfigStore 统一负责（tmp+rename 原子写，成功后 config 代数 +1）。
     fn write_config(&self, view: &ProviderConfigView) -> AppResult<()> {
-        let path = self.storage_root.join("config.json");
-        let mut root: serde_json::Value = if path.exists() {
-            let content = fs::read_to_string(&path)?;
-            serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))
-        } else {
-            serde_json::json!({})
-        };
+        ConfigStore::new(self.storage_root.clone()).update(|file| {
+            if let Some(defaults) = &view.defaults {
+                file.extra.insert(
+                    "defaults".into(),
+                    serde_json::json!({
+                        "provider": defaults.provider,
+                        "model": defaults.model,
+                    }),
+                );
+            } else {
+                file.extra.remove("defaults");
+            }
+            // 掩码/空 api_key 保留依据：旧 providers 段（仅旧值相关，不依赖其他顶层键）。
+            let old_providers = file
+                .extra
+                .get("providers")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            file.extra.insert(
+                "providers".into(),
+                build_providers_json(view, &old_providers),
+            );
+        })
+    }
+}
 
-        if let Some(defaults) = &view.defaults {
-            root["defaults"] = serde_json::json!({
-                "provider": defaults.provider,
-                "model": defaults.model,
-            });
-        } else {
-            root.as_object_mut().map(|obj| obj.remove("defaults"));
-        }
-
-        root["providers"] = build_providers_json(view, &root);
-
-        let content = serde_json::to_string_pretty(&root)?;
-        let tmp = path.with_extension("json.tmp");
-        fs::write(&tmp, content)?;
-        fs::rename(&tmp, &path)?;
-        Ok(())
+/// 从 ConfigStore 文件模型提取 `defaults` / `providers` 段（extra 中 Value 级承载）。
+fn app_config_from_file(file: &AppConfigFile) -> AppConfig {
+    AppConfig {
+        defaults: file
+            .extra
+            .get("defaults")
+            .and_then(|v| serde_json::from_value(v.clone()).ok()),
+        providers: file
+            .extra
+            .get("providers")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default(),
     }
 }
 
@@ -756,7 +768,7 @@ impl ProviderRegistry {
 /// - api_key：掩码/空 → 保留原 config 值；新值 → 覆盖写回。
 /// - 内置：显式写 `enabled`（false = 禁用，代码定义不物理删除）；
 /// - 自定义：`enabled: false` → 从映射移除（删除语义）。
-fn build_providers_json(view: &ProviderConfigView, root: &serde_json::Value) -> serde_json::Value {
+fn build_providers_json(view: &ProviderConfigView, providers_old: &serde_json::Value) -> serde_json::Value {
     let mut map = serde_json::Map::new();
     for p in &view.providers {
         let mut obj = serde_json::Map::new();
@@ -780,9 +792,8 @@ fn build_providers_json(view: &ProviderConfigView, root: &serde_json::Value) -> 
             .is_some_and(|k| !k.is_empty() && k != MASKED_API_KEY);
         if has_new_key {
             obj.insert("api_key".into(), serde_json::json!(p.api_key));
-        } else if let Some(existing) = root
-            .get("providers")
-            .and_then(|v| v.get(&p.id))
+        } else if let Some(existing) = providers_old
+            .get(&p.id)
             .and_then(|v| v.get("api_key"))
             .and_then(|v| v.as_str())
         {

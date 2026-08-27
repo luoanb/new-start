@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{
     atomic::Ordering,
-    Arc, Mutex, MutexGuard, Weak,
+    Arc, Mutex, MutexGuard, OnceLock, Weak,
 };
 
 use serde::{Deserialize, Serialize};
@@ -18,6 +18,7 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::{
+    config::config_generation_value,
     conversation_runner::{
         ConversationRunner, InputRecord, RoundContext, RoundTriggerKind, StreamDelta,
     },
@@ -83,6 +84,30 @@ fn append_judgement_feedback(
         }),
     );
     Value::Object(retry)
+}
+
+/// 结构化输出能力探测缓存：`(provider_id, model_id, config_generation)` → 支持级别。
+/// 键携带配置代数，config.json 写盘（`ConfigStore::update`）后自然失效重读；
+/// 错误驱动降级（400 response_format）也写回此处覆盖。
+fn capability_cache() -> &'static Mutex<HashMap<(String, String, u64), StructuredOutputSupport>> {
+    static CACHE: OnceLock<Mutex<HashMap<(String, String, u64), StructuredOutputSupport>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 支持级别 → 实际下发的 response_format（降级链：json_schema → json_object → 无约束）。
+fn format_for_support(def: &HookDef, support: StructuredOutputSupport) -> Option<ResponseFormatSpec> {
+    match support {
+        StructuredOutputSupport::JsonSchema => def.response_format.clone(),
+        StructuredOutputSupport::JsonObject => Some(ResponseFormatSpec::JsonObject),
+        StructuredOutputSupport::None => None,
+    }
+}
+
+/// 判定 provider 错误是否为「response_format 类型不可用」（请求层被拒，模型未开口）。
+/// 启发式匹配错误文本；误判后果仅为本次进程内少一层结构化约束，可经配置开关恢复。
+fn is_response_format_error(error: &str) -> bool {
+    error.contains("response_format")
 }
 
 /// Assistant 业务门面：对话 / 手动推进 / 轮询推进 + 轮询调度壳。
@@ -249,12 +274,10 @@ impl AssistantSession {
             "judgement call start"
         );
         // C 结构化输出预防：能力探测决定实际下发的 response_format（降级链见
-        // `structured_output_support`），探测结果按 (provider_id, model_id) 进程内缓存。
-        let response_format = match self.structured_output_support(model) {
-            StructuredOutputSupport::JsonSchema => def.response_format.clone(),
-            StructuredOutputSupport::JsonObject => Some(ResponseFormatSpec::JsonObject),
-            StructuredOutputSupport::None => None,
-        };
+        // `structured_output_support`），探测结果按 (provider_id, model_id, 配置代数)
+        // 进程内缓存；配置热更新后代数变化自然失效重读。
+        let support = self.structured_output_support(model);
+        let response_format = format_for_support(def, support);
         let id = new_hook_judgement_id();
         // 两阶段落库 · 开始：pending + 锚点事件（前端就地渲染「裁决中」卡）。
         self.hook_judgement_store
@@ -298,13 +321,25 @@ impl AssistantSession {
                 });
                 // B 有限重试：payload 追加失败反馈（原输出 + 明确「仅返回 JSON」指令）。
                 let retry_payload = append_judgement_feedback(&user_payload, &raw, &first_error);
+                // 错误驱动降级：response_format 类 400（请求层被拒，模型未开口）→ 降一级
+                // （json_schema → json_object → 无约束）并写回探测缓存，重试用降级后的格式；
+                // 否则维持原语义（格式不变，仅追加反馈）。
+                let (retry_payload, retry_format) = if is_response_format_error(&first_error) {
+                    let downgraded = self.degrade_structured_output_support(model, support);
+                    (
+                        retry_payload,
+                        format_for_support(def, downgraded),
+                    )
+                } else {
+                    (retry_payload, response_format)
+                };
                 let second = self
                     .run_judgement_round(
                         &spec.id,
                         &retry_payload,
                         model,
                         history,
-                        response_format,
+                        retry_format,
                     )
                     .await;
                 match second {
@@ -436,17 +471,15 @@ impl AssistantSession {
         }
     }
 
-    /// 能力探测：按 `(provider_id, model_id)` 进程内缓存结构化输出支持级别。
-    /// 降级链：json_schema → json_object → 无约束（缓存后不再重复探测）。
+    /// 能力探测：按 `(provider_id, model_id, config_generation)` 进程内缓存结构化输出支持级别。
+    /// 降级链：json_schema → json_object → 无约束；缓存键携带配置代数，config.json 写盘
+    /// （ConfigStore::update）后代数变化自然 miss 并重读，配置热更新无需重启。
     fn structured_output_support(&self, model: &ChatModelSelection) -> StructuredOutputSupport {
-        use std::collections::HashMap;
-        use std::sync::OnceLock;
-        static CACHE: OnceLock<Mutex<HashMap<(String, String), StructuredOutputSupport>>> =
-            OnceLock::new();
-        let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
         let key = (model.provider_id.clone(), model.model_id.clone());
+        let gen = config_generation_value();
+        let cache = capability_cache();
         if let Ok(guard) = cache.lock() {
-            if let Some(level) = guard.get(&key) {
+            if let Some(level) = guard.get(&(key.0.clone(), key.1.clone(), gen)) {
                 return *level;
             }
         }
@@ -459,9 +492,32 @@ impl AssistantSession {
             None => StructuredOutputSupport::None,
         };
         if let Ok(mut guard) = cache.lock() {
-            guard.insert(key, level);
+            guard.insert((key.0, key.1, gen), level);
         }
         level
+    }
+
+    /// 错误驱动降级：把 `(provider_id, model_id)` 在**当前配置代数**下的支持级别降一级
+    /// 并覆盖写回探测缓存（本次进程内立即生效）。返回降级后的级别。
+    fn degrade_structured_output_support(
+        &self,
+        model: &ChatModelSelection,
+        current: StructuredOutputSupport,
+    ) -> StructuredOutputSupport {
+        let next = match current {
+            StructuredOutputSupport::JsonSchema => StructuredOutputSupport::JsonObject,
+            StructuredOutputSupport::JsonObject => StructuredOutputSupport::None,
+            StructuredOutputSupport::None => StructuredOutputSupport::None,
+        };
+        let key = (
+            model.provider_id.clone(),
+            model.model_id.clone(),
+            config_generation_value(),
+        );
+        if let Ok(mut guard) = capability_cache().lock() {
+            guard.insert(key, next);
+        }
+        next
     }
 
     /// 更新轮询并发推进数量（运行时生效），返回实际生效值。
@@ -2463,13 +2519,24 @@ mod tests {
     }
 
     /// 主模型替身：按预置序列逐次出队响应（模拟「首轮散文 → 重试 JSON」等场景）。
+    /// `errors` 队列非空时优先返回 provider 错误（模拟 400 请求层被拒）；
+    /// 每次调用记录收到的 `response_format`（断言错误驱动降级是否生效）。
     struct SequenceModelCaller {
         responses: Mutex<VecDeque<String>>,
+        errors: Mutex<VecDeque<String>>,
+        seen_formats: Mutex<Vec<Option<ResponseFormatSpec>>>,
     }
 
     #[async_trait]
     impl ModelCaller for SequenceModelCaller {
-        async fn call_model(&self, _request: ModelCallRequest) -> AppResult<ModelCallResponse> {
+        async fn call_model(&self, request: ModelCallRequest) -> AppResult<ModelCallResponse> {
+            self.seen_formats
+                .lock()
+                .unwrap()
+                .push(request.response_format.clone());
+            if let Some(error) = self.errors.lock().unwrap().pop_front() {
+                return Err(AppError::LlmRequestFailed(error));
+            }
             let output = self
                 .responses
                 .lock()
@@ -2492,6 +2559,8 @@ mod tests {
         assistant: Arc<AssistantSession>,
         caller: Arc<SequenceModelCaller>,
         store: Arc<Mutex<HookJudgementStore>>,
+        /// 与 assistant 共享同一 ProviderRegistry（热失效测试经 save_config / 读盘修改配置）。
+        registry: Arc<ProviderRegistry>,
     }
 
     impl Drop for JudgementHarness {
@@ -2560,6 +2629,8 @@ mod tests {
         let resolver = Arc::new(RoundResolver::new(Arc::clone(&manager)));
         let caller = Arc::new(SequenceModelCaller {
             responses: Mutex::new(VecDeque::new()),
+            errors: Mutex::new(VecDeque::new()),
+            seen_formats: Mutex::new(Vec::new()),
         });
         let executor = Arc::new(RoundExecutor::new(
             Arc::clone(&caller) as Arc<dyn ModelCaller>,
@@ -2573,13 +2644,16 @@ mod tests {
             Arc::new(SessionCoordinator::new()),
         );
         let (step_tx, _step_rx) = tokio::sync::mpsc::unbounded_channel::<AssistantStepRequest>();
+        // 共享同一 ProviderRegistry：热失效测试经 harness 侧 save_config / 读盘修改配置，
+        // assistant 侧能力探测（model_capabilities → 读盘）即时反映。
+        let registry = Arc::new(ProviderRegistry::new(root.clone()));
         let assistant = Arc::new(AssistantSession::new(
             conversation_store,
             Arc::clone(&manager),
             topic_store,
             neuron_store,
             Arc::clone(&hook_store),
-            Arc::new(ProviderRegistry::new(root.clone())),
+            registry.clone(),
             runner,
             step_tx,
             SessionTracker::new(),
@@ -2593,7 +2667,82 @@ mod tests {
             assistant,
             caller,
             store: hook_store,
+            registry,
         }
+    }
+
+    #[tokio::test]
+    async fn structured_output_probe_invalidated_by_config_update() {
+        // 配置热更新：探测缓存键携带配置代数，config.json 写盘后自然失效重读，
+        // 能力开关从 true → false 无需重启即生效（json_schema → json_object）。
+        // 独立模型 id 隔离进程级探测缓存（并行测试互不污染）。
+        let h = judgement_harness(
+            r#"{"openai":{"models":[{"id":"gpt-4o-hot","capabilities":{"chat":true,"tools":true,"streaming":true,"structured_output":true}}]}}"#,
+        );
+        let model = judgement_model("gpt-4o-hot");
+        assert_eq!(
+            h.assistant.structured_output_support(&model),
+            StructuredOutputSupport::JsonSchema
+        );
+        // 模拟模型管理面板保存配置：get_config_view → 关闭 JSON 开关 → save_config
+        // （save_config → ConfigStore::update 同一代数路径）。
+        let mut view = h.registry.get_config_view().expect("config view");
+        for p in &mut view.providers {
+            if p.id == "openai" {
+                for m in &mut p.models {
+                    if m.id == "gpt-4o-hot" {
+                        m.capabilities.structured_output = false;
+                    }
+                }
+            }
+        }
+        h.registry.save_config(view).expect("save config");
+        // 代数 +1 → 缓存 miss → 重读盘 → 降为 json_object。
+        assert_eq!(
+            h.assistant.structured_output_support(&model),
+            StructuredOutputSupport::JsonObject
+        );
+    }
+
+    #[tokio::test]
+    async fn response_format_400_downgrades_retry_with_json_object() {
+        // 错误驱动降级：首轮 response_format 类 400（请求层被拒，模型未开口）→ 降级为
+        // json_object 并覆盖探测缓存，重试改用降级后的格式，成功后终态 retried_ok。
+        let h = judgement_harness(
+            r#"{"openai":{"models":[{"id":"gpt-4o-400","capabilities":{"chat":true,"tools":true,"streaming":true,"structured_output":true}}]}}"#,
+        );
+        let def = hook_def(SYSTEM_TYPE_COMPLETE_SCOPE).expect("known hook");
+        h.caller.errors.lock().unwrap().push_back(
+            "provider returned 400 Bad Request: This response_format type is unavailable now"
+                .into(),
+        );
+        h.caller.responses.lock().unwrap().extend([
+            r#"{"completed_item_ids":["s1"],"reason":"done"}"#.to_string(),
+        ]);
+        let outcome = h
+            .assistant
+            .call_judgement(
+                def,
+                complete_scope_anchor(),
+                serde_json::json!({"topic_id": "t1"}),
+                &judgement_model("gpt-4o-400"),
+                &[],
+            )
+            .await
+            .expect("降级重试成功后不应上抛");
+        assert_eq!(outcome.status, JudgementStatus::RetriedOk);
+        assert_eq!(outcome.decision["completed_item_ids"][0], "s1");
+        // 首轮下发 json_schema（配置声明支持）→ 400 → attempt 2 降级为 json_object。
+        let formats = h.caller.seen_formats.lock().unwrap();
+        assert_eq!(formats.len(), 2, "首轮+重试全量留痕");
+        assert!(
+            matches!(
+                &formats[0],
+                Some(ResponseFormatSpec::JsonSchema { name, .. }) if name == "complete_scope"
+            ),
+            "首轮应下发 json_schema 契约，实际 {formats:?}"
+        );
+        assert_eq!(formats[1], Some(ResponseFormatSpec::JsonObject));
     }
 
     fn judgement_model(model_id: &str) -> ChatModelSelection {

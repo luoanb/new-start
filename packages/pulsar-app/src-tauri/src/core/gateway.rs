@@ -2035,8 +2035,8 @@ mod tests {
             crate::core::poller::DEFAULT_POLLER_BASE_INTERVAL_MS
         );
         assert!(status.task_count >= 1);
-        // Default / missing poller.enabled → paused
-        assert_eq!(status.state, crate::core::poller::PollerRunState::Paused);
+        // Default / missing poller.enabled → running (2026-08-28 flip).
+        assert_eq!(status.state, crate::core::poller::PollerRunState::Running);
     }
 
     #[tokio::test]

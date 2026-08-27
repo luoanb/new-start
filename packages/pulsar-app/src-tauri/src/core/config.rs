@@ -1,4 +1,11 @@
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        OnceLock,
+    },
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -119,6 +126,19 @@ pub struct ConfigStore {
     storage_root: PathBuf,
 }
 
+/// 进程级 config 写盘代数：`update` 成功后 +1（进程内单调递增，永不回退）。
+/// 供依赖配置内容的进程内缓存（如结构化输出探测）做热失效依据：缓存键携带
+/// 代数，配置更新后自然 miss 并重读，无需事件广播或文件 watch。
+fn config_generation() -> &'static AtomicU64 {
+    static GENERATION: OnceLock<AtomicU64> = OnceLock::new();
+    GENERATION.get_or_init(|| AtomicU64::new(0))
+}
+
+/// 当前 config.json 写盘代数（进程内共享，各 ConfigStore 实例读取同一计数器）。
+pub fn config_generation_value() -> u64 {
+    config_generation().load(Ordering::Relaxed)
+}
+
 impl ConfigStore {
     pub fn new(storage_root: PathBuf) -> Self {
         Self { storage_root }
@@ -140,7 +160,8 @@ impl ConfigStore {
             .map_err(|e| AppError::StorageError(format!("Invalid config.json: {e}")))
     }
 
-    /// 读改写：`f` 中修改配置，随后整体写回（保留未建模字段）。
+    /// 读改写：`f` 中修改配置，随后整体原子写回（保留未建模字段）。
+    /// 写盘成功后 config 代数 +1（`config_generation_value` 随之递增）。
     pub fn update<F>(&self, f: F) -> AppResult<()>
     where
         F: FnOnce(&mut AppConfigFile),
@@ -155,8 +176,15 @@ impl ConfigStore {
         }
         let json = serde_json::to_string_pretty(&config)
             .map_err(|e| AppError::StorageError(format!("Failed to serialize config.json: {e}")))?;
-        fs::write(&path, json)
-            .map_err(|e| AppError::StorageError(format!("Failed to write {}: {e}", path.display())))
+        // 原子写：tmp + rename，避免写一半留下损坏文件。
+        let tmp = path.with_extension("json.tmp");
+        fs::write(&tmp, json)
+            .map_err(|e| AppError::StorageError(format!("Failed to write {}: {e}", tmp.display())))?;
+        fs::rename(&tmp, &path)
+            .map_err(|e| AppError::StorageError(format!("Failed to write {}: {e}", path.display())))?;
+        // 写盘成功 → 代数 +1（依赖配置的缓存据此失效重读）。
+        config_generation().fetch_add(1, Ordering::Relaxed);
+        Ok(())
     }
 }
 
@@ -266,5 +294,33 @@ mod tests {
         assert!(json.contains("tool_result_max_chars"));
         assert!(json.contains("future_key"));
         assert!(config.extra.get("context").is_none());
+    }
+
+    #[test]
+    fn update_bumps_config_generation_and_writes_atomically() {
+        // 进程级代数：update 写盘成功后 +1（缓存热失效依据）；文件真实落盘且合法。
+        let root = std::env::temp_dir().join(format!(
+            "pulsar-config-gen-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = ConfigStore::new(root.clone());
+        let before = super::config_generation_value();
+        store
+            .update(|c| {
+                c.extra.insert("future_key".into(), serde_json::json!(1));
+            })
+            .unwrap();
+        // 并行测试可能共享进程级计数器，只断言单调递增而非精确 +1。
+        assert!(super::config_generation_value() >= before + 1);
+        let content = std::fs::read_to_string(store.path()).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed["future_key"], 1);
+        // 无残留 tmp 文件。
+        assert!(!store.path().with_extension("json.tmp").exists());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

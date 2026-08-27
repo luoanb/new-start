@@ -1,5 +1,8 @@
 # Spec: Poller 默认关闭自动轮询
 
+> **已废弃（2026-08-28）**：决策翻转，Poller 缺省改为自动轮询开启。
+> 取代者：`docs/micro_specs/2026-08-28_00-08_poller-default-enabled.md`。
+
 ## Goal
 
 - 默认不自动轮询；用户手动步进（`assistant step` / `poll_trigger`）。
