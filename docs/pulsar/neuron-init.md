@@ -58,7 +58,7 @@ flowchart TD
 /neuron rebootstrap
 ```
 
-等价于依次 `reset-system`：`assistant_select_neuron` → `assistant_match_topic` → `assistant_complete_scope` → `assistant_score_feedback`，再 `bootstrap`。会多次调模型，较慢。
+等价于依次 `reset-system`：`assistant_select_neuron` → `assistant_match_topic` → `assistant_complete_scope` → `assistant_score_feedback` → `assistant_revise_topic`，再 `bootstrap`。重建走内置种子（content 零模型调用），仅补池调模型。
 
 ### 2.1 `ensure_creator`（不调模型）
 
@@ -77,7 +77,7 @@ flowchart TD
 - 创建时节点权重强制为 `0`（无上游边）。
 - **唯一例外**：不经 pool→7→1。
 
-### 2.2 `ensure_system_neuron`（可能调模型）
+### 2.2 `ensure_system_neuron`（内建 type 零模型调用；自定义 type 可能调模型）
 
 用于 `assistant_select_neuron` 及任意其它系统根（业务自定义 `system_type` 亦同）。
 
@@ -87,20 +87,24 @@ flowchart TD
   B -->|是| C[断边并删根]
   B -->|否| D{已存在?}
   D -->|是| E[behavior 空则补默认；select_candidates source=本根]
-  C --> F[ensure_creator]
+  C --> F{有内置种子?}
   D -->|否| F
-  F --> G[generate_draft system=creator种子]
-  G --> H[落库系统根 weight=0 无上游边]
-  H --> I[select_candidates source=本根 n=7]
-  E --> J[返回根]
-  I --> J
+  F -->|是| G[内置种子直落库 不调模型]
+  F -->|否| H[ensure_creator → generate_draft LLM 生成]
+  G --> I[裁决类补默认 behavior]
+  H --> J[裁决类补默认 behavior]
+  I --> K[select_candidates source=本根 n=7 补池]
+  J --> K
+  E --> L[返回根]
+  K --> L
 ```
 
 要点：
 
-- 候选池 / 子项：`select_candidates(n=7, source_id=**本系统根**.id)` —— **只看自己的直接下游**。
-- 下游不足时一次 `generate_drafts(count=缺口)` + 挂到本根下批量补齐（禁止循环单条；不经 `create_neuron`→`select_one` 以免递归）。
-- 写系统根 content：用 `create_neuron` 种子作 model system，不借用其它根的下游当本根 pool。
+- **内置种子优先**：内建 system_type（`assistant_select_neuron` + 4 个裁决 hook）有 `SYSTEM_PROMPT_SEEDS` 内置文案（见 `neuron/config.rs`），创建时直接落库，**不调模型生成 content**；`rebootstrap` 亦命中种子稳定重建。可被 `config.json → neurons.bootstrap.system_prompts.<type>` 非空覆盖。
+- **自定义 type 兜底**：无内置种子的 `system_type` 保持旧行为——`ensure_creator` → `generate_draft(system=creator种子)` LLM 生成。
+- 候选池 / 子项：`select_candidates(n=7, source_id=**本系统根**.id)` —— 只看自己的直接下游；不足时一次 `generate_drafts(count=缺口)` 批量补齐（此补池仍调模型，与 content 生成无关）。
+- 写系统根 content：种子分支用内置文案；LLM 分支用 `create_neuron` 种子作 model system，不借用其它根的下游当本根 pool。
 - 赋 `system_type` **只许**本方法；禁止旁路贴标。
 - 命中已存在的裁决类系统神经元时，若 `behavior` 为空则按 `default_behavior_for_system_type` 自动补写默认值（`Fixed` + 对应 `insert_id`）；已有值不覆盖。
 

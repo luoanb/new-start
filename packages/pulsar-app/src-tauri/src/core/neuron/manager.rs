@@ -101,6 +101,7 @@ impl NeuronManager {
             Arc::clone(&store),
             Arc::clone(&query),
             Arc::clone(&selection),
+            config.clone(),
         ));
         let evolution = Arc::new(NeuronEvolution::new(
             Arc::clone(&store),

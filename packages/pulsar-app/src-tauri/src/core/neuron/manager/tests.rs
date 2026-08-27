@@ -19,7 +19,9 @@
             NeuronKindFilter, NeuronUpdate, SelectionPolicy, SessionBehavior, ToolPolicy,
         },
         neuron::{
-            config::NeuronConfigReader, model::NeuronModelCaller, store::NeuronStore,
+            config::{NeuronConfigReader, SYSTEM_PROMPT_SEEDS},
+            model::NeuronModelCaller,
+            store::NeuronStore,
         },
         tool_registry::ToolRegistry,
     };
@@ -545,6 +547,88 @@
         let creator = manager.ensure_creator().unwrap();
         assert_eq!(creator.system_type.as_deref(), Some(CREATOR_SYSTEM_TYPE));
         assert!(!creator.content.trim().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn seed_for(system_type: &str) -> String {
+        SYSTEM_PROMPT_SEEDS
+            .iter()
+            .find(|(ty, _)| *ty == system_type)
+            .map(|(_, content)| content.to_string())
+            .unwrap_or_else(|| panic!("missing built-in seed for {system_type}"))
+    }
+
+    #[tokio::test]
+    async fn ensure_system_neuron_uses_builtin_seed_without_model_call() {
+        let (manager, root) = test_manager();
+        let selector = manager
+            .ensure_system_neuron(ASSISTANT_SELECT_NEURON, EnsureSystemOpts { reset: false })
+            .await
+            .unwrap();
+        // content 必须是内置种子（LLM 分支产物为 "content-N" 格式，可用于区分）。
+        assert_eq!(selector.content, seed_for(ASSISTANT_SELECT_NEURON));
+        assert_eq!(selector.desc, ASSISTANT_SELECT_NEURON);
+        assert!(selector.tool_ids.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn ensure_system_neuron_builtin_seed_preserves_default_behavior() {
+        let (manager, root) = test_manager();
+        let ensured = manager
+            .ensure_system_neuron(
+                "assistant_complete_scope",
+                EnsureSystemOpts { reset: false },
+            )
+            .await
+            .unwrap();
+        assert_eq!(ensured.content, seed_for("assistant_complete_scope"));
+        // 创建分支返回对象不带 behavior（behavior 是落库补写）；从 store 重取断言。
+        let stored = manager
+            .get(&ensured.id)
+            .unwrap()
+            .expect("system neuron should exist");
+        let behavior = stored
+            .behavior
+            .expect("裁决类种子创建后应补写默认 behavior");
+        assert_eq!(behavior.selection, SelectionPolicy::Fixed);
+        assert_eq!(behavior.tools, ToolPolicy::None);
+        assert_eq!(
+            behavior.insert_id.as_deref(),
+            Some("assistant.complete_scope")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn ensure_system_neuron_respects_config_system_prompt_override() {
+        let (manager, root) = test_manager();
+        fs::write(
+            root.join("config.json"),
+            r#"{"neurons":{"bootstrap":{"create_neuron_prompt":"create a neuron","system_prompts":{"assistant_select_neuron":"override prompt"}}}}"#,
+        )
+        .unwrap();
+        let selector = manager
+            .ensure_system_neuron(ASSISTANT_SELECT_NEURON, EnsureSystemOpts { reset: false })
+            .await
+            .unwrap();
+        assert_eq!(selector.content, "override prompt");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn ensure_system_neuron_falls_back_to_llm_for_custom_type() {
+        let (manager, root) = test_manager();
+        let custom = manager
+            .ensure_system_neuron("custom_type", EnsureSystemOpts { reset: false })
+            .await
+            .unwrap();
+        assert_eq!(custom.system_type.as_deref(), Some("custom_type"));
+        assert!(
+            custom.content.starts_with("content-"),
+            "自定义 type 无内置种子应走 LLM 生成，got: {}",
+            custom.content
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

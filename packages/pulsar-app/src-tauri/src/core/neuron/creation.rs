@@ -11,6 +11,7 @@ use crate::core::{
         NeuronCreate, SessionBehavior, SystemPromptStatus,
     },
     neuron::{
+        config::NeuronConfigReader,
         query::NeuronQuery,
         selection::NeuronSelection,
         spec::SessionSpecManager,
@@ -32,6 +33,8 @@ pub(crate) struct NeuronCreation {
     specs: SessionSpecManager,
     query: Arc<NeuronQuery>,
     selection: Arc<NeuronSelection>,
+    /// 内置系统提示词种子读取（含 config 覆盖）。
+    config: NeuronConfigReader,
 }
 
 impl NeuronCreation {
@@ -39,12 +42,14 @@ impl NeuronCreation {
         store: Arc<Mutex<NeuronStore>>,
         query: Arc<NeuronQuery>,
         selection: Arc<NeuronSelection>,
+        config: NeuronConfigReader,
     ) -> Self {
         Self {
             specs: SessionSpecManager::new(Arc::clone(&store)),
             store,
             query,
             selection,
+            config,
         }
     }
 
@@ -181,39 +186,66 @@ impl NeuronCreation {
              - {tools_note}\n\
              - Return ONLY JSON with desc, content, and tool_ids (weight optional/ignored)."
         );
-        tracing::info!(
-            phase = "ensure_system_neuron",
-            system_type,
-            step = "generate_draft",
-            "generating system neuron draft from creator seed"
-        );
-        let draft = match self.selection.generate_draft(&creator.content, &user_prompt).await {
-            Ok(draft) => draft,
-            Err(error) => {
-                tracing::error!(
+        // 内建 system_type 优先使用内置种子直落库（零模型调用）；无种子的自定义 type 走 LLM 生成。
+        let created = match self.config.system_prompt_for(system_type)? {
+            Some(seed) => {
+                tracing::info!(
+                    phase = "ensure_system_neuron",
+                    system_type,
+                    step = "builtin_seed",
+                    seed_len = seed.len(),
+                    "creating system neuron from built-in seed (no model call)"
+                );
+                self.selection.persist_system_root(NeuronCreate {
+                    desc: system_type.to_string(),
+                    content: seed,
+                    weight: 0.0,
+                    system_type: Some(system_type.to_string()),
+                    tool_ids: Vec::new(),
+                    lineage_parent_id: None,
+                    variant_state: None,
+                })?
+            }
+            None => {
+                tracing::info!(
                     phase = "ensure_system_neuron",
                     system_type,
                     step = "generate_draft",
-                    error_code = error.code(),
-                    error = %error,
-                    "generate_draft failed"
+                    "generating system neuron draft from creator seed"
                 );
-                return Err(error);
+                let draft = match self
+                    .selection
+                    .generate_draft(&creator.content, &user_prompt)
+                    .await
+                {
+                    Ok(draft) => draft,
+                    Err(error) => {
+                        tracing::error!(
+                            phase = "ensure_system_neuron",
+                            system_type,
+                            step = "generate_draft",
+                            error_code = error.code(),
+                            error = %error,
+                            "generate_draft failed"
+                        );
+                        return Err(error);
+                    }
+                };
+                self.selection.persist_system_root(NeuronCreate {
+                    desc: if draft.desc.trim().is_empty() {
+                        system_type.to_string()
+                    } else {
+                        draft.desc
+                    },
+                    content: draft.content,
+                    weight: 0.0,
+                    system_type: Some(system_type.to_string()),
+                    tool_ids: draft.tool_ids,
+                    lineage_parent_id: None,
+                    variant_state: None,
+                })?
             }
         };
-        let created = self.selection.persist_system_root(NeuronCreate {
-            desc: if draft.desc.trim().is_empty() {
-                system_type.to_string()
-            } else {
-                draft.desc
-            },
-            content: draft.content,
-            weight: 0.0,
-            system_type: Some(system_type.to_string()),
-            tool_ids: draft.tool_ids,
-            lineage_parent_id: None,
-            variant_state: None,
-        })?;
         // 裁决类系统神经元创建即注册默认 behavior（Fixed + 各自 insert_id），
         // 使业务侧裁决调用无需额外映射即可按 Fixed 语义取提示词。
         if let Some(default_behavior) = default_behavior_for_system_type(system_type) {

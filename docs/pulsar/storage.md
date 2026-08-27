@@ -99,7 +99,10 @@ Model lists and chat defaults are configured in `.pulsar/config.json` so provide
   },
   "neurons": {
     "bootstrap": {
-      "create_neuron_prompt": "You are the Neuron Creator for an agent app. ... Return ONLY one JSON object ..."
+      "create_neuron_prompt": "You are the Neuron Creator for an agent app. ... Return ONLY one JSON object ...",
+      "system_prompts": {
+        "assistant_select_neuron": "custom selector prompt (optional override)"
+      }
     }
   }
 }
@@ -116,11 +119,13 @@ Configuration fields:
 - `providers.<id>.api_base`: provider API base. Environment variables override this value.
 - `providers.<id>.models`: provider model list shown by `/models` and accepted by `/use`.
 - `neurons.bootstrap.create_neuron_prompt`: content of the unique `system_type=create_neuron` system neuron. Optional; when missing, the app uses a built-in default seed prompt so bootstrap can still create the first system neuron. The built-in seed asks for single-responsibility neurons with executable `content` (role / when-to-use / steps / output / constraints). Model-returned `weight` is ignored: new neurons and edges always start at weight `0` and only change via later evaluation deltas. Changing this config does not rewrite an already-persisted `create_neuron` row — reset/recreate that system neuron to pick up a new seed.
-- Assistant mode fixed `system_type` prompt neurons are ensured via `NeuronManager::ensure_system_neuron` / `bootstrap` (startup creates at least `assistant_select_neuron`):
+- `neurons.bootstrap.system_prompts.<system_type>`: optional per-type override of the built-in system prompt seeds (keys like `assistant_select_neuron` / `assistant_match_topic` / `assistant_complete_scope` / `assistant_score_feedback` / `assistant_revise_topic`). Non-empty values override the built-in seed; missing/empty falls back to the built-in seed. Built-in seeds let `ensure_system_neuron` / `rebootstrap` persist a known-good prompt without a model call; `system_type` values without a built-in seed still fall back to LLM generation.
+- Assistant mode fixed `system_type` prompt neurons are ensured via `NeuronManager::ensure_system_neuron` / `bootstrap` (startup creates at least `assistant_select_neuron`). All built-in types use the built-in prompt seeds (see `SYSTEM_PROMPT_SEEDS` in `neuron/config.rs`) instead of LLM generation:
   - `assistant_select_neuron`: 7-candidate neuron selection
   - `assistant_match_topic`: topic match / create decision (lazy ensure)
   - `assistant_complete_scope`: afterhook scope completion decision (lazy ensure)
   - `assistant_score_feedback`: user satisfaction score (lazy ensure)
+  - `assistant_revise_topic`: topic scope revision decision (lazy ensure)
 - Candidate pool rule: with `source_id`, only direct downstream; without source, global neurons including system nodes.
 
 Missing optional neuron bootstrap configuration does not prevent application startup. Built-in default seed is used until overridden in config.
