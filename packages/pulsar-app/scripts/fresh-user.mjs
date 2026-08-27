@@ -93,6 +93,25 @@ function restore() {
   console.log(`${tag} 已恢复: ${latest} → .pulsar`);
 }
 
+function usage() {
+  console.log(`用法: pnpm fresh-user <start|restore|status>  或  --help
+
+将 pulsar-app 切到「新用户」数据状态，测完还原。
+
+指令:
+  start    把 .pulsar/ 改名为 .pulsar.bak-<时间戳>，
+           下次启动应用即为全新用户态（内置 provider 回归、神经元种子重新 bootstrap）
+  restore  恢复最新一份备份回 .pulsar/；
+           模拟期间产生的新 .pulsar/ 先留底为 .pulsar.discarded-<时间戳>
+  status   查看当前数据状态与全部备份
+  --help   显示本帮助
+
+边界:
+  全程仅 rename，绝不删除任何数据；只处理 ${pkgDir}/.pulsar/
+  执行 start/restore 前请先退出应用
+  WebView/浏览器的 localStorage 不受影响，完整全新体验需手动清理`);
+}
+
 const cmd = process.argv[2];
 switch (cmd) {
   case "start":
@@ -104,7 +123,11 @@ switch (cmd) {
   case "status":
     status();
     break;
+  case "--help":
+  case "-h":
+    usage();
+    break;
   default:
-    console.log("用法: pnpm fresh-user <start|restore|status>");
+    usage();
     process.exitCode = cmd ? 1 : 0;
 }
