@@ -6,9 +6,6 @@ dist
 .mini-claw
 .DS_Store
 *.log
-packages/pulsar-app/.pulsar/sessions/*
-packages/pulsar-app/.pulsar/config.json
-packages/pulsar-app/.pulsar/app.db
+packages/pulsar-app/.pulsar/*
 packages/pulsar-app/src-tauri/.pulsar/app.db
-packages/pulsar-app/.pulsar/logs/pulsar.log*
-packages/pulsar-app/.pulsar/search
+packages/pulsar-app/.pulsar.bak*

@@ -8,9 +8,14 @@
         ".git",
         "node_modules",
         "target",
-        ".DS_Store"
+        "dist",
+        ".pulsar",
+        ".DS_Store",
+        "build",
+        "out",
+        "coverage"
       ],
-      "created_at": 1787064309217
+      "created_at": 1787843402294
     }
   ],
   "active_id": "ws-13703389a02e2b97"
