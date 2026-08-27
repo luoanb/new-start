@@ -21,12 +21,13 @@
   let saving = $state(false);
   let error = $state("");
   let view = $state<ProviderConfigView>({ providers: [] });
-  let selectedId = $state<string | null>(null);
+  // 选中身份用索引而非 id：id 是可编辑字段，按 id 匹配会在输入时自断选中（表单面板丢失）。
+  let selectedIndex = $state<number | null>(null);
 
   const selected = $derived(
-    view.providers.find((p) => p.id === selectedId) ?? null,
+    selectedIndex !== null ? (view.providers[selectedIndex] ?? null) : null,
   );
-  const creating = $derived(selectedId === "");
+  const creating = $derived(selected?.id === "");
 
   const kindOptions = [
     { value: "open_ai", label: "open_ai" },
@@ -50,8 +51,9 @@
     try {
       view = await api.call(c.getProviderConfig, undefined);
       // 默认选中第一个启用（未禁用）的服务商
-      selectedId =
-        view.providers.find((p) => p.enabled)?.id ?? view.providers[0]?.id ?? null;
+      const enabledIdx = view.providers.findIndex((p) => p.enabled);
+      selectedIndex =
+        enabledIdx >= 0 ? enabledIdx : view.providers.length > 0 ? 0 : null;
     } catch (e) {
       error = formatInvokeError(e);
     } finally {
@@ -85,10 +87,11 @@
   $effect(() => {
     const req = data.state.providerEditRequestId;
     if (!req || req === lastEditRequestId) return;
-    if (!view.providers.some((p) => p.id === req)) return;
+    const idx = view.providers.findIndex((p) => p.id === req);
+    if (idx < 0) return;
     lastEditRequestId = req;
     data.state.providerEditRequestId = null;
-    selectedId = req;
+    selectedIndex = idx;
   });
 
   let lastCreateRequest = $state(0);
@@ -97,12 +100,13 @@
     if (req === lastCreateRequest) return;
     lastCreateRequest = req;
     // 已有未保存的新建草稿则跳过，仅切换选中
-    if (view.providers.some((p) => p.id === "")) {
-      selectedId = "";
+    const draftIdx = view.providers.findIndex((p) => p.id === "");
+    if (draftIdx >= 0) {
+      selectedIndex = draftIdx;
       return;
     }
     view.providers = [...view.providers, newProvider()];
-    selectedId = "";
+    selectedIndex = view.providers.length - 1;
   });
 
   // ── 服务商表单操作 ──
@@ -140,7 +144,8 @@
     const idx = view.providers.findIndex((p) => p.id === id);
     if (idx < 0) return;
     view.providers.splice(idx, 1);
-    if (selectedId === id) selectedId = null;
+    if (selectedIndex === idx) selectedIndex = null;
+    else if (selectedIndex !== null && idx < selectedIndex) selectedIndex--;
   }
 
   // ── 默认模型设置 ──
@@ -249,12 +254,14 @@
               class="icon-btn"
               type="button"
               onclick={() => {
-                if (view.providers.some((p) => p.id === "")) {
-                  selectedId = "";
+                // 已有未保存的新建草稿则只切回草稿，避免重复插入
+                const draftIdx = view.providers.findIndex((p) => p.id === "");
+                if (draftIdx >= 0) {
+                  selectedIndex = draftIdx;
                   return;
                 }
                 view.providers = [...view.providers, newProvider()];
-                selectedId = "";
+                selectedIndex = view.providers.length - 1;
               }}
               aria-label={t("providerManager.addProvider")}
             >
@@ -266,11 +273,11 @@
           </Tooltip>
         </div>
         <div class="list-items">
-          {#each view.providers as p (p.id || "new")}
+          {#each view.providers as p, i (p.id || `new-${i}`)}
             <button
               class="list-item"
-              class:active={p.id === selectedId}
-              onclick={() => (selectedId = p.id)}
+              class:active={i === selectedIndex}
+              onclick={() => (selectedIndex = i)}
             >
               <span class="list-item-name" title={p.display_name ?? p.id}>
                 {p.display_name || p.id || t("providerManager.untitled")}
