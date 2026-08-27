@@ -126,6 +126,7 @@ Configuration fields:
   - `assistant_complete_scope`: afterhook scope completion decision (lazy ensure)
   - `assistant_score_feedback`: user satisfaction score (lazy ensure)
   - `assistant_revise_topic`: topic scope revision decision (lazy ensure)
+- `bootstrap` also seeds one built-in **regular** neuron (not a system node): `通用助手` with initial weight `50` (see `BUILTIN_GENERIC_NEURON_SEED` in `neuron/config.rs`). It provides an out-of-the-box high-score default role — stable pick when LLM selection is unavailable (weight fallback) and a fallback candidate for normal semantic selection. Idempotent by exact `desc` match; existing nodes are never overwritten.
 - Candidate pool rule: with `source_id`, only direct downstream; without source, global neurons including system nodes.
 
 Missing optional neuron bootstrap configuration does not prevent application startup. Built-in default seed is used until overridden in config.

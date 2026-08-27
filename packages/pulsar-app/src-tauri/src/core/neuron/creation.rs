@@ -11,7 +11,10 @@ use crate::core::{
         NeuronCreate, SessionBehavior, SystemPromptStatus,
     },
     neuron::{
-        config::NeuronConfigReader,
+        config::{
+            NeuronConfigReader, BUILTIN_GENERIC_NEURON_DESC, BUILTIN_GENERIC_NEURON_INITIAL_WEIGHT,
+            BUILTIN_GENERIC_NEURON_SEED,
+        },
         query::NeuronQuery,
         selection::NeuronSelection,
         spec::SessionSpecManager,
@@ -313,6 +316,51 @@ impl NeuronCreation {
         self.specs.list_specs()
     }
 
+    /// 内置通用助手神经元（常规能力节点）：bootstrap 时确保存在，初始权重 50。
+    ///
+    /// 幂等键 = desc 精确匹配：已存在同 desc 节点 → 跳过（不覆盖用户改动、不重复加分）。
+    /// 创建遵循 store 契约「创建恒 0、后续改权重走 `adjust_weight(delta)`」
+    /// （副作用仅 use_count+1 统计口径）。
+    pub(crate) fn ensure_generic_neuron(&self) -> AppResult<Neuron> {
+        if let Some(existing) = self
+            .store()?
+            .list_neurons()?
+            .into_iter()
+            .find(|n| n.desc == BUILTIN_GENERIC_NEURON_DESC)
+        {
+            tracing::info!(
+                phase = "bootstrap",
+                step = "generic_neuron",
+                neuron_id = %existing.id,
+                "generic assistant neuron hit existing; skip"
+            );
+            return Ok(existing);
+        }
+        let created = self.selection.persist_plain(
+            NeuronCreate {
+                desc: BUILTIN_GENERIC_NEURON_DESC.to_string(),
+                content: BUILTIN_GENERIC_NEURON_SEED.to_string(),
+                weight: 0.0,
+                system_type: None,
+                tool_ids: Vec::new(),
+                lineage_parent_id: None,
+                variant_state: None,
+            },
+            None,
+        )?;
+        let boosted = self
+            .store()?
+            .adjust_weight(&created.id, BUILTIN_GENERIC_NEURON_INITIAL_WEIGHT)?;
+        tracing::info!(
+            phase = "bootstrap",
+            step = "generic_neuron",
+            neuron_id = %boosted.id,
+            weight = boosted.weight,
+            "generic assistant neuron created with initial weight"
+        );
+        Ok(boosted)
+    }
+
     /// Startup readiness: creator + selector only.
     pub(crate) async fn bootstrap(&self) -> AppResult<BootstrapReport> {
         tracing::info!(phase = "bootstrap", "bootstrap start");
@@ -334,10 +382,13 @@ impl NeuronCreation {
                 return Err(error);
             }
         };
+        // 内置通用助手（常规节点，初始权重 50）：开箱即用的高分默认角色。
+        let generic = self.ensure_generic_neuron()?;
         tracing::info!(
             phase = "bootstrap",
             create_neuron_id = %creator.id,
             select_neuron_id = %selector.id,
+            generic_neuron_id = %generic.id,
             "bootstrap ok"
         );
         Ok(BootstrapReport {

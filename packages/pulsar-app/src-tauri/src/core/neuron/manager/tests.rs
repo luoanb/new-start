@@ -19,7 +19,7 @@
             NeuronKindFilter, NeuronUpdate, SelectionPolicy, SessionBehavior, ToolPolicy,
         },
         neuron::{
-            config::{NeuronConfigReader, SYSTEM_PROMPT_SEEDS},
+            config::{NeuronConfigReader, SYSTEM_PROMPT_SEEDS, BUILTIN_GENERIC_NEURON_DESC},
             model::NeuronModelCaller,
             store::NeuronStore,
         },
@@ -159,6 +159,53 @@
                 variant_state: None,
             })
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn bootstrap_seeds_generic_assistant_with_weight_50() {
+        // 内置通用助手（常规节点）：bootstrap 后存在 desc=通用助手、weight=50、system_type=None。
+        let (manager, root) = test_manager();
+        let report = manager.bootstrap().await.unwrap();
+        assert!(!report.create_neuron_id.is_empty());
+        assert!(!report.select_neuron_id.is_empty());
+        let generic = manager
+            .store()
+            .unwrap()
+            .list_neurons()
+            .unwrap()
+            .into_iter()
+            .find(|n| n.desc == BUILTIN_GENERIC_NEURON_DESC)
+            .expect("generic assistant neuron should exist after bootstrap");
+        assert!(generic.system_type.is_none(), "常规节点，非系统节点");
+        assert!(
+            (generic.weight - 50.0).abs() < 1e-9,
+            "初始权重应为 50，实际 {}",
+            generic.weight
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn bootstrap_generic_assistant_is_idempotent() {
+        // 幂等：重复 bootstrap 不重复创建、不重复累加权重。
+        let (manager, root) = test_manager();
+        manager.bootstrap().await.unwrap();
+        manager.bootstrap().await.unwrap();
+        let generics: Vec<_> = manager
+            .store()
+            .unwrap()
+            .list_neurons()
+            .unwrap()
+            .into_iter()
+            .filter(|n| n.desc == BUILTIN_GENERIC_NEURON_DESC)
+            .collect();
+        assert_eq!(generics.len(), 1, "重复 bootstrap 不应重复创建");
+        assert!(
+            (generics[0].weight - 50.0).abs() < 1e-9,
+            "权重不应重复累加，实际 {}",
+            generics[0].weight
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
