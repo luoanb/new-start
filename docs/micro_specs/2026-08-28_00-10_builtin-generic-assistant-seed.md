@@ -20,6 +20,10 @@
   知识边界、决策树式处理、多步任务拆解、自我修正，见 WebSearch 收录的 system prompt 指南）。
   幂等语义不变：**已落库的旧 content 不会被自动覆盖**，升级路径 = 删除库中「通用助手」节点后
   重新 bootstrap（重建为新内容），或手动编辑该节点。`cargo test --lib` 417 passed。
+- 2026-08-28（规范迭代）：① 神经元产出规范：`DEFAULT_CREATE_NEURON_PROMPT` 字段规则**移除**
+  「何时被选中 / 何时不应被选中」必写项；安全约束新增「禁止编写干预选择行为的内容（指示选择器
+  何时选中本节点 / 如何比较候选 / 影响评分或权重）」；示例改为中性表述。② `BUILTIN_GENERIC_NEURON_SEED`
+  同步删除「## 何时被选中」段落。选型与评分由系统负责，神经元内容不得干预。`cargo test --lib` 417 passed。
 
 ## 1. 背景（Reverse Sync）
 

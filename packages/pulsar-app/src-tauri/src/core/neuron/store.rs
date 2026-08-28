@@ -231,7 +231,7 @@ impl NeuronStore {
             .prepare(
                 "SELECT id, desc, content, weight, system_type, tool_ids, created_at, updated_at,
                         use_count, last_used_at, deleted_at, behavior
-                 FROM neurons WHERE deleted_at IS NULL ORDER BY created_at DESC",
+                 FROM neurons WHERE deleted_at IS NULL ORDER BY weight DESC, created_at DESC, id ASC",
             )
             .map_err(|e| AppError::StorageError(format!("Failed to prepare: {}", e)))?;
         let rows = stmt

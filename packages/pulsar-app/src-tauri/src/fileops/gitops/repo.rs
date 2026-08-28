@@ -743,7 +743,12 @@ impl GitBackend for CliGitBackend {
     async fn status(&self, repo: &GitRepo) -> AppResult<GitStatusView> {
         let root = Self::repo_root(repo)?;
         let out = self
-            .run_git_ok(&root, &["status", "--porcelain", "--branch"])
+            .run_git_ok(
+                &root,
+                // -uall：未跟踪目录展开为具体文件，避免面板把 `?? docs/` 渲染成文件夹条目
+                // （目录条目点不开、看不到改动内容）。
+                &["status", "--porcelain", "--branch", "--untracked-files=all"],
+            )
             .await?;
         Ok(parse_status(&out.stdout))
     }
@@ -1160,6 +1165,19 @@ AM added_then_modified.txt
         let view = parse_status(out);
         assert_eq!(view.untracked[0].path, "a b.txt");
         assert_eq!(view.unstaged[0].path, "x\t\"q");
+    }
+
+    #[test]
+    fn status_untracked_files_all_expands_directory_entries() {
+        // `git status --untracked-files=all`：未跟踪目录不再折叠为 `?? dir/` 目录条目，
+        // 而是展开为具体文件路径，面板才能逐文件展示与打开。
+        let out = "## main\n?? docs/research/ai-assistant-capabilities.md\n?? untracked.txt\n";
+        let view = parse_status(out);
+        assert_eq!(view.untracked.len(), 2);
+        assert_eq!(view.untracked[0].path, "docs/research/ai-assistant-capabilities.md");
+        assert_eq!(view.untracked[1].path, "untracked.txt");
+        // 不再出现以 / 结尾的目录条目
+        assert!(!view.untracked.iter().any(|e| e.path.ends_with('/')));
     }
 
     #[test]

@@ -1166,7 +1166,7 @@ async fn git_restore(
     Ok(())
 }
 
-/// 从暂存区提交（确认弹窗展示 staged diff 摘要）。
+/// 从暂存区提交（直接提交，不弹确认窗——Commit 可回滚、无破坏性）。
 #[tauri::command]
 async fn git_commit(
     gateway: State<'_, Gateway>,
@@ -1180,25 +1180,11 @@ async fn git_commit(
     }
     let svc = gateway.inner().git_service();
     let repo = svc.active_repo().await.map_err(|error| error.payload())?;
-    let detail = match svc.backend().diff(&repo, true, None).await {
-        Ok(d) => json!({
-            "staged_files": d.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>(),
-            "truncated": d.truncated,
-        }),
-        Err(_) => json!({ "staged_files": [] }),
-    };
-    let outcome = svc
-        .confirm()
-        .request_and_wait(GitOpKind::Commit, "提交暂存区改动".into(), detail)
+    svc.backend()
+        .commit(&repo, &message)
         .await
         .map_err(|error| error.payload())?;
-    if outcome == ConfirmOutcome::Approved {
-        svc.backend()
-            .commit(&repo, &message)
-            .await
-            .map_err(|error| error.payload())?;
-        state_emit.inner()(StateChange::Git);
-    }
+    state_emit.inner()(StateChange::Git);
     Ok(())
 }
 

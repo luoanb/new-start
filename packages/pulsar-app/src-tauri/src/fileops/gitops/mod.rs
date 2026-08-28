@@ -32,7 +32,8 @@ pub struct GitRepo {
     pub is_nested: bool,
 }
 
-/// git status 视图（porcelain v1 解析；目录聚合由前端完成）。
+/// git status 视图（porcelain v1 解析；status 命令带 `--untracked-files=all`，
+/// 未跟踪目录展开为具体文件，面板逐文件展示，不做目录聚合）。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GitStatusView {
     /// 当前分支（detached 时为 None）。
