@@ -1515,14 +1515,6 @@ impl AssistantHooks<'_> {
                 return Ok(());
             }
         };
-        if topic.scope_in.is_empty() {
-            tracing::info!(
-                phase = "complete_scope_hook",
-                topic_id = %topic_id,
-                "skip: empty scope_in"
-            );
-            return Ok(());
-        }
         // 暂停 / 等待用户课题不做裁决写入（避免触发 mutate 报错）。
         if matches!(
             topic.status,
@@ -1533,6 +1525,20 @@ impl AssistantHooks<'_> {
                 topic_id = %topic_id,
                 status = ?topic.status,
                 "skip: topic paused or waiting user"
+            );
+            return Ok(());
+        }
+        // 空待办收尾：scope_in 为空时无任何可推进事项 → 置 Done，避免 Poller 每轮空转调模型
+        //（空 scope 可能来自 revise_topic 删光全部项或 legacy 迁移数据；derive_topic_state(&[])
+        //  恒推导为 Todo，不主动收尾课题将永远被轮询推进）。
+        if topic.scope_in.is_empty() {
+            self.assistant
+                .topics()?
+                .set_status(&topic_id, TopicStatus::Done)?;
+            tracing::info!(
+                phase = "complete_scope_hook",
+                topic_id = %topic_id,
+                "empty scope_in; topic closed as done"
             );
             return Ok(());
         }
