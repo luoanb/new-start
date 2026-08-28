@@ -124,6 +124,9 @@ export type Translations = {
     noMore: string;
     empty: string;
     loading: string;
+    resetSystemPrompts: string;
+    resetSystemPromptsTitle: string;
+    resetSystemPromptsConfirm: string;
   };
   neuronEditor: {
     systemType: string;
@@ -774,6 +777,10 @@ export const en: Translations = {
     noMore: "No more",
     empty: "No neurons yet.",
     loading: "Loading...",
+    resetSystemPrompts: "Reset system prompts",
+    resetSystemPromptsTitle: "Reset system prompts",
+    resetSystemPromptsConfirm:
+      "Reset all system neuron prompts to the built-in defaults? (Regular neurons and weights are untouched)",
   },
   neuronEditor: {
     systemType: "System Type",
@@ -1457,6 +1464,9 @@ export const zh: Translations = {
     noMore: "没有更多了",
     empty: "暂无神经元。",
     loading: "加载中...",
+    resetSystemPrompts: "重置系统提示词",
+    resetSystemPromptsTitle: "重置系统提示词",
+    resetSystemPromptsConfirm: "将所有系统神经元提示词恢复为代码内置预设？（普通神经元与权重不受影响）",
   },
   neuronEditor: {
     systemType: "系统类型",

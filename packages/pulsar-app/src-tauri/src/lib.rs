@@ -787,6 +787,21 @@ async fn set_neuron_system_type(
     Ok(neuron)
 }
 
+/// 重置全部系统提示词为代码内置预设（rebootstrap）：删除重建 5 个 assistant_* 系统神经元，
+/// 不重置 create_neuron 种子，普通神经元与权重不受影响。
+#[tauri::command]
+async fn reset_system_prompts(
+    mgr: State<'_, Arc<NeuronManager>>,
+    state_emit: State<'_, StateEmitter>,
+) -> TauriResult<()> {
+    mgr.inner()
+        .rebootstrap()
+        .await
+        .map_err(|error| error.payload())?;
+    state_emit.inner()(StateChange::Neurons);
+    Ok(())
+}
+
 /// 管理面更新系统神经元行为（所有 system_type 非空的神经元可写，含裁决类）。
 #[tauri::command]
 async fn update_neuron_behavior(
@@ -1929,6 +1944,7 @@ pub fn run() {
             list_neurons_page,
             set_neuron_system_type,
             update_neuron_behavior,
+            reset_system_prompts,
             list_insert_catalog,
             // Logs
             logs_snapshot,

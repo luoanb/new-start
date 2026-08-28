@@ -60,6 +60,8 @@ flowchart TD
 
 等价于依次 `reset-system`：`assistant_select_neuron` → `assistant_match_topic` → `assistant_complete_scope` → `assistant_score_feedback` → `assistant_revise_topic`，再 `bootstrap`。重建走内置种子（content 零模型调用），仅补池调模型。
 
+GUI 等价入口：神经元侧栏（列表）标题栏「重置系统提示词」icon 按钮（Tauri 命令 `reset_system_prompts`，有二次确认弹窗），位于「＋」按钮旁。点击即执行上述 rebootstrap，随后广播 Neurons 事件，列表与画布自动刷新；普通神经元与权重不受影响，`create_neuron` 种子不重置。
+
 ### 2.1 `ensure_creator`（不调模型）
 
 ```mermaid

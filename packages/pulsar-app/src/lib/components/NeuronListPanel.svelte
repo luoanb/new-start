@@ -6,6 +6,7 @@
   import type { Neuron, NeuronPage } from "$lib/types";
   import { systemTypeColor } from "$lib/features/neuron/systemTypeColor";
   import Select from "./Select.svelte";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
 
   const ctx = useViewContext();
   const data = ctx.stores.data;
@@ -127,18 +128,50 @@
   function handleLaunch(n: Neuron) {
     void data.requestLaunchNeuron(n.id);
   }
+
+  // 重置系统提示词为代码内置预设（rebootstrap）：删建 5 个 assistant_* 系统神经元，
+  // 普通神经元与权重不动；后端广播 StateChange::Neurons 后列表/画布自动刷新。
+  // 危险操作：先弹 ConfirmDialog（danger 红色确认），再执行。
+  let showResetConfirm = $state(false);
+  let resettingSystem = $state(false);
+  function requestResetSystemPrompts() {
+    if (resettingSystem) return;
+    showResetConfirm = true;
+  }
+  async function doResetSystemPrompts() {
+    showResetConfirm = false;
+    resettingSystem = true;
+    try {
+      await api.call(c.resetSystemPrompts, undefined);
+    } catch (e) {
+      console.error(`Failed to reset system prompts: ${formatInvokeError(e)}`);
+    } finally {
+      resettingSystem = false;
+    }
+  }
 </script>
 
 <div class="neurons-list-panel">
   <div class="panel-toolbar">
     <span class="panel-title">{t("neuronListPanel.title")}</span>
-    <button
-      class="icon-btn"
-      title={t("neuronListPanel.create")}
-      onclick={() => data.requestCreateNeuron()}
-    >
-      <svg class="icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-    </button>
+    <div class="toolbar-actions">
+      <button
+        class="icon-btn"
+        title={t("neuronListPanel.resetSystemPromptsConfirm")}
+        aria-label={t("neuronListPanel.resetSystemPrompts")}
+        onclick={requestResetSystemPrompts}
+        disabled={resettingSystem}
+      >
+        <svg class="icon reset-icon" class:spinning={resettingSystem} viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></svg>
+      </button>
+      <button
+        class="icon-btn"
+        title={t("neuronListPanel.create")}
+        onclick={() => data.requestCreateNeuron()}
+      >
+        <svg class="icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      </button>
+    </div>
   </div>
   <div class="filter-bar">
     <input
@@ -306,6 +339,15 @@
   {/if}
 </div>
 
+<ConfirmDialog
+  open={showResetConfirm}
+  title={t("neuronListPanel.resetSystemPromptsTitle")}
+  message={t("neuronListPanel.resetSystemPromptsConfirm")}
+  danger={true}
+  onConfirm={() => void doResetSystemPrompts()}
+  onCancel={() => (showResetConfirm = false)}
+/>
+
 <style>
   .neurons-list-panel {
     height: 100%;
@@ -343,6 +385,24 @@
     transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
   }
   .icon-btn:hover { background: var(--color-hover); color: var(--color-text); }
+  .icon-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-shrink: 0;
+  }
+  .reset-icon.spinning {
+    animation: reset-spin 0.8s linear infinite;
+  }
+  @keyframes reset-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
   .filter-bar {
     display: flex;
     align-items: center;

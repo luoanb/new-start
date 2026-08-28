@@ -197,6 +197,7 @@ export const c = {
   updateNeuronBehavior: def<{ id: string; behavior: unknown }, Neuron>(
     "update_neuron_behavior",
   ),
+  resetSystemPrompts: def<undefined, void>("reset_system_prompts"),
   adjustNeuronWeight: def<{ id: string; delta: number }, Neuron>("adjust_neuron_weight"),
   adjustEdgeWeight: def<{ source: string; target: string; delta: number }, Connection>(
     "adjust_edge_weight",
