@@ -1,6 +1,6 @@
 [package]
 name = "pulsar-app"
-version = "0.2.1"
+version = "0.2.2"
 description = "Pulsar — an autonomous AI agent desktop client"
 authors = ["you"]
 edition = "2021"
