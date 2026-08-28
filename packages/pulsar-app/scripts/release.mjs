@@ -14,7 +14,11 @@ import { dirname, join } from "node:path";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG_DIR = join(HERE, ".."); // packages/pulsar-app
-const REPO_DIR = join(PKG_DIR, ".."); // workspace 根（.git 所在）
+// 仓库根动态探测（git 向上查找 .git），避免路径层级手工计算出错。
+const REPO_DIR = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+  cwd: PKG_DIR,
+  encoding: "utf8",
+}).trim();
 const CARGO_PKG = "pulsar-app"; // Cargo 包名（Cargo.lock 中 [[package]].name）
 
 const FILES = {
