@@ -13,6 +13,7 @@
     "cli": "cargo run --manifest-path src-tauri/Cargo.toml --bin pulsar-cli --",
     "tui": "cargo run --manifest-path src-tauri/Cargo.toml --bin pulsar-tui",
     "fresh-user": "node scripts/fresh-user.mjs",
+    "release": "node scripts/release.mjs",
     "tauri": "tauri",
     "server:build": "pnpm build && cargo build --release --manifest-path src-tauri/Cargo.toml --bin pulsar-server --features embed-static",
     "server:prod": "PULSAR_HOST=0.0.0.0 PULSAR_PORT=9999 cargo run --release --manifest-path src-tauri/Cargo.toml --bin pulsar-server --features embed-static --",

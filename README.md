@@ -152,7 +152,17 @@ cd packages/pulsar-app && pnpm dev
 
 ## 发布
 
-GitHub Actions（`.github/workflows/publish-pulsar-app.yml`）在 `release` 分支自动构建并发布：
+一键发布（在 `packages/pulsar-app` 目录下）：
+
+```bash
+pnpm release        # 小版本 patch（默认）
+pnpm release minor  # 中版本
+pnpm release major  # 大版本
+```
+
+脚本自动完成：累加版本号（同步 `package.json` / `tauri.conf.json` / `Cargo.toml` / `Cargo.lock`）→ 提交并推送 `main` → `release` 分支快进推送 → 打 `pulsar-v<版本>` annotated tag 并推送。要求当前在 `main` 分支且工作区干净。
+
+推送 `release` 后，GitHub Actions（`.github/workflows/publish-pulsar-app.yml`）自动构建并发布：
 Windows x64、Linux x64 / Arm64、macOS x64 / Arm64，产物以 `pulsar-v<版本>` 标签发布为 GitHub Release（draft）。
 
 ## 文档索引
