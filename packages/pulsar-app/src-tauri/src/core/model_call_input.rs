@@ -319,6 +319,9 @@ impl ModelCallInput {
                 tool_call_id: None,
                 reasoning_content: None,
             }),
+            // 错误驻留消息：仅落库供用户感知，不回灌模型输入（错误文案进 wire 会污染
+            // 上下文、还可能诱发新的上下文超限）；`project_history` 的 filter_map 同步丢弃。
+            MessageBody::Error { .. } => None,
         }
     }
 
@@ -759,5 +762,22 @@ mod tests {
         assert!(projected[0].content.contains("compressed summary"));
         assert!(projected[1..].iter().all(|m| !m.content.starts_with("old message 1")));
         assert!(projected[1..].iter().any(|m| m.content.contains("old message 6")));
+    }
+
+    #[test]
+    fn error_residency_message_is_not_refilled_into_model_input() {
+        // 错误驻留：落库供用户感知，但 from_message / project_history 均不回灌模型输入。
+        let error = Message {
+            role: MessageRole::System,
+            body: MessageBody::Error {
+                content: "模型调用失败（transient）：connection timeout".into(),
+                error_class: "transient".into(),
+            },
+            timestamp: 0,
+            neuron_id: None,
+        };
+        assert!(ModelCallInput::from_message(&error).is_none());
+        let projected = ModelCallInput::project_history(&[error]);
+        assert!(projected.is_empty(), "Error 消息不得进入 wire");
     }
 }

@@ -75,7 +75,9 @@ export type MessageBody =
   | { kind: "tool_result"; tool_call_id: string; tool_name: string; content: string }
   | { kind: "compaction"; summary_of: string[]; content: string }
   | { kind: "nudge"; content: string }
-  | { kind: "role_context"; content: string };
+  | { kind: "role_context"; content: string }
+  /** 错误驻留：熔断/模型调用失败说明（后端不回灌模型输入，仅用户感知）。 */
+  | { kind: "error"; content: string; error_class?: string };
 
 export type Message = {
   role: MessageRole;

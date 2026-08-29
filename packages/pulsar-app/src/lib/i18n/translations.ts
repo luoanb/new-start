@@ -55,6 +55,7 @@ export type Translations = {
     compaction: string;
     nudge: string;
     context: string;
+    error: string;
     copy: string;
     rate: string;
     copied: string;
@@ -242,6 +243,7 @@ export type Translations = {
     description: string;
     updated: string;
     sessionId: string;
+    lastError: string;
     name: string;
     topicStatus: Record<string, string>;
     createFailed: string;
@@ -702,6 +704,7 @@ export const en: Translations = {
     compaction: "summary",
     nudge: "polling advance",
     context: "role context",
+    error: "error",
     copy: "Copy",
     rate: "Rate",
     copied: "Copied",
@@ -896,6 +899,7 @@ export const en: Translations = {
     description: "Description",
     updated: "Updated",
     sessionId: "Session",
+    lastError: "Last error",
     name: "Name",
     topicStatus: {
       todo: "Todo",
@@ -1389,6 +1393,7 @@ export const zh: Translations = {
     compaction: "摘要",
     nudge: "轮询推进",
     context: "角色切换",
+    error: "错误",
     copy: "复制",
     rate: "评价",
     copied: "已复制",
@@ -1582,6 +1587,7 @@ export const zh: Translations = {
     description: "描述",
     updated: "更新于",
     sessionId: "会话",
+    lastError: "最近错误",
     name: "名称",
     topicStatus: {
       todo: "待办",

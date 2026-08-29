@@ -108,6 +108,17 @@ pub enum ErrorClass {
     Permanent,
 }
 
+impl ErrorClass {
+    /// 序列化用稳定字符串（错误驻留消息 / 课题 extra.last_error 落库）。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ErrorClass::ContextLengthExceeded => "context_length_exceeded",
+            ErrorClass::Transient => "transient",
+            ErrorClass::Permanent => "permanent",
+        }
+    }
+}
+
 pub fn classify_error(error: &AppError) -> ErrorClass {
     match error {
         AppError::LlmRequestFailed(message) => {

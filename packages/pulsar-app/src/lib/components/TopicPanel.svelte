@@ -55,6 +55,21 @@
     return d.toLocaleString();
   }
 
+  // 错误驻留标记：topic.extra.last_error（后端 poller 熔断/失败时写入，恢复时清除）。
+  // 防御性解析：extra 来自 JSON，结构不可信。
+  function lastErrorOf(topic: {
+    extra?: Record<string, unknown> | null;
+  }): { message?: string; class?: string } | null {
+    const raw = topic.extra?.["last_error"];
+    if (!raw || typeof raw !== "object") return null;
+    const obj = raw as Record<string, unknown>;
+    if (typeof obj.message !== "string") return null;
+    return {
+      message: obj.message,
+      class: typeof obj.class === "string" ? obj.class : undefined,
+    };
+  }
+
   // ── Actions ──
 
   async function handleCreate() {
@@ -282,6 +297,12 @@
               <span class="status-badge {topic.status}">
                 {tMap("topicPanel.topicStatus", topic.status)}
               </span>
+              {#if lastErrorOf(topic)}
+                <span
+                  class="status-badge last-error"
+                  title={lastErrorOf(topic)?.message}
+                >⚠</span>
+              {/if}
             </div>
             <div class="topic-meta">
               {t("topicPanel.updated")}: {formatTime(topic.updated_at)}
@@ -301,6 +322,13 @@
                 <div class="detail-row">
                   <span class="detail-label">{t("topicPanel.sessionId")}</span>
                   <span class="mono">{topic.session_id.slice(0, 12)}...</span>
+                </div>
+              {/if}
+
+              {#if lastErrorOf(topic)}
+                <div class="detail-row last-error-row">
+                  <span class="detail-label">{t("topicPanel.lastError")}</span>
+                  <span class="last-error-text">{lastErrorOf(topic)?.message}</span>
                 </div>
               {/if}
 
@@ -513,6 +541,9 @@
   .status-badge.waiting_user { color: var(--color-warning); }
   .status-badge.wrapping_up { color: var(--color-primary); }
   .status-badge.blocked { color: var(--color-warning); }
+  /* 错误驻留标记：topic.extra.last_error（轮询熔断/失败），错误色徽章 + 悬停提示详情 */
+  .status-badge.last-error { color: var(--color-error); cursor: help; }
+  .last-error-row .last-error-text { color: var(--color-error); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .progress-row { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-1); }
   .progress-bar-bg { flex: 1; height: 4px; background: var(--color-border); border-radius: 2px; overflow: hidden; }
   .progress-bar-fill { height: 100%; background: var(--color-primary); border-radius: 2px; transition: width var(--duration-normal) var(--ease-out); }

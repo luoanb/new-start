@@ -49,6 +49,14 @@ pub enum MessageBody {
     /// （`[当前角色]` 前缀，与 wire 一致）。
     /// 落库顺序与 wire 注入顺序一致，回灌进后续模型输入（历史 = wire）。
     RoleContext { content: String },
+    /// 熔断/模型调用失败的错误驻留：仅落库供用户与前端感知，**不回灌模型输入**
+    /// （`from_message` 跳过，历史 = wire 不变式保持）。`error_class` 为错误分类
+    /// 字符串（transient / permanent / context_length_exceeded）。
+    Error {
+        content: String,
+        #[serde(default)]
+        error_class: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -70,7 +78,8 @@ impl Message {
             | MessageBody::ToolResult { content, .. }
             | MessageBody::Compaction { content, .. }
             | MessageBody::Nudge { content }
-            | MessageBody::RoleContext { content } => content,
+            | MessageBody::RoleContext { content }
+            | MessageBody::Error { content, .. } => content,
         }
     }
 
@@ -81,7 +90,8 @@ impl Message {
             | MessageBody::ToolResult { content, .. }
             | MessageBody::Compaction { content, .. }
             | MessageBody::Nudge { content }
-            | MessageBody::RoleContext { content } => {
+            | MessageBody::RoleContext { content }
+            | MessageBody::Error { content, .. } => {
                 let next = f(content);
                 *content = next;
             }

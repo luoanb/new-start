@@ -35,6 +35,8 @@
   const isToolResult = $derived(message.body.kind === "tool_result");
   const isNudge = $derived(message.body.kind === "nudge");
   const isContext = $derived(message.body.kind === "role_context");
+  // 错误驻留：role=system 但 body.kind==="error"，渲染为错误说明卡片（非系统提示词）。
+  const isError = $derived(message.body.kind === "error");
   // Q1 统一类型后工具调用平级挂载于 text 变体（wire 同源投影）。
   const hasToolCalls = $derived(
     message.body.kind === "text" && (message.body.tool_calls?.length ?? 0) > 0
@@ -115,7 +117,9 @@
       {#if !isTool}
         <div class="role-bar">
           <span class="role-label">
-            {#if isSystem}
+            {#if isError}
+              {t("chatMessage.error")}
+            {:else if isSystem}
               {t("chatMessage.system")}
             {:else if isCompaction}
               {t("chatMessage.compaction")}
@@ -137,6 +141,8 @@
 
       {#if isToolResult}
         <ToolResultBlock {message} />
+      {:else if isError}
+        <div class="error-note">{message.body.content}</div>
       {:else if hasToolCalls}
         {#if reasoning}
           <ThinkingBlock {reasoning} {streaming} />
@@ -283,6 +289,18 @@
     color: var(--color-text-muted);
     background: color-mix(in oklch, var(--color-text-muted) 5%, transparent);
     border: var(--border-width) solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: var(--space-2) var(--space-3);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  /* 错误驻留卡片：与 system-prompt 同构，错误色边框/文字强调（熔断/调用失败说明） */
+  .error-note {
+    font-size: var(--fs-sm);
+    line-height: 1.5;
+    color: var(--color-error);
+    background: color-mix(in oklch, var(--color-error) 6%, transparent);
+    border: var(--border-width) solid color-mix(in oklch, var(--color-error) 45%, transparent);
     border-radius: var(--radius-sm);
     padding: var(--space-2) var(--space-3);
     white-space: pre-wrap;

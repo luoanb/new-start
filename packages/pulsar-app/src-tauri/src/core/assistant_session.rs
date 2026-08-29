@@ -110,6 +110,19 @@ fn is_response_format_error(error: &str) -> bool {
     error.contains("response_format")
 }
 
+/// 错误简述（错误驻留用）：截断 200 字符，完整细节留日志。
+fn error_brief(error: &AppError) -> String {
+    let text = error.to_string();
+    let mut chars = text.chars();
+    match (chars.by_ref().take(200).collect::<String>(), chars.next()) {
+        (brief, None) => brief,
+        (mut brief, Some(_)) => {
+            brief.push('…');
+            brief
+        }
+    }
+}
+
 /// Assistant 业务门面：对话 / 手动推进 / 轮询推进 + 轮询调度壳。
 pub struct AssistantSession {
     store: ConversationStore,
@@ -546,7 +559,7 @@ impl AssistantSession {
             input_len = user_input.len(),
             "converse start"
         );
-        let response = self
+        let response = match self
             .runner
             .run_round(
                 session_id,
@@ -555,7 +568,17 @@ impl AssistantSession {
                 model,
                 None, // 用户聊天窗口发起：保留思考配置（跟随前端勾选）
             )
-            .await?;
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                // 错误驻留：用户输入已由 persist_input 落库，补一条错误说明，
+                // 避免「无回复的 user 消息」无解释。
+                let class = crate::core::context_safety::classify_error(&error);
+                self.persist_error_message(session_id, &error, class);
+                return Err(error);
+            }
+        };
         // 用户手动推进成功 = 熔断恢复（等效 HALF_OPEN 探测成功 → CLOSED）。
         self.reset_failure_state(session_id);
         tracing::info!(
@@ -584,7 +607,7 @@ impl AssistantSession {
             input_len = user_input.len(),
             "converse stream start"
         );
-        let response = self
+        let response = match self
             .runner
             .run_round_stream(
                 session_id,
@@ -594,7 +617,16 @@ impl AssistantSession {
                 None, // 用户聊天窗口发起：保留思考配置（跟随前端勾选）
                 on_delta,
             )
-            .await?;
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                // 错误驻留：同 converse——失败补一条错误说明进对话。
+                let class = crate::core::context_safety::classify_error(&error);
+                self.persist_error_message(session_id, &error, class);
+                return Err(error);
+            }
+        };
         tracing::info!(
             phase = "assistant_converse_stream",
             session_id = %response.conversation_id,
@@ -611,7 +643,7 @@ impl AssistantSession {
         model: &ChatModelSelection,
     ) -> AppResult<ChatResponse> {
         tracing::info!(phase = "assistant_step", session_id, "step start");
-        let response = self
+        let response = match self
             .runner
             .run_round(
                 session_id,
@@ -624,7 +656,16 @@ impl AssistantSession {
                     effort: None,
                 }),
             )
-            .await?;
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                // 错误驻留：手动推进失败同样补一条错误说明进对话。
+                let class = crate::core::context_safety::classify_error(&error);
+                self.persist_error_message(session_id, &error, class);
+                return Err(error);
+            }
+        };
         // 用户手动推进成功 = 熔断恢复（等效 HALF_OPEN 探测成功 → CLOSED）。
         self.reset_failure_state(session_id);
         tracing::info!(phase = "assistant_step", session_id, "step ok");
@@ -632,11 +673,125 @@ impl AssistantSession {
     }
 
     /// 重置会话熔断状态（用户手动推进成功 / 恢复操作）。
+    /// 同时清除课题错误标记（extra.last_error）——熔断恢复即恢复正常轮询。
     fn reset_failure_state(&self, session_id: &str) {
         if let Ok(mut states) = self.failure_states.lock() {
             if let Some(state) = states.get_mut(session_id) {
                 state.record_success();
             }
+        }
+        self.clear_topic_last_error(session_id);
+    }
+
+    /// 错误驻留（对话侧）：落一条 `system` + `MessageBody::Error` 消息进会话，
+    /// 供用户与前端感知失败原因；`from_message` 跳过 Error，不回灌模型输入。
+    /// 驻留失败仅告警（不影响原错误向上传播）。
+    fn persist_error_message(&self, session_id: &str, error: &AppError, class: crate::core::context_safety::ErrorClass) {
+        let message = Message {
+            role: MessageRole::System,
+            body: MessageBody::Error {
+                content: format!(
+                    "模型调用失败（{}，code={}）：{}",
+                    class.as_str(),
+                    error.code(),
+                    error_brief(error)
+                ),
+                error_class: class.as_str().to_string(),
+            },
+            timestamp: super::conversation_store::now_ms(),
+            neuron_id: None,
+        };
+        if let Err(e) = self.store.add_message(session_id, message) {
+            tracing::warn!(
+                phase = "error_residency",
+                session_id,
+                error = %e,
+                "persist error message failed"
+            );
+        }
+    }
+
+    /// 错误驻留（课题侧）：写 `topic.extra.last_error`（读改写合并，不覆盖 extra 其他键）。
+    /// `TopicStore::update` 自带变更广播，前端课题列表随之刷新。
+    fn set_topic_last_error(
+        &self,
+        session_id: &str,
+        error: &AppError,
+        class: crate::core::context_safety::ErrorClass,
+        consecutive_failures: u32,
+    ) {
+        let Ok(topics) = self.topics() else {
+            return;
+        };
+        let topic = match topics.find_by_session_id(session_id) {
+            Ok(Some(topic)) => topic,
+            _ => return,
+        };
+        let mut extra = match topic.extra {
+            Some(Value::Object(map)) => map,
+            _ => serde_json::Map::new(),
+        };
+        extra.insert(
+            "last_error".to_string(),
+            json!({
+                "class": class.as_str(),
+                "code": error.code(),
+                "message": error_brief(error),
+                "consecutive_failures": consecutive_failures,
+                "at": super::conversation_store::now_ms(),
+            }),
+        );
+        if let Err(e) = topics.update(
+            &topic.id,
+            TopicUpdate {
+                extra: Some(Some(Value::Object(extra))),
+                ..Default::default()
+            },
+        ) {
+            tracing::warn!(
+                phase = "error_residency",
+                topic_id = %topic.id,
+                session_id,
+                error = %e,
+                "set topic last_error failed"
+            );
+        }
+    }
+
+    /// 清除课题错误标记（extra.last_error）；extra 为空对象时写 null。
+    fn clear_topic_last_error(&self, session_id: &str) {
+        let Ok(topics) = self.topics() else {
+            return;
+        };
+        let topic = match topics.find_by_session_id(session_id) {
+            Ok(Some(topic)) => topic,
+            _ => return,
+        };
+        let Some(Value::Object(mut map)) = topic.extra else {
+            return;
+        };
+        if map.remove("last_error").is_none() {
+            return;
+        }
+        let value = if map.is_empty() {
+            Value::Null
+        } else {
+            Value::Object(map)
+        };
+        if let Err(e) = topics.update(
+            &topic.id,
+            TopicUpdate {
+                extra: Some(Some(value)),
+                ..Default::default()
+            },
+        ) {
+            tracing::warn!(
+                phase = "error_residency",
+                topic_id = %topic.id,
+                session_id,
+                error = %e,
+                "clear topic last_error failed"
+            );
         }
     }
 
@@ -775,6 +930,8 @@ impl AssistantSession {
                                         state.record_success();
                                     }
                                 }
+                                // 成功恢复：清除课题错误标记（extra.last_error）。
+                                assistant.clear_topic_last_error(&session_id);
                                 tracing::info!(
                                     phase = "assistant_poll_handler",
                                     topic_id,
@@ -787,23 +944,41 @@ impl AssistantSession {
                                 // 失败：错误分类并推进熔断状态机（连续失败退避 → 暂停）。
                                 let class =
                                     crate::core::context_safety::classify_error(&error);
-                                let skip_next = {
+                                let (was_first_failure, entered_pause, consecutive_failures, skip_next) = {
                                     let mut states = assistant.failure_states.lock().unwrap();
-                                    states
-                                        .entry(session_id.clone())
-                                        .or_default()
-                                        .record_failure(
-                                            class,
-                                            assistant.poll_backoff_after,
-                                            assistant.poll_pause_after,
-                                            assistant.backoff_max_skips,
-                                        )
+                                    let state = states.entry(session_id.clone()).or_default();
+                                    let was_first = state.consecutive_failures == 0;
+                                    let was_paused = state.paused;
+                                    let skip_next = state.record_failure(
+                                        class,
+                                        assistant.poll_backoff_after,
+                                        assistant.poll_pause_after,
+                                        assistant.backoff_max_skips,
+                                    );
+                                    (
+                                        was_first,
+                                        !was_paused && state.paused,
+                                        state.consecutive_failures,
+                                        skip_next,
+                                    )
                                 };
+                                // 错误驻留：对话仅在「首次失败 / 进入熔断暂停」两个跃迁点落库
+                                // （防连续失败刷屏）；课题 extra.last_error 每次失败覆盖更新。
+                                if was_first_failure || entered_pause {
+                                    assistant.persist_error_message(&session_id, &error, class);
+                                }
+                                assistant.set_topic_last_error(
+                                    &session_id,
+                                    &error,
+                                    class,
+                                    consecutive_failures,
+                                );
                                 tracing::error!(
                                     phase = "assistant_poll_handler",
                                     topic_id,
                                     session_id,
                                     error_class = ?class,
+                                    consecutive_failures,
                                     skip_next_tick = skip_next,
                                     error = %error,
                                     "poll step failed; circuit state updated"
