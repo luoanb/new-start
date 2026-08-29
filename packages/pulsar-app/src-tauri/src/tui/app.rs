@@ -611,14 +611,17 @@ impl TuiApp {
             Command::PollAction(args) => {
                 self.handle_poll_command(args).await;
             }
-            Command::Close(session_id) => match self.gateway.session_tracker().close(&session_id) {
-                Ok(msg) => {
-                    self.messages.push(TuiMessage::status(msg));
+            Command::Close(session_id) => {
+                // 统一停止语义：取消活动轮次 + 暂停绑定课题 + 摘除运行条目（Gateway::stop_session）。
+                match self.gateway.stop_session(&session_id) {
+                    Ok(msg) => {
+                        self.messages.push(TuiMessage::status(msg));
+                    }
+                    Err(e) => {
+                        self.error_banner = Some(TuiErrorView::from(e));
+                    }
                 }
-                Err(e) => {
-                    self.error_banner = Some(TuiErrorView::from(e));
-                }
-            },
+            }
             Command::Exit => {
                 self.should_quit = true;
             }

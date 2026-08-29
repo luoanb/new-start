@@ -909,16 +909,19 @@ impl AssistantSession {
                     let touched = Arc::clone(&touched);
                     tasks.spawn(async move {
                         let _permit = semaphore.acquire().await.expect("semaphore not closed");
-                        if let Err(error) = assistant.session_tracker.register(&session_id, None) {
-                            tracing::error!(
-                                phase = "assistant_poll_handler",
-                                topic_id,
-                                session_id,
-                                error = %error,
-                                "poll register failed"
-                            );
-                            return;
-                        }
+                        let session_handle = match assistant.session_tracker.register(&session_id) {
+                            Ok(handle) => handle,
+                            Err(error) => {
+                                tracing::error!(
+                                    phase = "assistant_poll_handler",
+                                    topic_id,
+                                    session_id,
+                                    error = %error,
+                                    "poll register failed"
+                                );
+                                return;
+                            }
+                        };
                         let _ = assistant
                             .session_tracker
                             .update_step(&session_id, "polling");
@@ -985,7 +988,7 @@ impl AssistantSession {
                                 )
                             }
                         }
-                        assistant.session_tracker.unregister(&session_id);
+                        assistant.session_tracker.unregister(&session_id, &session_handle);
                         if let Ok(mut list) = touched.lock() {
                             list.push(session_id);
                         }

@@ -409,10 +409,10 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
         }
         "close_session" => {
             let p: ConversationIdParams = from_params(params)?;
+            // 统一停止语义：取消活动轮次 + 暂停绑定课题 + 摘除运行条目（Gateway::stop_session）。
             let session_id = state
                 .gateway
-                .session_tracker()
-                .close(&p.session_id)
+                .stop_session(&p.session_id)
                 .map_err(RpcErrorBody::from)?;
             (state.state_emit)(StateChange::Sessions);
             value(session_id)

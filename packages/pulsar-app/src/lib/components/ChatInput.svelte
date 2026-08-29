@@ -16,7 +16,7 @@
     onModelChange,
   }: {
     onSend: (text: string) => void;
-    /** 会话运行中：输入框保持可输入，终止按钮常驻；发送会先中断当前轮再立即发送。 */
+    /** 会话运行中：输入框保持可输入，终止按钮常驻；运行中发送由后端协调器抢占旧轮，无需前端先中断。 */
     running?: boolean;
     /** 中断当前运行中的会话（running 时可用）。 */
     onStop?: () => void | Promise<void>;
@@ -68,10 +68,8 @@
   async function submit() {
     const trimmed = text.trim();
     if (!trimmed) return;
-    if (running) {
-      // 运行中发送：先中断当前轮（abort），再立即发送新消息。
-      await onStop?.();
-    }
+    // 运行中发送不调用 onStop：发送 = 继续对话（后端 User 抢占旧轮，课题不受影响）；
+    // 停止 = 暂停对话（轮次 + 课题），两者语义不同，走停止按钮。
     history.push(trimmed);
     historyIndex = -1;
     onSend(trimmed);

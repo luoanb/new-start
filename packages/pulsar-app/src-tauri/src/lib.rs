@@ -181,13 +181,14 @@ async fn create_conversation(
 
 #[tauri::command]
 async fn close_session(
-    sessions: State<'_, SessionTracker>,
+    gateway: State<'_, Gateway>,
     state_emit: State<'_, StateEmitter>,
     session_id: String,
 ) -> TauriResult<String> {
-    let session_id = sessions
+    // 统一停止语义：取消活动轮次 + 暂停绑定课题 + 摘除运行条目（Gateway::stop_session）。
+    let session_id = gateway
         .inner()
-        .close(&session_id)
+        .stop_session(&session_id)
         .map_err(|error| error.payload())?;
     state_emit.inner()(StateChange::Sessions);
     Ok(session_id)

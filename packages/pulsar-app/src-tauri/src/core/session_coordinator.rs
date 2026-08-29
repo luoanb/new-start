@@ -125,7 +125,7 @@ impl SessionCoordinator {
         }
     }
 
-    /// 外部中断（Bug #1 桥接）：取消该会话当前活动轮次（停止按钮 → tracker abort 回调）。
+    /// 外部中断（Bug #1 桥接）：取消该会话当前活动轮次（停止按钮 → Gateway::stop_session）。
     /// 无活动轮次时为无害 no-op（返回 false）——与 User 抢占共用同一协作式取消语义。
     pub fn cancel_active(&self, session_id: &str) -> bool {
         let map = self.active.lock().expect("coordinator lock should not be poisoned");

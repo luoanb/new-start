@@ -19,7 +19,16 @@ pub struct RunningSession {
 
 struct SessionCtx {
     info: RunningSession,
-    abort: Option<Box<dyn FnOnce() + Send>>,
+    /// 归属令牌：`register` 每次生成新令牌，`unregister` 仅在令牌与当前条目一致
+    /// （`Arc::ptr_eq`）时移除——旧轮收尾的过期句柄不会误删新轮的注册条目
+    /// （发送消息中断：旧轮被抢占收敛返回时，新轮已重新注册）。
+    token: Arc<()>,
+}
+
+/// 注册归属句柄：由 `register` 返回，调用方收尾时传回 `unregister` 做归属校验。
+#[derive(Clone)]
+pub struct SessionHandle {
+    token: Arc<()>,
 }
 
 /// Pure in-memory session tracker.
@@ -64,13 +73,11 @@ impl SessionTracker {
 
     /// Register a session as running.
     ///
-    /// `abort` is an optional callback invoked when `close()` is called,
-    /// allowing the caller to cancel the in-flight execution.
-    pub fn register(
-        &self,
-        session_id: &str,
-        abort: Option<Box<dyn FnOnce() + Send>>,
-    ) -> AppResult<()> {
+    /// 返回归属句柄：`unregister` 仅接受当前最新注册的句柄（见 `SessionCtx::token`）。
+    /// tracker 为纯运行状态展示（list / get / update_step），不承载取消行为——
+    /// 停止语义统一走 `Gateway::stop_session`（协调器 cancel_active + 暂停课题）。
+    pub fn register(&self, session_id: &str) -> AppResult<SessionHandle> {
+        let token = Arc::new(());
         {
             let mut map = self
                 .inner
@@ -84,23 +91,34 @@ impl SessionTracker {
                         started_at: now_ms(),
                         current_step: None,
                     },
-                    abort,
+                    token: Arc::clone(&token),
                 },
             );
         }
         self.notify();
-        Ok(())
+        Ok(SessionHandle { token })
     }
 
     /// Remove a session from the tracker (normal completion).
-    /// Does NOT invoke the abort callback.
-    pub fn unregister(&self, session_id: &str) {
-        {
-            if let Ok(mut map) = self.inner.lock() {
-                let _ = map.remove(session_id);
+    ///
+    /// 归属校验：仅当 `handle` 仍对应最新注册时才移除；过期句柄（该会话已被新轮
+    /// 重新注册）为无害 no-op，防止旧轮收尾误删新轮条目。
+    pub fn unregister(&self, session_id: &str, handle: &SessionHandle) {
+        let removed = self.inner.lock().is_ok_and(|mut map| {
+            let is_owner = matches!(
+                map.get(session_id),
+                Some(ctx) if Arc::ptr_eq(&ctx.token, &handle.token)
+            );
+            if is_owner {
+                map.remove(session_id);
+                true
+            } else {
+                false
             }
+        });
+        if removed {
+            self.notify();
         }
-        self.notify();
     }
 
     /// Update the current execution step for an agent session.
@@ -127,27 +145,24 @@ impl SessionTracker {
         }
     }
 
-    /// Force-close a running session: invokes the abort callback and removes it.
+    /// Remove a running entry without ownership check（强制摘除）。
+    ///
+    /// 生产路径唯一调用方是 `Gateway::stop_session`（停止 = 摘除展示条目）。
+    /// 条目不存在时返回 `ConversationNotFound`——调用方按需静默（停止幂等）。
     pub fn close(&self, session_id: &str) -> AppResult<String> {
-        let abort = {
+        {
             let mut map = self
                 .inner
                 .lock()
                 .map_err(|e| AppError::StorageError(format!("Lock error: {}", e)))?;
-            map.remove(session_id).map(|ctx| ctx.abort)
-        };
-        if let Some(abort) = abort {
-            // Release lock before calling the callback
-            if let Some(f) = abort {
-                f();
+            if map.remove(session_id).is_none() {
+                return Err(AppError::ConversationNotFound(format!(
+                    "Running session not found: {session_id}"
+                )));
             }
-            self.notify();
-            Ok(format!("Closed session: {session_id}"))
-        } else {
-            Err(AppError::ConversationNotFound(format!(
-                "Running session not found: {session_id}"
-            )))
         }
+        self.notify();
+        Ok(format!("Closed session: {session_id}"))
     }
 
     /// List all currently running sessions.
@@ -280,8 +295,8 @@ mod tests {
     #[test]
     fn test_register_and_list() {
         let st = SessionTracker::new();
-        st.register("sess-1", None).unwrap();
-        st.register("sess-2", None).unwrap();
+        st.register("sess-1").unwrap();
+        st.register("sess-2").unwrap();
         let list = st.list().unwrap();
         assert_eq!(list.len(), 2);
     }
@@ -289,31 +304,42 @@ mod tests {
     #[test]
     fn test_unregister_removes_session() {
         let st = SessionTracker::new();
-        st.register("sess-1", None).unwrap();
-        st.unregister("sess-1");
+        let handle = st.register("sess-1").unwrap();
+        st.unregister("sess-1", &handle);
         assert!(st.list().unwrap().is_empty());
+    }
+
+    /// 归属校验回归（发送消息中断）：旧轮过期句柄的 unregister 不得删除新轮注册条目。
+    #[test]
+    fn test_unregister_stale_handle_keeps_newer_registration() {
+        let st = SessionTracker::new();
+        let old = st.register("sess-1").unwrap();
+        let new = st.register("sess-1").unwrap(); // 新轮覆盖注册（发送消息中断）
+
+        st.unregister("sess-1", &old); // 旧轮被抢占后收尾
+        assert!(
+            st.get("sess-1").unwrap().is_some(),
+            "stale unregister must not remove the newer registration"
+        );
+
+        st.unregister("sess-1", &new); // 新轮正常收尾
+        assert!(st.get("sess-1").unwrap().is_none());
     }
 
     #[test]
     fn test_update_step() {
         let st = SessionTracker::new();
-        st.register("sess-1", None).unwrap();
+        st.register("sess-1").unwrap();
         st.update_step("sess-1", "calculate").unwrap();
         let s = st.get("sess-1").unwrap().unwrap();
         assert_eq!(s.current_step.as_deref(), Some("calculate"));
     }
 
     #[test]
-    fn test_close_invokes_abort() {
+    fn test_close_removes_entry() {
         let st = SessionTracker::new();
-        let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let called_clone = called.clone();
-        let abort = Box::new(move || {
-            called_clone.store(true, std::sync::atomic::Ordering::Relaxed);
-        });
-        st.register("sess-1", Some(abort)).unwrap();
+        st.register("sess-1").unwrap();
         st.close("sess-1").unwrap();
-        assert!(called.load(std::sync::atomic::Ordering::Relaxed));
         assert!(st.list().unwrap().is_empty());
     }
 
