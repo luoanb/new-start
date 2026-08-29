@@ -143,12 +143,21 @@ impl ConversationRunner {
         // B 方案：会话级串行。User 轮抢占（cancel 当前轮）；非 User 轮遇忙跳过（返回占位，
         // 由 Poller / 手动推进等调用方静默吞掉，不打断正在进行的对话）。
         // busy 必然释放：guard 生命周期覆盖全轮，任何早退路径 Drop 自动 end()。
-        let Some(active_round) = self.coordinator.begin(&ctx.session_id, ctx.trigger) else {
+        let Some(mut active_round) = self.coordinator.begin(&ctx.session_id, ctx.trigger) else {
             return Ok(ChatResponse {
                 conversation_id: ctx.session_id.clone(),
                 response: String::new(),
             });
         };
+        // 用户优先：本轮抢占旧轮时，先等待旧轮完成「回复多少存储多少」收敛落库再刷新消息
+        // 快照——保证本轮 wire 上下文包含旧轮被截断回复的最终落库内容，而非节流写盘的
+        // 中间态（Bug #2）。等待带 2s 超时兜底，异常路径不阻塞新轮。
+        if let Some(wait) = active_round.take_preempt_wait() {
+            wait_preempt_convergence(wait).await;
+            if let Ok(conversation) = self.store.require_conversation(&ctx.session_id) {
+                ctx.messages = conversation.messages;
+            }
+        }
         tracing::info!(
             phase = "run_round",
             session_id = %ctx.session_id,
@@ -273,12 +282,21 @@ impl ConversationRunner {
         let mut ctx = self.load_context(session_id, input, tool_override, model)?;
         // B 方案：会话级串行。User 轮抢占（cancel 当前轮）；非 User 轮遇忙跳过（返回占位）。
         // busy 必然释放：guard 生命周期覆盖全轮，任何早退路径 Drop 自动 end()。
-        let Some(active_round) = self.coordinator.begin(&ctx.session_id, ctx.trigger) else {
+        let Some(mut active_round) = self.coordinator.begin(&ctx.session_id, ctx.trigger) else {
             return Ok(ChatResponse {
                 conversation_id: ctx.session_id.clone(),
                 response: String::new(),
             });
         };
+        // 用户优先：本轮抢占旧轮时，先等待旧轮完成「回复多少存储多少」收敛落库再刷新消息
+        // 快照——保证本轮 wire 上下文包含旧轮被截断回复的最终落库内容，而非节流写盘的
+        // 中间态（Bug #2）。等待带 2s 超时兜底，异常路径不阻塞新轮。
+        if let Some(wait) = active_round.take_preempt_wait() {
+            wait_preempt_convergence(wait).await;
+            if let Ok(conversation) = self.store.require_conversation(&ctx.session_id) {
+                ctx.messages = conversation.messages;
+            }
+        }
         tracing::info!(
             phase = "run_round_stream",
             session_id = %ctx.session_id,
@@ -910,6 +928,29 @@ pub(crate) fn write_session_state(
     let mut conversation = store.require_conversation(session_id)?;
     set_session_state(&mut conversation, state);
     store.save_conversation(&conversation)
+}
+
+/// 等待被抢占旧轮收敛（Bug #2）：旧轮完成「回复多少存储多少」收敛落库后信号置真
+/// （取消分支同步收敛 → guard Drop 兜底发送），或轮次结束（sender 释放）即返回。
+/// 2s 超时兜底：异常路径降级为节流中间态快照，不阻塞新轮。
+async fn wait_preempt_convergence(mut wait: tokio::sync::watch::Receiver<bool>) {
+    let waited = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if *wait.borrow_and_update() {
+                return;
+            }
+            if wait.changed().await.is_err() {
+                return; // 全部 sender 释放 = 旧轮已结束
+            }
+        }
+    })
+    .await;
+    if waited.is_err() {
+        tracing::warn!(
+            phase = "preempt_wait",
+            "preempted round convergence wait timed out; proceeding with throttled snapshot"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1904,6 +1945,8 @@ mod tests {
     struct StreamHangCaller {
         calls: AtomicUsize,
         first_chunk_sent: Arc<tokio::sync::Notify>,
+        /// 第二次调用收到的 wire 快照（Bug #2 固化：新轮上下文须含旧轮最终落库全文）。
+        second_wire: Arc<Mutex<Vec<ModelMessage>>>,
     }
 
     #[async_trait]
@@ -1914,12 +1957,15 @@ mod tests {
 
         async fn call_model_stream(
             &self,
-            _request: ModelCallRequest,
+            request: ModelCallRequest,
             mut on_chunk: Box<dyn FnMut(openai_compat::StreamChunk) + Send>,
         ) -> AppResult<ModelCallResponse> {
             if self.calls.fetch_add(1, Ordering::Relaxed) == 0 {
-                on_chunk(openai_compat::StreamChunk {
-                    id: "chunk-0".into(),
+                // 两个连续增量：「partial 」随首块立即落库；「reply」落在 150ms 节流窗口内
+                // 不落盘——制造「旧轮存在未落库尾部」的确定性状态，固化 Bug #2：抢占后
+                // 新轮 wire 必须取到收敛落库后的全文 "partial reply"，而非中间态。
+                let mk_chunk = |id: &str, text: &str| openai_compat::StreamChunk {
+                    id: id.into(),
                     object: "chat.completion.chunk".into(),
                     created: 0,
                     model: "test-model".into(),
@@ -1927,19 +1973,23 @@ mod tests {
                         index: 0,
                         delta: openai_compat::StreamDelta {
                             role: Some("assistant".into()),
-                            content: Some("partial reply".into()),
+                            content: Some(text.into()),
                             reasoning_content: None,
                             tool_calls: None,
                         },
                         finish_reason: None,
                     }],
                     usage: None,
-                });
+                };
+                on_chunk(mk_chunk("chunk-0", "partial "));
+                on_chunk(mk_chunk("chunk-1", "reply"));
                 self.first_chunk_sent.notify_waiters();
                 // 挂起直到被抢占（外层 select 取消时 future 被 drop）。
                 std::future::pending::<()>().await;
                 unreachable!("stream caller must be preempted")
             }
+            // Bug #2 固化点：记录第二轮收到的 wire 快照供断言。
+            *self.second_wire.lock().unwrap() = request.messages.clone();
             Ok(ModelCallResponse {
                 provider_id: "test".into(),
                 model_id: "test-model".into(),
@@ -1962,6 +2012,7 @@ mod tests {
         let caller: Arc<dyn ModelCaller> = Arc::new(StreamHangCaller {
             calls: AtomicUsize::new(0),
             first_chunk_sent: Arc::clone(&hang_signal),
+            second_wire: Arc::new(Mutex::new(Vec::new())),
         });
         let executor = Arc::new(RoundExecutor::new(
             Arc::clone(&caller),
@@ -2030,6 +2081,85 @@ mod tests {
         );
         assert_eq!(conv.messages[2].text(), "second question");
         assert_eq!(conv.messages[3].text(), "echo");
+    }
+
+    /// Bug #2 回归固化：发送消息中断（User 抢占）后，新轮 wire 中旧轮 assistant 消息
+    /// 必须是收敛落库后的完整全文（"partial reply"），而非节流写盘的中间态（"partial "）。
+    /// StreamHangCaller 故意把第二个增量留在节流窗口内不落盘，使未修复时本断言确定失败。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn preempting_round_wire_contains_preempted_round_final_partial() {
+        let h = harness();
+        let store = ConversationStore::new(h.root.join("sessions-preempt-wire")).unwrap();
+        let coordinator = Arc::new(SessionCoordinator::new());
+        let hang_signal = Arc::new(tokio::sync::Notify::new());
+        let second_wire: Arc<Mutex<Vec<ModelMessage>>> = Arc::new(Mutex::new(Vec::new()));
+        let caller: Arc<dyn ModelCaller> = Arc::new(StreamHangCaller {
+            calls: AtomicUsize::new(0),
+            first_chunk_sent: Arc::clone(&hang_signal),
+            second_wire: Arc::clone(&second_wire),
+        });
+        let executor = Arc::new(RoundExecutor::new(
+            Arc::clone(&caller),
+            Arc::clone(&h.tool_registry),
+            crate::core::context_safety::DEFAULT_TOOL_RESULT_MAX_CHARS,
+        ));
+        let runner = ConversationRunner::new(
+            store.clone(),
+            Arc::clone(&h.resolver),
+            executor,
+            Arc::clone(&coordinator),
+        );
+        let conv = store
+            .create_conversation(None, ConversationMode::Chat)
+            .unwrap();
+        let id = conv.id.clone();
+
+        let runner_a = runner.clone();
+        let id_a = id.clone();
+        let first = tokio::spawn(async move {
+            runner_a
+                .run_round_stream(
+                    &id_a,
+                    InputRecord::User("first question".into()),
+                    None,
+                    &model(),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+        });
+        hang_signal.notified().await;
+
+        let runner_b = runner.clone();
+        let id_b = id.clone();
+        let second = tokio::spawn(async move {
+            runner_b
+                .run_round_stream(
+                    &id_b,
+                    InputRecord::User("second question".into()),
+                    None,
+                    &model(),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+        });
+        let _first_resp = first.await.unwrap();
+        let _second_resp = second.await.unwrap();
+
+        // 核心断言：第二轮收到的 wire 中，旧轮 assistant 内容 = 收敛落库后的全文。
+        let wire = second_wire.lock().unwrap().clone();
+        let old_assistant = wire
+            .iter()
+            .rev()
+            .find(|m| m.role == crate::core::models::ModelMessageRole::Assistant)
+            .expect("wire must contain the preempted round's assistant message");
+        assert_eq!(
+            old_assistant.content, "partial reply",
+            "new round's wire must snapshot the converged final text, not the throttled intermediate state"
+        );
     }
 
     /// 会话忙时非 User 轮（Poller 推进）直接跳过：不落消息、不调模型、返回占位。

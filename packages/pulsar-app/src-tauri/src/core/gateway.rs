@@ -19,8 +19,8 @@ use super::{
     models::{
         ChatModelSelection, ChatOptions, ChatResponse, Conversation, ConversationMode,
         ConversationSummaryPage, Message, MessageBody, MessagePage, MessageRole, ModelCallRequest,
-        ModelCallResponse, ModelInfo, ProviderInfo, RuntimeStatus, SkillInfo, SystemPromptStatus,
-        ToolInfo, ToolSource, ToolTag,
+        ModelCallResponse, ModelInfo, ProviderInfo, RuntimeStatus, ScopeInItem, SkillInfo,
+        SystemPromptStatus, TopicStatus, ToolInfo, ToolSource, ToolTag,
     },
     neuron_config::NeuronConfigReader,
     neuron_manager::NeuronManager,
@@ -88,6 +88,10 @@ pub struct Gateway {
     assistant: Arc<AssistantSession>,
     poller: Arc<Mutex<Poller>>,
     session_tracker: SessionTracker,
+    /// 会话级串行协调器：与 runner 共享同一实例。停止按钮（close_session → tracker abort
+    /// 回调）经 `cancel_active` 取消活动轮次，并暂停会话绑定的可推进课题——
+    /// 「停止 = 暂停对话（轮次 + 课题）」，恢复走课题现有 resume（Bug #1 修复 + 语义补全）。
+    coordinator: Arc<SessionCoordinator>,
     /// Shared so Gateway can be used via `&self` / Tauri State without holding an outer lock across await.
     current_conversation_id: Arc<Mutex<String>>,
     /// MCP server 状态（装配期与运行期重装配均可更新，供前端 DockPane 展示）。
@@ -367,11 +371,13 @@ impl Gateway {
         // 注入点注册表：核心 5 步之外的调度全部以 hook 挂载（装配期注册，Runner Clone 共享）。
         let registry = Arc::new(HookRegistry::new());
         // 会话级串行协调器（B 方案）：User 轮抢占 / 非 User 轮遇忙跳过。
+        // 留存一份在 Gateway：供 session_tracker 的 abort 闭包取消活动轮次（Bug #1 桥接）。
+        let coordinator = Arc::new(SessionCoordinator::new());
         let runner = ConversationRunner::new(
             store.clone(),
             Arc::clone(&resolver),
             executor,
-            Arc::new(SessionCoordinator::new()),
+            Arc::clone(&coordinator),
         )
         .with_hooks(Arc::clone(&registry));
         let chat = ChatSession::new(runner.clone());
@@ -493,6 +499,7 @@ impl Gateway {
             assistant,
             poller,
             session_tracker,
+            coordinator,
             current_conversation_id: Arc::new(Mutex::new(current_conversation_id)),
             mcp_server_statuses,
             workspace_store,
@@ -796,7 +803,9 @@ impl Gateway {
         // Clone handles before any network await — callers must not hold an outer Gateway lock.
         let assistant = Arc::clone(&self.assistant);
         let session_tracker = self.session_tracker.clone();
-        session_tracker.register(&conversation_id, None)?;
+        // Bug #1 修复：注册真实 abort 回调——停止按钮（close_session）经此取消活动轮次
+        // 并暂停绑定课题；无活动轮次/无课题时均为无害 no-op。
+        session_tracker.register(&conversation_id, Some(self.stop_abort_hook(&conversation_id)))?;
 
         // ConversationMode 路由按 mode 委托各业务 session 文件（业务逻辑不进 Gateway）：
         // - Assistant → assistant_session.converse（课题路由/选型经注入点 hook 编排）
@@ -894,7 +903,8 @@ impl Gateway {
         // Clone handles before any network await — callers must not hold an outer Gateway lock.
         let assistant = Arc::clone(&self.assistant);
         let session_tracker = self.session_tracker.clone();
-        session_tracker.register(&conversation_id, None)?;
+        // Bug #1 修复：注册真实 abort 回调（流式路径同样可被停止按钮终止 + 暂停绑定课题）。
+        session_tracker.register(&conversation_id, Some(self.stop_abort_hook(&conversation_id)))?;
 
         // 流式增量回调：conversation_id 在 resolve 后确定，闭包捕获之并转发为 MessageDelta。
         let on_delta = self.state_emit.0.as_ref().map(|emitter| {
@@ -990,7 +1000,8 @@ impl Gateway {
         }
         let assistant = Arc::clone(&self.assistant);
         let session_tracker = self.session_tracker.clone();
-        session_tracker.register(&conversation_id, None)?;
+        // Bug #1 修复：注册真实 abort 回调（手动推进/轮询路径同样可被停止按钮终止）。
+        session_tracker.register(&conversation_id, Some(self.stop_abort_hook(&conversation_id)))?;
         let result = assistant.step(&conversation_id, model).await;
         session_tracker.unregister(&conversation_id);
         result
@@ -1136,6 +1147,50 @@ impl Gateway {
         self.topic_store
             .clone()
             .ok_or_else(|| AppError::StorageError("TopicStore not initialized".into()))
+    }
+
+    /// 构造「停止」abort 闭包（停止按钮统一语义）：① 取消该会话当前活动轮次
+    /// （`cancel_active`，Bug #1 桥接）；② 暂停该会话绑定的可推进课题
+    /// （Todo / InProgress / WrappingUp——即 Poller 跳过清单之外会被自动续跑的状态），
+    /// 防止「停止后下个轮询 tick 又自动续跑」。`Paused` / `WaitingUser` 本就不被推进，
+    /// 终态（Done / Cancelled）不动；恢复走课题现有 resume（前端恢复按钮）。
+    fn stop_abort_hook(&self, conversation_id: &str) -> Box<dyn FnOnce() + Send> {
+        let coordinator = Arc::clone(&self.coordinator);
+        let cid = conversation_id.to_string();
+        let topic_store = self.topic_store.clone();
+        Box::new(move || {
+            coordinator.cancel_active(&cid);
+            let Some(store) = topic_store.as_ref() else {
+                return;
+            };
+            let Ok(store) = store.lock() else {
+                return;
+            };
+            let Ok(Some(topic)) = store.find_by_session_id(&cid) else {
+                return;
+            };
+            if matches!(
+                topic.status,
+                TopicStatus::Todo | TopicStatus::InProgress | TopicStatus::WrappingUp
+            ) {
+                if let Err(error) = store.pause(&topic.id) {
+                    tracing::warn!(
+                        phase = "stop_session",
+                        conversation_id = %cid,
+                        topic_id = %topic.id,
+                        error = %error,
+                        "pause bound topic on stop failed"
+                    );
+                } else {
+                    tracing::info!(
+                        phase = "stop_session",
+                        conversation_id = %cid,
+                        topic_id = %topic.id,
+                        "bound topic paused on stop"
+                    );
+                }
+            }
+        })
     }
 
     /// Access the HookJudgementStore for commands / AssistantSession.
@@ -2235,6 +2290,107 @@ mod tests {
 
         let store = ConversationStore::new(root).expect("test store should initialize");
         Gateway::new(store).expect("test gateway should initialize")
+    }
+
+    /// 停止语义回归（停止 = 暂停对话）：stop hook 触发后，会话绑定的可推进课题
+    /// （InProgress）必须被暂停，Poller 跳过清单生效 → 不再自动续跑。
+    #[test]
+    fn stop_abort_hook_pauses_bound_advanceable_topic() {
+        let gateway = test_gateway("stop_abort_hook_pauses_bound_topic");
+        let cid = gateway
+            .create_new_conversation(ConversationMode::Assistant)
+            .expect("conversation should be created");
+        let topic_store = gateway.topic_store().expect("topic store");
+        // create 按 scope 推导状态：completed + pending → InProgress。
+        let topic = topic_store
+            .lock()
+            .unwrap()
+            .create(
+                "t",
+                "d",
+                TopicStatus::InProgress,
+                vec![
+                    ScopeInItem {
+                        id: "s1".into(),
+                        goal: "g1".into(),
+                        done_contract: "c1".into(),
+                        status: "completed".into(),
+                    },
+                    ScopeInItem {
+                        id: "s2".into(),
+                        goal: "g2".into(),
+                        done_contract: "c2".into(),
+                        status: "pending".into(),
+                    },
+                ],
+                None,
+            )
+            .expect("topic should be created");
+        assert_eq!(topic.status, TopicStatus::InProgress, "derive check");
+        topic_store
+            .lock()
+            .unwrap()
+            .bind_session(&topic.id, &cid)
+            .expect("bind session");
+
+        (gateway.stop_abort_hook(&cid))();
+
+        let paused = topic_store
+            .lock()
+            .unwrap()
+            .get(&topic.id)
+            .expect("topic readable")
+            .expect("topic exists");
+        assert_eq!(
+            paused.status,
+            TopicStatus::Paused,
+            "stop must pause the bound advanceable topic (blocks poller auto-resume)"
+        );
+    }
+
+    /// 停止语义边界：WaitingUser 课题本就在 Poller 跳过清单内（等待用户介入），停止不动它。
+    #[test]
+    fn stop_abort_hook_keeps_waiting_user_topic_untouched() {
+        let gateway = test_gateway("stop_abort_hook_keeps_waiting_user");
+        let cid = gateway
+            .create_new_conversation(ConversationMode::Assistant)
+            .expect("conversation should be created");
+        let topic_store = gateway.topic_store().expect("topic store");
+        let topic = topic_store
+            .lock()
+            .unwrap()
+            .create(
+                "t",
+                "d",
+                TopicStatus::WaitingUser,
+                vec![ScopeInItem {
+                    id: "s1".into(),
+                    goal: "g".into(),
+                    done_contract: "c".into(),
+                    status: "blocked".into(),
+                }],
+                None,
+            )
+            .expect("topic should be created");
+        topic_store
+            .lock()
+            .unwrap()
+            .bind_session(&topic.id, &cid)
+            .expect("bind session");
+
+        (gateway.stop_abort_hook(&cid))();
+
+        let untouched = topic_store
+            .lock()
+            .unwrap()
+            .get(&topic.id)
+            .expect("topic readable")
+            .expect("topic exists");
+        assert_eq!(
+            untouched.status,
+            TopicStatus::WaitingUser,
+            "waiting-user topic already blocks polling; stop must not override it"
+        );
     }
 
     fn test_root(name: &str) -> PathBuf {
