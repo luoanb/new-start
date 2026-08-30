@@ -10,8 +10,9 @@ use tauri::State;
 use super::events::{pump_session_events, TerminalEventHub};
 use super::manager::TerminalManager;
 use super::session::{SessionInfo, TerminalSession};
+use super::resolve_spawn_cwd;
 use crate::core::error::AppErrorPayload;
-use crate::core::AppError;
+use crate::core::{AppError, Gateway};
 
 type TauriResult<T> = Result<T, AppErrorPayload>;
 
@@ -47,11 +48,14 @@ fn session_not_found(session_id: &str) -> AppErrorPayload {
 pub async fn terminal_spawn(
     manager: State<'_, Arc<TerminalManager>>,
     hub: State<'_, TerminalEventHub>,
+    gateway: State<'_, Gateway>,
     cwd: Option<String>,
     shell: Option<String>,
     cols: Option<u16>,
     rows: Option<u16>,
 ) -> TauriResult<TerminalSpawned> {
+    // 工作区路径由后端管理：未显式传 cwd 时回退到 active 工作区根。
+    let cwd = resolve_spawn_cwd(cwd, &gateway.inner().workspace_store()).map_err(|e| e.payload())?;
     let (session, output_rx, exit_rx) =
         TerminalSession::spawn(cwd, shell, cols, rows).map_err(|e| e.payload())?;
     let session_id = session.session_id().to_string();

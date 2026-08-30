@@ -86,7 +86,13 @@ async fn dispatch(text: &str, state: &NetState) -> String {
     match envelope.topic.as_str() {
         terminal_ws::TOPIC => {
             let payload = envelope.rest.to_string();
-            terminal_ws::handle_frame(&payload, &state.terminal, &state.terminal_hub).await
+            terminal_ws::handle_frame(
+                &payload,
+                &state.terminal,
+                &state.terminal_hub,
+                &state.gateway.workspace_store(),
+            )
+            .await
         }
         other => error_frame(format!("unknown topic: {other}")),
     }

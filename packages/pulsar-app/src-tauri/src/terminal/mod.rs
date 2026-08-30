@@ -8,6 +8,9 @@
 //! Agent 可见执行（execute_command 接入）由 `core/cmd_exec` 通过
 //! `TerminalManager` 的会话句柄旁路广播，本模块不感知 core 内部细节。
 
+use crate::core::AppResult;
+use crate::fileops::workspace::WorkspaceStore;
+
 pub mod bridge;
 pub mod commands;
 pub mod events;
@@ -19,3 +22,61 @@ pub use bridge::AgentTerminalBridge;
 pub use events::TerminalEventHub;
 pub use manager::TerminalManager;
 pub use session::{SessionInfo, TerminalSession, TERMINAL_EXIT_EVENT, TERMINAL_OUTPUT_EVENT};
+
+/// 解析终端启动目录：客户端显式传 `cwd` 则原样使用；否则回退到后端管理的
+/// active 工作区根（工作区路径由后端管理，前端不负责拼接）。无 active 工作区
+/// 时返回 None（沿用进程 cwd），不报错。
+pub fn resolve_spawn_cwd(
+    cwd: Option<String>,
+    workspace_store: &WorkspaceStore,
+) -> AppResult<Option<String>> {
+    if let Some(cwd) = cwd {
+        return Ok(Some(cwd));
+    }
+    Ok(workspace_store
+        .active()?
+        .map(|ws| ws.root.display().to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 临时存储根（workspaces.json 不存在时自动回落空态）。
+    fn test_store() -> WorkspaceStore {
+        let root = std::env::temp_dir().join(format!(
+            "pulsar-term-store-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        WorkspaceStore::new(&root).unwrap()
+    }
+
+    #[test]
+    fn explicit_cwd_wins() {
+        let store = test_store();
+        let cwd = resolve_spawn_cwd(Some("/tmp".into()), &store).unwrap();
+        assert_eq!(cwd.as_deref(), Some("/tmp"));
+    }
+
+    #[test]
+    fn no_workspace_falls_back_to_none() {
+        let store = test_store();
+        let cwd = resolve_spawn_cwd(None, &store).unwrap();
+        assert_eq!(cwd, None);
+    }
+
+    #[test]
+    fn falls_back_to_active_workspace_root() {
+        let root = std::env::temp_dir().join(format!(
+            "pulsar-term-cwd-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = test_store();
+        store.add(root.to_str().unwrap()).unwrap();
+        let canonical = std::fs::canonicalize(&root).unwrap();
+        let cwd = resolve_spawn_cwd(None, &store).unwrap();
+        assert_eq!(cwd.as_deref(), canonical.to_str());
+    }
+}

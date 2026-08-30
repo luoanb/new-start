@@ -17,6 +17,8 @@ use serde_json::json;
 use super::events::{pump_session_events, TerminalEventHub};
 use super::manager::TerminalManager;
 use super::session::{SessionInfo, TerminalSession};
+use super::resolve_spawn_cwd;
+use crate::fileops::workspace::WorkspaceStore;
 
 /// 本业务的 topic 标识（net::ws 按此分发）。
 pub const TOPIC: &str = "terminal";
@@ -55,6 +57,7 @@ pub async fn handle_frame(
     payload: &str,
     manager: &Arc<TerminalManager>,
     hub: &TerminalEventHub,
+    workspace_store: &WorkspaceStore,
 ) -> String {
     let request: WsRequest = match serde_json::from_str(payload) {
         Ok(req) => req,
@@ -62,6 +65,11 @@ pub async fn handle_frame(
     };
     match request {
         WsRequest::Spawn { cwd, shell, cols, rows } => {
+            // 工作区路径由后端管理：未显式传 cwd 时回退到 active 工作区根。
+            let cwd = match resolve_spawn_cwd(cwd, workspace_store) {
+                Ok(cwd) => cwd,
+                Err(e) => return error_frame(format!("spawn failed: {e}")),
+            };
             match TerminalSession::spawn(cwd, shell, cols, rows) {
                 Ok((session, output_rx, exit_rx)) => {
                     let session_id = session.session_id().to_string();
