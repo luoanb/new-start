@@ -13,6 +13,7 @@ use crate::core::error::{AppError, AppResult};
 use crate::core::hook::defs::{BoxFuture, InjectPointId};
 use crate::core::hook::judgement::{HookDef, JudgementAnchor};
 use crate::core::hook::registry::{HookInstance, HookRun};
+use crate::core::log_phase::PHASE_HOOK_COMPLETE_SCOPE;
 use crate::core::models::TopicStatus;
 use crate::core::openai_compat::ResponseFormatSpec;
 
@@ -48,13 +49,13 @@ pub(crate) const INSTANCE: HookInstance = HookInstance {
 
 pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppResult<()> {
     let Some(topic_id) = ctx.topic_id.clone() else {
-        tracing::info!(phase = "complete_scope_hook", "skip: no topic");
+        tracing::info!(phase = PHASE_HOOK_COMPLETE_SCOPE, "skip: no topic");
         return Ok(());
     };
     let topic = match hooks.assistant.topics()?.get(&topic_id)? {
         Some(topic) => topic,
         None => {
-            tracing::info!(phase = "complete_scope_hook", topic_id = %topic_id, "skip: topic missing");
+            tracing::info!(phase = PHASE_HOOK_COMPLETE_SCOPE, topic_id = %topic_id, "skip: topic missing");
             return Ok(());
         }
     };
@@ -64,7 +65,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
         TopicStatus::Paused | TopicStatus::WaitingUser
     ) {
         tracing::info!(
-            phase = "complete_scope_hook",
+            phase = PHASE_HOOK_COMPLETE_SCOPE,
             topic_id = %topic_id,
             status = ?topic.status,
             "skip: topic paused or waiting user"
@@ -80,7 +81,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
             .topics()?
             .set_status(&topic_id, TopicStatus::Done)?;
         tracing::info!(
-            phase = "complete_scope_hook",
+            phase = PHASE_HOOK_COMPLETE_SCOPE,
             topic_id = %topic_id,
             "empty scope_in; topic closed as done"
         );
@@ -99,7 +100,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
                 .topics()?
                 .set_status(&topic_id, TopicStatus::Done)?;
             tracing::info!(
-                phase = "complete_scope_hook",
+                phase = PHASE_HOOK_COMPLETE_SCOPE,
                 topic_id = %topic_id,
                 "wrap-up round finished; topic closed"
             );
@@ -113,7 +114,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
     let model_output = outcome.model_output.clone();
     let tool_results = outcome.tool_results.clone();
     tracing::info!(
-        phase = "complete_scope_hook",
+        phase = PHASE_HOOK_COMPLETE_SCOPE,
         topic_id = %topic_id,
         scope_items = topic.scope_in.len(),
         "calling complete-scope model"
@@ -154,7 +155,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
         .cloned()
         .unwrap_or_default();
     tracing::info!(
-        phase = "complete_scope_hook",
+        phase = PHASE_HOOK_COMPLETE_SCOPE,
         completed = ids.len(),
         blocked = blocked_ids.len(),
         "updating scope items"
@@ -189,7 +190,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
             .topics()?
             .set_status(&topic_id, TopicStatus::WrappingUp)?;
         tracing::info!(
-            phase = "complete_scope_hook",
+            phase = PHASE_HOOK_COMPLETE_SCOPE,
             topic_id = %topic_id,
             "scope completed via tool round; topic wrapping up"
         );

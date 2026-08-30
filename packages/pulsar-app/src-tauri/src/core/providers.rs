@@ -11,6 +11,9 @@ use super::{
         ResponseFormatSpec, ToolCallWire, ToolDef,
     },
 };
+use crate::core::log_phase::{
+    PHASE_APPLY_TOOLS, PHASE_CALL_MODEL, PHASE_PARSE_TOOL_CALL,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
@@ -421,7 +424,7 @@ impl ProviderRegistry {
                         // 诊断：记录模型返回的原始 arguments 字符串，区分 `""` 空串与 `"null"` 字面量。
                         // 配合 apply_tools 的 tools_wire 日志，定位必填参数丢失发生在发送还是模型侧。
                         tracing::info!(
-                            phase = "parse_tool_call",
+                            phase = PHASE_PARSE_TOOL_CALL,
                             tool = %tc.function.name,
                             args_str_len = tc.function.arguments.len(),
                             raw_arguments = %tc.function.arguments,
@@ -488,7 +491,7 @@ impl ProviderRegistry {
                 })
                 .unwrap_or_default();
             tracing::warn!(
-                phase = "call_model",
+                phase = PHASE_CALL_MODEL,
                 provider_id = %request.provider_id,
                 model_id = %request.model_id,
                 response_id = %response.id,
@@ -1103,7 +1106,7 @@ fn apply_tools(req: &mut ChatRequest, tools: &Option<Vec<crate::core::models::To
                 })
                 .unwrap_or_default();
             tracing::info!(
-                phase = "apply_tools",
+                phase = PHASE_APPLY_TOOLS,
                 tool_count = wire_summary.len(),
                 tools_wire = wire_summary.join(","),
                 "tools wire payload sent to model"

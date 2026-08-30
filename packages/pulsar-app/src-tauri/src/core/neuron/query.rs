@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::core::{
     error::{AppError, AppResult},
+    log_phase::PHASE_NEURON_RECYCLE,
     models::{
         Connection, Neuron, NeuronKindFilter, NeuronPage, NeuronSubgraph, NeuronUpdate,
         SystemPromptStatus,
@@ -222,7 +223,7 @@ impl NeuronQuery {
         }
         let recycled = store.mark_deleted(&victims)?;
         tracing::info!(
-            phase = "recycle_if_over_capacity",
+            phase = PHASE_NEURON_RECYCLE,
             capacity,
             active_before = active,
             victims = victims.len(),

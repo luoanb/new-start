@@ -6,6 +6,7 @@
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::poller::PollHandler;
+use crate::core::log_phase::PHASE_ASSISTANT_POLL_HANDLER;
 
 /// Poller 注册任务名：`Poller` 定时触发后经 channel 转成 `AssistantStepRequest::PollAll`。
 pub const ASSISTANT_POLL_TASK: &str = "assistant_advance";
@@ -24,7 +25,7 @@ pub struct AssistantPollHandler {
 impl PollHandler for AssistantPollHandler {
     fn on_tick(&mut self) {
         tracing::info!(
-            phase = "assistant_poll_handler",
+            phase = PHASE_ASSISTANT_POLL_HANDLER,
             "on_tick fired, sending PollAll"
         );
         let _ = self.tx.send(AssistantStepRequest::PollAll);

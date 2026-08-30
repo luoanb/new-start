@@ -16,6 +16,7 @@ use crate::core::error::AppResult;
 use crate::core::hook::defs::{BoxFuture, InjectPointId};
 use crate::core::hook::judgement::{HookDef, JudgementAnchor};
 use crate::core::hook::registry::{HookInstance, HookRun};
+use crate::core::log_phase::PHASE_HOOK_USER_ROUND_JUDGEMENT;
 use crate::core::openai_compat::ResponseFormatSpec;
 
 pub const SYSTEM_TYPE_USER_ROUND_JUDGEMENT: &str = "assistant_user_round_judgement";
@@ -86,7 +87,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
         .unwrap_or(0);
     if !need_user_round_judgement(topic.is_some(), user_rounds) {
         tracing::info!(
-            phase = "user_round_judgement_hook",
+            phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
             topic_id = ?topic_id,
             user_rounds,
             "skip: judgement gated"
@@ -111,7 +112,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
         .unwrap_or_default();
     let unfinished = hooks.assistant.topics()?.list_unfinished()?;
     tracing::info!(
-        phase = "user_round_judgement_hook",
+        phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
         topic_id = ?topic_id,
         user_rounds,
         neurons = neuron_ids.len(),
@@ -157,12 +158,12 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
             Some(score) if score != 0 && (-5..=5).contains(&score) => {
                 if neuron_ids.is_empty() {
                     tracing::info!(
-                        phase = "user_round_judgement_hook",
+                        phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
                         "skip scoring: last interval has no stamped neuron"
                     );
                 } else {
                     tracing::info!(
-                        phase = "user_round_judgement_hook",
+                        phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
                         score,
                         "applying weight delta"
                     );
@@ -173,12 +174,12 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
                 }
             }
             Some(score) => tracing::warn!(
-                phase = "user_round_judgement_hook",
+                phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
                 score,
                 "score not applicable (0 or out of -5..=5); skip scoring"
             ),
             None => tracing::warn!(
-                phase = "user_round_judgement_hook",
+                phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
                 "score missing; skip scoring"
             ),
         }
@@ -189,12 +190,12 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
         .get("action")
         .and_then(|v| v.as_str())
         .unwrap_or("none");
-    tracing::info!(phase = "user_round_judgement_hook", action, "routing decision");
+    tracing::info!(phase = PHASE_HOOK_USER_ROUND_JUDGEMENT, action, "routing decision");
     match action {
         "switch" => {
             let Some(target_id) = decision.get("topic_id").and_then(|v| v.as_str()) else {
                 tracing::warn!(
-                    phase = "user_round_judgement_hook",
+                    phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
                     "switch missing topic_id; treated as none"
                 );
                 return Ok(());
@@ -206,7 +207,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
                         .create_bound_topic_from_decision(ctx, decision, true)
                         .or_else(|error| {
                             tracing::warn!(
-                                phase = "user_round_judgement_hook",
+                                phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
                                 error = %error,
                                 "switch missing and decision lacked scope_in; using emergency scope"
                             );
@@ -218,7 +219,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
                             )
                         })?;
                     tracing::warn!(
-                        phase = "user_round_judgement_hook",
+                        phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
                         requested_topic_id = target_id,
                         created_topic_id = %created.id,
                         "switch target missing; created topic"
@@ -231,7 +232,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
                 if bound_session != ctx.session_id {
                     // 切换到目标课题绑定的会话：runner 检测到 session_id 变化后自动 reload。
                     tracing::info!(
-                        phase = "user_round_judgement_hook",
+                        phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
                         from_session = %ctx.session_id,
                         to_session = %bound_session,
                         topic_id = %target.id,
@@ -253,7 +254,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
         "none" => {
             // 中性语义（A 降级兜底 action=none）：不创建、不切换，保持当前绑定。
             tracing::info!(
-                phase = "user_round_judgement_hook",
+                phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
                 "routing decision: none (no-op)"
             );
         }
@@ -262,7 +263,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
                 match hooks.create_bound_topic_from_decision(ctx, decision, false) {
                     Ok(created) => {
                         tracing::info!(
-                            phase = "user_round_judgement_hook",
+                            phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
                             topic_id = %created.id,
                             scope_items = created.scope_in.len(),
                             "created bound topic with scope_in"
@@ -271,7 +272,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
                     }
                     Err(error) => {
                         tracing::warn!(
-                            phase = "user_round_judgement_hook",
+                            phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
                             error = %error,
                             "create topic failed; keep session unbound"
                         );

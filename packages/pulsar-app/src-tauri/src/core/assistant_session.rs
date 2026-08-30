@@ -20,6 +20,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::core::log_phase::{
+    PHASE_APPLY_SCORE_FEEDBACK, PHASE_ASSISTANT_CONVERSE, PHASE_ASSISTANT_CONVERSE_STREAM,
+    PHASE_ASSISTANT_ERROR_RESIDENCY, PHASE_ASSISTANT_POLLER, PHASE_ASSISTANT_POLL_HANDLER,
+    PHASE_ASSISTANT_STEP, PHASE_CALL_JUDGEMENT, PHASE_HOOK_ASSISTANT, PHASE_MANUAL_SCORE_FEEDBACK,
+    PHASE_RUN_JUDGEMENT_ROUND,
+};
+
 use super::{
     config::config_generation_value,
     conversation_runner::{
@@ -97,12 +104,17 @@ fn capability_cache() -> &'static Mutex<HashMap<(String, String, u64), Structure
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// 支持级别 → 实际下发的 response_format（降级链：json_schema → json_object → 无约束）。
+/// 支持级别 → 实际下发的 response_format（json_schema 可用则下发；JsonObject 级
+/// 实验下线（zhipu 慢路径证据见函数内注释），与 None 同样无约束，靠解析兜底链）。
 fn format_for_support(def: &HookDef, support: StructuredOutputSupport) -> Option<ResponseFormatSpec> {
     match support {
         StructuredOutputSupport::JsonSchema => def.response_format.clone(),
-        StructuredOutputSupport::JsonObject => Some(ResponseFormatSpec::JsonObject),
-        StructuredOutputSupport::None => None,
+        // JsonObject 级下线（2026-08-31 实验）：zhipu 对 json_object 约束 + 超长 prompt
+        // 实测为慢路径（round_review 裁决 123~278s，同体量主对话仅 20~55s）且伴发 500
+        // （19:30:41 两连 500 快速失败）。无约束时依赖解析兜底链：extract_json_object →
+        // 带反馈重试一次 → 中性降级，主流程不受影响。若需回滚，恢复本分支为
+        // `Some(ResponseFormatSpec::JsonObject)` 即可。
+        StructuredOutputSupport::JsonObject | StructuredOutputSupport::None => None,
     }
 }
 
@@ -280,7 +292,7 @@ impl AssistantSession {
     ) -> AppResult<JudgementOutcome> {
         let started = std::time::Instant::now();
         tracing::info!(
-            phase = "call_judgement",
+            phase = PHASE_CALL_JUDGEMENT,
             system_type = def.system_type,
             provider = %model.provider_id,
             model = %model.model_id,
@@ -374,7 +386,7 @@ impl AssistantSession {
                             error: Some(second_error.clone()),
                         });
                         tracing::warn!(
-                            phase = "call_judgement",
+                            phase = PHASE_CALL_JUDGEMENT,
                             system_type = def.system_type,
                             id = %id,
                             error = %second_error,
@@ -416,7 +428,7 @@ impl AssistantSession {
                 duration_ms,
             )?;
         tracing::info!(
-            phase = "call_judgement",
+            phase = PHASE_CALL_JUDGEMENT,
             system_type = def.system_type,
             id = %id,
             status = status.as_str(),
@@ -475,7 +487,7 @@ impl AssistantSession {
                 // 解析失败留痕原始输出（全文保留在 attempts_detail，不截断），便于定位
                 // 「LLM response missing JSON object」类问题（模型偶发输出散文而非 JSON）。
                 tracing::warn!(
-                    phase = "run_judgement_round",
+                    phase = PHASE_RUN_JUDGEMENT_ROUND,
                     response_len = raw.len(),
                     response_preview = raw.chars().take(500).collect::<String>(),
                     error = %error,
@@ -554,7 +566,7 @@ impl AssistantSession {
         model: &ChatModelSelection,
     ) -> AppResult<ChatResponse> {
         tracing::info!(
-            phase = "assistant_converse",
+            phase = PHASE_ASSISTANT_CONVERSE,
             session_id,
             provider = %model.provider_id,
             model = %model.model_id,
@@ -584,7 +596,7 @@ impl AssistantSession {
         // 用户手动推进成功 = 熔断恢复（等效 HALF_OPEN 探测成功 → CLOSED）。
         self.reset_failure_state(session_id);
         tracing::info!(
-            phase = "assistant_converse",
+            phase = PHASE_ASSISTANT_CONVERSE,
             session_id = %response.conversation_id,
             response_len = response.response.len(),
             "converse ok"
@@ -602,7 +614,7 @@ impl AssistantSession {
         on_delta: Option<Box<dyn FnMut(StreamDelta) + Send>>,
     ) -> AppResult<ChatResponse> {
         tracing::info!(
-            phase = "assistant_converse_stream",
+            phase = PHASE_ASSISTANT_CONVERSE_STREAM,
             session_id,
             provider = %model.provider_id,
             model = %model.model_id,
@@ -630,7 +642,7 @@ impl AssistantSession {
             }
         };
         tracing::info!(
-            phase = "assistant_converse_stream",
+            phase = PHASE_ASSISTANT_CONVERSE_STREAM,
             session_id = %response.conversation_id,
             response_len = response.response.len(),
             "converse stream ok"
@@ -644,7 +656,7 @@ impl AssistantSession {
         session_id: &str,
         model: &ChatModelSelection,
     ) -> AppResult<ChatResponse> {
-        tracing::info!(phase = "assistant_step", session_id, "step start");
+        tracing::info!(phase = PHASE_ASSISTANT_STEP, session_id, "step start");
         let response = match self
             .runner
             .run_round(
@@ -670,7 +682,7 @@ impl AssistantSession {
         };
         // 用户手动推进成功 = 熔断恢复（等效 HALF_OPEN 探测成功 → CLOSED）。
         self.reset_failure_state(session_id);
-        tracing::info!(phase = "assistant_step", session_id, "step ok");
+        tracing::info!(phase = PHASE_ASSISTANT_STEP, session_id, "step ok");
         Ok(response)
     }
 
@@ -705,7 +717,7 @@ impl AssistantSession {
         };
         if let Err(e) = self.store.add_message(session_id, message) {
             tracing::warn!(
-                phase = "error_residency",
+                phase = PHASE_ASSISTANT_ERROR_RESIDENCY,
                 session_id,
                 error = %e,
                 "persist error message failed"
@@ -751,7 +763,7 @@ impl AssistantSession {
             },
         ) {
             tracing::warn!(
-                phase = "error_residency",
+                phase = PHASE_ASSISTANT_ERROR_RESIDENCY,
                 topic_id = %topic.id,
                 session_id,
                 error = %e,
@@ -788,7 +800,7 @@ impl AssistantSession {
             },
         ) {
             tracing::warn!(
-                phase = "error_residency",
+                phase = PHASE_ASSISTANT_ERROR_RESIDENCY,
                 topic_id = %topic.id,
                 session_id,
                 error = %e,
@@ -803,7 +815,7 @@ impl AssistantSession {
         session_id: &str,
         model: &ChatModelSelection,
     ) -> AppResult<ChatResponse> {
-        tracing::info!(phase = "assistant_poller", session_id, "poller step start");
+        tracing::info!(phase = PHASE_ASSISTANT_POLLER, session_id, "poller step start");
         self.runner
             .run_round(
                 session_id,
@@ -839,14 +851,14 @@ impl AssistantSession {
         match request {
             AssistantStepRequest::PollAll => {
                 tracing::info!(
-                    phase = "assistant_poll_handler",
+                    phase = PHASE_ASSISTANT_POLL_HANDLER,
                     "PollAll received in process_step_request"
                 );
                 let topics = match self.topics().and_then(|store| store.list_unfinished()) {
                     Ok(topics) => topics,
                     Err(error) => {
                         tracing::error!(
-                            phase = "assistant_poll_handler",
+                            phase = PHASE_ASSISTANT_POLL_HANDLER,
                             error = %error,
                             "PollAll topic list failed"
                         );
@@ -854,7 +866,7 @@ impl AssistantSession {
                     }
                 };
                 tracing::info!(
-                    phase = "assistant_poll_handler",
+                    phase = PHASE_ASSISTANT_POLL_HANDLER,
                     topic_count = topics.len(),
                     "PollAll topic list resolved"
                 );
@@ -863,14 +875,11 @@ impl AssistantSession {
                 let semaphore = Arc::new(tokio::sync::Semaphore::new(parallelism));
                 let touched = Arc::new(Mutex::new(Vec::<String>::new()));
                 let mut tasks = tokio::task::JoinSet::new();
-                let mut skipped = 0usize;
                 for topic in topics {
                     let Some(session_id) = topic.session_id else {
-                        skipped += 1;
                         continue;
                     };
                     if skip_polling(&topic.status) {
-                        skipped += 1;
                         continue;
                     }
                     // 熔断/退避跳过：连续失败进入 BACKOFF/COOLDOWN 的会话跳过本轮 tick，
@@ -880,14 +889,13 @@ impl AssistantSession {
                             if state.should_skip() {
                                 state.consume_skip();
                                 tracing::info!(
-                                    phase = "assistant_poll_handler",
+                                    phase = PHASE_ASSISTANT_POLL_HANDLER,
                                     session_id,
                                     consecutive_failures = state.consecutive_failures,
                                     backoff_skips_remaining = state.backoff_skips_remaining,
                                     paused = state.paused,
                                     "skip topic: session in backoff/cooldown"
                                 );
-                                skipped += 1;
                                 continue;
                             }
                         }
@@ -897,12 +905,11 @@ impl AssistantSession {
                     // 避免对同一会话重复发起推进。
                     if let Ok(Some(_)) = self.session_tracker.get(&session_id) {
                         tracing::info!(
-                            phase = "assistant_poll_handler",
+                            phase = PHASE_ASSISTANT_POLL_HANDLER,
                             topic_id,
                             session_id,
                             "skip topic: session already running"
                         );
-                        skipped += 1;
                         continue;
                     }
                     let model = model.clone();
@@ -915,7 +922,7 @@ impl AssistantSession {
                             Ok(handle) => handle,
                             Err(error) => {
                                 tracing::error!(
-                                    phase = "assistant_poll_handler",
+                                    phase = PHASE_ASSISTANT_POLL_HANDLER,
                                     topic_id,
                                     session_id,
                                     error = %error,
@@ -938,7 +945,7 @@ impl AssistantSession {
                                 // 成功恢复：清除课题错误标记（extra.last_error）。
                                 assistant.clear_topic_last_error(&session_id);
                                 tracing::info!(
-                                    phase = "assistant_poll_handler",
+                                    phase = PHASE_ASSISTANT_POLL_HANDLER,
                                     topic_id,
                                     session_id,
                                     response_len = response.response.len(),
@@ -979,7 +986,7 @@ impl AssistantSession {
                                     consecutive_failures,
                                 );
                                 tracing::error!(
-                                    phase = "assistant_poll_handler",
+                                    phase = PHASE_ASSISTANT_POLL_HANDLER,
                                     topic_id,
                                     session_id,
                                     error_class = ?class,
@@ -996,17 +1003,10 @@ impl AssistantSession {
                         }
                     });
                 }
-                tracing::info!(
-                    phase = "assistant_poll_handler",
-                    spawned = tasks.len(),
-                    skipped,
-                    parallelism,
-                    "PollAll tasks spawned"
-                );
                 while tasks.join_next().await.is_some() {}
                 let touched = touched.lock().map(|list| list.clone()).unwrap_or_default();
                 tracing::info!(
-                    phase = "assistant_poll_handler",
+                    phase = PHASE_ASSISTANT_POLL_HANDLER,
                     touched_sessions = touched.len(),
                     "PollAll finished"
                 );
@@ -1039,7 +1039,7 @@ impl AssistantSession {
             return Ok(());
         }
         tracing::info!(
-            phase = "apply_score_feedback",
+            phase = PHASE_APPLY_SCORE_FEEDBACK,
             topic_id,
             neuron_count = neuron_ids.len(),
             delta,
@@ -1068,15 +1068,15 @@ impl AssistantSession {
         }
         // Creator pool self-iteration after a scoring round. Never allowed to
         // break the feedback flow: failures keep the pool unchanged.
-        tracing::info!(phase = "apply_score_feedback", "calling maybe_evolve_creator_variants");
+        tracing::info!(phase = PHASE_APPLY_SCORE_FEEDBACK, "calling maybe_evolve_creator_variants");
         if let Err(error) = self.neuron_manager.maybe_evolve_creator_variants().await {
             tracing::warn!(
-                phase = "apply_score_feedback",
+                phase = PHASE_APPLY_SCORE_FEEDBACK,
                 error = %error,
                 "maybe_evolve_creator_variants failed; keeping pool unchanged"
             );
         }
-        tracing::info!(phase = "apply_score_feedback", "apply score feedback done");
+        tracing::info!(phase = PHASE_APPLY_SCORE_FEEDBACK, "apply score feedback done");
         Ok(())
     }
 
@@ -1115,7 +1115,7 @@ impl AssistantSession {
             ));
         }
         tracing::info!(
-            phase = "manual_score_feedback",
+            phase = PHASE_MANUAL_SCORE_FEEDBACK,
             session_id,
             topic_id = %topic_id,
             message_index,
@@ -1194,7 +1194,7 @@ impl AssistantHooks<'_> {
             RoundTriggerKind::Poller => {
                 if let Err(error) = self.run_after_hooks(ctx).await {
                     tracing::error!(
-                        phase = "assistant_poller",
+                        phase = PHASE_ASSISTANT_POLLER,
                         error = %error,
                         "assistant afterhook failed; ignored"
                     );
@@ -1277,7 +1277,7 @@ impl AssistantHooks<'_> {
             last_is_tool,
         );
         tracing::info!(
-            phase = "assistant_hook",
+            phase = PHASE_HOOK_ASSISTANT,
             trigger = ?ctx.trigger,
             session_id = %ctx.session_id,
             topic_id = %topic_id,
@@ -2424,9 +2424,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn response_format_400_downgrades_retry_with_json_object() {
-        // 错误驱动降级：首轮 response_format 类 400（请求层被拒，模型未开口）→ 降级为
-        // json_object 并覆盖探测缓存，重试改用降级后的格式，成功后终态 retried_ok。
+    async fn response_format_400_downgrades_retry_without_constraint() {
+        // 错误驱动降级：首轮 response_format 类 400（请求层被拒，模型未开口）→ 探测缓存
+        // 降级并重试。JsonObject 级已在 format_for_support 下线（zhipu 慢路径实验），
+        // 故 attempt 2 实际下发无约束（None），成功后终态 retried_ok。
         let h = judgement_harness(
             r#"{"openai":{"models":[{"id":"gpt-4o-400","capabilities":{"chat":true,"tools":true,"streaming":true,"structured_output":true}}]}}"#,
         );
@@ -2451,7 +2452,8 @@ mod tests {
             .expect("降级重试成功后不应上抛");
         assert_eq!(outcome.status, JudgementStatus::RetriedOk);
         assert_eq!(outcome.decision["completed_item_ids"][0], "s1");
-        // 首轮下发 json_schema（配置声明支持）→ 400 → attempt 2 降级为 json_object。
+        // 首轮下发 json_schema（配置声明支持）→ 400 → 探测缓存降级为 JsonObject 级，
+        // 但 wire 层 JsonObject 已下线 → attempt 2 无约束。
         let formats = h.caller.seen_formats.lock().unwrap();
         assert_eq!(formats.len(), 2, "首轮+重试全量留痕");
         assert!(
@@ -2461,7 +2463,7 @@ mod tests {
             ),
             "首轮应下发 json_schema 契约，实际 {formats:?}"
         );
-        assert_eq!(formats[1], Some(ResponseFormatSpec::JsonObject));
+        assert_eq!(formats[1], None);
     }
 
     fn judgement_model(model_id: &str) -> ChatModelSelection {

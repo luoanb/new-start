@@ -13,6 +13,7 @@ use crate::core::error::{AppError, AppResult};
 use crate::core::hook::defs::{BoxFuture, InjectPointId};
 use crate::core::hook::judgement::{HookDef, JudgementAnchor};
 use crate::core::hook::registry::{HookInstance, HookRun};
+use crate::core::log_phase::PHASE_HOOK_MATCH_TOPIC;
 use crate::core::openai_compat::ResponseFormatSpec;
 
 pub const SYSTEM_TYPE_MATCH_TOPIC: &str = "assistant_match_topic";
@@ -66,7 +67,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
     let model = &ctx.model;
     let unfinished = hooks.assistant.topics()?.list_unfinished()?;
     tracing::info!(
-        phase = "match_topic_hook",
+        phase = PHASE_HOOK_MATCH_TOPIC,
         unfinished = unfinished.len(),
         session_id = %ctx.session_id,
         "calling match-topic model"
@@ -105,7 +106,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
         .get("action")
         .and_then(|v| v.as_str())
         .unwrap_or("create");
-    tracing::info!(phase = "match_topic_hook", action, "match decision");
+    tracing::info!(phase = PHASE_HOOK_MATCH_TOPIC, action, "match decision");
     match action {
         "switch" => {
             let topic_id = decision
@@ -121,7 +122,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
                         .create_bound_topic_from_decision(ctx, decision, true)
                         .or_else(|error| {
                             tracing::warn!(
-                                phase = "match_topic_hook",
+                                phase = PHASE_HOOK_MATCH_TOPIC,
                                 error = %error,
                                 "switch missing and decision lacked scope_in; using emergency scope"
                             );
@@ -133,7 +134,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
                             )
                         })?;
                     tracing::warn!(
-                        phase = "match_topic_hook",
+                        phase = PHASE_HOOK_MATCH_TOPIC,
                         requested_topic_id = topic_id,
                         created_topic_id = %created.id,
                         "switch target missing; created topic"
@@ -146,7 +147,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
                 if bound_session != ctx.session_id {
                     // 切换到目标课题绑定的会话：runner 检测到 session_id 变化后自动 reload。
                     tracing::info!(
-                        phase = "match_topic_hook",
+                        phase = PHASE_HOOK_MATCH_TOPIC,
                         from_session = %ctx.session_id,
                         to_session = %bound_session,
                         topic_id = %topic.id,
@@ -167,13 +168,13 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
         }
         "none" => {
             // 中性语义（A 降级兜底 action=none）：不创建、不切换，保持当前绑定。
-            tracing::info!(phase = "match_topic_hook", "match decision: none (no-op)");
+            tracing::info!(phase = PHASE_HOOK_MATCH_TOPIC, "match decision: none (no-op)");
         }
         _ => {
             if ctx.topic_id.is_none() {
                 let created = hooks.create_bound_topic_from_decision(ctx, decision, false)?;
                 tracing::info!(
-                    phase = "match_topic_hook",
+                    phase = PHASE_HOOK_MATCH_TOPIC,
                     topic_id = %created.id,
                     scope_items = created.scope_in.len(),
                     "created bound topic with scope_in"

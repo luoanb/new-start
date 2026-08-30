@@ -13,6 +13,7 @@ use crate::core::error::{AppError, AppResult};
 use crate::core::hook::defs::{BoxFuture, InjectPointId};
 use crate::core::hook::judgement::{HookDef, JudgementAnchor, JudgementStatus};
 use crate::core::hook::registry::{HookInstance, HookRun};
+use crate::core::log_phase::PHASE_HOOK_SCORE_FEEDBACK;
 use crate::core::openai_compat::ResponseFormatSpec;
 
 pub const SYSTEM_TYPE_SCORE_FEEDBACK: &str = "assistant_score_feedback";
@@ -47,24 +48,24 @@ pub(crate) const INSTANCE: HookInstance = HookInstance {
 
 pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> AppResult<()> {
     let Some(topic_id) = ctx.topic_id.clone() else {
-        tracing::info!(phase = "score_feedback_hook", "skip: no topic bound yet");
+        tracing::info!(phase = PHASE_HOOK_SCORE_FEEDBACK, "skip: no topic bound yet");
         return Ok(());
     };
     let topic = match hooks.assistant.topics()?.get(&topic_id)? {
         Some(topic) => topic,
         None => {
-            tracing::info!(phase = "score_feedback_hook", topic_id = %topic_id, "skip: topic missing");
+            tracing::info!(phase = PHASE_HOOK_SCORE_FEEDBACK, topic_id = %topic_id, "skip: topic missing");
             return Ok(());
         }
     };
     let Some(session_id) = topic.session_id.clone() else {
-        tracing::info!(phase = "score_feedback_hook", topic_id = %topic_id, "skip: topic not bound to session");
+        tracing::info!(phase = PHASE_HOOK_SCORE_FEEDBACK, topic_id = %topic_id, "skip: topic not bound to session");
         return Ok(());
     };
     let conversation = match hooks.assistant.store.require_conversation(&session_id) {
         Ok(conversation) => conversation,
         Err(_) => {
-            tracing::info!(phase = "score_feedback_hook", topic_id = %topic_id, "skip: conversation missing");
+            tracing::info!(phase = PHASE_HOOK_SCORE_FEEDBACK, topic_id = %topic_id, "skip: conversation missing");
             return Ok(());
         }
     };
@@ -73,14 +74,14 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
     let neuron_ids = interval_neuron_ids(&conversation.messages, conversation.messages.len());
     if neuron_ids.is_empty() {
         tracing::info!(
-            phase = "score_feedback_hook",
+            phase = PHASE_HOOK_SCORE_FEEDBACK,
             topic_id = %topic_id,
             "skip: last interval has no stamped neuron"
         );
         return Ok(());
     }
     tracing::info!(
-        phase = "score_feedback_hook",
+        phase = PHASE_HOOK_SCORE_FEEDBACK,
         topic_id = %topic_id,
         neuron_count = neuron_ids.len(),
         "scoring last intervention interval"
@@ -111,7 +112,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
     if outcome.status == JudgementStatus::Downgraded {
         // A 降级兜底：中性占位（score=0），跳过打分，不让评分副作用阻断主对话。
         tracing::warn!(
-            phase = "score_feedback_hook",
+            phase = PHASE_HOOK_SCORE_FEEDBACK,
             topic_id = %topic_id,
             error = ?outcome.error,
             "judgement degraded; skip scoring"
@@ -128,7 +129,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
             "score must be in -5..=5 and non-zero, got {score}"
         )));
     }
-    tracing::info!(phase = "score_feedback_hook", score, "applying weight delta");
+    tracing::info!(phase = PHASE_HOOK_SCORE_FEEDBACK, score, "applying weight delta");
     hooks
         .assistant
         .apply_score_feedback(&topic_id, neuron_ids, score as f64)

@@ -37,6 +37,7 @@ import type {
   ModelInfo,
   Neuron,
   NeuronPage,
+  PhaseInfo,
   NeuronSubgraph,
   PollerStatus,
   ProviderConfigView,
@@ -255,6 +256,7 @@ export const c = {
   logsSetLevel: def<{ level: string }, string>("logs_set_level"),
   logsClearBuffer: def<undefined, void>("logs_clear_buffer"),
   logsDir: def<undefined, string | null>("logs_dir"),
+  logsPhases: def<undefined, PhaseInfo[]>("logs_phases"),
 
   // ── 终端 ──
   terminalSpawn: def<

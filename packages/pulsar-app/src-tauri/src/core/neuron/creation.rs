@@ -6,6 +6,10 @@ use std::sync::{Arc, Mutex};
 
 use crate::core::{
     error::{AppError, AppResult},
+    log_phase::{
+        PHASE_NEURON_BOOTSTRAP, PHASE_NEURON_ENSURE_SESSION, PHASE_NEURON_ENSURE_SYSTEM,
+        PHASE_NEURON_REBOOTSTRAP,
+    },
     models::{
         BootstrapReport, CandidateQuery, CreateNeuronInput, EnsureSystemOpts, Neuron,
         NeuronCreate, SessionBehavior, SystemPromptStatus,
@@ -127,7 +131,7 @@ impl NeuronCreation {
         }
 
         tracing::info!(
-            phase = "ensure_system_neuron",
+            phase = PHASE_NEURON_ENSURE_SYSTEM,
             system_type,
             reset = opts.reset,
             "ensure_system_neuron start"
@@ -139,7 +143,7 @@ impl NeuronCreation {
                 let _ = self.query.delete_for_admin(&existing.id)?;
                 self.selection.clear_creator_cache_if_matches(&existing.id);
                 tracing::info!(
-                    phase = "ensure_system_neuron",
+                    phase = PHASE_NEURON_ENSURE_SYSTEM,
                     system_type,
                     neuron_id = %existing.id,
                     "reset deleted existing system neuron"
@@ -154,7 +158,7 @@ impl NeuronCreation {
                         .store()?
                         .set_behavior(&existing.id, Some(&default_behavior))?;
                     tracing::info!(
-                        phase = "ensure_system_neuron",
+                        phase = PHASE_NEURON_ENSURE_SYSTEM,
                         system_type,
                         neuron_id = %existing.id,
                         "backfilled default behavior for legacy system neuron"
@@ -167,7 +171,7 @@ impl NeuronCreation {
                 existing
             };
             tracing::info!(
-                phase = "ensure_system_neuron",
+                phase = PHASE_NEURON_ENSURE_SYSTEM,
                 system_type,
                 neuron_id = %existing.id,
                 "ensure_system_neuron hit existing; filling own downstream pool"
@@ -193,7 +197,7 @@ impl NeuronCreation {
         let created = match self.config.system_prompt_for(system_type)? {
             Some(seed) => {
                 tracing::info!(
-                    phase = "ensure_system_neuron",
+                    phase = PHASE_NEURON_ENSURE_SYSTEM,
                     system_type,
                     step = "builtin_seed",
                     seed_len = seed.len(),
@@ -211,7 +215,7 @@ impl NeuronCreation {
             }
             None => {
                 tracing::info!(
-                    phase = "ensure_system_neuron",
+                    phase = PHASE_NEURON_ENSURE_SYSTEM,
                     system_type,
                     step = "generate_draft",
                     "generating system neuron draft from creator seed"
@@ -224,7 +228,7 @@ impl NeuronCreation {
                     Ok(draft) => draft,
                     Err(error) => {
                         tracing::error!(
-                            phase = "ensure_system_neuron",
+                            phase = PHASE_NEURON_ENSURE_SYSTEM,
                             system_type,
                             step = "generate_draft",
                             error_code = error.code(),
@@ -256,7 +260,7 @@ impl NeuronCreation {
                 .set_behavior(&created.id, Some(&default_behavior))?;
         }
         tracing::info!(
-            phase = "ensure_system_neuron",
+            phase = PHASE_NEURON_ENSURE_SYSTEM,
             system_type,
             neuron_id = %created.id,
             "ensure_system_neuron created; filling own downstream pool"
@@ -286,7 +290,7 @@ impl NeuronCreation {
                 let _ = self.query.delete_for_admin(&existing.id)?;
                 self.selection.clear_creator_cache_if_matches(&existing.id);
                 tracing::info!(
-                    phase = "ensure_session_neuron",
+                    phase = PHASE_NEURON_ENSURE_SESSION,
                     system_type,
                     neuron_id = %existing.id,
                     "reset deleted existing session spec"
@@ -329,7 +333,7 @@ impl NeuronCreation {
             .find(|n| n.desc == BUILTIN_GENERIC_NEURON_DESC)
         {
             tracing::info!(
-                phase = "bootstrap",
+                phase = PHASE_NEURON_BOOTSTRAP,
                 step = "generic_neuron",
                 neuron_id = %existing.id,
                 "generic assistant neuron hit existing; skip"
@@ -352,7 +356,7 @@ impl NeuronCreation {
             .store()?
             .adjust_weight(&created.id, BUILTIN_GENERIC_NEURON_INITIAL_WEIGHT)?;
         tracing::info!(
-            phase = "bootstrap",
+            phase = PHASE_NEURON_BOOTSTRAP,
             step = "generic_neuron",
             neuron_id = %boosted.id,
             weight = boosted.weight,
@@ -363,7 +367,7 @@ impl NeuronCreation {
 
     /// Startup readiness: creator + selector only.
     pub(crate) async fn bootstrap(&self) -> AppResult<BootstrapReport> {
-        tracing::info!(phase = "bootstrap", "bootstrap start");
+        tracing::info!(phase = PHASE_NEURON_BOOTSTRAP, "bootstrap start");
         let creator = self.selection.ensure_creator()?;
         // First-boot: ensure the creator owns its candidate pool (7 active slots).
         self.selection.ensure_own_candidate_pool(&creator.id).await?;
@@ -374,7 +378,7 @@ impl NeuronCreation {
             Ok(neuron) => neuron,
             Err(error) => {
                 tracing::error!(
-                    phase = "bootstrap",
+                    phase = PHASE_NEURON_BOOTSTRAP,
                     error_code = error.code(),
                     error = %error,
                     "bootstrap failed at assistant_select_neuron"
@@ -385,7 +389,7 @@ impl NeuronCreation {
         // 内置通用助手（常规节点，初始权重 50）：开箱即用的高分默认角色。
         let generic = self.ensure_generic_neuron()?;
         tracing::info!(
-            phase = "bootstrap",
+            phase = PHASE_NEURON_BOOTSTRAP,
             create_neuron_id = %creator.id,
             select_neuron_id = %selector.id,
             generic_neuron_id = %generic.id,
@@ -400,11 +404,11 @@ impl NeuronCreation {
     /// Ops: reset+recreate all known Assistant system prompts, then bootstrap.
     /// Does not reset `create_neuron` seed.
     pub(crate) async fn rebootstrap(&self) -> AppResult<BootstrapReport> {
-        tracing::info!(phase = "rebootstrap", "rebootstrap start");
+        tracing::info!(phase = PHASE_NEURON_REBOOTSTRAP, "rebootstrap start");
         let _ = self.selection.ensure_creator()?;
         for system_type in REBOOTSTRAP_SYSTEM_TYPES {
             tracing::info!(
-                phase = "rebootstrap",
+                phase = PHASE_NEURON_REBOOTSTRAP,
                 system_type,
                 "resetting system prompt"
             );
@@ -413,7 +417,7 @@ impl NeuronCreation {
         }
         let report = self.bootstrap().await?;
         tracing::info!(
-            phase = "rebootstrap",
+            phase = PHASE_NEURON_REBOOTSTRAP,
             create_neuron_id = %report.create_neuron_id,
             select_neuron_id = %report.select_neuron_id,
             "rebootstrap ok"

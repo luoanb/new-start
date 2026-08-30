@@ -42,6 +42,11 @@ use super::{
     topic_store::TopicStore,
     hook_judgement_store::HookJudgementStore,
     hook::defs::{HookDef, HookHandler, HookRegistry, InjectPointId},
+    log_phase::{
+        PHASE_NEURON_BOOTSTRAP_NEURONS, PHASE_NEURON_RECYCLE_RUNTIME, PHASE_POLLER_CONFIG,
+        PHASE_POLLER_RUNTIME, PHASE_HOOK_SELECT_NEURON, PHASE_SEND_MODEL_MESSAGE,
+        PHASE_SEND_MODEL_MESSAGE_STREAM, PHASE_START_SESSION, PHASE_STOP_SESSION, PHASE_TOOL_CONFIG,
+    },
     CompactionConfig,
 };
 
@@ -298,7 +303,7 @@ impl Gateway {
                 ) {
                     Ok(registry) => registry,
                     Err(error) => {
-                        tracing::error!(phase = "tool_config", error = %error, "background mcp assembly: local tools failed");
+                        tracing::error!(phase = PHASE_TOOL_CONFIG, error = %error, "background mcp assembly: local tools failed");
                         return;
                     }
                 };
@@ -313,7 +318,7 @@ impl Gateway {
                 )
                 .await
                 {
-                    tracing::error!(phase = "tool_config", error = %error, "background mcp assembly failed");
+                    tracing::error!(phase = PHASE_TOOL_CONFIG, error = %error, "background mcp assembly failed");
                 }
             });
         }
@@ -343,7 +348,7 @@ impl Gateway {
 
         let poller_settings = PollerConfigReader::new(store.root().to_path_buf()).load()?;
         tracing::info!(
-            phase = "poller_config",
+            phase = PHASE_POLLER_CONFIG,
             enabled = poller_settings.enabled,
             base_interval_ms = poller_settings.base_interval_ms,
             assistant_interval_ticks = poller_settings.assistant_interval_ticks,
@@ -425,7 +430,7 @@ impl Gateway {
                                 )
                                 .await?;
                             tracing::info!(
-                                phase = "select_neuron_hook",
+                                phase = PHASE_HOOK_SELECT_NEURON,
                                 session_id = %ctx.session_id,
                                 selected_neuron_id = ?neuron.as_ref().map(|n| n.id.as_str()),
                                 role_msgs = with_role.len() - old_len,
@@ -626,7 +631,7 @@ impl Gateway {
         conversation.extra = Some(extra);
         self.store.save_conversation(&conversation)?;
         tracing::info!(
-            phase = "start_session",
+            phase = PHASE_START_SESSION,
             conversation_id = %conversation.id,
             mode = ?mode,
             has_seed,
@@ -695,7 +700,7 @@ impl Gateway {
         self.assemble_and_replace().await?;
 
         tracing::info!(
-            phase = "tool_config",
+            phase = PHASE_TOOL_CONFIG,
             mcp_servers = view.mcp_servers.len(),
             http_tools = view.http_tools.len(),
             command_tools = view.command_tools.len(),
@@ -710,7 +715,7 @@ impl Gateway {
     /// 无需打开弹窗即可让变更生效。配置非法时返回可读错误，registry 保持原状。
     pub async fn reassemble_tools(&self) -> AppResult<()> {
         self.assemble_and_replace().await?;
-        tracing::info!(phase = "tool_config", "tool registry reassembled from disk");
+        tracing::info!(phase = PHASE_TOOL_CONFIG, "tool registry reassembled from disk");
         Ok(())
     }
 
@@ -813,7 +818,7 @@ impl Gateway {
         let result = match mode {
             ConversationMode::Assistant => {
                 tracing::info!(
-                    phase = "send_model_message",
+                    phase = PHASE_SEND_MODEL_MESSAGE,
                     mode = "assistant",
                     conversation_id = %conversation_id,
                     "routing to assistant_session.converse"
@@ -822,7 +827,7 @@ impl Gateway {
             }
             ConversationMode::Chat => {
                 tracing::info!(
-                    phase = "send_model_message",
+                    phase = PHASE_SEND_MODEL_MESSAGE,
                     mode = "chat",
                     conversation_id = %conversation_id,
                     "routing to chat_session.send"
@@ -831,7 +836,7 @@ impl Gateway {
             }
             ConversationMode::Agent => {
                 tracing::info!(
-                    phase = "send_model_message",
+                    phase = PHASE_SEND_MODEL_MESSAGE,
                     mode = "agent",
                     conversation_id = %conversation_id,
                     "routing to agent_session.agent_loop"
@@ -842,7 +847,7 @@ impl Gateway {
             // ConversationMode::tool_tags 决定，runner 透传给 service）。
             ConversationMode::System => {
                 tracing::info!(
-                    phase = "send_model_message",
+                    phase = PHASE_SEND_MODEL_MESSAGE,
                     mode = "system",
                     conversation_id = %conversation_id,
                     "routing to assistant_session.converse (system tools)"
@@ -858,7 +863,7 @@ impl Gateway {
             Ok(response) => response,
             Err(error) => {
                 tracing::error!(
-                    phase = "send_model_message",
+                    phase = PHASE_SEND_MODEL_MESSAGE,
                     conversation_id = %conversation_id,
                     error_code = error.code(),
                     error = %error,
@@ -952,7 +957,7 @@ impl Gateway {
             Ok(response) => response,
             Err(error) => {
                 tracing::error!(
-                    phase = "send_model_message_stream",
+                    phase = PHASE_SEND_MODEL_MESSAGE_STREAM,
                     conversation_id = %conversation_id,
                     error_code = error.code(),
                     error = %error,
@@ -1178,14 +1183,14 @@ impl Gateway {
             match pause_result {
                 Some(Ok(topic_id)) => {
                     tracing::info!(
-                        phase = "stop_session",
+                        phase = PHASE_STOP_SESSION,
                         conversation_id = %conversation_id,
                         topic_id = %topic_id,
                         "bound topic paused on stop"
                     );
                 }
                 Some(Err(error)) => tracing::warn!(
-                    phase = "stop_session",
+                    phase = PHASE_STOP_SESSION,
                     conversation_id = %conversation_id,
                     error = %error,
                     "pause bound topic on stop failed"
@@ -1218,13 +1223,13 @@ impl Gateway {
 
     pub async fn bootstrap_neurons(&self) -> AppResult<()> {
         tracing::info!(
-            phase = "bootstrap_neurons",
+            phase = PHASE_NEURON_BOOTSTRAP_NEURONS,
             "gateway bootstrap_neurons start"
         );
         match self.neuron_manager.bootstrap().await {
             Ok(report) => {
                 tracing::info!(
-                    phase = "bootstrap_neurons",
+                    phase = PHASE_NEURON_BOOTSTRAP_NEURONS,
                     create_neuron_id = %report.create_neuron_id,
                     select_neuron_id = %report.select_neuron_id,
                     "gateway bootstrap_neurons ok"
@@ -1233,7 +1238,7 @@ impl Gateway {
             }
             Err(error) => {
                 tracing::warn!(
-                    phase = "bootstrap_neurons",
+                    phase = PHASE_NEURON_BOOTSTRAP_NEURONS,
                     error_code = error.code(),
                     error = %error,
                     "gateway bootstrap_neurons failed"
@@ -1355,7 +1360,7 @@ fn spawn_poller_runtime(
     state_emit: Option<StateEmitter>,
 ) {
     tracing::info!(
-        phase = "poller_runtime",
+        phase = PHASE_POLLER_RUNTIME,
         base_interval_ms,
         "poller runtime loop starting via tauri async runtime"
     );
@@ -1378,7 +1383,7 @@ fn spawn_poller_runtime(
                     }
                 }
                 Some(request) = step_rx.recv() => {
-                    tracing::info!(phase = "poller_runtime", kind = "step_request", "received step request from channel");
+                    tracing::info!(phase = PHASE_POLLER_RUNTIME, kind = "step_request", "received step request from channel");
                     let model = match providers.default_model_selection() {
                         Ok(Some(model)) => model,
                         _ => continue,
@@ -1389,7 +1394,7 @@ fn spawn_poller_runtime(
                     // 放到独立任务执行，tick 循环立即返回，绝不被模型调用拖住。
                     tauri::async_runtime::spawn(async move {
                         let Ok(_permit) = step_guard.try_lock() else {
-                            tracing::info!(phase = "poller_runtime", "step request skipped: another step is in flight");
+                            tracing::info!(phase = PHASE_POLLER_RUNTIME, "step request skipped: another step is in flight");
                             return;
                         };
                         let touched = assistant.process_step_request(request, &model).await;
@@ -1416,7 +1421,7 @@ fn spawn_neuron_recycle_runtime(
     state_emit: Option<StateEmitter>,
 ) {
     tracing::info!(
-        phase = "neuron_recycle_runtime",
+        phase = PHASE_NEURON_RECYCLE_RUNTIME,
         interval_ms,
         "neuron recycle runtime loop starting via tauri async runtime"
     );
@@ -1427,7 +1432,7 @@ fn spawn_neuron_recycle_runtime(
             match neurons.recycle_if_over_capacity() {
                 Ok(recycled) if recycled > 0 => {
                     tracing::info!(
-                        phase = "neuron_recycle_runtime",
+                        phase = PHASE_NEURON_RECYCLE_RUNTIME,
                         recycled,
                         "recycled low-value neurons over capacity"
                     );
@@ -1438,7 +1443,7 @@ fn spawn_neuron_recycle_runtime(
                 Ok(_) => {}
                 Err(error) => {
                     tracing::warn!(
-                        phase = "neuron_recycle_runtime",
+                        phase = PHASE_NEURON_RECYCLE_RUNTIME,
                         error_code = error.code(),
                         error = %error,
                         "neuron recycle check failed"

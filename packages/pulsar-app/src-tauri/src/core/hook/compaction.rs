@@ -12,6 +12,7 @@ use crate::core::{
     compactor::Compactor,
     error::{AppError, AppResult},
     hook::defs::{HookDef, HookHandler, HookRegistry, InjectPointId},
+    log_phase::PHASE_HOOK_COMPACTION,
     models::Conversation,
     providers::ProviderRegistry,
 };
@@ -56,7 +57,7 @@ pub fn register(
                             ctx.messages = conversation.messages;
                             if compacted {
                                 tracing::info!(
-                                    phase = "compaction_hook",
+                                    phase = PHASE_HOOK_COMPACTION,
                                     session_id = %ctx.session_id,
                                     "wire compacted for this round"
                                 );

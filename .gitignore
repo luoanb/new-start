@@ -9,3 +9,4 @@ dist
 packages/pulsar-app/.pulsar/*
 packages/pulsar-app/src-tauri/.pulsar/app.db
 packages/pulsar-app/.pulsar.bak*
+.tmp_perf/*

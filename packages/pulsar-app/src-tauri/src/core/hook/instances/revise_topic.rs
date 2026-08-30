@@ -13,6 +13,7 @@ use crate::core::error::{AppError, AppResult};
 use crate::core::hook::defs::{BoxFuture, InjectPointId};
 use crate::core::hook::judgement::{HookDef, JudgementAnchor};
 use crate::core::hook::registry::{HookInstance, HookRun};
+use crate::core::log_phase::PHASE_HOOK_REVISE_TOPIC;
 use crate::core::models::TopicStatus;
 use crate::core::openai_compat::ResponseFormatSpec;
 use crate::core::topic_store::now_ms;
@@ -80,14 +81,14 @@ pub(crate) const INSTANCE: HookInstance = HookInstance {
 
 pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppResult<()> {
     let Some(topic_id) = ctx.topic_id.clone() else {
-        tracing::info!(phase = "revise_topic_hook", "skip: no topic");
+        tracing::info!(phase = PHASE_HOOK_REVISE_TOPIC, "skip: no topic");
         return Ok(());
     };
     let topic = match hooks.assistant.topics()?.get(&topic_id)? {
         Some(topic) => topic,
         None => {
             tracing::info!(
-                phase = "revise_topic_hook",
+                phase = PHASE_HOOK_REVISE_TOPIC,
                 topic_id = %topic_id,
                 "skip: topic missing"
             );
@@ -96,7 +97,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
     };
     if topic.scope_in.is_empty() {
         tracing::info!(
-            phase = "revise_topic_hook",
+            phase = PHASE_HOOK_REVISE_TOPIC,
             topic_id = %topic_id,
             "skip: empty scope_in"
         );
@@ -108,7 +109,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
         TopicStatus::Paused | TopicStatus::WaitingUser
     ) {
         tracing::info!(
-            phase = "revise_topic_hook",
+            phase = PHASE_HOOK_REVISE_TOPIC,
             topic_id = %topic_id,
             status = ?topic.status,
             "skip: topic paused or waiting user"
@@ -128,7 +129,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
         RoundTriggerKind::AgentLoop => "agent_loop",
     };
     tracing::info!(
-        phase = "revise_topic_hook",
+        phase = PHASE_HOOK_REVISE_TOPIC,
         topic_id = %topic_id,
         trigger,
         scope_items = topic.scope_in.len(),
@@ -185,7 +186,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
             match stores.add_scope_item(&topic_id, goal, contract) {
                 Ok(_) => added += 1,
                 Err(error) => tracing::warn!(
-                    phase = "revise_topic_hook",
+                    phase = PHASE_HOOK_REVISE_TOPIC,
                     error = %error,
                     "add scope item failed"
                 ),
@@ -195,7 +196,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
             match stores.delete_scope_item(&topic_id, item_id) {
                 Ok(_) => removed_ids.push(item_id.clone()),
                 Err(error) => tracing::warn!(
-                    phase = "revise_topic_hook",
+                    phase = PHASE_HOOK_REVISE_TOPIC,
                     error = %error,
                     item_id,
                     "remove scope item failed"
@@ -207,7 +208,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
             {
                 Ok(_) => updated_ids.push(item_id.clone()),
                 Err(error) => tracing::warn!(
-                    phase = "revise_topic_hook",
+                    phase = PHASE_HOOK_REVISE_TOPIC,
                     error = %error,
                     item_id,
                     "update scope item failed"
@@ -231,7 +232,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
         });
         let _ = append_revision_log(&hooks.assistant.topic_store, &topic_id, event);
         tracing::info!(
-            phase = "revise_topic_hook",
+            phase = PHASE_HOOK_REVISE_TOPIC,
             topic_id = %topic_id,
             trigger,
             added,

@@ -18,6 +18,7 @@ use super::{
     neuron_manager::NeuronManager,
     round_types::SessionSeed,
 };
+use crate::core::log_phase::{PHASE_RESOLVE, PHASE_RESOLVE_ROLE};
 
 /// 选型决策组件：只做「本轮选谁、把角色上下文拼进 messages」，不做模型调用/工具执行。
 #[derive(Debug)]
@@ -53,7 +54,7 @@ impl RoundResolver {
         reselect: bool,
     ) -> AppResult<(Vec<Message>, Option<Neuron>)> {
         tracing::info!(
-            phase = "resolve",
+            phase = PHASE_RESOLVE,
             seed = ?seed,
             last_selected,
             reselect,
@@ -81,7 +82,7 @@ impl RoundResolver {
                 .expect("Global always produce a scope");
                 if let Some(role) = self.reuse_selected_neuron(last_selected, reselect) {
                     tracing::info!(
-                        phase = "resolve_role",
+                        phase = PHASE_RESOLVE_ROLE,
                         seed = ?SessionSeed::Global,
                         reused_anchor = true,
                         neuron_id = %role.id,
@@ -90,7 +91,7 @@ impl RoundResolver {
                     Some(role)
                 } else {
                     tracing::info!(
-                        phase = "resolve",
+                        phase = PHASE_RESOLVE,
                         seed = ?SessionSeed::Global,
                         "calling select_role (LLM selection)"
                     );
@@ -99,7 +100,7 @@ impl RoundResolver {
                         .select_role(&ModelCallInput::project_history(old_messages), scope)
                         .await?;
                     tracing::info!(
-                        phase = "resolve_role",
+                        phase = PHASE_RESOLVE_ROLE,
                         seed = ?SessionSeed::Global,
                         reused_anchor = false,
                         neuron_id = %role.id,
@@ -126,7 +127,7 @@ impl RoundResolver {
                         .expect("Neighborhood always produce a scope");
                     if let Some(role) = self.reuse_selected_neuron(last_selected, reselect) {
                         tracing::info!(
-                            phase = "resolve_role",
+                            phase = PHASE_RESOLVE_ROLE,
                             seed = ?SessionSeed::Neuron(id.clone()),
                             reused_anchor = true,
                             neuron_id = %role.id,
@@ -139,7 +140,7 @@ impl RoundResolver {
                             .select_role(&ModelCallInput::project_history(old_messages), scope)
                             .await?;
                         tracing::info!(
-                            phase = "resolve_role",
+                            phase = PHASE_RESOLVE_ROLE,
                             seed = ?SessionSeed::Neuron(id.clone()),
                             reused_anchor = false,
                             neuron_id = %role.id,
@@ -163,7 +164,7 @@ impl RoundResolver {
                     match &selection {
                         SelectionPolicy::None => {
                             tracing::info!(
-                                phase = "resolve_role",
+                                phase = PHASE_RESOLVE_ROLE,
                                 seed = ?SessionSeed::Neuron(id.clone()),
                                 selection = "none",
                                 "system neuron: no selection"
@@ -173,7 +174,7 @@ impl RoundResolver {
                         SelectionPolicy::Fixed => {
                             // 读系统神经元自己的 content；不参与 LLM 选型。
                             tracing::info!(
-                                phase = "resolve_role",
+                                phase = PHASE_RESOLVE_ROLE,
                                 seed = ?SessionSeed::Neuron(id.clone()),
                                 selection = "fixed",
                                 neuron_id = %neuron.id,
@@ -187,7 +188,7 @@ impl RoundResolver {
                             if let Some(role) = self.reuse_selected_neuron(last_selected, reselect)
                             {
                                 tracing::info!(
-                                    phase = "resolve_role",
+                                    phase = PHASE_RESOLVE_ROLE,
                                     seed = ?SessionSeed::Neuron(id.clone()),
                                     selection = "neighborhood",
                                     reused_anchor = true,
@@ -204,7 +205,7 @@ impl RoundResolver {
                                     )
                                     .await?;
                                 tracing::info!(
-                                    phase = "resolve_role",
+                                    phase = PHASE_RESOLVE_ROLE,
                                     seed = ?SessionSeed::Neuron(id.clone()),
                                     selection = "neighborhood",
                                     reused_anchor = false,

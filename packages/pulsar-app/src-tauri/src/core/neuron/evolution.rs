@@ -7,6 +7,9 @@ use std::sync::{Arc, Mutex};
 use crate::core::{
     error::{AppError, AppResult},
     insert_catalog::InsertCatalog,
+    log_phase::{
+        PHASE_NEURON_EVOLVE_CREATOR, PHASE_NEURON_REWRITE_VARIANT, PHASE_NEURON_ROLLBACK_VARIANT,
+    },
     model_call_input::{ModelAppendTemplate, ModelCallInput},
     models::{Neuron, NeuronUpdate, NeuronVariant},
     neuron::{
@@ -62,11 +65,11 @@ impl NeuronEvolution {
     /// 2. Elimination candidates (delta <= -3, or use_count >= 10 with delta < 0).
     /// 3. Rewrite candidates (use_count >= 3 and |delta| >= 2): differential rewrite.
     pub(crate) async fn maybe_evolve_creator_variants(&self) -> AppResult<()> {
-        tracing::info!(phase = "maybe_evolve_creator_variants", "entry: ensure_creator");
+        tracing::info!(phase = PHASE_NEURON_EVOLVE_CREATOR, "entry: ensure_creator");
         let creator = self.selection.ensure_creator()?;
         let variants = self.store()?.get_variants(&creator.id, false)?;
         tracing::info!(
-            phase = "maybe_evolve_creator_variants",
+            phase = PHASE_NEURON_EVOLVE_CREATOR,
             creator_id = %creator.id,
             variant_count = variants.len(),
             "variants loaded"
@@ -88,7 +91,7 @@ impl NeuronEvolution {
                 self.store()?
                     .set_variant_state(&variant.neuron.id, Some("active"))?;
                 tracing::info!(
-                    phase = "maybe_evolve_creator_variants",
+                    phase = PHASE_NEURON_EVOLVE_CREATOR,
                     variant_id = %variant.neuron.id,
                     use_count = variant.use_count,
                     "observing variant promoted to active"
@@ -110,7 +113,7 @@ impl NeuronEvolution {
             if eliminated {
                 self.rollback_variant_if_regressed(&variant.neuron.id)?;
                 tracing::info!(
-                    phase = "maybe_evolve_creator_variants",
+                    phase = PHASE_NEURON_EVOLVE_CREATOR,
                     variant_id = %variant.neuron.id,
                     accumulated_delta = variant.accumulated_delta,
                     use_count = variant.use_count,
@@ -132,7 +135,7 @@ impl NeuronEvolution {
                 match self.rewrite_variant(&creator, variant).await {
                     Ok(()) => {
                         tracing::info!(
-                            phase = "maybe_evolve_creator_variants",
+                            phase = PHASE_NEURON_EVOLVE_CREATOR,
                             variant_id = %variant.neuron.id,
                             "variant differentially rewritten; moved to observing"
                         );
@@ -141,7 +144,7 @@ impl NeuronEvolution {
                     Err(error) => {
                         // Failure keeps the old version; never blocks the create flow.
                         tracing::warn!(
-                            phase = "maybe_evolve_creator_variants",
+                            phase = PHASE_NEURON_EVOLVE_CREATOR,
                             variant_id = %variant.neuron.id,
                             error = %error,
                             "rewrite failed; keeping old version"
@@ -161,7 +164,7 @@ impl NeuronEvolution {
         let Some(version) = store.latest_version_of(variant_id)? else {
             store.set_variant_state(variant_id, Some("observing"))?;
             tracing::info!(
-                phase = "rollback_variant_if_regressed",
+                phase = PHASE_NEURON_ROLLBACK_VARIANT,
                 variant_id,
                 "no archived version; demoted to observing"
             );
@@ -178,7 +181,7 @@ impl NeuronEvolution {
         store.insert_neuron_version(variant_id, &version.content, "rollback", Some(&version.id))?;
         store.set_variant_state(variant_id, Some("active"))?;
         tracing::info!(
-            phase = "rollback_variant_if_regressed",
+            phase = PHASE_NEURON_ROLLBACK_VARIANT,
             variant_id,
             version_id = %version.id,
             "rolled back to archived version"
@@ -191,7 +194,7 @@ impl NeuronEvolution {
     /// observing slot; the previous content is archived in `neuron_versions`.
     async fn rewrite_variant(&self, creator: &Neuron, variant: &NeuronVariant) -> AppResult<()> {
         tracing::info!(
-            phase = "rewrite_variant",
+            phase = PHASE_NEURON_REWRITE_VARIANT,
             variant_id = %variant.neuron.id,
             use_count = variant.use_count,
             accumulated_delta = variant.accumulated_delta,

@@ -18,6 +18,7 @@ use crate::core::error::AppResult;
 use crate::core::hook::defs::{BoxFuture, InjectPointId};
 use crate::core::hook::judgement::{HookDef, JudgementAnchor};
 use crate::core::hook::registry::{HookInstance, HookRun};
+use crate::core::log_phase::PHASE_HOOK_ROUND_REVIEW;
 use crate::core::models::TopicStatus;
 use crate::core::openai_compat::ResponseFormatSpec;
 use crate::core::topic_store::now_ms;
@@ -90,14 +91,14 @@ pub(crate) const INSTANCE: HookInstance = HookInstance {
 
 pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppResult<()> {
     let Some(topic_id) = ctx.topic_id.clone() else {
-        tracing::info!(phase = "round_review_hook", "skip: no topic");
+        tracing::info!(phase = PHASE_HOOK_ROUND_REVIEW, "skip: no topic");
         return Ok(());
     };
     let topic = match hooks.assistant.topics()?.get(&topic_id)? {
         Some(topic) => topic,
         None => {
             tracing::info!(
-                phase = "round_review_hook",
+                phase = PHASE_HOOK_ROUND_REVIEW,
                 topic_id = %topic_id,
                 "skip: topic missing"
             );
@@ -110,7 +111,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
         TopicStatus::Paused | TopicStatus::WaitingUser
     ) {
         tracing::info!(
-            phase = "round_review_hook",
+            phase = PHASE_HOOK_ROUND_REVIEW,
             topic_id = %topic_id,
             status = ?topic.status,
             "skip: topic paused or waiting user"
@@ -126,7 +127,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
             .topics()?
             .set_status(&topic_id, TopicStatus::Done)?;
         tracing::info!(
-            phase = "round_review_hook",
+            phase = PHASE_HOOK_ROUND_REVIEW,
             topic_id = %topic_id,
             "empty scope_in; topic closed as done"
         );
@@ -145,7 +146,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
                 .topics()?
                 .set_status(&topic_id, TopicStatus::Done)?;
             tracing::info!(
-                phase = "round_review_hook",
+                phase = PHASE_HOOK_ROUND_REVIEW,
                 topic_id = %topic_id,
                 "wrap-up round finished; topic closed"
             );
@@ -155,7 +156,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
     // 收尾轮门控：工具轮（声明或执行任一存在）的中间产物不触发裁决。
     let Some(outcome) = ctx.outcome.as_ref().filter(|o| is_settling_round(o)) else {
         tracing::info!(
-            phase = "round_review_hook",
+            phase = PHASE_HOOK_ROUND_REVIEW,
             tool_calls = ctx.outcome.as_ref().map_or(0, |o| o.tool_calls.as_ref().map_or(0, Vec::len)),
             tool_results = ctx.outcome.as_ref().map_or(0, |o| o.tool_results.len()),
             "skip: not a settling round"
@@ -171,7 +172,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
         RoundTriggerKind::AgentLoop => "agent_loop",
     };
     tracing::info!(
-        phase = "round_review_hook",
+        phase = PHASE_HOOK_ROUND_REVIEW,
         topic_id = %topic_id,
         trigger,
         scope_items = topic.scope_in.len(),
@@ -229,7 +230,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
             match stores.add_scope_item(&topic_id, goal, contract) {
                 Ok(_) => added += 1,
                 Err(error) => tracing::warn!(
-                    phase = "round_review_hook",
+                    phase = PHASE_HOOK_ROUND_REVIEW,
                     error = %error,
                     "add scope item failed"
                 ),
@@ -239,7 +240,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
             match stores.delete_scope_item(&topic_id, item_id) {
                 Ok(_) => removed_ids.push(item_id.clone()),
                 Err(error) => tracing::warn!(
-                    phase = "round_review_hook",
+                    phase = PHASE_HOOK_ROUND_REVIEW,
                     error = %error,
                     item_id,
                     "remove scope item failed"
@@ -251,7 +252,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
             {
                 Ok(_) => updated_ids.push(item_id.clone()),
                 Err(error) => tracing::warn!(
-                    phase = "round_review_hook",
+                    phase = PHASE_HOOK_ROUND_REVIEW,
                     error = %error,
                     item_id,
                     "update scope item failed"
@@ -291,7 +292,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
             .mark_scope_item_blocked(&topic_id, item_id);
     }
     tracing::info!(
-        phase = "round_review_hook",
+        phase = PHASE_HOOK_ROUND_REVIEW,
         topic_id = %topic_id,
         trigger,
         added,
@@ -335,7 +336,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
             .topics()?
             .set_status(&topic_id, TopicStatus::WrappingUp)?;
         tracing::info!(
-            phase = "round_review_hook",
+            phase = PHASE_HOOK_ROUND_REVIEW,
             topic_id = %topic_id,
             "scope completed via tool round; topic wrapping up"
         );

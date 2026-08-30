@@ -11,6 +11,13 @@ use std::{
 use crate::core::{
     error::{AppError, AppResult},
     insert_catalog::InsertCatalog,
+    log_phase::{
+        PHASE_FILL_CANDIDATES_BATCH, PHASE_GENERATE_DRAFTS, PHASE_NEURON_ENSURE_CREATOR,
+        PHASE_SELECT_ASSISTANT_CANDIDATES, PHASE_SELECT_CANDIDATES, PHASE_SELECT_CANDIDATES_DETAIL,
+        PHASE_SELECT_NEURON_MODEL_DECISION, PHASE_SELECT_NEURON_MODEL_INPUT,
+        PHASE_SELECT_NEURON_MODEL_INPUT_FULL, PHASE_SELECT_NEURON_MODEL_OUTPUT, PHASE_SELECT_ONE,
+        PHASE_SELECT_ONE_LINK_BACK,
+    },
     model_call_input::{ModelAppendTemplate, ModelCallInput},
     models::{
         AssistantCandidateScope, CandidateQuery, CreateNeuronInput, GeneratedNeuronDraft,
@@ -68,7 +75,7 @@ impl NeuronSelection {
             if let Some(neuron) = self.store()?.get_neuron(&id)? {
                 if neuron.system_type.as_deref() == Some(CREATOR_SYSTEM_TYPE) {
                     tracing::debug!(
-                        phase = "ensure_creator",
+                        phase = PHASE_NEURON_ENSURE_CREATOR,
                         neuron_id = %neuron.id,
                         "creator cache hit"
                     );
@@ -84,7 +91,7 @@ impl NeuronSelection {
         {
             *cached_id = Some(neuron.id.clone());
             tracing::info!(
-                phase = "ensure_creator",
+                phase = PHASE_NEURON_ENSURE_CREATOR,
                 neuron_id = %neuron.id,
                 "creator loaded from store"
             );
@@ -103,7 +110,7 @@ impl NeuronSelection {
         })?;
         *cached_id = Some(neuron.id.clone());
         tracing::info!(
-            phase = "ensure_creator",
+            phase = PHASE_NEURON_ENSURE_CREATOR,
             neuron_id = %neuron.id,
             "creator created from seed"
         );
@@ -154,7 +161,7 @@ impl NeuronSelection {
         }
 
         tracing::info!(
-            phase = "select_candidates",
+            phase = PHASE_SELECT_CANDIDATES,
             n = query.n,
             min_new = query.min_new,
             source_id = query.source_id.as_deref().unwrap_or(""),
@@ -219,7 +226,7 @@ impl NeuronSelection {
         selected.truncate(query.n);
 
         tracing::info!(
-            phase = "select_candidates",
+            phase = PHASE_SELECT_CANDIDATES,
             reused,
             created,
             total = selected.len(),
@@ -228,7 +235,7 @@ impl NeuronSelection {
         );
         for (i, n) in selected.iter().enumerate() {
             tracing::info!(
-                phase = "select_candidates.detail",
+                phase = PHASE_SELECT_CANDIDATES_DETAIL,
                 index = i,
                 id = %n.id,
                 desc = %n.desc,
@@ -268,7 +275,7 @@ impl NeuronSelection {
         scope: AssistantCandidateScope,
     ) -> AppResult<Vec<Neuron>> {
         tracing::info!(
-            phase = "select_assistant_candidates",
+            phase = PHASE_SELECT_ASSISTANT_CANDIDATES,
             scope = ?scope,
             "select_assistant_candidates entry"
         );
@@ -387,7 +394,7 @@ impl NeuronSelection {
         }
 
         tracing::info!(
-            phase = "select_assistant_candidates",
+            phase = PHASE_SELECT_ASSISTANT_CANDIDATES,
             self_id,
             existing_downstream = policy.existing_downstream,
             new_downstream = policy.new_downstream,
@@ -423,7 +430,7 @@ impl NeuronSelection {
                 // 模选命中后回挂边：source → target（权重 0，幂等）。失败不阻塞选型（与 mark_used 同策略）。
                 if let Err(error) = self.maybe_link_to_source(link_source, &neuron) {
                     tracing::warn!(
-                        phase = "select_one.link_back",
+                        phase = PHASE_SELECT_ONE_LINK_BACK,
                         error = %error,
                         "link back skipped due to error"
                     );
@@ -431,7 +438,7 @@ impl NeuronSelection {
                 // 活跃信号：select_one 命中即记录使用（忽略失败，不阻塞选择流程）。
                 let _ = self.store()?.mark_used(&neuron.id);
                 tracing::info!(
-                    phase = "select_one",
+                    phase = PHASE_SELECT_ONE,
                     method = "llm",
                     neuron_id = %neuron.id,
                     "select_one ok"
@@ -440,7 +447,7 @@ impl NeuronSelection {
             }
             Err(error) => {
                 tracing::warn!(
-                    phase = "select_one",
+                    phase = PHASE_SELECT_ONE,
                     method = "weight_fallback",
                     error = %error,
                     "llm select failed; falling back to weight"
@@ -469,7 +476,7 @@ impl NeuronSelection {
         }
         self.store()?.link(source, &target.id, 0.0)?;
         tracing::info!(
-            phase = "select_one.link_back",
+            phase = PHASE_SELECT_ONE_LINK_BACK,
             source,
             target_id = %target.id,
             "linked back source -> target after model selection"
@@ -519,7 +526,7 @@ impl NeuronSelection {
             ModelAppendTemplate::Manual,
         );
         tracing::info!(
-            phase = "select_neuron.model_input",
+            phase = PHASE_SELECT_NEURON_MODEL_INPUT,
             selector_id = %selector.id,
             system_prompt_len = selector.content.len(),
             insert_id = "neuron.select_one",
@@ -528,14 +535,14 @@ impl NeuronSelection {
             "select_neuron model input assembled"
         );
         tracing::debug!(
-            phase = "select_neuron.model_input.full",
+            phase = PHASE_SELECT_NEURON_MODEL_INPUT_FULL,
             system_prompt = %selector.content,
             insert_text = %insert,
             "select_neuron full model input (debug)"
         );
         let output = self.model_caller.call_model(wire).await?;
         tracing::info!(
-            phase = "select_neuron.model_output",
+            phase = PHASE_SELECT_NEURON_MODEL_OUTPUT,
             raw_output = %output,
             "select_neuron model raw output"
         );
@@ -547,7 +554,7 @@ impl NeuronSelection {
                 AppError::InvalidInput("select neuron response missing neuron_id".into())
             })?;
         tracing::info!(
-            phase = "select_neuron.model_decision",
+            phase = PHASE_SELECT_NEURON_MODEL_DECISION,
             neuron_id = %neuron_id,
             in_candidates = candidates.iter().any(|n| n.id == neuron_id),
             "select_neuron llm decision"
@@ -579,7 +586,7 @@ impl NeuronSelection {
             )));
         }
         tracing::info!(
-            phase = "fill_candidates_batch",
+            phase = PHASE_FILL_CANDIDATES_BATCH,
             source_id = source_id.unwrap_or(""),
             count,
             "fill_candidates_batch start"
@@ -671,7 +678,7 @@ impl NeuronSelection {
             ModelAppendTemplate::Manual,
         );
         tracing::info!(
-            phase = "generate_drafts",
+            phase = PHASE_GENERATE_DRAFTS,
             message_count = wire.len(),
             user_len = user_prompt.len(),
             expected,
@@ -681,7 +688,7 @@ impl NeuronSelection {
             Ok(output) => output,
             Err(error) => {
                 tracing::error!(
-                    phase = "generate_drafts",
+                    phase = PHASE_GENERATE_DRAFTS,
                     error_code = error.code(),
                     error = %error,
                     "generate_drafts model call failed"
@@ -691,14 +698,14 @@ impl NeuronSelection {
         };
         let drafts = parse_generated_drafts(&output, expected).map_err(|error| {
             tracing::error!(
-                phase = "generate_drafts",
+                phase = PHASE_GENERATE_DRAFTS,
                 error = %error,
                 "generate_drafts JSON parse failed"
             );
             error
         })?;
         tracing::info!(
-            phase = "generate_drafts",
+            phase = PHASE_GENERATE_DRAFTS,
             count = drafts.len(),
             "generate_drafts ok"
         );

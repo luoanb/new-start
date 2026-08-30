@@ -10,6 +10,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use super::{config::ConfigStore, error::AppResult};
+use crate::core::log_phase::PHASE_POLLER_TICK;
 
 /// Defaults when `config.json` omits `poller` fields.
 pub const DEFAULT_POLLER_BASE_INTERVAL_MS: u64 = 1000;
@@ -197,7 +198,7 @@ impl Poller {
         self.pending_trigger = false;
         if force_all {
             tracing::info!(
-                phase = "poller_tick",
+                phase = PHASE_POLLER_TICK,
                 tick = self.tick_count,
                 "trigger consumed: force_all firing all handlers"
             );

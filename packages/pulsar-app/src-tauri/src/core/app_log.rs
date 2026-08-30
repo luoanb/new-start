@@ -232,6 +232,11 @@ pub fn log_dir() -> Option<PathBuf> {
     controls().map(|c| c.log_dir().to_path_buf())
 }
 
+/// 全量 phase 注册清单，供 `logs_phases` 命令暴露给前端日志面板做下拉。
+pub fn phases() -> &'static [super::log_phase::PhaseInfo] {
+    super::log_phase::all_phases()
+}
+
 struct UiLogLayer {
     buffer: Arc<Mutex<VecDeque<LogEntry>>>,
     capacity: usize,

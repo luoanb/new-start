@@ -17,6 +17,7 @@ use crate::core::{
         HookJudgementFilter, HookJudgementListResult, HookJudgementStore,
     },
     insert_catalog::{InsertCatalog, InsertInfo},
+    log_phase::{PHASE_NEURON_BOOTSTRAP_NEURONS, PHASE_SCORE_FEEDBACK_COMMAND},
     neuron_manager::NeuronManager,
     poller::Poller,
     providers::{ProviderConfigView, ProviderRegistry},
@@ -706,7 +707,7 @@ async fn score_feedback(
         .await
         .map_err(|error| {
             tracing::warn!(
-                phase = "score_feedback_command",
+                phase = PHASE_SCORE_FEEDBACK_COMMAND,
                 conversation_id,
                 message_index,
                 score,
@@ -1673,6 +1674,11 @@ fn logs_dir() -> Option<String> {
     app_log::log_dir().map(|path| path.display().to_string())
 }
 
+#[tauri::command]
+fn logs_phases() -> &'static [crate::core::log_phase::PhaseInfo] {
+    app_log::phases()
+}
+
 // ── Helpers ──
 
 fn with_topic_store<T>(
@@ -1846,11 +1852,11 @@ pub fn run() {
 
             // Bootstrap without holding any Gateway lock across model calls.
             tauri::async_runtime::spawn(async move {
-                tracing::info!(phase = "bootstrap_neurons", "starting neuron bootstrap");
+                tracing::info!(phase = PHASE_NEURON_BOOTSTRAP_NEURONS, "starting neuron bootstrap");
                 match neuron_manager.bootstrap().await {
                     Ok(report) => {
                         tracing::info!(
-                            phase = "bootstrap_neurons",
+                            phase = PHASE_NEURON_BOOTSTRAP_NEURONS,
                             create_neuron_id = %report.create_neuron_id,
                             select_neuron_id = %report.select_neuron_id,
                             "neuron bootstrap complete"
@@ -1858,7 +1864,7 @@ pub fn run() {
                     }
                     Err(error) => {
                         tracing::warn!(
-                            phase = "bootstrap_neurons",
+                            phase = PHASE_NEURON_BOOTSTRAP_NEURONS,
                             error_code = error.code(),
                             error = %error,
                             "neuron bootstrap incomplete"
@@ -1953,6 +1959,7 @@ pub fn run() {
             logs_set_level,
             logs_clear_buffer,
             logs_dir,
+            logs_phases,
             // Workspace / Files
             list_workspaces,
             add_workspace,

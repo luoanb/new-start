@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use crate::core::{
     error::AppResult,
+    log_phase::PHASE_SELECT_ROLE,
     models::{
         AssistantCandidateScope, BootstrapReport, CandidateQuery, Connection, CreateNeuronInput,
         EnsureSystemOpts, ModelMessage, NeighborhoodPoolPolicy, Neuron, NeuronCreate,
@@ -430,7 +431,7 @@ impl NeuronManager {
         scope: AssistantCandidateScope,
     ) -> AppResult<Neuron> {
         tracing::info!(
-            phase = "select_role",
+            phase = PHASE_SELECT_ROLE,
             scope = ?scope,
             history_len = messages.len(),
             "select_role entry"

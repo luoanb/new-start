@@ -8,7 +8,9 @@
 use std::{path::PathBuf, sync::Arc};
 
 use pulsar_app_lib::core::{
-    app_log, config::{server_env_overrides, ConfigStore, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT},
+    app_log,
+    config::{server_env_overrides, ConfigStore, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT},
+    log_phase::PHASE_NEURON_BOOTSTRAP_NEURONS,
     storage, StateChange, StateEmitter,
 };
 use pulsar_app_lib::net::{run_server, NetState, ServerConfig};
@@ -114,7 +116,7 @@ async fn main() {
         match neuron_manager.bootstrap().await {
             Ok(report) => {
                 tracing::info!(
-                    phase = "bootstrap_neurons",
+                    phase = PHASE_NEURON_BOOTSTRAP_NEURONS,
                     create_neuron_id = %report.create_neuron_id,
                     select_neuron_id = %report.select_neuron_id,
                     "neuron bootstrap complete"
@@ -122,7 +124,7 @@ async fn main() {
             }
             Err(error) => {
                 tracing::warn!(
-                    phase = "bootstrap_neurons",
+                    phase = PHASE_NEURON_BOOTSTRAP_NEURONS,
                     error_code = error.code(),
                     error = %error,
                     "neuron bootstrap incomplete"

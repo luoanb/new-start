@@ -16,6 +16,9 @@ use super::{
     round_types::{RoundOutcome, SessionSeed, SessionState},
     session_coordinator::SessionCoordinator,
 };
+use crate::core::log_phase::{
+    PHASE_PREEMPT_WAIT, PHASE_RUN_ROUND, PHASE_RUN_ROUND_STREAM,
+};
 
 /// 流式增量写盘 / 事件节流间隔（首块立即写，此后 ~150ms 一次；完成时最终写保证一致）。
 const STREAM_WRITE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(150);
@@ -159,7 +162,7 @@ impl ConversationRunner {
             }
         }
         tracing::info!(
-            phase = "run_round",
+            phase = PHASE_RUN_ROUND,
             session_id = %ctx.session_id,
             trigger = ?ctx.trigger,
             mode = ?ctx.mode,
@@ -199,7 +202,7 @@ impl ConversationRunner {
             r = model_fut => r?,
             _ = token.cancelled() => {
                 tracing::info!(
-                    phase = "run_round",
+                    phase = PHASE_RUN_ROUND,
                     session_id = %ctx.session_id,
                     "round interrupted by user"
                 );
@@ -224,7 +227,7 @@ impl ConversationRunner {
             r = fut => r?,
             _ = token.cancelled() => {
                 tracing::info!(
-                    phase = "run_round",
+                    phase = PHASE_RUN_ROUND,
                     session_id = %ctx.session_id,
                     "tool execution interrupted by user"
                 );
@@ -239,7 +242,7 @@ impl ConversationRunner {
             .run_after_execute_tools(&mut ctx, &mut outcome.tool_results)
             .await;
         tracing::info!(
-            phase = "run_round",
+            phase = PHASE_RUN_ROUND,
             session_id = %ctx.session_id,
             response_len = outcome.response.len(),
             tool_calls = outcome.tool_calls.as_ref().map_or(0, |c| c.len()),
@@ -250,10 +253,10 @@ impl ConversationRunner {
         // 发送后落产物（声明已在上一步落库；此处落执行结果或纯文本）。会话态已在发送前写回，
         // 再跑 after hooks：课题副作用（如 round_review 模型调用）失败只影响副作用本身，不丢失本轮模型产物。
         self.persist_outcome(&ctx)?;
-        tracing::info!(phase = "run_round", session_id = %ctx.session_id, "persist done");
+        tracing::info!(phase = PHASE_RUN_ROUND, session_id = %ctx.session_id, "persist done");
         // IP-5 AfterPersistOutcome：产物已落库，只读整轮上下文；落账本等副作用由 hook 自办。ignore 策略。
         self.hooks.run_after_persist_outcome(&ctx).await;
-        tracing::info!(phase = "run_round", session_id = %ctx.session_id, "round ok");
+        tracing::info!(phase = PHASE_RUN_ROUND, session_id = %ctx.session_id, "round ok");
         Ok(ChatResponse {
             conversation_id: ctx.session_id.clone(),
             response: outcome.response,
@@ -298,7 +301,7 @@ impl ConversationRunner {
             }
         }
         tracing::info!(
-            phase = "run_round_stream",
+            phase = PHASE_RUN_ROUND_STREAM,
             session_id = %ctx.session_id,
             trigger = ?ctx.trigger,
             mode = ?ctx.mode,
@@ -320,7 +323,7 @@ impl ConversationRunner {
         // IP-2 AfterPersistInput：wire 已落库、call_model 前。ignore 策略——Err 按原 wire 发送。
         self.hooks.run_after_persist_input(&mut ctx).await;
         tracing::info!(
-            phase = "run_round_stream",
+            phase = PHASE_RUN_ROUND_STREAM,
             session_id = %ctx.session_id,
             "input appended and persisted"
         );
@@ -345,7 +348,7 @@ impl ConversationRunner {
             .len()
             .saturating_sub(1);
         tracing::info!(
-            phase = "run_round_stream",
+            phase = PHASE_RUN_ROUND_STREAM,
             session_id = %ctx.session_id,
             placeholder_index,
             "placeholder appended"
@@ -393,7 +396,7 @@ impl ConversationRunner {
                 }
             }) {
                 tracing::warn!(
-                    phase = "run_round_stream",
+                    phase = PHASE_RUN_ROUND_STREAM,
                     session_id = %stream_session_id,
                     error = %error,
                     "streaming write failed (kept in memory)"
@@ -409,7 +412,7 @@ impl ConversationRunner {
             }
         });
         tracing::info!(
-            phase = "run_round_stream",
+            phase = PHASE_RUN_ROUND_STREAM,
             session_id = %ctx.session_id,
             "calling main model stream"
         );
@@ -429,7 +432,7 @@ impl ConversationRunner {
             r = model_fut => r?,
             _ = token.cancelled() => {
                 tracing::info!(
-                    phase = "run_round_stream",
+                    phase = PHASE_RUN_ROUND_STREAM,
                     session_id = %ctx.session_id,
                     "stream interrupted by user; finalizing partial output"
                 );
@@ -467,7 +470,7 @@ impl ConversationRunner {
             .run_after_call_model(&mut ctx, &mut model_response)
             .await;
         tracing::info!(
-            phase = "run_round_stream",
+            phase = PHASE_RUN_ROUND_STREAM,
             session_id = %ctx.session_id,
             output_len = model_response.output.len(),
             reasoning_len = model_response.reasoning.as_deref().map_or(0, str::len),
@@ -505,7 +508,7 @@ impl ConversationRunner {
                 r = fut => r?,
                 _ = token.cancelled() => {
                     tracing::info!(
-                        phase = "run_round_stream",
+                        phase = PHASE_RUN_ROUND_STREAM,
                         session_id = %ctx.session_id,
                         "tool execution interrupted by user"
                     );
@@ -558,7 +561,7 @@ impl ConversationRunner {
         }
         ctx.outcome = Some(outcome.clone());
         tracing::info!(
-            phase = "run_round_stream",
+            phase = PHASE_RUN_ROUND_STREAM,
             session_id = %ctx.session_id,
             response_len = outcome.response.len(),
             tool_results = outcome.tool_results.len(),
@@ -576,7 +579,7 @@ impl ConversationRunner {
             });
         }
         tracing::info!(
-            phase = "run_round_stream",
+            phase = PHASE_RUN_ROUND_STREAM,
             session_id = %ctx.session_id,
             "stream round ok"
         );
@@ -772,7 +775,7 @@ impl ConversationRunner {
         }
         let stamped = ctx.selected_neuron.as_ref().map(|n| n.id.clone());
         tracing::info!(
-            phase = "run_round",
+            phase = PHASE_RUN_ROUND,
             session_id = %ctx.session_id,
             tool_calls = tool_calls.len(),
             stamped = ?stamped,
@@ -812,7 +815,7 @@ impl ConversationRunner {
             "assistant text"
         };
         tracing::info!(
-            phase = "run_round",
+            phase = PHASE_RUN_ROUND,
             session_id = %ctx.session_id,
             trigger = ?ctx.trigger,
             stamped = ?stamped,
@@ -947,7 +950,7 @@ async fn wait_preempt_convergence(mut wait: tokio::sync::watch::Receiver<bool>) 
     .await;
     if waited.is_err() {
         tracing::warn!(
-            phase = "preempt_wait",
+            phase = PHASE_PREEMPT_WAIT,
             "preempted round convergence wait timed out; proceeding with throttled snapshot"
         );
     }

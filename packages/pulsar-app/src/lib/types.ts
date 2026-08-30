@@ -373,6 +373,12 @@ export type LogEntry = {
   fields?: Record<string, string>;
 };
 
+export type PhaseInfo = {
+  value: string;
+  group: string;
+  label: string;
+};
+
 // ── Hook Judgements（裁决记录，与后端 hook_judgement_store.rs serde 一致）──
 
 /** 裁决终态（后端 JudgementStatus 序列化同构；pending 为过程态）。 */

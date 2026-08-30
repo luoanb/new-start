@@ -25,6 +25,7 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use super::conversation_runner::RoundTriggerKind;
+use crate::core::log_phase::PHASE_SESSION_COORDINATOR;
 
 /// 活动轮次条目：取消令牌 + 收敛信号发送端。
 ///
@@ -75,7 +76,7 @@ impl SessionCoordinator {
                 // 用户优先：立即终止当前轮（协作式取消，已产出由该轮自行收敛落库），
                 // 并把旧轮的收敛信号接收端交付给新轮（等待收敛后再取快照，Bug #2）。
                 tracing::info!(
-                    phase = "session_coordinator",
+                    phase = PHASE_SESSION_COORDINATOR,
                     session_id,
                     "user round preempts active round"
                 );
@@ -83,7 +84,7 @@ impl SessionCoordinator {
                 preempt_wait = Some(existing.converged.subscribe());
             } else {
                 tracing::info!(
-                    phase = "session_coordinator",
+                    phase = PHASE_SESSION_COORDINATOR,
                     session_id,
                     trigger = ?trigger,
                     "round skipped: session busy"

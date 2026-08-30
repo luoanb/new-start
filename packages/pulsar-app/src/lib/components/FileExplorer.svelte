@@ -276,6 +276,7 @@
         { label: t("fileExplorer.rename"), icon: ICONS.rename, onSelect: () => startRename(entry.path) },
         { label: t("fileExplorer.move"), icon: ICONS.move, onSelect: () => startMove(entry.path) },
         { label: t("fileExplorer.copyPath"), icon: ICONS.copy, onSelect: () => void copyPath(entry.path) },
+        { label: t("fileExplorer.copyRelativePath"), icon: ICONS.copy, onSelect: () => void copyRelativePath(entry.path) },
         { label: t("fileExplorer.delete"), icon: ICONS.trash, danger: true, onSelect: () => void deletePath(entry.path) },
       );
     } else {
@@ -284,6 +285,7 @@
         { label: t("fileExplorer.rename"), icon: ICONS.rename, onSelect: () => startRename(entry.path) },
         { label: t("fileExplorer.move"), icon: ICONS.move, onSelect: () => startMove(entry.path) },
         { label: t("fileExplorer.copyPath"), icon: ICONS.copy, onSelect: () => void copyPath(entry.path) },
+        { label: t("fileExplorer.copyRelativePath"), icon: ICONS.copy, onSelect: () => void copyRelativePath(entry.path) },
         { label: t("fileExplorer.delete"), icon: ICONS.trash, danger: true, onSelect: () => void deletePath(entry.path) },
       );
     }
@@ -303,6 +305,8 @@
         { label: t("fileExplorer.newFolder"), onSelect: () => startNew("new-folder", entry.path) },
         { label: t("fileExplorer.rename"), onSelect: () => startRename(entry.path) },
         { label: t("fileExplorer.move"), onSelect: () => startMove(entry.path) },
+        { label: t("fileExplorer.copyPath"), onSelect: () => void copyPath(entry.path) },
+        { label: t("fileExplorer.copyRelativePath"), onSelect: () => void copyRelativePath(entry.path) },
         { label: t("fileExplorer.delete"), danger: true, onSelect: () => void deletePath(entry.path) },
       );
     } else {
@@ -310,6 +314,8 @@
         { label: t("fileExplorer.open"), onSelect: () => activeWs && openFile(activeWs, entry.path) },
         { label: t("fileExplorer.rename"), onSelect: () => startRename(entry.path) },
         { label: t("fileExplorer.move"), onSelect: () => startMove(entry.path) },
+        { label: t("fileExplorer.copyPath"), onSelect: () => void copyPath(entry.path) },
+        { label: t("fileExplorer.copyRelativePath"), onSelect: () => void copyRelativePath(entry.path) },
         { label: t("fileExplorer.delete"), danger: true, onSelect: () => void deletePath(entry.path) },
       );
     }
@@ -452,18 +458,28 @@
     return CopyToClipboard.copyText(text);
   }
 
-  async function copyPath(path: string) {
-    if (!activeWs) return;
-    const abs = path ? `${activeWs.root}/${path}` : activeWs.root;
-    const ok = await copyText(abs);
+  /** 写剪贴板 + 成功闪烁 / 失败错误条（复制绝对/相对路径共用）。 */
+  async function copyWithFlash(text: string) {
+    const ok = await copyText(text);
     if (ok) {
-      copiedFlash = abs;
+      copiedFlash = text;
       setTimeout(() => {
-        if (copiedFlash === abs) copiedFlash = null;
+        if (copiedFlash === text) copiedFlash = null;
       }, 1600);
     } else {
       error = t("fileExplorer.operationFailed", { error: "copy" });
     }
+  }
+
+  /** 复制绝对路径：工作区根 + 相对路径拼接（相对路径为空时复制根自身）。 */
+  async function copyPath(path: string) {
+    if (!activeWs) return;
+    await copyWithFlash(path ? `${activeWs.root}/${path}` : activeWs.root);
+  }
+
+  /** 复制相对路径：entry.path 即相对当前工作区根的路径，原样写入剪贴板。 */
+  async function copyRelativePath(path: string) {
+    await copyWithFlash(path);
   }
 
   // ── 添加工作区：系统对话框 + 输入回退 ──

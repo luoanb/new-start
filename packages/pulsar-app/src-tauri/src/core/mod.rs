@@ -20,6 +20,7 @@ pub mod hook_judgement_store {
     pub use super::hook::store::*;
 }
 pub mod insert_catalog;
+pub mod log_phase;
 pub mod log_redact;
 pub mod mcp;
 pub mod model_call_input;

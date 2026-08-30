@@ -15,6 +15,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::error::{AppError, AppResult};
+use crate::core::log_phase::{
+    PHASE_LLM_CALL_PERF, PHASE_LLM_REQUEST_OUT, PHASE_LLM_RESPONSE_IN,
+};
 
 /// 消息内容：纯文本或多模态部分列表（`image_url`/`input_audio`/`text`）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -352,7 +355,7 @@ const DUMP_LLM_WIRE: bool = true;
 fn dump_wire_request(body: &serde_json::Value) {
     if DUMP_LLM_WIRE {
         tracing::info!(
-            phase = "llm_request_out",
+            phase = PHASE_LLM_REQUEST_OUT,
             body = %serde_json::to_string(body).unwrap_or_default(),
             "llm request body (full)"
         );
@@ -362,11 +365,39 @@ fn dump_wire_request(body: &serde_json::Value) {
 fn dump_wire_response(bytes: &[u8]) {
     if DUMP_LLM_WIRE {
         tracing::info!(
-            phase = "llm_response_in",
+            phase = PHASE_LLM_RESPONSE_IN,
             body = %String::from_utf8_lossy(bytes),
             "llm response body (full)"
         );
     }
+}
+
+/// 调用耗时打点（llm_call_perf）：墙钟 + usage 定量拆分慢因——
+/// completion_tokens 巨大 → 服务端生成/思考长；completion 小而耗时高 → prefill/排队。
+/// 流式额外记录首包时间（TTFB ≈ prefill 完成点）。
+fn log_call_perf(
+    stream: bool,
+    model: &str,
+    started: std::time::Instant,
+    first_chunk_at: Option<std::time::Instant>,
+    usage: Option<&Usage>,
+) {
+    tracing::info!(
+        phase = PHASE_LLM_CALL_PERF,
+        stream,
+        model = %model,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        ttfb_ms = first_chunk_at
+            .map(|t| (t - started).as_millis() as u64)
+            .unwrap_or(0),
+        prompt_tokens = usage.map_or(0, |u| u.prompt_tokens),
+        completion_tokens = usage.map_or(0, |u| u.completion_tokens),
+        reasoning_tokens = usage
+            .and_then(|u| u.completion_tokens_details.as_ref())
+            .and_then(|d| d.reasoning_tokens)
+            .unwrap_or(0),
+        "model call perf"
+    );
 }
 
 /// 轻量 OpenAI 兼容客户端：仅负责 HTTP 发送与错误归一。
@@ -391,6 +422,7 @@ impl Client {
         let body = serde_json::to_value(req)
             .map_err(|e| AppError::LlmRequestFailed(format!("serialize request: {e}")))?;
         dump_wire_request(&body);
+        let started = std::time::Instant::now();
         let response = self
             .http
             .post(self.endpoint())
@@ -401,8 +433,10 @@ impl Client {
             .map_err(|e| AppError::LlmRequestFailed(format!("request failed: {e}")))?;
         let bytes = self.read_body(response).await?;
         dump_wire_response(&bytes);
-        serde_json::from_slice(&bytes)
-            .map_err(|e| AppError::LlmRequestFailed(format!("parse response: {e}")))
+        let parsed: ChatResponse = serde_json::from_slice(&bytes)
+            .map_err(|e| AppError::LlmRequestFailed(format!("parse response: {e}")))?;
+        log_call_perf(false, &parsed.model, started, None, parsed.usage.as_ref());
+        Ok(parsed)
     }
 
     /// 流式调用：SSE 逐 chunk 解析，通过 `on_chunk` 回调抛出；结束后返回聚合结果。
@@ -435,6 +469,8 @@ impl Client {
         }
 
         let mut stream = response.bytes_stream();
+        let started = std::time::Instant::now();
+        let mut first_chunk_at: Option<std::time::Instant> = None;
         let mut aggregated = StreamResult {
             id: String::new(),
             object: String::new(),
@@ -452,6 +488,9 @@ impl Client {
             let chunk = chunk_res
                 .map_err(|e| AppError::LlmRequestFailed(format!("stream error: {e}")))?;
             let text = String::from_utf8_lossy(&chunk);
+            if first_chunk_at.is_none() {
+                first_chunk_at = Some(std::time::Instant::now());
+            }
             for line in text.lines() {
                 let line = line.trim();
                 if !line.starts_with("data:") {
@@ -522,9 +561,16 @@ impl Client {
             }
         }
         aggregated.choices = final_choice.into_iter().collect();
+        log_call_perf(
+            true,
+            &aggregated.model,
+            started,
+            first_chunk_at,
+            aggregated.usage.as_ref(),
+        );
         if DUMP_LLM_WIRE {
             tracing::info!(
-                phase = "llm_response_in",
+                phase = PHASE_LLM_RESPONSE_IN,
                 body = %serde_json::to_string(&aggregated).unwrap_or_default(),
                 "llm stream response (aggregated full)"
             );

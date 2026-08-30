@@ -206,6 +206,13 @@ export type Translations = {
     initFailed: string;
     setLevelFailed: string;
     clearFailed: string;
+    phase: string;
+    phaseSearch: string;
+    detail: string;
+    copy: string;
+    copied: string;
+    copyFailed: string;
+    close: string;
   };
   drawer: {
     sessions: string;
@@ -495,6 +502,7 @@ export type Translations = {
     moveTargetHint: string;
     moveConfirm: string;
     copyPath: string;
+    copyRelativePath: string;
     open: string;
     empty: string;
     noWorkspace: string;
@@ -864,6 +872,13 @@ export const en: Translations = {
     initFailed: "Logs init failed: {error}",
     setLevelFailed: "Set level failed: {error}",
     clearFailed: "Clear failed: {error}",
+    phase: "Phase",
+    phaseSearch: "type to filter phase…",
+    detail: "Detail",
+    copy: "Copy",
+    copied: "Copied",
+    copyFailed: "Copy failed",
+    close: "Close",
   },
   drawer: {
     sessions: "Sessions",
@@ -1166,6 +1181,7 @@ export const en: Translations = {
     moveTargetHint: "Move to: pick a target folder",
     moveConfirm: "Move",
     copyPath: "Copy path",
+    copyRelativePath: "Copy relative path",
     open: "Open",
     empty: "This folder is empty",
     noWorkspace: "No workspace yet",
@@ -1554,6 +1570,13 @@ export const zh: Translations = {
     initFailed: "日志初始化失败：{error}",
     setLevelFailed: "设置级别失败：{error}",
     clearFailed: "清空失败：{error}",
+    phase: "阶段",
+    phaseSearch: "输入过滤阶段…",
+    detail: "详情",
+    copy: "复制",
+    copied: "已复制",
+    copyFailed: "复制失败",
+    close: "关闭",
   },
   drawer: {
     sessions: "会话列表",
@@ -1856,6 +1879,7 @@ export const zh: Translations = {
     moveTargetHint: "移动到：选择目标目录",
     moveConfirm: "移动",
     copyPath: "复制路径",
+    copyRelativePath: "复制相对路径",
     open: "打开",
     empty: "此目录为空",
     noWorkspace: "尚未添加工作区",

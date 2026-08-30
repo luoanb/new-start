@@ -21,6 +21,7 @@ use super::{
     round_types::{RoundOutcome, ToolResultItem},
     tool_registry::ToolRegistry,
 };
+use crate::core::log_phase::{PHASE_ROUND_EXECUTE, PHASE_TOOL_AUTHORIZATION};
 
 /// 模型调用抽象：生产用 [`super::providers::ProviderRegistry`]，测试可注入替身。
 #[async_trait]
@@ -142,7 +143,7 @@ impl RoundExecutor {
         )?;
         let model_response = self.model_caller.call_model(request).await?;
         tracing::info!(
-            phase = "round_execute",
+            phase = PHASE_ROUND_EXECUTE,
             output_len = model_response.output.len(),
             tool_calls = model_response.tool_calls.as_ref().map_or(0, |c| c.len()),
             reasoning = model_response.reasoning.as_deref().map_or(0, str::len),
@@ -180,7 +181,7 @@ impl RoundExecutor {
             .call_model_stream(request, on_chunk)
             .await?;
         tracing::info!(
-            phase = "round_execute",
+            phase = PHASE_ROUND_EXECUTE,
             output_len = model_response.output.len(),
             tool_calls = model_response.tool_calls.as_ref().map_or(0, |c| c.len()),
             reasoning = model_response.reasoning.as_deref().map_or(0, str::len),
@@ -234,7 +235,7 @@ impl RoundExecutor {
             (final_ids, tools)
         };
         tracing::info!(
-            phase = "round_execute",
+            phase = PHASE_ROUND_EXECUTE,
             authorized_tool_count = authorized_tool_ids.len(),
             wire_tool_ids = ?tools.as_ref().map(|t| t.iter().map(|d| d.name.clone()).collect::<Vec<_>>()),
             "tools authorized"
@@ -254,7 +255,7 @@ impl RoundExecutor {
             })
             .collect();
         tracing::info!(
-            phase = "round_execute",
+            phase = PHASE_ROUND_EXECUTE,
             message_count = model_messages.len(),
             messages = ?wire_view,
             "model input (final messages)"
@@ -317,7 +318,7 @@ impl RoundExecutor {
                     .get_tool(&call.name)
                     .ok_or_else(|| AppError::SkillNotFound(call.name.clone()))?;
                 tracing::info!(
-                    phase = "round_execute",
+                    phase = PHASE_ROUND_EXECUTE,
                     tool = %call.name,
                     args_len = call.arguments.to_string().len(),
                     "executing tool"
@@ -330,7 +331,7 @@ impl RoundExecutor {
                         let message =
                             format!("[tool:{}] 工具调用失败：{error}", call.name);
                         tracing::warn!(
-                            phase = "round_execute",
+                            phase = PHASE_ROUND_EXECUTE,
                             tool = %call.name,
                             error = %error,
                             "tool failed; error passed back to model"
@@ -339,7 +340,7 @@ impl RoundExecutor {
                     }
                 };
                 tracing::info!(
-                    phase = "round_execute",
+                    phase = PHASE_ROUND_EXECUTE,
                     tool = %call.name,
                     result_len = result.len(),
                     "tool executed"
@@ -388,7 +389,7 @@ pub fn filter_authorized_tool_ids(registry: &ToolRegistry, tool_ids: &[String]) 
             out.push(id.clone());
         } else {
             tracing::warn!(
-                phase = "tool_authorization",
+                phase = PHASE_TOOL_AUTHORIZATION,
                 tool_id = %id,
                 "ignoring unknown tool id"
             );
