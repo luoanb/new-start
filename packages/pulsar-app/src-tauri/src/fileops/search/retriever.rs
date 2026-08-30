@@ -1,7 +1,9 @@
 //! 索引构建（mtime 增量）+ 块级检索（SQLite FTS5 + bm25 + 块类型加权）。
 //!
 //! 索引按项目（workspace）独立存储：`<index_root>/<sha256(root)[..16]>/search.db`。
-//! 检索是 FTS5 块级关键词召回（embedding 向量通道留 v2，chunk 表可增量加列）。
+//! 检索是 FTS5 块级关键词召回：英文走 content 前缀匹配（unicode61 已拆 `_`），
+//! 中文走 `cjk` 列的 2-gram 子串匹配；跨 token 短查询 AND、长查询降级 OR。
+//! （embedding 向量通道留 v2，chunk 表可增量加列）。
 
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
@@ -17,7 +19,14 @@ use super::chunk::{CodeChunk, SearchBlock, SemanticSearchResult};
 use super::indexer::Chunker;
 
 const DB_FILE: &str = "search.db";
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
+/// FTS5 虚拟表定义（v2：新增 `cjk` 中文 2-gram 列，unicode61 分词）。
+const FTS5_SCHEMA: &str = "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+           id UNINDEXED, path UNINDEXED, start_line UNINDEXED,
+           end_line UNINDEXED, block_type UNINDEXED, content, cjk
+         )";
+/// 跨 token 组合阈值：≥该数量（通常为同义词枚举）降级 OR 宽松召回。
+const OR_JOIN_MIN_TOKENS: usize = 4;
 /// 单文件大小上限（超出跳过索引，与分块器保持一致）。
 const MAX_FILE_BYTES: usize = 512 * 1024;
 /// 检索默认/上限。
@@ -169,17 +178,37 @@ impl Retriever {
                 "query must contain at least one searchable word".into(),
             ));
         }
-        // FTS5 column filter：content 列逐 token AND 组合（unicode61 已把 `foo_bar` 拆词）。
-        // 中文 token（CJK 词组合无空格）用前缀匹配：`"语义"*` 可命中「语义搜索」，
-        // 英文标识符保持精确匹配（沿用既有测试语义）。
-        let match_expr = tokens
-            .iter()
-            .map(|t| {
-                let quoted = format!("content:\"{t}\"");
-                if is_cjk(t) { format!("{quoted}*") } else { quoted }
-            })
-            .collect::<Vec<_>>()
-            .join(" AND ");
+        // FTS5 column filter：
+        // - 英文 token → content 前缀匹配（`"stop"*` 命中 `stop_session`/`stopAll`；unicode61 已把 `_` 拆词）。
+        // - 中文 token → 按 2-gram 展开到 cjk 列 OR 组合（`中断` 命中注释中间的「会话中断」，子串级召回）；
+        //   单字中文无 bigram 时回退 content 前缀匹配。
+        // - 跨 token 组合：≤3 词 AND 保精度；≥4 词（通常为同义词枚举）降级 OR 宽松召回，靠 bm25 收敛。
+        let mut clauses: Vec<String> = Vec::with_capacity(tokens.len());
+        for t in &tokens {
+            let clause = if is_cjk(t) {
+                let mut grams = query_bigrams(t);
+                grams.sort();
+                grams.dedup();
+                if grams.is_empty() {
+                    format!("content:\"{t}\"*")
+                } else {
+                    grams
+                        .iter()
+                        .map(|g| format!("cjk:\"{g}\""))
+                        .collect::<Vec<_>>()
+                        .join(" OR ")
+                }
+            } else {
+                format!("content:\"{t}\"*")
+            };
+            clauses.push(format!("({clause})"));
+        }
+        let joiner = if clauses.len() >= OR_JOIN_MIN_TOKENS {
+            " OR "
+        } else {
+            " AND "
+        };
+        let match_expr = clauses.join(joiner);
 
         let db_path = index_dir_for(index_root, &ws.root).join(DB_FILE);
         let conn = Connection::open(&db_path)
@@ -194,7 +223,7 @@ impl Retriever {
         let limit = (top_k * RANK_PREFETCH_MULT) as i64;
 
         let sql = "SELECT path, start_line, end_line, block_type, content, \
-                   (bm25(chunks_fts, 0, 0, 0, 0, 0, 5.0) + \
+                   (bm25(chunks_fts, 0, 0, 0, 0, 0, 5.0, 2.0) + \
                      CASE block_type \
                        WHEN 'impl' THEN 0.6 WHEN 'trait' THEN 0.6 WHEN 'interface' THEN 0.6 \
                        WHEN 'function' THEN 0.3 WHEN 'struct' THEN 0.3 WHEN 'class' THEN 0.3 WHEN 'enum' THEN 0.3 \
@@ -269,10 +298,6 @@ fn init_schema(conn: &mut Connection) -> AppResult<()> {
            block_type TEXT NOT NULL,
            content TEXT NOT NULL
          );
-         CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
-           id UNINDEXED, path UNINDEXED, start_line UNINDEXED,
-           end_line UNINDEXED, block_type UNINDEXED, content
-         );
          CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);",
     )
     .map_err(db_err)?;
@@ -281,11 +306,23 @@ fn init_schema(conn: &mut Connection) -> AppResult<()> {
         .optional()
         .map_err(db_err)?;
     if ver.as_deref() != Some(&SCHEMA_VERSION.to_string()) {
+        // 版本升级：重建 FTS 表（新增 cjk 列）并清空索引登记，触发下一轮全量重建
+        // （增量扫描以 files 表为准，清空后所有文件都会视为变更重新分块）。
+        conn.execute_batch(&format!(
+            "DROP TABLE IF EXISTS chunks_fts;
+             {FTS5_SCHEMA};
+             DELETE FROM files;
+             DELETE FROM chunks;"
+        ))
+        .map_err(db_err)?;
         conn.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?1)",
             params![SCHEMA_VERSION.to_string()],
         )
         .map_err(db_err)?;
+    } else {
+        // 全新库幂等创建（已存在同版本则跳过）。
+        conn.execute_batch(FTS5_SCHEMA).map_err(db_err)?;
     }
     Ok(())
 }
@@ -312,7 +349,7 @@ fn insert_chunks_tx(
         .prepare("INSERT INTO chunks (path, start_line, end_line, block_type, content) VALUES (?1, ?2, ?3, ?4, ?5)")
         .map_err(db_err)?;
     let mut fts = tx
-        .prepare("INSERT INTO chunks_fts (id, path, start_line, end_line, block_type, content) VALUES (last_insert_rowid(), ?1, ?2, ?3, ?4, ?5)")
+        .prepare("INSERT INTO chunks_fts (id, path, start_line, end_line, block_type, content, cjk) VALUES (last_insert_rowid(), ?1, ?2, ?3, ?4, ?5, ?6)")
         .map_err(db_err)?;
     for chunk in chunks {
         stmt.execute(params![
@@ -323,12 +360,14 @@ fn insert_chunks_tx(
             chunk.content,
         ])
         .map_err(db_err)?;
+        let cjk = cjk_bigrams(&chunk.content);
         fts.execute(params![
             rel,
             chunk.start_line as i64,
             chunk.end_line as i64,
             chunk.block_type.as_str(),
             chunk.content,
+            cjk,
         ])
         .map_err(db_err)?;
     }
@@ -359,6 +398,64 @@ fn normalize_query(query: &str) -> Vec<String> {
 /// 用前缀匹配弥补「短词命中长词」的精确匹配局限。
 fn is_cjk(s: &str) -> bool {
     s.chars().any(|c| !c.is_ascii() && c.is_alphabetic())
+}
+
+/// CJK 字符判定（与 `is_cjk` 同谓词）：非 ASCII 字母（中文/日文/韩文等）。
+fn is_cjk_char(c: char) -> bool {
+    !c.is_ascii() && c.is_alphabetic()
+}
+
+/// 提取 content 中所有连续 CJK 字段的重叠 2-gram，空格分隔（供 `cjk` 列索引）。
+/// 例：`对话中断时的处理逻辑` → `对话 话中 中断 断时 时的 的处 处理 理逻 逻辑`。
+fn cjk_bigrams(content: &str) -> String {
+    let mut out = String::new();
+    let mut run: Vec<char> = Vec::new();
+    for c in content.chars() {
+        if is_cjk_char(c) {
+            run.push(c);
+        } else {
+            push_bigrams(&run, &mut out);
+            run.clear();
+        }
+    }
+    push_bigrams(&run, &mut out);
+    out
+}
+
+/// 查询词的 CJK 2-gram 集合（子串级召回，任一 bigram 命中即算该词命中）。
+/// 例：`对话中断` → [对话, 话中, 中断]；单字词返回空（调用方回退前缀匹配）。
+fn query_bigrams(token: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut run: Vec<char> = Vec::new();
+    for c in token.chars() {
+        if is_cjk_char(c) {
+            run.push(c);
+        } else {
+            collect_bigrams(&run, &mut out);
+            run.clear();
+        }
+    }
+    collect_bigrams(&run, &mut out);
+    out
+}
+
+fn push_bigrams(run: &[char], out: &mut String) {
+    for w in run.windows(2) {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push(w[0]);
+        out.push(w[1]);
+    }
+}
+
+fn collect_bigrams(run: &[char], out: &mut Vec<String>) {
+    for w in run.windows(2) {
+        let mut g = String::with_capacity(2);
+        g.push(w[0]);
+        g.push(w[1]);
+        out.push(g);
+    }
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -561,6 +658,110 @@ mod tests {
         assert!(r.results.iter().all(|b| b.path == "src/auth.rs"));
         let r2 = Retriever::search(&root, &entry2, "login", None, None).unwrap();
         assert!(r2.results.is_empty(), "跨工作区不应命中");
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn cjk_mid_comment_substring_hits() {
+        let (base, ws, entry) = setup("cjkmid");
+        std::fs::write(
+            ws.join("src/stop.rs"),
+            "fn handle() -> u32 {\n    // 处理会话中断时的逻辑\n    1\n}\n",
+        )
+        .unwrap();
+        let root = index_root(&base);
+        let _ = Indexer::ensure_index(&root, &entry).unwrap();
+        // 「中断」在函数块内注释中间（token 以「处理」开头），前缀匹配不命中，2-gram 子串命中。
+        let r = Retriever::search(&root, &entry, "中断", None, None).unwrap();
+        assert!(
+            r.results.iter().any(|b| b.path == "src/stop.rs"),
+            "注释中间的「中断」应子串命中: {:?}",
+            r.results
+        );
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn english_prefix_matches_camel_case_identifier() {
+        let (base, ws, entry) = setup("camel");
+        std::fs::write(ws.join("src/cmd.rs"), "fn stopAllSessions() {}\n").unwrap();
+        let root = index_root(&base);
+        let _ = Indexer::ensure_index(&root, &entry).unwrap();
+        // unicode61 不拆驼峰（stopall... 单 token），前缀 `"stop"*` 命中。
+        let r = Retriever::search(&root, &entry, "stop", None, None).unwrap();
+        assert!(
+            r.results.iter().any(|b| b.path == "src/cmd.rs"),
+            "驼峰标识符 stopAllSessions 应被 stop 前缀命中: {:?}",
+            r.results
+        );
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn long_query_or_recalls_partial_match() {
+        let (base, ws, entry) = setup("orquery");
+        std::fs::write(
+            ws.join("src/abort.rs"),
+            "fn abort_stream() {\n    // 中断处理\n}\n",
+        )
+        .unwrap();
+        let root = index_root(&base);
+        let _ = Indexer::ensure_index(&root, &entry).unwrap();
+        // 5 个词只有「中断」命中：长查询（≥4 词）降级 OR，不应返回空。
+        let r = Retriever::search(&root, &entry, "对话 中止 会话 中断 重启", None, None).unwrap();
+        assert!(
+            !r.results.is_empty(),
+            "长查询 OR 应召回部分命中的块: {:?}",
+            r.results
+        );
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn single_char_cjk_falls_back_to_content_prefix() {
+        let (base, ws, entry) = setup("single");
+        std::fs::write(ws.join("src/stop.rs"), "fn h() {\n    // 停止会话\n}\n").unwrap();
+        let root = index_root(&base);
+        let _ = Indexer::ensure_index(&root, &entry).unwrap();
+        // 单字「停」无 bigram，回退 content 前缀匹配「停止」。
+        let r = Retriever::search(&root, &entry, "停", None, None).unwrap();
+        assert!(
+            r.results.iter().any(|b| b.path == "src/stop.rs"),
+            "单字中文回退前缀匹配: {:?}",
+            r.results
+        );
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn schema_v1_migrates_and_reindexes() {
+        let (base, _ws, entry) = setup("migrate");
+        let root = index_root(&base);
+        let _ = Indexer::ensure_index(&root, &entry).unwrap();
+        let db = index_dir_for(&root, &entry.root).join(DB_FILE);
+        // 模拟旧版库：无 cjk 列的 fts + 版本号回退 1。
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "DROP TABLE chunks_fts;
+             CREATE VIRTUAL TABLE chunks_fts USING fts5(
+               id UNINDEXED, path UNINDEXED, start_line UNINDEXED,
+               end_line UNINDEXED, block_type UNINDEXED, content
+             );
+             INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '1');",
+        )
+        .unwrap();
+        drop(conn);
+        // 再 ensure：应检测版本不符 → 重建带 cjk 的 fts 并全量重索引。
+        let stats = Indexer::ensure_index(&root, &entry).unwrap();
+        assert!(stats.indexed_blocks >= 3, "迁移后应全量重建索引");
+        let conn = Connection::open(&db).unwrap();
+        let ver: String = conn
+            .query_row("SELECT value FROM meta WHERE key = 'schema_version'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ver, "2");
+        drop(conn);
+        let r = Retriever::search(&root, &entry, "login", None, None).unwrap();
+        assert!(!r.results.is_empty(), "迁移后检索可用");
         std::fs::remove_dir_all(&base).ok();
     }
 }
