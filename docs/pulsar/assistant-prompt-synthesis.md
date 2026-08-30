@@ -97,9 +97,8 @@ tools = None
 
 | `system_type` | insert id |
 |---------------|-----------|
-| `assistant_score_feedback` | `assistant.score_feedback` |
-| `assistant_match_topic` | `assistant.match_topic` |
-| `assistant_complete_scope` | `assistant.complete_scope` |
+| `assistant_user_round_judgement` | `assistant.user_round_judgement` |
+| `assistant_round_review` | `assistant.round_review` |
 
 未映射的 `system_type` 直接报错（无 insert）。
 
@@ -153,31 +152,22 @@ tools = ToolRegistry.definitions_for(authorized_tool_ids) 或 None
 
 ## 4. 各调度点明细
 
-### 4.1 ScoreFeedbackBeforeHook（权重打分）
+### 4.1 UserRoundJudgementBeforeHook（用户轮合并裁决：打分 + 课题路由）
 
 | 项 | 内容 |
 |----|------|
-| 时机 | `converse` 第一个 beforehook |
-| 跳过 | 无 topic；无 `last_intervention_at`；`intervention_neuron_ids` 为空 |
-| 通道 | `call_system_prompt_json` + `Manual` |
-| role_system | `assistant_score_feedback` neuron.content |
-| content | `assistant.score_feedback` insert 全文 |
-| user_input | JSON：`{ user_input, topic_id, neuron_ids }` |
-| 期望输出 | `{"score": <int -5..=5, ≠0>}` |
+| 时机 | `converse` 第一个 beforehook（IP-1，AfterLoadContext） |
+| 门控 | 未绑定课题（含首轮）必跑；已绑定课题每 3 条用户消息（`user_rounds % 3 == 0`）复核一次，否则 skip |
+| 通道 | `call_judgement`（`call_system_prompt_json` + `Manual`），JSON Schema 强约束 + 中性降级兜底 |
+| role_system | `assistant_user_round_judgement` neuron.content |
+| content | `assistant.user_round_judgement` insert 全文 |
+| user_input | JSON：`{ user_input, current_session_id, topic_id, neuron_ids, topics[] }` |
+| 期望输出 | `{ score, action, topic_id, name, description, scope_in }`（一次输出同时承担①打分②路由） |
+| 消费顺序 | ①打分：score ∈ [-5,5] 且 ≠0 时对上一介入区间盖章神经元 `apply_score_feedback`；0/越界/缺失 → warn + skip。②路由：`switch`（切换会话 → reload）/ `create`（新建课题，`scope_in` 必填）/ `none`（维持现状） |
 | 聊天历史 | **只读拼入** `ctx.messages`；不 add_message |
-| 失败策略 | JSON 解析失败 → warn 后跳过打分；非法 score 范围 → 报错 |
+| 失败策略 | JSON 解析失败 → `call_judgement` 中性降级（score=0 / action=none）；create 分支失败 → warn 并保持未绑定，不阻断本轮 |
 
-### 4.2 MatchTopicBeforeHook（课题匹配 / 创建）
-
-| 项 | 内容 |
-|----|------|
-| 时机 | `converse` 第二个 beforehook |
-| 通道 | `call_system_prompt_json` + `Manual` |
-| role_system / content | match_topic neuron + insert |
-| user_input | JSON：`{ user_input, current_session_id, topics }` |
-| 聊天历史 | 只读 `ctx.messages`；不 add_message |
-
-### 4.3 SelectNeuronBeforeHook → 选型（及可能的补齐草稿）
+### 4.2 SelectNeuronBeforeHook → 选型（及可能的补齐草稿）
 
 | 项 | 内容 |
 |----|------|
@@ -190,7 +180,7 @@ tools = ToolRegistry.definitions_for(authorized_tool_ids) 或 None
 | 写入 ctx | `selected_neuron`；`system_prompt = selected.content` |
 | 补齐草稿 | 非首轮至少生成 2 个 self 直接下游；既有下游不足 4 时一并补缺口；`history=[]` |
 
-### 4.4 run_core（助手主对话）
+### 4.3 run_core（助手主对话）
 
 | 项 | 内容 |
 |----|------|
@@ -202,16 +192,23 @@ tools = ToolRegistry.definitions_for(authorized_tool_ids) 或 None
 
 这是助手模式中**唯一**会把本轮对话写入会话存储的模型调度（Hook 只读历史）。
 
-### 4.5 CompleteScopeAfterHook（勾选 ScopeIn）
+### 4.4 RoundReviewAfterHook（轮次合并复盘：范围修订 + 验收）
 
 | 项 | 内容 |
 |----|------|
-| 时机 | 核心之后 |
-| 通道 | `call_system_prompt_json` + `Manual` |
-| user_input | JSON：`{ topic_id, scope_in, model_output, tool_result, user_input }` |
-| 聊天历史 | 只读 `ctx.messages`；不 add_message |
+| 时机 | `persist_outcome` 之后（IP-5，AfterPersistOutcome） |
+| 门控 | 仅收尾轮触发（`is_settling_round`：无工具声明且无工具执行结果）；无绑定课题 / 课题缺失 / Paused / WaitingUser → skip |
+| 通道 | `call_judgement`（`call_system_prompt_json` + `Manual`），JSON Schema 强约束 + 中性降级兜底 |
+| role_system | `assistant_round_review` neuron.content |
+| content | `assistant.round_review` insert 全文 |
+| user_input | JSON：`{ topic_id, scope_in, model_output, tool_results, user_input, trigger }` |
+| 期望输出 | `{ reason, add_items, remove_item_ids, update_items, completed_item_ids, blocked_item_ids }`（先修订后验收） |
+| 触发类型门禁 | `completed` 项仅 User 轮允许 edit/remove；ManualStep / Poller 一律跳过（记 skipped_ids） |
+| 特殊语义 | 空 `scope_in` → 课题直接收尾 Done；WrappingUp 课题本轮无工具调用即关闭 |
+| 落库 | 修订 + 验收合并为单条 revision_log 留痕事件 |
+| 失败策略 | User/ManualStep 轮失败阻断本轮；Poller 轮失败仅记录不中断推进 |
 
-### 4.6 ensure_system_neuron（懒创建系统根，侧路）
+### 4.5 ensure_system_neuron（懒创建系统根，侧路）
 
 | 项 | 内容 |
 |----|------|
@@ -224,9 +221,8 @@ tools = ToolRegistry.definitions_for(authorized_tool_ids) 或 None
 
 | insert id | 读者 | 消费位置 | 核心输出契约 |
 |-----------|------|----------|--------------|
-| `assistant.score_feedback` | 打分模型 | `call_system_prompt_json` → assemble `content` | `{"score": N}`，N∈[-5,5]≠0 |
-| `assistant.match_topic` | 课题裁决 | 同上 | `action`；create 时强制 `scope_in` |
-| `assistant.complete_scope` | 勾选模型 | 同上 | `completed_item_ids` |
+| `assistant.user_round_judgement` | 用户轮裁决模型 | `call_system_prompt_json` → assemble `content` | `{score, action, topic_id, name, description, scope_in}`；action ∈ switch/create/none |
+| `assistant.round_review` | 轮次复盘模型 | 同上 | `{reason, add_items, remove_item_ids, update_items, completed_item_ids, blocked_item_ids}` |
 | `neuron.select_one` | 选型模型 | `try_llm_select` → assemble `content` | `neuron_id` ∈ candidates |
 | `neuron.draft_from_model` | 草稿模型 | `generate_drafts` → assemble `content` | desc/content/tool_ids 列表 |
 
@@ -257,12 +253,11 @@ tools = ToolRegistry.definitions_for(authorized_tool_ids) 或 None
 
 | # | 调度名 | role_system | assemble content | template | user_input | msgs | 落库 |
 |---|--------|-------------|------------------|----------|------------|------|------|
-| 1 | score_feedback | score neuron | score insert | Manual | JSON | ✓ 只读 | ✗ |
-| 2 | match_topic | match neuron | match insert | Manual | JSON | ✓ 只读 | ✗ |
-| 3a | fill 候选（条件） | creator 子/自身 | draft insert | Manual | Purpose 契约 | [] | ✗ |
-| 3b | select_one LLM | select neuron | select insert | Manual | JSON candidates | ✓ 只读 | ✗ |
+| 1 | user_round_judgement（门控 0~1） | judgement neuron | judgement insert | Manual | JSON | ✓ 只读 | ✗ |
+| 2 | fill 候选（条件） | creator 子/自身 | draft insert | Manual | Purpose 契约 | [] | ✗ |
+| 3 | select_one LLM | select neuron | select insert | Manual | JSON candidates | ✓ 只读 | ✗ |
 | 4 | run_core | **业务 neuron** | `""` | Neuron | user/nudge | ✓ | ✓ |
-| 5 | complete_scope | complete neuron | complete insert | Manual | JSON | ✓ 只读 | ✗ |
+| 5 | round_review（仅收尾轮） | review neuron | review insert | Manual | JSON | ✓ 只读 | ✗ |
 | ※ | ensure 系统根 | creator content | draft insert | Manual | system_type 契约 | [] | ✗ |
 
 ---

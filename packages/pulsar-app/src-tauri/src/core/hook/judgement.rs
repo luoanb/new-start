@@ -1,34 +1,28 @@
-//! Hook 概念收拢层：裁决 hook 的唯一静态清单（规则），与 `hook_judgements` 账本（数据库表）区分。
+//! Hook 概念收拢层：裁决 hook 的**共享类型**，与 `hook_judgements` 账本（数据库表）区分。
 //!
 //! - **HookDef 是「规则」**：`system_type` 标识、展示名 `label`、结构化输出契约 `response_format`、
-//!   中性降级默认值 `neutral_fallback` —— 每个 hook 自带，就近定义。
-//! - **HOOK_DEFS 是代码内静态清单**（非数据库表、不落盘、运行时只读）；新增裁决 hook =
-//!   此处加一行 + 一个 hook 函数，`call_judgement` 与面板过滤下拉自动收拢。
-//! - `SYSTEM_TYPE_SELECT_NEURON`（候选选择）非裁决 hook，不收拢；`SYSTEM_TYPE_*` 常量保留在
-//!   `assistant_session.rs` 原位，此处引用。
+//!   中性降级默认值 `neutral_fallback` —— 每个 hook 自带，就近定义在
+//!   `hook/instances/<hook>.rs`，经 `registry::ACTIVE_HOOKS` 汇聚。
+//! - **注册式管理**：新增/下线 hook = 实例清单增删（见 `registry`）；本模块只保留类型
+//!   与查询入口，`hook_def()` / `hook_defs_meta()` 只查 `ACTIVE_HOOKS`
+//!   （legacy system_type 在存量账本中按未知类型回退展示）。
+//! - `SYSTEM_TYPE_SELECT_NEURON`（候选选择）非裁决 hook，不收拢；常量保留在
+//!   `assistant_session.rs` 原位。
 
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
 
-use crate::core::{
-    assistant_session::{
-        SYSTEM_TYPE_COMPLETE_SCOPE, SYSTEM_TYPE_MATCH_TOPIC, SYSTEM_TYPE_REVISE_TOPIC,
-        SYSTEM_TYPE_SCORE_FEEDBACK,
-    },
-    hook::defs::InjectPointId,
-    openai_compat::ResponseFormatSpec,
-};
+use super::registry::ACTIVE_HOOKS;
 
 /// 单个裁决 hook 的静态定义。
 pub struct HookDef {
-    /// system_type 标识（引用 assistant_session.rs 常量，常量保留原位）。
+    /// system_type 标识（常量就近定义在 `hook/instances/<hook>.rs`）。
     pub system_type: &'static str,
     /// 展示名 i18n key（面板过滤下拉与记录展示的数据源）。
     pub label: &'static str,
     /// 挂载注入点（账本 `inject_point` 列来源；裁决均在 IP-1/IP-5 挂载）。
     pub inject_point: &'static str,
     /// hook 自带结构化输出契约（schema 就近定义；None = 无约束）。
-    pub response_format: Option<ResponseFormatSpec>,
+    pub response_format: Option<crate::core::openai_compat::ResponseFormatSpec>,
     /// 中性降级默认值（A 方案兜底语义：裁决失败时主轮次不中断）。
     pub neutral_fallback: fn() -> serde_json::Value,
 }
@@ -97,175 +91,21 @@ pub struct JudgementAnchor {
     pub anchor_message_index: Option<i64>,
 }
 
-// ── JSON Schema（就近定义，每个 hook 一份，约束其决策输出）───────────────────
-
-/// complete_scope：勾选已完成/已阻塞 scope 项。
-pub const COMPLETE_SCOPE_SCHEMA: &str = r#"{
-  "type": "object",
-  "properties": {
-    "completed_item_ids": { "type": "array", "items": { "type": "string" } },
-    "blocked_item_ids": { "type": "array", "items": { "type": "string" } }
-  },
-  "required": ["completed_item_ids", "blocked_item_ids"],
-  "additionalProperties": false
-}"#;
-
-/// match_topic：switch（切已有课题）/ create（新建）/ none（不创建不切换）。
-/// strict 兼容：全字段 required，可选用 `["T","null"]` 联合表达。
-pub const MATCH_TOPIC_SCHEMA: &str = r#"{
-  "type": "object",
-  "properties": {
-    "action": { "type": "string", "enum": ["switch", "create", "none"] },
-    "topic_id": { "type": ["string", "null"] },
-    "name": { "type": ["string", "null"] },
-    "description": { "type": ["string", "null"] },
-    "scope_in": {
-      "type": ["array", "null"],
-      "items": {
-        "type": "object",
-        "properties": {
-          "goal": { "type": "string" },
-          "done_contract": { "type": "string" }
-        },
-        "required": ["goal", "done_contract"],
-        "additionalProperties": false
-      }
-    }
-  },
-  "required": ["action", "topic_id", "name", "description", "scope_in"],
-  "additionalProperties": false
-}"#;
-
-/// revise_topic：scope_in 增删改 + 修订原因。
-pub const REVISE_TOPIC_SCHEMA: &str = r#"{
-  "type": "object",
-  "properties": {
-    "reason": { "type": "string" },
-    "add_items": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "goal": { "type": "string" },
-          "done_contract": { "type": "string" }
-        },
-        "required": ["goal", "done_contract"],
-        "additionalProperties": false
-      }
-    },
-    "remove_item_ids": { "type": "array", "items": { "type": "string" } },
-    "update_items": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "id": { "type": "string" },
-          "goal": { "type": "string" },
-          "done_contract": { "type": "string" }
-        },
-        "required": ["id"],
-        "additionalProperties": false
-      }
-    }
-  },
-  "required": ["reason", "add_items", "remove_item_ids", "update_items"],
-  "additionalProperties": false
-}"#;
-
-/// score_feedback：干预区间打分（-5..=5，非 0）。
-pub const SCORE_FEEDBACK_SCHEMA: &str = r#"{
-  "type": "object",
-  "properties": {
-    "score": { "type": "integer", "minimum": -5, "maximum": 5 }
-  },
-  "required": ["score"],
-  "additionalProperties": false
-}"#;
-
-// ── 中性降级默认值（A 方案兜底语义，逐 hook 固化）────────────────────────────
-
-fn fallback_complete_scope() -> serde_json::Value {
-    serde_json::json!({ "completed_item_ids": [], "blocked_item_ids": [] })
-}
-
-fn fallback_match_topic() -> serde_json::Value {
-    // none：不创建、不切换（hook 消费处显式三分支处理）。
-    serde_json::json!({ "action": "none" })
-}
-
-fn fallback_revise_topic() -> serde_json::Value {
-    // 空 diff：无任何 add/remove/update，不产生修订副作用。
-    serde_json::json!({
-        "reason": "",
-        "add_items": [],
-        "remove_item_ids": [],
-        "update_items": []
-    })
-}
-
-fn fallback_score_feedback() -> serde_json::Value {
-    // 中性占位（消费处按终态 status 跳过，不应用打分）。
-    serde_json::json!({ "score": 0 })
-}
-
-// ── 静态清单（新增裁决 hook = 此处加一行 + 一个 hook 函数）───────────────────
-
-/// 全部裁决 hook 定义（运行时只读；面板过滤下拉由本表生成）。
-pub static HOOK_DEFS: &[HookDef] = &[
-    HookDef {
-        system_type: SYSTEM_TYPE_COMPLETE_SCOPE,
-        label: "hook.completeScope",
-        inject_point: InjectPointId::AfterPersistOutcome.as_str(),
-        response_format: Some(ResponseFormatSpec::JsonSchema {
-            name: Cow::Borrowed("complete_scope"),
-            schema: Cow::Borrowed(COMPLETE_SCOPE_SCHEMA),
-        }),
-        neutral_fallback: fallback_complete_scope,
-    },
-    HookDef {
-        system_type: SYSTEM_TYPE_MATCH_TOPIC,
-        label: "hook.matchTopic",
-        inject_point: InjectPointId::AfterLoadContext.as_str(),
-        response_format: Some(ResponseFormatSpec::JsonSchema {
-            name: Cow::Borrowed("match_topic"),
-            schema: Cow::Borrowed(MATCH_TOPIC_SCHEMA),
-        }),
-        neutral_fallback: fallback_match_topic,
-    },
-    HookDef {
-        system_type: SYSTEM_TYPE_REVISE_TOPIC,
-        label: "hook.reviseTopic",
-        inject_point: InjectPointId::AfterPersistOutcome.as_str(),
-        response_format: Some(ResponseFormatSpec::JsonSchema {
-            name: Cow::Borrowed("revise_topic"),
-            schema: Cow::Borrowed(REVISE_TOPIC_SCHEMA),
-        }),
-        neutral_fallback: fallback_revise_topic,
-    },
-    HookDef {
-        system_type: SYSTEM_TYPE_SCORE_FEEDBACK,
-        label: "hook.scoreFeedback",
-        inject_point: InjectPointId::AfterLoadContext.as_str(),
-        response_format: Some(ResponseFormatSpec::JsonSchema {
-            name: Cow::Borrowed("score_feedback"),
-            schema: Cow::Borrowed(SCORE_FEEDBACK_SCHEMA),
-        }),
-        neutral_fallback: fallback_score_feedback,
-    },
-];
-
-/// 按 system_type 查找 hook 定义。
+/// 按 system_type 查启用 hook 定义（只查 `registry::ACTIVE_HOOKS`）。
 pub fn hook_def(system_type: &str) -> Option<&'static HookDef> {
-    HOOK_DEFS.iter().find(|def| def.system_type == system_type)
+    ACTIVE_HOOKS
+        .iter()
+        .map(|h| &h.def)
+        .find(|def| def.system_type == system_type)
 }
 
-/// hook 元信息列表（命令层出参）。
+/// 启用 hook 元信息列表（命令 `hook_defs_list` 出参）。
 pub fn hook_defs_meta() -> Vec<HookDefMeta> {
-    HOOK_DEFS
+    ACTIVE_HOOKS
         .iter()
-        .map(|def| HookDefMeta {
-            system_type: def.system_type.to_string(),
-            label: def.label.to_string(),
+        .map(|h| HookDefMeta {
+            system_type: h.def.system_type.to_string(),
+            label: h.def.label.to_string(),
         })
         .collect()
 }
@@ -273,44 +113,48 @@ pub fn hook_defs_meta() -> Vec<HookDefMeta> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::hook::instances::{
+        SYSTEM_TYPE_ROUND_REVIEW, SYSTEM_TYPE_USER_ROUND_JUDGEMENT,
+    };
 
     #[test]
-    fn hook_def_finds_all_four() {
-        assert!(hook_def(SYSTEM_TYPE_COMPLETE_SCOPE).is_some());
-        assert!(hook_def(SYSTEM_TYPE_MATCH_TOPIC).is_some());
-        assert!(hook_def(SYSTEM_TYPE_REVISE_TOPIC).is_some());
-        assert!(hook_def(SYSTEM_TYPE_SCORE_FEEDBACK).is_some());
+    fn hook_def_finds_merged_two() {
+        assert!(hook_def(SYSTEM_TYPE_USER_ROUND_JUDGEMENT).is_some());
+        assert!(hook_def(SYSTEM_TYPE_ROUND_REVIEW).is_some());
+        // 旧四条休眠不注册（存量账本记录走面板未知类型回退）。
+        assert!(hook_def("assistant_match_topic").is_none());
+        assert!(hook_def("assistant_complete_scope").is_none());
+        assert!(hook_def("assistant_score_feedback").is_none());
+        assert!(hook_def("assistant_revise_topic").is_none());
         assert!(hook_def("assistant_select_neuron").is_none());
         assert!(hook_def("unknown").is_none());
     }
 
     #[test]
     fn fallback_values_are_neutral() {
-        assert_eq!(
-            (hook_def(SYSTEM_TYPE_COMPLETE_SCOPE).unwrap().neutral_fallback)(),
-            serde_json::json!({ "completed_item_ids": [], "blocked_item_ids": [] })
-        );
-        assert_eq!(
-            (hook_def(SYSTEM_TYPE_MATCH_TOPIC).unwrap().neutral_fallback)(),
-            serde_json::json!({ "action": "none" })
-        );
-        let revise = (hook_def(SYSTEM_TYPE_REVISE_TOPIC).unwrap().neutral_fallback)();
-        assert_eq!(revise["add_items"], serde_json::json!([]));
-        assert_eq!(revise["remove_item_ids"], serde_json::json!([]));
-        assert_eq!(revise["update_items"], serde_json::json!([]));
-        assert_eq!(
-            (hook_def(SYSTEM_TYPE_SCORE_FEEDBACK).unwrap().neutral_fallback)(),
-            serde_json::json!({ "score": 0 })
-        );
+        let user_round = (hook_def(SYSTEM_TYPE_USER_ROUND_JUDGEMENT)
+            .unwrap()
+            .neutral_fallback)();
+        assert_eq!(user_round["score"], serde_json::json!(0));
+        assert_eq!(user_round["action"], serde_json::json!("none"));
+        assert_eq!(user_round["topic_id"], serde_json::Value::Null);
+
+        let review = (hook_def(SYSTEM_TYPE_ROUND_REVIEW).unwrap().neutral_fallback)();
+        assert_eq!(review["reason"], serde_json::json!(""));
+        assert_eq!(review["add_items"], serde_json::json!([]));
+        assert_eq!(review["remove_item_ids"], serde_json::json!([]));
+        assert_eq!(review["update_items"], serde_json::json!([]));
+        assert_eq!(review["completed_item_ids"], serde_json::json!([]));
+        assert_eq!(review["blocked_item_ids"], serde_json::json!([]));
     }
 
     #[test]
     fn each_hook_carries_response_format_schema() {
-        for def in HOOK_DEFS {
+        for h in ACTIVE_HOOKS {
             assert!(
-                matches!(def.response_format, Some(ResponseFormatSpec::JsonSchema { .. })),
+                matches!(h.def.response_format, Some(crate::core::openai_compat::ResponseFormatSpec::JsonSchema { .. })),
                 "{} should carry a json_schema",
-                def.system_type
+                h.def.system_type
             );
         }
     }
@@ -318,19 +162,19 @@ mod tests {
     #[test]
     fn schemas_are_valid_strict_json_schema() {
         // strict 模式要求：可解析为对象、顶层含 additionalProperties: false。
-        for def in HOOK_DEFS {
-            let ResponseFormatSpec::JsonSchema { schema, .. } =
-                def.response_format.as_ref().expect("hook carries schema")
+        for h in ACTIVE_HOOKS {
+            let crate::core::openai_compat::ResponseFormatSpec::JsonSchema { schema, .. } =
+                h.def.response_format.as_ref().expect("hook carries schema")
             else {
                 unreachable!()
             };
             let parsed = serde_json::from_str::<serde_json::Value>(schema.as_ref())
-                .unwrap_or_else(|e| panic!("{} schema must parse: {e}", def.system_type));
+                .unwrap_or_else(|e| panic!("{} schema must parse: {e}", h.def.system_type));
             assert_eq!(
                 parsed["additionalProperties"],
                 serde_json::json!(false),
                 "{} schema must declare additionalProperties:false",
-                def.system_type
+                h.def.system_type
             );
         }
     }
@@ -338,9 +182,11 @@ mod tests {
     #[test]
     fn hook_defs_meta_maps_label() {
         let metas = hook_defs_meta();
-        assert_eq!(metas.len(), 4);
-        assert!(metas.iter().any(|m| m.system_type == SYSTEM_TYPE_COMPLETE_SCOPE
-            && m.label == "hook.completeScope"));
+        assert_eq!(metas.len(), 2);
+        assert!(metas.iter().any(|m| m.system_type == SYSTEM_TYPE_ROUND_REVIEW
+            && m.label == "hook.roundReview"));
+        assert!(metas.iter().any(|m| m.system_type == SYSTEM_TYPE_USER_ROUND_JUDGEMENT
+            && m.label == "hook.userRoundJudgement"));
     }
 
     #[test]

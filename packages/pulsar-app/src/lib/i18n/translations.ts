@@ -468,6 +468,8 @@ export type Translations = {
     matchTopic: string;
     reviseTopic: string;
     scoreFeedback: string;
+    userRoundJudgement: string;
+    roundReview: string;
   };
   fileExplorer: {
     addWorkspace: string;
@@ -1137,6 +1139,8 @@ export const en: Translations = {
     matchTopic: "Match Topic",
     reviseTopic: "Revise Topic",
     scoreFeedback: "Score Feedback",
+    userRoundJudgement: "User Round Judgement",
+    roundReview: "Round Review",
   },
   fileExplorer: {
     addWorkspace: "Add Workspace",
@@ -1825,6 +1829,8 @@ export const zh: Translations = {
     matchTopic: "课题匹配",
     reviseTopic: "课题修订",
     scoreFeedback: "评分反馈",
+    userRoundJudgement: "用户轮裁决",
+    roundReview: "轮次复盘",
   },
   fileExplorer: {
     addWorkspace: "添加工作区",

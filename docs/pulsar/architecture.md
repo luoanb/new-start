@@ -97,7 +97,7 @@ flowchart TB
 
 | 模块 | 职责 |
 |------|------|
-| `assistant_session.rs` | 助手模式：神经元选型（select_one）、评分（score_feedback）、topic 匹配（match_topic）、scope 完成（complete_scope）等 hook 调度 |
+| `assistant_session.rs` | 助手模式 hook 编排（模式门控 / 课题解析 / 简报推进 / 计数），按注入点遍历 `hook/registry.rs::ACTIVE_HOOKS` 执行裁决实例（用户轮合并裁决 user_round_judgement：打分+课题路由；轮次合并复盘 round_review：范围修订+验收） |
 | `call_service.rs` | `NeuronCallService`：无状态单轮对话引擎，注入 ModelCaller + NeuronManager + ToolRegistry；`SessionSeed` / `SessionState` |
 | `poller.rs` + `poller_step.rs` | 后台轮询推进（`PollAll` / step），并行度共享原子值 |
 | `session_tracker.rs` | 运行中会话集合跟踪 + 注册工具（`RunningSession`） |
@@ -272,7 +272,7 @@ flowchart TB
     LC["load_context<br/>读会话 seed / state / messages"]
 
     subgraph before["before hooks（User 触发）"]
-      RBT["resolve_bound_topic<br/>按会话解析已绑定课题"] --> SF["score_feedback<br/>call_judgement 打分模型<br/>禁工具 · mode=None<br/>JSON 解析失败 → warn + skip"] --> MT["match_topic<br/>call_judgement 课题裁决<br/>禁工具 · mode=None<br/>action: switch / create"]
+      RBT["resolve_bound_topic<br/>按会话解析已绑定课题"] --> URJ["user_round_judgement<br/>合并裁决（打分+课题路由）<br/>门控：未绑定必跑；已绑定每 3 条用户消息复核<br/>禁工具 · mode=None · JSON 解析失败 → 中性降级<br/>action: switch / create / none"]
     end
 
     subgraph core["主对话（mode = Some(Assistant/System)）"]
@@ -280,7 +280,7 @@ flowchart TB
     end
 
     subgraph after["after hooks（User 触发）"]
-      CMP["complete_scope<br/>call_judgement 勾选完成项<br/>失败阻断本轮"] --> TCK["tick_round_counters<br/>total / user_rounds +1<br/>poll_count 归零"]
+      CMP["round_review<br/>合并复盘（修订+验收）<br/>仅收尾轮（无工具声明/执行）触发<br/>失败阻断本轮"] --> TCK["tick_round_counters<br/>total / user_rounds +1<br/>poll_count 归零"]
     end
   end
 
@@ -291,15 +291,16 @@ flowchart TB
   core --> PER["persist<br/>落库：输入消息 + 产物 + 会话态"]
   PER --> after
   after --> RES["返回 ChatResponse<br/>广播 StateChange"]
-  MT -.->|"switch 到其它会话<br/>reload 重读上下文"| LC
+  URJ -.->|"switch 到其它会话<br/>reload 重读上下文"| LC
 ```
 
 要点：
 
-- **hook 与主对话同源**：三个裁决 hook 与主对话共用 `ctx.model`（用户所选模型）与 `ctx.messages`（只读历史）。
+- **hook 与主对话同源**：两个合并裁决 hook 与主对话共用 `ctx.model`（用户所选模型）与 `ctx.messages`（只读历史）。
 - **裁决禁工具**：`call_judgement` 构造 `RoundInput { mode: None, tool_override: Some(vec![]) }`，不注入任何标签工具。
 - **主对话注入 Core**：`mode = Some(...)`，Core 标签工具（`execute_command` / `get_current_time`）并入 wire。
-- **switch 会话**：`match_topic` 若裁决切换到其它课题绑定的会话，runner 检测 `session_id` 变化后 `reload` 重读上下文。
+- **switch 会话**：`user_round_judgement` 若裁决切换到其它课题绑定的会话，runner 检测 `session_id` 变化后 `reload` 重读上下文。
+- **频率门控**：`user_round_judgement` 未绑定课题必跑、已绑定每 3 条用户消息复核一次；`round_review` 仅收尾轮（无工具声明与执行）触发，工具轮中间产物不做裁决。
 
 #### 2. 轮询时（Poller）
 
@@ -320,7 +321,7 @@ flowchart TB
     subgraph pbefore["before hooks（Poller 触发）"]
       RBT2["resolve_bound_topic<br/>需课题已绑定（否则报错）"] --> BRIEF["build_topic_brief 简报<br/>should_refresh_brief 三条件<br/>命中则刷新 ctx.model_input"] --> RSL["reselect = poll_count % N == 0<br/>（选型频率，非每轮）"]
     end
-    PCS["NeuronCallService.converse<br/>简报作为本轮指令<br/>（同样注入 Core）"] --> PPER["persist 落库"] --> PAH["after_round hooks<br/>complete_scope<br/>失败仅记录（不打断推进）<br/>+ poll_count +1"]
+    PCS["NeuronCallService.converse<br/>简报作为本轮指令<br/>（同样注入 Core）"] --> PPER["persist 落库"] --> PAH["after_round hooks<br/>round_review<br/>失败仅记录（不打断推进）<br/>+ poll_count +1"]
   end
 
   REG --> pbefore
@@ -332,7 +333,7 @@ flowchart TB
 要点：
 
 - **nudge 落库**：轮询推进以 `InputRecord::Nudge` 落 nudge 消息，简报作为本轮指令进入 `model_input`。
-- **不打断推进**：Poller 触发下 `complete_scope` 失败仅记录；空转（无未完成课题 / 全部跳过）不发状态事件，避免无效刷新。
+- **不打断推进**：Poller 触发下 `round_review` 失败仅记录；空转（无未完成课题 / 全部跳过）不发状态事件，避免无效刷新。
 - **串行化**：`step_guard.try_lock()` 保证同一时刻只有一个 PollAll；tick 循环不被模型调用拖住。
 
 ## 并发与锁纪律

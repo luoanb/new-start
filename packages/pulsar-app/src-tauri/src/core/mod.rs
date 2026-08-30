@@ -60,12 +60,12 @@ pub use topic_store::TopicStore;
 pub use hook_judgement_store::HookJudgementStore;
 pub use hook::{
     hook_def, hook_defs_meta, AttemptRecord, HookDef, HookDefMeta, JudgementAnchor,
-    JudgementOutcome, JudgementStatus, HOOK_DEFS,
+    JudgementOutcome, JudgementStatus,
 };
 
 pub use assistant_session::{
-    AssistantSession, SYSTEM_TYPE_COMPLETE_SCOPE, SYSTEM_TYPE_MATCH_TOPIC,
-    SYSTEM_TYPE_SCORE_FEEDBACK, SYSTEM_TYPE_SELECT_NEURON,
+    AssistantSession, SYSTEM_TYPE_ROUND_REVIEW, SYSTEM_TYPE_SELECT_NEURON,
+    SYSTEM_TYPE_USER_ROUND_JUDGEMENT,
 };
 pub use conversation_runner::ConversationRunner;
 pub use error::{AppError, AppResult};

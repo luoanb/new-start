@@ -518,7 +518,7 @@ async fn hook_judgements_list(
     with_hook_judgement_store(&hook_judgement_store, |store| store.list_with_total(&filter))
 }
 
-/// Hook 元信息表（`HOOK_DEFS` 静态表出参：面板过滤下拉的数据源）。
+/// Hook 元信息表（启用 hook 清单出参：面板过滤下拉的数据源）。
 #[tauri::command]
 fn hook_defs_list() -> Vec<crate::core::hook::HookDefMeta> {
     hook_defs_meta()

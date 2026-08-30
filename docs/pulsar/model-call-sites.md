@@ -85,17 +85,17 @@ pulsar-app（Rust / Tauri）的模型调用采用**单一下游出口** + 多层
 - **Neuron 模板**：角色/能力载体（谁、怎么做）。
 - **Manual 模板**：操作说明书/输出契约（产出什么、什么格式）。
 - `sanitize_tool_pairs`：自愈 tool_calls/tool 配对（OpenAI 兼容接口强校验）——未完全应答的 assistant 降级/丢弃，且其 tool 结果一并丢弃（避免孤儿 tool 消息）；另丢弃无前置声明的孤儿 tool 消息。
-- insert 契约注入：`inserts/*.md`（match_topic、select_one、draft_from_model、variant_evolve、complete_scope、score_feedback、execute_command、get_current_time）。
+- insert 契约注入：`inserts/*.md`（user_round_judgement、round_review、select_one、draft_from_model、variant_evolve、execute_command、get_current_time）。
 
 ---
 
 ## 5. 单次用户输入的模型调用次数（Assistant 模式）
 
 ```
-score_feedback (0~1) → match_topic (1) → select_role (0~1) → execute_round (1) → complete_scope (1)
+user_round_judgement (0~1，门控) → select_role (0~1) → execute_round (1) → round_review (0~1，仅收尾轮)
 ```
 
-最多 **4~5 次串行 LLM 调用**，成本与延迟叠加。
+最多 **4 次串行 LLM 调用**（合并裁决前为 5 次），成本与延迟叠加。
 
 ---
 

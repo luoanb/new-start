@@ -1,10 +1,13 @@
 //! Assistant 业务接入（独立文件，业务逻辑不进入 Gateway 正文）。
 //!
 //! `AssistantSession` 提供 `converse` / `step` / `step_poller` 入口与轮询调度壳；
-//! 课题副作用（干预打分 score_feedback、课题匹配/创建/切换 match_topic、进度验收
-//! complete_scope、轮询计数）以注入点 hook 形式注册：
-//! - IP-1 AfterLoadContext：`assistant.round.before`（匹配/切换会话、简报推进、打分）
-//! - IP-5 AfterPersistOutcome：`assistant.round.after`（范围修订、进度验收、计数）
+//! 课题副作用（合并裁决、轮询计数）以注入点 hook 形式注册：
+//! - IP-1 AfterLoadContext：`assistant.round.before`（用户轮合并裁决、简报推进）
+//! - IP-5 AfterPersistOutcome：`assistant.round.after`（收尾轮合并复盘、计数）
+//!
+//! 合并裁决（2026-08-30 spec）：原 score_feedback + match_topic 合并为 IP-1
+//! `user_round_judgement`（user_rounds 门控低频复核），原 revise_topic + complete_scope
+//! 合并为 IP-5 `round_review`（仅收尾轮触发）；旧四 system_type 成为遗留系统神经元（惰性遗弃）。
 
 use std::collections::HashMap;
 use std::fmt;
@@ -28,8 +31,8 @@ use super::{
         // 命名约定：`defs::HookDef`（注册单元）与 `hook::HookDef`（裁决规则表）同名不同物，
         // 注册单元以别名 `HookRegistration` 引用，`HookDef` 保持裁决规则表（既有消费者）。
         defs::HookDef as HookRegistration,
-        hook_def, AttemptRecord, HookDef, HookHandler, HookRegistry, InjectPointId,
-        JudgementAnchor, JudgementOutcome, JudgementStatus,
+        active_hooks_at, AttemptRecord, HookDef, HookHandler, HookRegistry, HookRun,
+        InjectPointId, JudgementAnchor, JudgementOutcome, JudgementStatus,
     },
     hook_judgement_store::{new_hook_judgement_id, HookJudgementStore},
     models::{
@@ -43,16 +46,15 @@ use super::{
     poller::{Poller, SharedPollParallelism},
     poller_step::{AssistantPollHandler, AssistantStepRequest, ASSISTANT_POLL_TASK},
     providers::ProviderRegistry,
-    round_types::SessionSeed,
+    round_types::{RoundOutcome, SessionSeed},
     session_tracker::SessionTracker,
     topic_store::TopicStore,
 };
 
 pub const SYSTEM_TYPE_SELECT_NEURON: &str = "assistant_select_neuron";
-pub const SYSTEM_TYPE_MATCH_TOPIC: &str = "assistant_match_topic";
-pub const SYSTEM_TYPE_COMPLETE_SCOPE: &str = "assistant_complete_scope";
-pub const SYSTEM_TYPE_SCORE_FEEDBACK: &str = "assistant_score_feedback";
-pub const SYSTEM_TYPE_REVISE_TOPIC: &str = "assistant_revise_topic";
+/// 合并裁决 system_type 常量唯一来源在 `hook::instances`（一 hook 一文件内聚），此处
+/// re-export 保持 `assistant_session::SYSTEM_TYPE_*` 既有引用路径不变。
+pub use crate::core::hook::instances::{SYSTEM_TYPE_ROUND_REVIEW, SYSTEM_TYPE_USER_ROUND_JUDGEMENT};
 
 /// Re-export default interval ticks (overridable via `config.json` → `poller`).
 pub use super::poller::DEFAULT_ASSISTANT_POLL_TICKS;
@@ -125,9 +127,9 @@ fn error_brief(error: &AppError) -> String {
 
 /// Assistant 业务门面：对话 / 手动推进 / 轮询推进 + 轮询调度壳。
 pub struct AssistantSession {
-    store: ConversationStore,
+    pub(crate) store: ConversationStore,
     neuron_manager: Arc<NeuronManager>,
-    topic_store: Arc<Mutex<TopicStore>>,
+    pub(crate) topic_store: Arc<Mutex<TopicStore>>,
     neuron_store: Arc<Mutex<NeuronStore>>,
     /// 裁决记录账本：`call_judgement` 两阶段落库（insert_start → finish）与锚点事件广播。
     hook_judgement_store: Arc<Mutex<HookJudgementStore>>,
@@ -135,7 +137,7 @@ pub struct AssistantSession {
     providers: Arc<ProviderRegistry>,
     /// 单轮编排：读会话 → before hooks → 三段管道 → after hooks → 落库。
     /// 裁决调用（call_judgement）经 `run_raw_round` 与主对话共用同一三段管道。
-    runner: ConversationRunner,
+    pub(crate) runner: ConversationRunner,
     step_tx: UnboundedSender<AssistantStepRequest>,
     session_tracker: SessionTracker,
     /// 与 Poller 共享的轮询并发推进数量（运行时可变，前端可调）。
@@ -205,7 +207,7 @@ impl AssistantSession {
         registry
             .register(HookRegistration {
                 id: "assistant.round.before",
-                label: "课题路由 / 简报推进 / 打分（IP-1）",
+                label: "用户轮裁决 / 简报推进（IP-1）",
                 inject_point: InjectPointId::AfterLoadContext,
                 handler: HookHandler::AfterLoadContext(Box::new(move |ctx| {
                     let weak = Weak::clone(&weak);
@@ -230,7 +232,7 @@ impl AssistantSession {
         registry
             .register(HookRegistration {
                 id: "assistant.round.after",
-                label: "范围修订 / 进度验收 / 计数（IP-5）",
+                label: "轮次复盘 / 计数（IP-5）",
                 inject_point: InjectPointId::AfterPersistOutcome,
                 handler: HookHandler::AfterPersistOutcome(Box::new(move |ctx| {
                     let weak = Weak::clone(&weak);
@@ -268,7 +270,7 @@ impl AssistantSession {
     ///   （`def.neutral_fallback()` 中性决策 + error 摘要 + 耗时），不再 `?` 上抛。
     ///
     /// 全链路落库：`insert_start`（pending + 锚点事件）→ `finish`（终态收敛 + 终态事件）。
-    async fn call_judgement(
+    pub(crate) async fn call_judgement(
         &self,
         def: &HookDef,
         anchor: JudgementAnchor,
@@ -544,7 +546,7 @@ impl AssistantSession {
         let _ = self.step_tx.send(AssistantStepRequest::PollAll);
     }
 
-    /// 用户主对话：User 触发一轮（score_feedback + match_topic + complete_scope + 干预标记）。
+    /// 用户主对话：User 触发一轮（IP-1 用户轮裁决 + IP-5 收尾轮复盘 + 干预标记）。
     pub async fn converse(
         &self,
         session_id: &str,
@@ -1013,7 +1015,7 @@ impl AssistantSession {
         }
     }
 
-    fn topics(&self) -> AppResult<MutexGuard<'_, TopicStore>> {
+    pub(crate) fn topics(&self) -> AppResult<MutexGuard<'_, TopicStore>> {
         self.topic_store
             .lock()
             .map_err(|e| AppError::StorageError(format!("TopicStore lock failed: {e}")))
@@ -1128,8 +1130,10 @@ impl AssistantSession {
 /// 注入 `ConversationRunner` 的单轮钩子：承载 Assistant 全部课题副作用。
 /// `round_before` 挂 IP-1 AfterLoadContext、`round_after` 挂 IP-5 AfterPersistOutcome
 /// （装配期由 [`AssistantSession::install_hooks`] 注册）。
-struct AssistantHooks<'a> {
-    assistant: &'a AssistantSession,
+///
+/// `pub(crate)`：hook 实例（`hook::instances::*`）按注册式架构直接消费本结构。
+pub(crate) struct AssistantHooks<'a> {
+    pub(crate) assistant: &'a AssistantSession,
 }
 
 impl AssistantHooks<'_> {
@@ -1146,8 +1150,14 @@ impl AssistantHooks<'_> {
             RoundTriggerKind::User => {
                 // 用户接入即解除等待用户状态（blocked 项 → pending，恢复课题轮询）。
                 self.release_waiting_user(ctx)?;
-                self.score_feedback(ctx).await?;
-                self.match_topic(ctx).await?;
+                // IP-1 hook 本体按注入点遍历启用清单（注册式）；裁决门控下沉在实例 run 内
+                //（未绑定必跑、已绑定低频复核）。
+                for instance in active_hooks_at(InjectPointId::AfterLoadContext) {
+                    match &instance.run {
+                        HookRun::Before(run) => run(self, ctx).await?,
+                        HookRun::After(_) => unreachable!("after hooks never mount at IP-1"),
+                    }
+                }
             }
             RoundTriggerKind::ManualStep | RoundTriggerKind::Poller => {
                 self.advance_brief(ctx)?;
@@ -1165,41 +1175,45 @@ impl AssistantHooks<'_> {
         if !matches!(ctx.mode, ConversationMode::Assistant | ConversationMode::System) {
             return Ok(());
         }
-        // 先改内容再验收：revise_topic（范围修订）先于 complete_scope（进度验收）执行，
-        // 新加/修订项本轮即可参与验收勾选。
-        let revised = self.revise_topic(ctx).await;
-        let completed = self.complete_scope(ctx).await;
+        if ctx.outcome.is_none() {
+            // 无已完成轮（异常路径）：无产物可复盘，仅保留计数语义缺失时的静默跳过。
+            return Ok(());
+        }
+        // IP-5 hook 本体按注入点遍历启用清单（注册式）：User/Manual 轮错误上抛，
+        // Poller 轮吞错（轮询推进不得被课题副作用打断）。收尾轮门控下沉在各实例 run 内
+        //（round_review 的 is_settling_round 门；legacy 实例每轮跑，回切语义忠实）。
         match ctx.trigger {
             RoundTriggerKind::User => {
-                revised?;
-                completed?;
+                self.run_after_hooks(ctx).await?;
                 self.tick_round_counters(ctx, true)?;
             }
             RoundTriggerKind::ManualStep => {
-                revised?;
-                completed?;
+                self.run_after_hooks(ctx).await?;
                 self.tick_round_counters(ctx, false)?;
             }
             RoundTriggerKind::Poller => {
-                // 轮询推进不得被课题副作用打断（失败仅记录）。
-                if let Err(error) = revised {
+                if let Err(error) = self.run_after_hooks(ctx).await {
                     tracing::error!(
                         phase = "assistant_poller",
                         error = %error,
-                        "revise_topic afterhook failed; ignored"
-                    );
-                }
-                if let Err(error) = completed {
-                    tracing::error!(
-                        phase = "assistant_poller",
-                        error = %error,
-                        "complete_scope afterhook failed; ignored"
+                        "assistant afterhook failed; ignored"
                     );
                 }
                 let _ = self.tick_round_counters(ctx, false);
             }
             RoundTriggerKind::AgentLoop => {
                 unreachable!("assistant hooks never run agent-loop rounds")
+            }
+        }
+        Ok(())
+    }
+
+    /// 按注入点遍历 IP-5 启用实例执行（编排中立：实例自带门控）。
+    async fn run_after_hooks(&self, ctx: &RoundContext) -> AppResult<()> {
+        for instance in active_hooks_at(InjectPointId::AfterPersistOutcome) {
+            match &instance.run {
+                HookRun::After(run) => run(self, ctx).await?,
+                HookRun::Before(_) => unreachable!("before hooks never mount at IP-5"),
             }
         }
         Ok(())
@@ -1293,542 +1307,6 @@ impl AssistantHooks<'_> {
         Ok(())
     }
 
-    /// 干预打分：对会话最后一个介入区间（上次用户介入之后到现在）调用模型打分
-    /// （解析失败仅 warn + skip，不阻断主对话）。
-    async fn score_feedback(&self, ctx: &mut RoundContext) -> AppResult<()> {
-        let Some(topic_id) = ctx.topic_id.clone() else {
-            tracing::info!(phase = "score_feedback_hook", "skip: no topic bound yet");
-            return Ok(());
-        };
-        let topic = match self.assistant.topics()?.get(&topic_id)? {
-            Some(topic) => topic,
-            None => {
-                tracing::info!(phase = "score_feedback_hook", topic_id = %topic_id, "skip: topic missing");
-                return Ok(());
-            }
-        };
-        let Some(session_id) = topic.session_id.clone() else {
-            tracing::info!(phase = "score_feedback_hook", topic_id = %topic_id, "skip: topic not bound to session");
-            return Ok(());
-        };
-        let conversation = match self.assistant.store.require_conversation(&session_id) {
-            Ok(conversation) => conversation,
-            Err(_) => {
-                tracing::info!(phase = "score_feedback_hook", topic_id = %topic_id, "skip: conversation missing");
-                return Ok(());
-            }
-        };
-        // 用户输入在 before hook 之后才落库，本次介入尚未进入消息列表；
-        // 以列表末尾为锚点推导「上次介入（不含）之后」的盖章神经元。
-        let neuron_ids = interval_neuron_ids(&conversation.messages, conversation.messages.len());
-        if neuron_ids.is_empty() {
-            tracing::info!(
-                phase = "score_feedback_hook",
-                topic_id = %topic_id,
-                "skip: last interval has no stamped neuron"
-            );
-            return Ok(());
-        }
-        tracing::info!(
-            phase = "score_feedback_hook",
-            topic_id = %topic_id,
-            neuron_count = neuron_ids.len(),
-            "scoring last intervention interval"
-        );
-        // 同源：用本轮主对话同一模型（用户所选），不读配置默认。
-        let model = &ctx.model;
-        let def = hook_def(SYSTEM_TYPE_SCORE_FEEDBACK).expect("known hook");
-        // before hook：用户消息尚未落库，锚点 = 当前消息列表末尾（用户消息即将落库的位置）。
-        let anchor = JudgementAnchor {
-            conversation_id: session_id.clone(),
-            anchor_message_index: Some(ctx.messages.len() as i64),
-        };
-        // 统一入口接管纠偏（A/B/C）；降级态（score=0）由下方按终态跳过打分。
-        let outcome = self
-            .assistant
-            .call_judgement(
-                def,
-                anchor,
-                json!({
-                    "user_input": ctx.model_input,
-                    "topic_id": topic_id,
-                    "neuron_ids": neuron_ids,
-                }),
-                &model,
-                &ctx.messages,
-            )
-            .await?;
-        if outcome.status == JudgementStatus::Downgraded {
-            // A 降级兜底：中性占位（score=0），跳过打分，不让评分副作用阻断主对话。
-            tracing::warn!(
-                phase = "score_feedback_hook",
-                topic_id = %topic_id,
-                error = ?outcome.error,
-                "judgement degraded; skip scoring"
-            );
-            return Ok(());
-        }
-        let score = outcome
-            .decision
-            .get("score")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| AppError::InvalidInput("score feedback missing score".into()))?;
-        if score == 0 || !(-5..=5).contains(&score) {
-            return Err(AppError::InvalidInput(format!(
-                "score must be in -5..=5 and non-zero, got {score}"
-            )));
-        }
-        tracing::info!(phase = "score_feedback_hook", score, "applying weight delta");
-        self.assistant
-            .apply_score_feedback(&topic_id, neuron_ids, score as f64)
-            .await
-    }
-
-    /// 课题匹配/创建/切换：模型裁决 action（switch → 已有课题；create → 新建课题）。
-    async fn match_topic(&self, ctx: &mut RoundContext) -> AppResult<()> {
-        // 同源：用本轮主对话同一模型（用户所选），不读配置默认。
-        let model = &ctx.model;
-        let unfinished = self.assistant.topics()?.list_unfinished()?;
-        tracing::info!(
-            phase = "match_topic_hook",
-            unfinished = unfinished.len(),
-            session_id = %ctx.session_id,
-            "calling match-topic model"
-        );
-        let def = hook_def(SYSTEM_TYPE_MATCH_TOPIC).expect("known hook");
-        // before hook：用户消息尚未落库，锚点 = 当前消息列表末尾（用户消息即将落库的位置）。
-        let anchor = JudgementAnchor {
-            conversation_id: ctx.session_id.clone(),
-            anchor_message_index: Some(ctx.messages.len() as i64),
-        };
-        let outcome = self
-            .assistant
-            .call_judgement(
-                def,
-                anchor,
-                json!({
-                    "user_input": ctx.model_input,
-                    "current_session_id": ctx.session_id,
-                    "topics": unfinished.iter().map(|t| json!({
-                        "id": t.id,
-                        "name": t.name,
-                        "description": t.description,
-                        "status": t.status,
-                        "session_id": t.session_id,
-                        "progress": t.progress,
-                        "scope_in": t.scope_in,
-                    })).collect::<Vec<_>>(),
-                }),
-                &model,
-                &ctx.messages,
-            )
-            .await?;
-        let decision = &outcome.decision;
-
-        let action = decision
-            .get("action")
-            .and_then(|v| v.as_str())
-            .unwrap_or("create");
-        tracing::info!(phase = "match_topic_hook", action, "match decision");
-        match action {
-            "switch" => {
-                let topic_id = decision
-                    .get("topic_id")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        AppError::InvalidInput("match topic switch missing topic_id".into())
-                    })?;
-                let topic = match self.assistant.topics()?.get(topic_id)? {
-                    Some(topic) => topic,
-                    None => {
-                        let created = self
-                            .create_bound_topic_from_decision(ctx, decision, true)
-                            .or_else(|error| {
-                                tracing::warn!(
-                                    phase = "match_topic_hook",
-                                    error = %error,
-                                    "switch missing and decision lacked scope_in; using emergency scope"
-                                );
-                                self.create_bound_topic_with_scope(
-                                    ctx,
-                                    None,
-                                    None,
-                                    emergency_scope_in(ctx),
-                                )
-                            })?;
-                        tracing::warn!(
-                            phase = "match_topic_hook",
-                            requested_topic_id = topic_id,
-                            created_topic_id = %created.id,
-                            "switch target missing; created topic"
-                        );
-                        ctx.topic_id = Some(created.id);
-                        return Ok(());
-                    }
-                };
-                if let Some(bound_session) = topic.session_id.clone() {
-                    if bound_session != ctx.session_id {
-                        // 切换到目标课题绑定的会话：runner 检测到 session_id 变化后自动 reload。
-                        tracing::info!(
-                            phase = "match_topic_hook",
-                            from_session = %ctx.session_id,
-                            to_session = %bound_session,
-                            topic_id = %topic.id,
-                            "switching session"
-                        );
-                        ctx.session_id = bound_session;
-                        ctx.topic_id = Some(topic.id);
-                    } else {
-                        ctx.topic_id = Some(topic.id);
-                    }
-                } else {
-                    let bound = self
-                        .assistant
-                        .topics()?
-                        .bind_session(&topic.id, &ctx.session_id)?;
-                    ctx.topic_id = Some(bound.id);
-                }
-            }
-            "none" => {
-                // 中性语义（A 降级兜底 action=none）：不创建、不切换，保持当前绑定。
-                tracing::info!(phase = "match_topic_hook", "match decision: none (no-op)");
-            }
-            _ => {
-                if ctx.topic_id.is_none() {
-                    let created = self.create_bound_topic_from_decision(ctx, decision, false)?;
-                    tracing::info!(
-                        phase = "match_topic_hook",
-                        topic_id = %created.id,
-                        scope_items = created.scope_in.len(),
-                        "created bound topic with scope_in"
-                    );
-                    ctx.topic_id = Some(created.id);
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// 课题范围修订：调用模型裁决 scope_in 增删改（add/remove/update），逐项容错落库并留痕。
-    ///
-    /// - 与 `complete_scope` 平行（在其之前执行）：先改内容再验收，新加项本轮即可参与勾选。
-    /// - 触发类型门禁：`completed` 项仅 User 轮允许 edit/remove；ManualStep / Poller 一律跳过（记 skipped_ids）。
-    /// - 空 diff 无副作用（不写留痕）；reason 缺失时用占位「（无 reason）」。
-    async fn revise_topic(&self, ctx: &RoundContext) -> AppResult<()> {
-        let Some(topic_id) = ctx.topic_id.clone() else {
-            tracing::info!(phase = "revise_topic_hook", "skip: no topic");
-            return Ok(());
-        };
-        let topic = match self.assistant.topics()?.get(&topic_id)? {
-            Some(topic) => topic,
-            None => {
-                tracing::info!(
-                    phase = "revise_topic_hook",
-                    topic_id = %topic_id,
-                    "skip: topic missing"
-                );
-                return Ok(());
-            }
-        };
-        if topic.scope_in.is_empty() {
-            tracing::info!(
-                phase = "revise_topic_hook",
-                topic_id = %topic_id,
-                "skip: empty scope_in"
-            );
-            return Ok(());
-        }
-        // 暂停 / 等待用户课题不做变更写入（避免触发 mutate 报错）。
-        if matches!(
-            topic.status,
-            TopicStatus::Paused | TopicStatus::WaitingUser
-        ) {
-            tracing::info!(
-                phase = "revise_topic_hook",
-                topic_id = %topic_id,
-                status = ?topic.status,
-                "skip: topic paused or waiting user"
-            );
-            return Ok(());
-        }
-        let outcome = ctx
-            .outcome
-            .as_ref()
-            .ok_or_else(|| AppError::InvalidInput("revise_topic requires a finished round".into()))?;
-        let model_output = outcome.model_output.clone();
-        let tool_results = outcome.tool_results.clone();
-        let trigger = match ctx.trigger {
-            RoundTriggerKind::User => "user",
-            RoundTriggerKind::ManualStep => "manual",
-            RoundTriggerKind::Poller => "poller",
-            RoundTriggerKind::AgentLoop => "agent_loop",
-        };
-        tracing::info!(
-            phase = "revise_topic_hook",
-            topic_id = %topic_id,
-            trigger,
-            scope_items = topic.scope_in.len(),
-            "calling revise-topic model"
-        );
-        // 同源：用本轮主对话同一模型（用户所选），不读配置默认。
-        let model = &ctx.model;
-        let def = hook_def(SYSTEM_TYPE_REVISE_TOPIC).expect("known hook");
-        // after hook：用户消息已落库，锚点 = 触发轮用户消息在列表中的位置（本轮输入为末尾一条）。
-        let anchor = JudgementAnchor {
-            conversation_id: ctx.session_id.clone(),
-            anchor_message_index: Some(ctx.messages.len().saturating_sub(1) as i64),
-        };
-        let outcome = self
-            .assistant
-            .call_judgement(
-                def,
-                anchor,
-                json!({
-                    "topic_id": topic_id,
-                    "scope_in": topic.scope_in,
-                    "model_output": model_output,
-                    "tool_results": tool_results,
-                    "user_input": ctx.model_input,
-                    "trigger": trigger,
-                }),
-                &model,
-                &ctx.messages,
-            )
-            .await?;
-        let decision = &outcome.decision;
-        let reason = decision
-            .get("reason")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or("（无 reason）")
-            .to_string();
-        // 当前各项状态快照：completed 门禁仅 User 轮放行（Poller/ManualStep 一律跳过）。
-        let is_user_round = matches!(ctx.trigger, RoundTriggerKind::User);
-        let mut status_of: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
-        for item in &topic.scope_in {
-            status_of.insert(item.id.as_str(), item.status.as_str());
-        }
-        let plan = parse_scope_revision(&decision, &status_of, is_user_round);
-        let mut added = 0usize;
-        let mut removed_ids: Vec<String> = Vec::new();
-        let mut updated_ids: Vec<String> = Vec::new();
-        let skipped_ids = plan.skipped_ids;
-        {
-            // 独立作用域：应用结束后释放 TopicStore 锁，供后续 append_revision_log 再取。
-            let stores = self.assistant.topics()?;
-            for (goal, contract) in &plan.add_items {
-                match stores.add_scope_item(&topic_id, goal, contract) {
-                    Ok(_) => added += 1,
-                    Err(error) => tracing::warn!(
-                        phase = "revise_topic_hook",
-                        error = %error,
-                        "add scope item failed"
-                    ),
-                }
-            }
-            for item_id in &plan.remove_item_ids {
-                match stores.delete_scope_item(&topic_id, item_id) {
-                    Ok(_) => removed_ids.push(item_id.clone()),
-                    Err(error) => tracing::warn!(
-                        phase = "revise_topic_hook",
-                        error = %error,
-                        item_id,
-                        "remove scope item failed"
-                    ),
-                }
-            }
-            for (item_id, goal, contract) in &plan.update_items {
-                match stores.update_scope_item(&topic_id, item_id, goal.as_deref(), contract.as_deref())
-                {
-                    Ok(_) => updated_ids.push(item_id.clone()),
-                    Err(error) => tracing::warn!(
-                        phase = "revise_topic_hook",
-                        error = %error,
-                        item_id,
-                        "update scope item failed"
-                    ),
-                }
-            }
-        }
-        // 留痕：有实际应用（add/remove/update 任一）或门禁跳过时记录；空 diff 不写。
-        if added > 0 || !removed_ids.is_empty() || !updated_ids.is_empty() || !skipped_ids.is_empty() {
-            let removed_len = removed_ids.len();
-            let updated_len = updated_ids.len();
-            let skipped_len = skipped_ids.len();
-            let event = json!({
-                "ts": now_ms(),
-                "trigger": trigger,
-                "reason": reason,
-                "added": added,
-                "removed_ids": removed_ids,
-                "updated_ids": updated_ids,
-                "skipped_ids": skipped_ids,
-            });
-            let _ = append_revision_log(&self.assistant.topic_store, &topic_id, event);
-            tracing::info!(
-                phase = "revise_topic_hook",
-                topic_id = %topic_id,
-                trigger,
-                added,
-                removed = removed_len,
-                updated = updated_len,
-                skipped = skipped_len,
-                "revision applied"
-            );
-        }
-        Ok(())
-    }
-
-    /// 进度验收：scope_in 非空时调用模型裁决已完成项并落库（失败仅记录，不阻断）。
-    async fn complete_scope(&self, ctx: &RoundContext) -> AppResult<()> {
-        let Some(topic_id) = ctx.topic_id.clone() else {
-            tracing::info!(phase = "complete_scope_hook", "skip: no topic");
-            return Ok(());
-        };
-        let topic = match self.assistant.topics()?.get(&topic_id)? {
-            Some(topic) => topic,
-            None => {
-                tracing::info!(phase = "complete_scope_hook", topic_id = %topic_id, "skip: topic missing");
-                return Ok(());
-            }
-        };
-        // 暂停 / 等待用户课题不做裁决写入（避免触发 mutate 报错）。
-        if matches!(
-            topic.status,
-            TopicStatus::Paused | TopicStatus::WaitingUser
-        ) {
-            tracing::info!(
-                phase = "complete_scope_hook",
-                topic_id = %topic_id,
-                status = ?topic.status,
-                "skip: topic paused or waiting user"
-            );
-            return Ok(());
-        }
-        // 空待办收尾：scope_in 为空时无任何可推进事项 → 置 Done，避免 Poller 每轮空转调模型
-        //（空 scope 可能来自 revise_topic 删光全部项或 legacy 迁移数据；derive_topic_state(&[])
-        //  恒推导为 Todo，不主动收尾课题将永远被轮询推进）。
-        if topic.scope_in.is_empty() {
-            self.assistant
-                .topics()?
-                .set_status(&topic_id, TopicStatus::Done)?;
-            tracing::info!(
-                phase = "complete_scope_hook",
-                topic_id = %topic_id,
-                "empty scope_in; topic closed as done"
-            );
-            return Ok(());
-        }
-        // 本轮最后一条是否为工具调用结果（persist_outcome 先于 after hooks，反映本轮）。
-        let last_is_tool = self
-            .assistant
-            .runner
-            .last_message_is_tool_result(&ctx.session_id)?;
-        // 收尾关闭判断（前置）：WrappingUp 课题在本轮以文本收尾（无工具调用）后关闭。
-        if topic.status == TopicStatus::WrappingUp {
-            if !last_is_tool {
-                self.assistant
-                    .topics()?
-                    .set_status(&topic_id, TopicStatus::Done)?;
-                tracing::info!(
-                    phase = "complete_scope_hook",
-                    topic_id = %topic_id,
-                    "wrap-up round finished; topic closed"
-                );
-            }
-            return Ok(());
-        }
-        let outcome = ctx
-            .outcome
-            .as_ref()
-            .ok_or_else(|| AppError::InvalidInput("complete_scope requires a finished round".into()))?;
-        let model_output = outcome.model_output.clone();
-        let tool_results = outcome.tool_results.clone();
-        tracing::info!(
-            phase = "complete_scope_hook",
-            topic_id = %topic_id,
-            scope_items = topic.scope_in.len(),
-            "calling complete-scope model"
-        );
-        // 同源：用本轮主对话同一模型（用户所选），不读配置默认。
-        let model = &ctx.model;
-        let def = hook_def(SYSTEM_TYPE_COMPLETE_SCOPE).expect("known hook");
-        // after hook：用户消息已落库，锚点 = 触发轮用户消息在列表中的位置（本轮输入为末尾一条）。
-        let anchor = JudgementAnchor {
-            conversation_id: ctx.session_id.clone(),
-            anchor_message_index: Some(ctx.messages.len().saturating_sub(1) as i64),
-        };
-        let outcome = self
-            .assistant
-            .call_judgement(
-                def,
-                anchor,
-                json!({
-                    "topic_id": topic_id,
-                    "scope_in": topic.scope_in,
-                    "model_output": model_output,
-                    "tool_results": tool_results,
-                    "user_input": ctx.model_input,
-                }),
-                &model,
-                &ctx.messages,
-            )
-            .await?;
-        let decision = &outcome.decision;
-        let ids = decision
-            .get("completed_item_ids")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-        let blocked_ids = decision
-            .get("blocked_item_ids")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-        tracing::info!(
-            phase = "complete_scope_hook",
-            completed = ids.len(),
-            blocked = blocked_ids.len(),
-            "updating scope items"
-        );
-        for id in &ids {
-            let Some(item_id) = id.as_str() else {
-                continue;
-            };
-            let _ = self
-                .assistant
-                .topics()?
-                .complete_scope_item(&topic_id, item_id);
-        }
-        for id in &blocked_ids {
-            let Some(item_id) = id.as_str() else {
-                continue;
-            };
-            let _ = self
-                .assistant
-                .topics()?
-                .mark_scope_item_blocked(&topic_id, item_id);
-        }
-        // 延迟关闭判断（后置）：最后一项本轮完成，但本轮以工具调用结束（模型尚未产出
-        // 最终总结）→ 置 WrappingUp 保持轮询，下一轮给收尾机会，而不是直接关闭课题。
-        let topic_after = match self.assistant.topics()?.get(&topic_id)? {
-            Some(topic) => topic,
-            None => return Ok(()),
-        };
-        if should_delay_close(&topic_after.status, last_is_tool) {
-            self.assistant
-                .topics()?
-                .set_status(&topic_id, TopicStatus::WrappingUp)?;
-            tracing::info!(
-                phase = "complete_scope_hook",
-                topic_id = %topic_id,
-                "scope completed via tool round; topic wrapping up"
-            );
-        }
-        Ok(())
-    }
-
     /// 轮次计数递增：`total_rounds` 每成功轮 +1；User 轮 `user_rounds` +1 且 `poll_count`
     /// 归零（"距上次用户接入的推进轮次"），Manual/Poller 推进 `poll_count` +1。
     /// 仍留 topic.extra.assistant（会话运行态已迁至 conversation）。
@@ -1846,7 +1324,7 @@ impl AssistantHooks<'_> {
         write_assistant_state(&self.assistant.topic_store, topic_id, state)
     }
 
-    fn create_bound_topic_from_decision(
+    pub(crate) fn create_bound_topic_from_decision(
         &self,
         ctx: &RoundContext,
         decision: &serde_json::Value,
@@ -1881,7 +1359,7 @@ impl AssistantHooks<'_> {
         self.create_bound_topic_with_scope(ctx, Some(name), Some(description), scope_in)
     }
 
-    fn create_bound_topic_with_scope(
+    pub(crate) fn create_bound_topic_with_scope(
         &self,
         ctx: &RoundContext,
         name: Option<String>,
@@ -1915,7 +1393,7 @@ fn default_topic_name(ctx: &RoundContext) -> String {
     }
 }
 
-fn emergency_scope_in(ctx: &RoundContext) -> Vec<ScopeInItem> {
+pub(crate) fn emergency_scope_in(ctx: &RoundContext) -> Vec<ScopeInItem> {
     let goal = ctx
         .model_input
         .trim()
@@ -1987,13 +1465,30 @@ fn build_topic_brief(topic: &Topic) -> String {
 /// 课题简报刷新频率：每 N 个推进轮至少刷新一次（另有课题变更 / 上轮非工具结束即时刷新）。
 const BRIEF_EVERY_N_ROUNDS: u64 = 3;
 
+/// IP-1 合并裁决复核频率：已绑定课题时每 N 条用户消息复核一次（未绑定课题必跑）。
+const USER_ROUND_JUDGEMENT_EVERY_N_ROUNDS: u64 = 3;
+
+/// IP-1 门控（纯函数便于单测）：未绑定课题（含首轮 `user_rounds == 0`）必跑；
+/// 已绑定课题按 `user_rounds` 低频复核。IP-1 时刻读到的是上一轮完成后的累计值
+/// （本轮未 tick），`0 % N == 0` 天然覆盖首轮。
+pub(crate) fn need_user_round_judgement(topic_bound: bool, user_rounds: u64) -> bool {
+    !topic_bound || user_rounds % USER_ROUND_JUDGEMENT_EVERY_N_ROUNDS == 0
+}
+
+/// IP-5 收尾轮判定（纯函数便于单测）：主轮无工具声明且无工具执行结果
+/// （模型「说完了」而非「干到一半」）。工具轮的中间产物不触发裁决；
+/// User / ManualStep / Poller 同规则。
+pub(crate) fn is_settling_round(outcome: &RoundOutcome) -> bool {
+    outcome.tool_calls.is_none() && outcome.tool_results.is_empty()
+}
+
 /// 主对话选型频率：每 N 个推进轮做一次 LLM 选型，中间轮沿用 `last_selected` 锚点
 /// （业务层算好 `poll_count % N == 0` 后传 `reselect`，引擎不持有频率概念）。
 const SELECTION_EVERY_N_ROUNDS: u64 = 5;
 
 /// topic 侧助手状态：轮次计数 + 简报缓存（会话运行态已迁至 conversation.extra.session.state）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct AssistantTopicState {
+pub(crate) struct AssistantTopicState {
     /// 距上次用户接入的推进轮次（User 轮归零）；简报 3 轮 / 选型 5 轮频率的基准。
     #[serde(default)]
     poll_count: u64,
@@ -2002,7 +1497,7 @@ struct AssistantTopicState {
     total_rounds: u64,
     /// 用户接入轮次。
     #[serde(default)]
-    user_rounds: u64,
+    pub(crate) user_rounds: u64,
     /// 上份课题简报缓存（推进轮复用，避免每轮重喂长简报）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     brief_cache: Option<String>,
@@ -2011,7 +1506,7 @@ struct AssistantTopicState {
     last_brief_round: u64,
 }
 
-fn read_assistant_state(topic: &Topic) -> AssistantTopicState {
+pub(crate) fn read_assistant_state(topic: &Topic) -> AssistantTopicState {
     topic
         .extra
         .as_ref()
@@ -2051,7 +1546,7 @@ fn write_assistant_state(
 
 /// 课题修订留痕：追加一条事件到 `topic.extra.revisions` 数组（复用 `write_assistant_state`
 /// 的 extra 读改写模式；事件由调用方构造，含 ts / trigger / reason / 变更明细）。
-fn append_revision_log(
+pub(crate) fn append_revision_log(
     topic_store: &Arc<Mutex<TopicStore>>,
     topic_id: &str,
     event: serde_json::Value,
@@ -2084,33 +1579,25 @@ fn append_revision_log(
     Ok(())
 }
 
-/// Unix 毫秒时间戳（修订留痕事件时间戳；SystemTime 失败回退 0）。
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
 /// 修订计划：`revise_topic` 裁决 JSON 的解析结果（应用前纯计算，便于单测）。
 #[derive(Debug, Default)]
-struct RevisionPlan {
+pub(crate) struct RevisionPlan {
     /// 待新增项：(goal, done_contract)，已过滤空字段。
-    add_items: Vec<(String, String)>,
+    pub(crate) add_items: Vec<(String, String)>,
     /// 待删除项 id。
-    remove_item_ids: Vec<String>,
+    pub(crate) remove_item_ids: Vec<String>,
     /// 待编辑项：(id, goal, done_contract)（各自 trim 后非空才携带，全空仍进入计划，
     /// 由存储层 `update_scope_item` 拒绝并降级为 warn）。
-    update_items: Vec<(String, Option<String>, Option<String>)>,
+    pub(crate) update_items: Vec<(String, Option<String>, Option<String>)>,
     /// 门禁跳过的 id（`completed` 项且非 User 轮，仅留痕不执行）。
-    skipped_ids: Vec<String>,
+    pub(crate) skipped_ids: Vec<String>,
 }
 
 /// 解析 revise 裁决 JSON 为修订计划：
 /// - `add_items`：goal / done_contract 均非空才进入计划（缺一即整项丢弃）。
 /// - `remove_item_ids` / `update_items`：id 必须非空；`completed` 项且非 User 轮 → 记 skipped_ids。
 /// - `update_items`：goal / done_contract 各自 trim 后非空才携带。
-fn parse_scope_revision(
+pub(crate) fn parse_scope_revision(
     decision: &serde_json::Value,
     status_of: &std::collections::HashMap<&str, &str>,
     is_user_round: bool,
@@ -2190,7 +1677,7 @@ fn skip_polling(status: &TopicStatus) -> bool {
 
 /// 延迟关闭判断：scope 已 100% 完成但本轮以工具调用结束（模型尚未产出最终总结）→ 置
 /// `WrappingUp` 保持轮询；非工具轮则存储层已推导为 `Done`。纯函数便于单测。
-fn should_delay_close(status: &TopicStatus, last_is_tool: bool) -> bool {
+pub(crate) fn should_delay_close(status: &TopicStatus, last_is_tool: bool) -> bool {
     *status == TopicStatus::Done && last_is_tool
 }
 
@@ -2228,7 +1715,7 @@ fn apply_round_counter(state: &mut AssistantTopicState, user_round: bool) {
 /// `(上次介入, 下次介入)`，即上次介入（不含）之后、下次介入（不含）之前的所有消息。
 /// 起点无上次介入时取 0；终点无下次介入时取 `messages.len()`。
 /// 区间内消息的 `neuron_id`（`None` 跳过）去重即为可评分目标。
-fn interval_neuron_ids(messages: &[Message], anchor_index: usize) -> Vec<String> {
+pub(crate) fn interval_neuron_ids(messages: &[Message], anchor_index: usize) -> Vec<String> {
     let is_boundary =
         |m: &Message| m.role == MessageRole::User && matches!(m.body, MessageBody::Text { .. });
     let start = (0..anchor_index)
@@ -2253,6 +1740,8 @@ fn interval_neuron_ids(messages: &[Message], anchor_index: usize) -> Vec<String>
 
 #[cfg(test)]
 mod tests {
+    use crate::core::hook::hook_def;
+
     use super::*;
     // `#[async_trait]` 仅测试 harness 使用（MockNeuronSelector / SequenceModelCaller）。
     use async_trait::async_trait;
@@ -2479,6 +1968,54 @@ mod tests {
         assert!(!should_delay_close(&TopicStatus::Done, false));
         assert!(!should_delay_close(&TopicStatus::WrappingUp, true));
         assert!(!should_delay_close(&TopicStatus::InProgress, true));
+    }
+
+    #[test]
+    fn judgement_gate_unbound_always_runs() {
+        // 未绑定课题（含首轮）必跑：路由需要建课 / 找课。
+        assert!(need_user_round_judgement(false, 0));
+        assert!(need_user_round_judgement(false, 7));
+    }
+
+    #[test]
+    fn judgement_gate_bound_follows_interval() {
+        // 已绑定：user_rounds==0（首轮）必跑；中间轮跳过；每 N=3 复核一次。
+        assert!(need_user_round_judgement(true, 0));
+        assert!(!need_user_round_judgement(true, 1));
+        assert!(!need_user_round_judgement(true, 2));
+        assert!(need_user_round_judgement(true, 3));
+        assert!(!need_user_round_judgement(true, 4));
+        assert!(need_user_round_judgement(true, 6));
+    }
+
+    fn settling_outcome(
+        tool_calls: Option<Vec<crate::core::models::ToolCall>>,
+        tool_results: Vec<crate::core::round_types::ToolResultItem>,
+    ) -> RoundOutcome {
+        RoundOutcome {
+            response: String::new(),
+            model_output: None,
+            tool_calls,
+            tool_results,
+            reasoning: None,
+            selected_neuron_id: None,
+        }
+    }
+
+    #[test]
+    fn settling_round_requires_no_tool_declaration_nor_result() {
+        // 收尾轮：无声明且无结果。
+        assert!(is_settling_round(&settling_outcome(None, vec![])));
+        // 声明了工具（无论是否执行）或存在执行结果 → 工具轮，不裁决。
+        assert!(!is_settling_round(&settling_outcome(Some(Vec::new()), vec![])));
+        assert!(!is_settling_round(&settling_outcome(
+            None,
+            vec![crate::core::round_types::ToolResultItem {
+                tool_call_id: "c1".into(),
+                tool_name: "echo".into(),
+                content: "ok".into(),
+            }]
+        )));
     }
 
     fn brief_topic(status: TopicStatus, scope: Vec<ScopeInItem>) -> Topic {
@@ -2788,12 +2325,10 @@ mod tests {
             NeuronConfigReader::new(root.clone()),
             Arc::clone(&tool_registry),
         ));
-        // 预创建 4 个裁决系统神经元（behavior 为空，ensure 命中时自动 backfill 默认）。
+        // 预创建 2 个合并裁决系统神经元（behavior 为空，ensure 命中时自动 backfill 默认）。
         for system_type in [
-            SYSTEM_TYPE_COMPLETE_SCOPE,
-            SYSTEM_TYPE_MATCH_TOPIC,
-            SYSTEM_TYPE_REVISE_TOPIC,
-            SYSTEM_TYPE_SCORE_FEEDBACK,
+            SYSTEM_TYPE_USER_ROUND_JUDGEMENT,
+            SYSTEM_TYPE_ROUND_REVIEW,
         ] {
             manager
                 .create_plain(
@@ -2895,13 +2430,13 @@ mod tests {
         let h = judgement_harness(
             r#"{"openai":{"models":[{"id":"gpt-4o-400","capabilities":{"chat":true,"tools":true,"streaming":true,"structured_output":true}}]}}"#,
         );
-        let def = hook_def(SYSTEM_TYPE_COMPLETE_SCOPE).expect("known hook");
+        let def = hook_def(SYSTEM_TYPE_ROUND_REVIEW).expect("known hook");
         h.caller.errors.lock().unwrap().push_back(
             "provider returned 400 Bad Request: This response_format type is unavailable now"
                 .into(),
         );
         h.caller.responses.lock().unwrap().extend([
-            r#"{"completed_item_ids":["s1"],"reason":"done"}"#.to_string(),
+            r#"{"reason":"done","add_items":[],"remove_item_ids":[],"update_items":[],"completed_item_ids":["s1"],"blocked_item_ids":[]}"#.to_string(),
         ]);
         let outcome = h
             .assistant
@@ -2922,7 +2457,7 @@ mod tests {
         assert!(
             matches!(
                 &formats[0],
-                Some(ResponseFormatSpec::JsonSchema { name, .. }) if name == "complete_scope"
+                Some(ResponseFormatSpec::JsonSchema { name, .. }) if name == "round_review"
             ),
             "首轮应下发 json_schema 契约，实际 {formats:?}"
         );
@@ -2945,11 +2480,11 @@ mod tests {
         let h = judgement_harness(
             r#"{"openai":{"models":[{"id":"gpt-4o","capabilities":{"chat":true,"tools":true,"streaming":true,"structured_output":true}}]}}"#,
         );
-        let def = hook_def(SYSTEM_TYPE_COMPLETE_SCOPE).expect("known hook");
+        let def = hook_def(SYSTEM_TYPE_ROUND_REVIEW).expect("known hook");
         // 首轮散文（无 JSON）→ 重试轮合法 JSON。
         h.caller.responses.lock().unwrap().extend([
             "Sorry, I cannot output JSON here.".to_string(),
-            r#"{"completed_item_ids":["s1"],"reason":"done"}"#.to_string(),
+            r#"{"reason":"done","add_items":[],"remove_item_ids":[],"update_items":[],"completed_item_ids":["s1"],"blocked_item_ids":[]}"#.to_string(),
         ]);
         let outcome = h
             .assistant
@@ -2990,7 +2525,7 @@ mod tests {
         let h = judgement_harness(
             r#"{"openai":{"models":[{"id":"gpt-4o","capabilities":{"chat":true,"tools":true,"streaming":true,"structured_output":true}}]}}"#,
         );
-        let def = hook_def(SYSTEM_TYPE_COMPLETE_SCOPE).expect("known hook");
+        let def = hook_def(SYSTEM_TYPE_ROUND_REVIEW).expect("known hook");
         // 两次都返回散文 → A 中性降级，主轮次不报错。
         h.caller.responses.lock().unwrap().extend([
             "散文输出，没有 JSON。".to_string(),
@@ -3031,9 +2566,9 @@ mod tests {
         let h = judgement_harness(
             r#"{"openai":{"models":[{"id":"gpt-4o","capabilities":{"chat":true,"tools":true,"streaming":true,"structured_output":true}}]}}"#,
         );
-        let def = hook_def(SYSTEM_TYPE_COMPLETE_SCOPE).expect("known hook");
+        let def = hook_def(SYSTEM_TYPE_ROUND_REVIEW).expect("known hook");
         h.caller.responses.lock().unwrap().extend([
-            r#"{"completed_item_ids":["s1"],"reason":"once"}"#.to_string(),
+            r#"{"reason":"once","add_items":[],"remove_item_ids":[],"update_items":[],"completed_item_ids":["s1"],"blocked_item_ids":[]}"#.to_string(),
         ]);
         let outcome = h
             .assistant

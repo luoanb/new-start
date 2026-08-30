@@ -42,8 +42,8 @@ Useful keywords: `assistant_select_neuron`, `generate_draft`, `error_code`.
 User-input path (`ConversationMode::Assistant`):
 
 - `send_model_message` → `assistant_converse`
-- steps: `score_feedback` → `match_topic` → `select_neuron` → `run_core` → `complete_scope`
-- nested: `assistant_system_json` (match/score/complete prompts), `match_topic_hook`, `select_neuron_hook`, `assistant_run_core`
+- steps: `user_round_judgement`（门控可跳过）→ `select_neuron` → `run_core` → `round_review`（收尾轮）
+- nested: `assistant_system_json` (judgement/review prompts), `user_round_judgement_hook`, `select_neuron_hook`, `assistant_run_core`
 
 If the UI hangs with no reply, filter keyword `assistant_converse` or `assistant_system_json` and see which `step=` last appeared without a following `ok` / `failed`.
 

@@ -36,12 +36,12 @@ pub const SYSTEM_CREATE: &str = CREATOR_SYSTEM_TYPE;
 pub const SYSTEM_SELECT: &str = ASSISTANT_SELECT_NEURON;
 /// Known Assistant system prompts rebuilt by [`NeuronManager::rebootstrap`].
 /// Does not include `create_neuron` (seed root).
+/// 旧四条裁决（assistant_{match_topic,complete_scope,score_feedback,revise_topic}）已合并移除
+/// （2026-08-30 spec）：存量神经元按惰性遗弃保留在库，rebootstrap 不再重建。
 pub const REBOOTSTRAP_SYSTEM_TYPES: &[&str] = &[
     ASSISTANT_SELECT_NEURON,
-    "assistant_match_topic",
-    "assistant_complete_scope",
-    "assistant_score_feedback",
-    "assistant_revise_topic",
+    "assistant_user_round_judgement",
+    "assistant_round_review",
 ];
 pub(crate) const DEFAULT_SELECT_N: usize = DEFAULT_ASSISTANT_GLOBAL_LIMIT;
 pub(crate) const MAX_CREATE_NEURON_COUNT: usize = 10;
@@ -50,6 +50,10 @@ pub(crate) const MAX_CREATE_NEURON_COUNT: usize = 10;
 /// 用自己 content + 契约段）。非裁决类返回 `None`。
 pub fn default_behavior_for_system_type(system_type: &str) -> Option<SessionBehavior> {
     let insert_id = match system_type {
+        // 合并裁决（现行）。
+        "assistant_user_round_judgement" => Some("assistant.user_round_judgement"),
+        "assistant_round_review" => Some("assistant.round_review"),
+        // 旧四条裁决（已合并）：保留兜底，存量遗留神经元缺 behavior 时仍可 backfill。
         "assistant_match_topic" => Some("assistant.match_topic"),
         "assistant_score_feedback" => Some("assistant.score_feedback"),
         "assistant_complete_scope" => Some("assistant.complete_scope"),

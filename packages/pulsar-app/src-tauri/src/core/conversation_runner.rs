@@ -248,7 +248,7 @@ impl ConversationRunner {
         );
         ctx.outcome = Some(outcome.clone());
         // 发送后落产物（声明已在上一步落库；此处落执行结果或纯文本）。会话态已在发送前写回，
-        // 再跑 after hooks：课题副作用（如 complete_scope 模型调用）失败只影响副作用本身，不丢失本轮模型产物。
+        // 再跑 after hooks：课题副作用（如 round_review 模型调用）失败只影响副作用本身，不丢失本轮模型产物。
         self.persist_outcome(&ctx)?;
         tracing::info!(phase = "run_round", session_id = %ctx.session_id, "persist done");
         // IP-5 AfterPersistOutcome：产物已落库，只读整轮上下文；落账本等副作用由 hook 自办。ignore 策略。

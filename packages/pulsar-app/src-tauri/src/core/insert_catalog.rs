@@ -176,6 +176,8 @@ mod tests {
             "assistant.match_topic",
             "assistant.complete_scope",
             "assistant.revise_topic",
+            "assistant.user_round_judgement",
+            "assistant.round_review",
             "neuron.draft_from_model",
             "neuron.select_one",
         ] {
@@ -199,6 +201,8 @@ mod tests {
             "assistant.match_topic",
             "assistant.complete_scope",
             "assistant.revise_topic",
+            "assistant.user_round_judgement",
+            "assistant.round_review",
             "neuron.draft_from_model",
             "neuron.select_one",
             "execute_command",

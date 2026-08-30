@@ -763,7 +763,7 @@ fn status_to_string(status: &TopicStatus) -> String {
         .to_string()
 }
 
-fn now_ms() -> u128 {
+pub(crate) fn now_ms() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

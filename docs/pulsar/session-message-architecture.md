@@ -136,7 +136,7 @@ flowchart TB
   subgraph run["ConversationRunner.run_round<br/>(conversation_runner.rs)"]
     LC["load_context<br/>读会话：seed / state / messages（Vec&lt;Message&gt; 真相源）"]
     BH["before hooks<br/>（RoundHooks 可选）"]
-    SW{"before hook 切换了会话？<br/>（match_topic switch）"}
+    SW{"before hook 切换了会话？<br/>（user_round_judgement switch）"}
     RV["reload<br/>重读上下文"]
     RZ["① resolve<br/>RoundResolver：选型 + 角色上下文拼接<br/>→ (with_role, neuron)"]
     AN["写回锚点（发送前）<br/>last_selected_neuron_id"]
@@ -158,7 +158,7 @@ flowchart TB
 - **真相源唯一**：管道内全程 `Vec<Message>`（`MessageBody` 带 kind，自描述），无 `ResolvedRound` / `WireRound` 中间层；发送前统一 `project_history` 投影为 `ModelMessage`。
 - **进 wire 必落库**：`persist_input`（发送前）落 `wire[old_len..]` 全量增量（System / RoleContext / 输入 / Nudge），不依赖模型产物——模型调用失败/超时也不丢用户消息；`persist_outcome`（发送后）落产物。
 - **锚点发送前写回**：resolve 已定选中神经元，模型调用前落 `last_selected_neuron_id`（选中 → 写回其 id；未选中 → 清空）。
-- **先落库再跑 after hooks**：`complete_scope` 等副作用失败只影响副作用本身，不丢失本轮模型产物。
+- **先落库再跑 after hooks**：`round_review` 等副作用失败只影响副作用本身，不丢失本轮模型产物。
 - **hook 与主对话同源**：`RoundContext` 携带 `model` / `messages` / `state`，before/after hooks 共享，裁决与主对话用同一模型。
 - **工具标签**：`execute(tool_tags) = ctx.mode.tool_tags()`，executor 只做数据驱动并入（规范见 [docs/micro_specs/2026-08-16_hoist-tool-tag-mapping.md](../micro_specs/2026-08-16_hoist-tool-tag-mapping.md)）。
 
@@ -229,7 +229,7 @@ flowchart LR
 课题与会话通过 `Topic.session_id` 双向绑定（见 [models.rs](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src-tauri/src/core/models.rs#L466-L479)）：
 
 - **绑定方向**：`Topic.session_id → Conversation`。`AssistantHooks.resolve_bound_topic` 每轮按 `session_id` 反查课题（[assistant_session.rs](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src-tauri/src/core/assistant_session.rs#L514-L524)）。
-- **切换方向**：`match_topic` 裁决 `action: switch / create` 时可能**切换会话**（改写 topic 绑定到其它会话），runner 检测 `session_id` 变化后 `reload` 重读上下文。
+- **切换方向**：`user_round_judgement` 裁决 `action: switch / create` 时可能**切换会话**（改写 topic 绑定到其它会话），runner 检测 `session_id` 变化后 `reload` 重读上下文。
 - **轮询推进**：`process_step_request(PollAll)` 列出未完成课题 → 过滤无 `session_id` / Paused / Cancelled / 已在运行的会话 → 信号量并发 `step_poller`（[assistant_session.rs](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src-tauri/src/core/assistant_session.rs#L235-L339)）。
 
 ## 7. 运行时会话（SessionTracker）
@@ -260,7 +260,7 @@ sequenceDiagram
   GW->>AS: converse(session_id, input, model)  [按 mode 路由]
   AS->>RUN: run_round(InputRecord::User)
   RUN->>RUN: load_context（读会话 seed/state/messages）
-  RUN->>AS: before_round hooks（resolve_bound_topic → score_feedback → match_topic）
+  RUN->>AS: before_round hooks（resolve_bound_topic → user_round_judgement）
   AS-->>RUN: 可能 switch 会话 → reload
   RUN->>RV: resolve（选型 + 角色上下文拼接 → (with_role, neuron)）
   RUN->>RUN: 发送前写回锚点 last_selected_neuron_id
@@ -272,7 +272,7 @@ sequenceDiagram
   EX->>EX: 执行本轮全部工具（结果拼接进 response）
   EX-->>RUN: RoundOutcome
   RUN->>RUN: persist_outcome（发送后：产物落库）
-  RUN->>AS: after_round hooks（complete_scope → tick_round_counters）
+  RUN->>AS: after_round hooks（round_review → tick_round_counters）
   RUN-->>GW: ChatResponse
   GW->>ST: unregister(conversation_id)
   GW-->>UI: ChatResponse + StateChange::Conversations{affected}
@@ -301,7 +301,7 @@ sequenceDiagram
     RUN->>AS: before_round（resolve_bound_topic → advance_brief 简报刷新决策）
     AS-->>RUN: nudge_persist / model_input / reselect
     RUN->>RUN: persist_input（发送前：简报刷新轮落 user(nudge)）<br/>→ 模型调用 → persist_outcome（发送后）
-    RUN->>AS: after_round（complete_scope 失败仅记录；poll_count +1）
+    RUN->>AS: after_round（round_review 失败仅记录；poll_count +1）
     AS-->>PH: touched 会话列表
     PH-->>EV: 非空 → Conversations{affected} + Topics
     EV-->>UI: SSE / app://state-changed → 重拉

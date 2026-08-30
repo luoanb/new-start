@@ -1181,7 +1181,7 @@ impl TuiApp {
             "rebootstrap" => match manager.rebootstrap().await {
                 Ok(report) => self.messages.push(TuiMessage::status(format!(
                     "Rebootstrap ok: create_neuron={}, assistant_select_neuron={} \
-                     (also reset match_topic/complete_scope/score_feedback)",
+                     (also reset user_round_judgement/round_review)",
                     report.create_neuron_id, report.select_neuron_id
                 ))),
                 Err(error) => self.error_banner = Some(TuiErrorView::from(error)),
