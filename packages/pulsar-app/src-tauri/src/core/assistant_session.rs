@@ -22,7 +22,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::core::log_phase::{
     PHASE_APPLY_SCORE_FEEDBACK, PHASE_ASSISTANT_CONVERSE, PHASE_ASSISTANT_CONVERSE_STREAM,
-    PHASE_ASSISTANT_ERROR_RESIDENCY, PHASE_ASSISTANT_POLLER, PHASE_ASSISTANT_POLL_HANDLER,
+    PHASE_ASSISTANT_ERROR_RESIDENCY, PHASE_ASSISTANT_POLLER,
     PHASE_ASSISTANT_STEP, PHASE_CALL_JUDGEMENT, PHASE_HOOK_ASSISTANT, PHASE_MANUAL_SCORE_FEEDBACK,
     PHASE_RUN_JUDGEMENT_ROUND,
 };
@@ -850,26 +850,16 @@ impl AssistantSession {
     ) -> Vec<String> {
         match request {
             AssistantStepRequest::PollAll => {
-                tracing::info!(
-                    phase = PHASE_ASSISTANT_POLL_HANDLER,
-                    "PollAll received in process_step_request"
-                );
                 let topics = match self.topics().and_then(|store| store.list_unfinished()) {
                     Ok(topics) => topics,
                     Err(error) => {
                         tracing::error!(
-                            phase = PHASE_ASSISTANT_POLL_HANDLER,
                             error = %error,
                             "PollAll topic list failed"
                         );
                         return Vec::new();
                     }
                 };
-                tracing::info!(
-                    phase = PHASE_ASSISTANT_POLL_HANDLER,
-                    topic_count = topics.len(),
-                    "PollAll topic list resolved"
-                );
 
                 let parallelism = self.poll_parallelism.load(Ordering::Relaxed).max(1);
                 let semaphore = Arc::new(tokio::sync::Semaphore::new(parallelism));
@@ -888,28 +878,13 @@ impl AssistantSession {
                         if let Some(state) = states.get_mut(&session_id) {
                             if state.should_skip() {
                                 state.consume_skip();
-                                tracing::info!(
-                                    phase = PHASE_ASSISTANT_POLL_HANDLER,
-                                    session_id,
-                                    consecutive_failures = state.consecutive_failures,
-                                    backoff_skips_remaining = state.backoff_skips_remaining,
-                                    paused = state.paused,
-                                    "skip topic: session in backoff/cooldown"
-                                );
                                 continue;
                             }
                         }
                     }
-                    let topic_id = topic.id;
                     // 跳过已在运行的会话（用户手动 converse 推进中 / 上一批尚未收尾），
                     // 避免对同一会话重复发起推进。
                     if let Ok(Some(_)) = self.session_tracker.get(&session_id) {
-                        tracing::info!(
-                            phase = PHASE_ASSISTANT_POLL_HANDLER,
-                            topic_id,
-                            session_id,
-                            "skip topic: session already running"
-                        );
                         continue;
                     }
                     let model = model.clone();
@@ -920,22 +895,13 @@ impl AssistantSession {
                         let _permit = semaphore.acquire().await.expect("semaphore not closed");
                         let session_handle = match assistant.session_tracker.register(&session_id) {
                             Ok(handle) => handle,
-                            Err(error) => {
-                                tracing::error!(
-                                    phase = PHASE_ASSISTANT_POLL_HANDLER,
-                                    topic_id,
-                                    session_id,
-                                    error = %error,
-                                    "poll register failed"
-                                );
-                                return;
-                            }
+                            Err(_error) => return,
                         };
                         let _ = assistant
                             .session_tracker
                             .update_step(&session_id, "polling");
                         match assistant.step_poller(&session_id, &model).await {
-                            Ok(response) => {
+                            Ok(_response) => {
                                 // 成功：熔断状态归零（等效 HALF_OPEN 探测成功 → CLOSED）。
                                 if let Ok(mut states) = assistant.failure_states.lock() {
                                     if let Some(state) = states.get_mut(&session_id) {
@@ -944,19 +910,12 @@ impl AssistantSession {
                                 }
                                 // 成功恢复：清除课题错误标记（extra.last_error）。
                                 assistant.clear_topic_last_error(&session_id);
-                                tracing::info!(
-                                    phase = PHASE_ASSISTANT_POLL_HANDLER,
-                                    topic_id,
-                                    session_id,
-                                    response_len = response.response.len(),
-                                    "poll step ok"
-                                )
                             }
                             Err(error) => {
                                 // 失败：错误分类并推进熔断状态机（连续失败退避 → 暂停）。
                                 let class =
                                     crate::core::context_safety::classify_error(&error);
-                                let (was_first_failure, entered_pause, consecutive_failures, skip_next) = {
+                                let (was_first_failure, entered_pause, consecutive_failures, _skip_next) = {
                                     let mut states = assistant.failure_states.lock().unwrap();
                                     let state = states.entry(session_id.clone()).or_default();
                                     let was_first = state.consecutive_failures == 0;
@@ -985,16 +944,6 @@ impl AssistantSession {
                                     class,
                                     consecutive_failures,
                                 );
-                                tracing::error!(
-                                    phase = PHASE_ASSISTANT_POLL_HANDLER,
-                                    topic_id,
-                                    session_id,
-                                    error_class = ?class,
-                                    consecutive_failures,
-                                    skip_next_tick = skip_next,
-                                    error = %error,
-                                    "poll step failed; circuit state updated"
-                                )
                             }
                         }
                         assistant.session_tracker.unregister(&session_id, &session_handle);
@@ -1005,11 +954,6 @@ impl AssistantSession {
                 }
                 while tasks.join_next().await.is_some() {}
                 let touched = touched.lock().map(|list| list.clone()).unwrap_or_default();
-                tracing::info!(
-                    phase = PHASE_ASSISTANT_POLL_HANDLER,
-                    touched_sessions = touched.len(),
-                    "PollAll finished"
-                );
                 touched
             }
         }
