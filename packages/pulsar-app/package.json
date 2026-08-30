@@ -1,6 +1,6 @@
 {
   "name": "pulsar-app",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Pulsar（星脉）— 自主推进的 AI Agent 桌面客户端",
   "type": "module",
   "scripts": {
