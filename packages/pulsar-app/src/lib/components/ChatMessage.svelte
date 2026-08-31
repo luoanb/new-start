@@ -5,6 +5,7 @@
   import ToolCallBlock from "./ToolCallBlock.svelte";
   import ToolResultBlock from "./ToolResultBlock.svelte";
   import NudgeBlock from "./NudgeBlock.svelte";
+  import CopyButton from "./CopyButton.svelte";
   import { t } from "$lib/i18n";
   import { clickOutside } from "$lib/actions/clickOutside";
 
@@ -142,7 +143,10 @@
       {#if isToolResult}
         <ToolResultBlock {message} />
       {:else if isError}
-        <div class="error-note">{message.body.content}</div>
+        <div class="error-note">
+          <CopyButton text={message.body.content} />
+          <span class="error-note-text">{message.body.content}</span>
+        </div>
       {:else if hasToolCalls}
         {#if reasoning}
           <ThinkingBlock {reasoning} {streaming} />
@@ -294,8 +298,12 @@
     white-space: pre-wrap;
     word-break: break-word;
   }
-  /* 错误驻留卡片：与 system-prompt 同构，错误色边框/文字强调（熔断/调用失败说明） */
+  /* 错误驻留卡片：与 system-prompt 同构，错误色边框/文字强调（熔断/调用失败说明）。
+     复制按钮（CopyButton）位于左侧，错误文案在右侧自动换行。 */
   .error-note {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
     font-size: var(--fs-sm);
     line-height: 1.5;
     color: var(--color-error);
@@ -303,8 +311,12 @@
     border: var(--border-width) solid color-mix(in oklch, var(--color-error) 45%, transparent);
     border-radius: var(--radius-sm);
     padding: var(--space-2) var(--space-3);
+  }
+  .error-note-text {
+    flex: 1;
     white-space: pre-wrap;
     word-break: break-word;
+    min-width: 0;
   }
   .content.markdown-content :global(p) { margin: 0.3em 0; }
   .content.markdown-content :global(p:first-child) { margin-top: 0; }
