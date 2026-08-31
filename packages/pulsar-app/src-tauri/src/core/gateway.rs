@@ -2325,12 +2325,14 @@ mod tests {
                         goal: "g1".into(),
                         done_contract: "c1".into(),
                         status: "completed".into(),
+                        blocked_reason: None,
                     },
                     ScopeInItem {
                         id: "s2".into(),
                         goal: "g2".into(),
                         done_contract: "c2".into(),
                         status: "pending".into(),
+                        blocked_reason: None,
                     },
                 ],
                 None,
@@ -2378,6 +2380,7 @@ mod tests {
                     goal: "g".into(),
                     done_contract: "c".into(),
                     status: "blocked".into(),
+                    blocked_reason: None,
                 }],
                 None,
             )

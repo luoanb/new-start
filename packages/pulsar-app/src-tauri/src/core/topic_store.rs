@@ -355,6 +355,7 @@ impl TopicStore {
                 goal: goal.to_string(),
                 done_contract: done_contract.to_string(),
                 status: "pending".into(),
+                blocked_reason: None,
             });
             Ok(())
         })
@@ -423,7 +424,12 @@ impl TopicStore {
         })
     }
 
-    pub fn mark_scope_item_blocked(&self, topic_id: &str, item_id: &str) -> AppResult<Topic> {
+    pub fn mark_scope_item_blocked(
+        &self,
+        topic_id: &str,
+        item_id: &str,
+        reason: Option<&str>,
+    ) -> AppResult<Topic> {
         self.mutate_scope(topic_id, |items| {
             let item = items
                 .iter_mut()
@@ -432,6 +438,7 @@ impl TopicStore {
                     AppError::InvalidInput(format!("Scope item not found: {item_id}"))
                 })?;
             item.status = "blocked".into();
+            item.blocked_reason = reason.map(str::to_string);
             Ok(())
         })
     }
@@ -450,6 +457,7 @@ impl TopicStore {
         for item in &mut topic.scope_in {
             if item.status == "blocked" {
                 item.status = "pending".into();
+                item.blocked_reason = None;
             }
         }
         let (progress, derived) = derive_topic_state(&topic.scope_in);
@@ -790,6 +798,7 @@ mod tests {
             goal: goal.into(),
             done_contract: format!("Finish {goal}"),
             status: status.into(),
+            blocked_reason: None,
         }
     }
 
@@ -1179,12 +1188,21 @@ mod tests {
         let id1 = t.scope_in[0].id.clone();
         let id2 = t.scope_in[1].id.clone();
         // 部分 blocked（仍有 pending）→ Todo
-        let t = store.mark_scope_item_blocked(&created.id, &id1).unwrap();
+        let t = store.mark_scope_item_blocked(&created.id, &id1, None).unwrap();
         assert_eq!(t.status, TopicStatus::Todo);
-        // 全部 blocked → WaitingUser
-        let t = store.mark_scope_item_blocked(&created.id, &id2).unwrap();
+        // 全部 blocked → WaitingUser；blocked_reason 随标记者落库
+        let t = store
+            .mark_scope_item_blocked(&created.id, &id2, Some("需要用户确认部署"))
+            .unwrap();
         assert_eq!(t.status, TopicStatus::WaitingUser);
         assert_eq!(t.progress, 0);
+        assert_eq!(
+            t.scope_in
+                .iter()
+                .find(|i| i.id == id2)
+                .and_then(|i| i.blocked_reason.as_deref()),
+            Some("需要用户确认部署")
+        );
     }
 
     #[test]
@@ -1197,7 +1215,7 @@ mod tests {
         let id = t.scope_in[0].id.clone();
         let _ = store.pause(&created.id).unwrap();
         // mutate_scope 的 Paused 检查对 blocked 写入同样生效
-        assert!(store.mark_scope_item_blocked(&created.id, &id).is_err());
+        assert!(store.mark_scope_item_blocked(&created.id, &id, None).is_err());
     }
 
     #[test]
@@ -1210,13 +1228,14 @@ mod tests {
         let t = store.add_scope_item(&t.id, "G2", "C2").unwrap();
         let id1 = t.scope_in[0].id.clone();
         let id2 = t.scope_in[1].id.clone();
-        let _ = store.mark_scope_item_blocked(&created.id, &id1).unwrap();
-        let t = store.mark_scope_item_blocked(&created.id, &id2).unwrap();
+        let _ = store.mark_scope_item_blocked(&created.id, &id1, None).unwrap();
+        let t = store.mark_scope_item_blocked(&created.id, &id2, None).unwrap();
         assert_eq!(t.status, TopicStatus::WaitingUser);
-        // 用户接入 → 解除 blocked → 全 pending → 恢复 Todo（可轮询）
+        // 用户接入 → 解除 blocked → 全 pending → 恢复 Todo（可轮询）；reason 一并清空
         let t = store.unblock_scope_items(&created.id).unwrap();
         assert_eq!(t.status, TopicStatus::Todo);
         assert!(t.scope_in.iter().all(|i| i.status == "pending"));
+        assert!(t.scope_in.iter().all(|i| i.blocked_reason.is_none()));
         // 无 blocked 项时幂等
         let t2 = store.unblock_scope_items(&created.id).unwrap();
         assert_eq!(t2.status, TopicStatus::Todo);
@@ -1230,7 +1249,7 @@ mod tests {
             .unwrap();
         let t = store.add_scope_item(&created.id, "G1", "C1").unwrap();
         let id = t.scope_in[0].id.clone();
-        let t = store.mark_scope_item_blocked(&created.id, &id).unwrap();
+        let t = store.mark_scope_item_blocked(&created.id, &id, None).unwrap();
         assert_eq!(t.status, TopicStatus::WaitingUser);
         let _ = store.pause(&created.id).unwrap();
         // 手动暂停课题解除 blocked 后保持 Paused（不被自动恢复）
@@ -1247,7 +1266,7 @@ mod tests {
             .unwrap();
         let t = store.add_scope_item(&created.id, "G1", "C1").unwrap();
         let id = t.scope_in[0].id.clone();
-        let t = store.mark_scope_item_blocked(&created.id, &id).unwrap();
+        let t = store.mark_scope_item_blocked(&created.id, &id, None).unwrap();
         assert_eq!(t.status, TopicStatus::WaitingUser);
         // list_unfinished SQL 仅排除 done/cancelled：waiting_user 仍在列表
         // （PollAll 必须在过滤层显式跳过，否则等待用户课题仍被轮询空转）

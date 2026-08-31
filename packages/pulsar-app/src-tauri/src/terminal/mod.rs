@@ -42,10 +42,11 @@ pub fn resolve_spawn_cwd(
 mod tests {
     use super::*;
 
-    /// 临时存储根（workspaces.json 不存在时自动回落空态）。
-    fn test_store() -> WorkspaceStore {
+    /// 临时存储根（workspaces.json 不存在时自动回落空态）；name 保证测试间隔离，
+    /// 避免并行运行时共享 workspaces.json 互相污染。
+    fn test_store(name: &str) -> WorkspaceStore {
         let root = std::env::temp_dir().join(format!(
-            "pulsar-term-store-test-{}",
+            "pulsar-term-store-test-{name}-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&root).unwrap();
@@ -54,14 +55,14 @@ mod tests {
 
     #[test]
     fn explicit_cwd_wins() {
-        let store = test_store();
+        let store = test_store("explicit");
         let cwd = resolve_spawn_cwd(Some("/tmp".into()), &store).unwrap();
         assert_eq!(cwd.as_deref(), Some("/tmp"));
     }
 
     #[test]
     fn no_workspace_falls_back_to_none() {
-        let store = test_store();
+        let store = test_store("none");
         let cwd = resolve_spawn_cwd(None, &store).unwrap();
         assert_eq!(cwd, None);
     }
@@ -73,7 +74,7 @@ mod tests {
             std::process::id()
         ));
         std::fs::create_dir_all(&root).unwrap();
-        let store = test_store();
+        let store = test_store("fallback");
         store.add(root.to_str().unwrap()).unwrap();
         let canonical = std::fs::canonicalize(&root).unwrap();
         let cwd = resolve_spawn_cwd(None, &store).unwrap();

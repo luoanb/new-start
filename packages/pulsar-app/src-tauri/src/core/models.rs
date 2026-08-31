@@ -638,6 +638,9 @@ pub struct ScopeInItem {
     pub done_contract: String,
     #[serde(default = "default_scope_in_status")]
     pub status: String,
+    /// 标记为 blocked（等待用户介入）时记录「用户需要做什么」；无则 None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<String>,
 }
 
 fn default_scope_in_status() -> String {

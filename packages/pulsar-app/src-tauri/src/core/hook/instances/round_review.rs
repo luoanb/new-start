@@ -6,6 +6,7 @@
 //! 工具轮中间产物不做裁决；暂停 / 等待用户课题不写入。
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 
 use serde_json::{json, Value};
 
@@ -56,10 +57,11 @@ pub const ROUND_REVIEW_SCHEMA: &str = r#"{
       }
     },
     "completed_item_ids": { "type": "array", "items": { "type": "string" } },
-    "blocked_item_ids": { "type": "array", "items": { "type": "string" } }
+    "blocked_item_ids": { "type": "array", "items": { "type": "string" } },
+    "blocked_reasons": { "type": "object", "additionalProperties": { "type": "string" } }
   },
   "required": ["reason", "add_items", "remove_item_ids", "update_items",
-               "completed_item_ids", "blocked_item_ids"],
+               "completed_item_ids", "blocked_item_ids", "blocked_reasons"],
   "additionalProperties": false
 }"#;
 
@@ -71,7 +73,8 @@ fn fallback_round_review() -> Value {
         "remove_item_ids": [],
         "update_items": [],
         "completed_item_ids": [],
-        "blocked_item_ids": []
+        "blocked_item_ids": [],
+        "blocked_reasons": {}
     })
 }
 
@@ -285,11 +288,21 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
             .topics()?
             .complete_scope_item(&topic_id, item_id);
     }
+    let blocked_reasons: HashMap<String, String> = decision
+        .get("blocked_reasons")
+        .and_then(|v| v.as_object())
+        .map(|o| {
+            o.iter()
+                .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().trim().to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
     for item_id in &blocked_ids {
-        let _ = hooks
-            .assistant
-            .topics()?
-            .mark_scope_item_blocked(&topic_id, item_id);
+        let _ = hooks.assistant.topics()?.mark_scope_item_blocked(
+            &topic_id,
+            item_id,
+            blocked_reasons.get(item_id).map(|r| r.as_str()),
+        );
     }
     tracing::info!(
         phase = PHASE_HOOK_ROUND_REVIEW,

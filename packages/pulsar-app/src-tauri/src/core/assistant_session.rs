@@ -1366,6 +1366,7 @@ pub(crate) fn emergency_scope_in(ctx: &RoundContext) -> Vec<ScopeInItem> {
         done_contract: "User confirms the goal and acceptance criteria are clear enough to proceed"
             .into(),
         status: "pending".into(),
+        blocked_reason: None,
     }]
 }
 
@@ -1397,14 +1398,20 @@ fn build_topic_brief(topic: &Topic) -> String {
         for item in &topic.scope_in {
             let (mark, label) = match item.status.as_str() {
                 "completed" => ("[x]", "验收"),
-                // 等待用户介入的项：简报标记"等待用户"，模型勿选
+                // 等待用户介入的项：简报标记"等待用户"（附 reason），模型勿选
                 "blocked" => ("[⏳]", "等待用户"),
                 _ => ("[ ]", "验收"),
             };
+            let reason = item
+                .blocked_reason
+                .as_deref()
+                .map(|r| format!("\n    需要：{}", r.trim()))
+                .unwrap_or_default();
             out.push_str(&format!(
-                "- {mark} {}\n    {label}：{}\n",
+                "- {mark} {}\n    {label}：{}{}\n",
                 item.goal.trim(),
-                item.done_contract.trim()
+                item.done_contract.trim(),
+                reason
             ));
         }
     }
@@ -2002,18 +2009,21 @@ mod tests {
                     goal: "G1".into(),
                     done_contract: "C1".into(),
                     status: "blocked".into(),
+                    blocked_reason: Some("需要用户提供部署环境".into()),
                 },
                 ScopeInItem {
                     id: "s2".into(),
                     goal: "G2".into(),
                     done_contract: "C2".into(),
                     status: "completed".into(),
+                    blocked_reason: None,
                 },
             ],
         );
         let brief = build_topic_brief(&topic);
         assert!(brief.contains("[⏳] G1"));
         assert!(brief.contains("等待用户：C1"));
+        assert!(brief.contains("需要：需要用户提供部署环境"));
         assert!(brief.contains("[x] G2"));
         // WaitingUser 课题仍走常规推进指令（等待用户介入后由 before hook 解除）
         assert!(!brief.contains("本轮无需调用工具"));
