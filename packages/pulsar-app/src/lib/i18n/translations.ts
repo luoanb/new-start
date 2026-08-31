@@ -16,6 +16,28 @@ export type Translations = {
     confirm: string;
     cancel: string;
   };
+  editorTabs: {
+    close: string;
+    closeOthers: string;
+    closeRight: string;
+    closeAll: string;
+    closeAllPane: string;
+    saveAs: string;
+    save: string;
+    saveAll: string;
+    copyPath: string;
+    copyRelativePath: string;
+    moveNewPane: string;
+    selectSameType: string;
+    selectAll: string;
+    deselect: string;
+    closeSelected: string;
+    closeAllAndSave: string;
+    pinned: string;
+    unsavedDialogTitle: string;
+    unsavedDialogBody: string;
+    discard: string;
+  };
   statusBar: {
     appName: string;
     toggleSidebar: string;
@@ -675,6 +697,28 @@ export const en: Translations = {
     newPane: "New Pane",
     confirm: "Confirm",
     cancel: "Cancel",
+  },
+  editorTabs: {
+    close: "Close",
+    closeOthers: "Close Others",
+    closeRight: "Close to the Right",
+    closeAll: "Close All",
+    closeAllPane: "Close All in Pane",
+    saveAs: "Save As…",
+    save: "Save",
+    saveAll: "Save All",
+    copyPath: "Copy Path",
+    copyRelativePath: "Copy Relative Path",
+    moveNewPane: "Move to New Pane",
+    selectSameType: "Select Same Type",
+    selectAll: "Select All",
+    deselect: "Deselect",
+    closeSelected: "Close Selected ({count})",
+    closeAllAndSave: "Close All & Save",
+    pinned: "Pinned",
+    unsavedDialogTitle: "Close unsaved tabs?",
+    unsavedDialogBody: "{count} tab(s) have unsaved changes. Discard and close?",
+    discard: "Discard",
   },
   statusBar: {
     appName: "Pulsar",
@@ -1374,6 +1418,28 @@ export const zh: Translations = {
     newPane: "新建分栏",
     confirm: "确认",
     cancel: "取消",
+  },
+  editorTabs: {
+    close: "关闭",
+    closeOthers: "关闭其他",
+    closeRight: "关闭右侧",
+    closeAll: "关闭全部",
+    closeAllPane: "关闭分栏内全部",
+    saveAs: "另存为…",
+    save: "保存",
+    saveAll: "保存全部",
+    copyPath: "复制路径",
+    copyRelativePath: "复制相对路径",
+    moveNewPane: "移动到新分栏",
+    selectSameType: "选择同类",
+    selectAll: "全选",
+    deselect: "取消选择",
+    closeSelected: "关闭选中的 {count} 个",
+    closeAllAndSave: "全部关闭并保存",
+    pinned: "固定",
+    unsavedDialogTitle: "关闭未保存的标签页？",
+    unsavedDialogBody: "有 {count} 个标签页未保存，关闭将丢失更改。是否继续？",
+    discard: "放弃更改",
   },
   statusBar: {
     appName: "星脉",

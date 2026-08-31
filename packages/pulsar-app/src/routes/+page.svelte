@@ -402,6 +402,47 @@
     fileEditorStore.dispose(panelId);
   }
 
+  /** 批量关闭多个主面板 tab（右键菜单批量操作）。
+   * - 干净 tab（非 file-editor 或未修改的文件）直接关闭，复用 closePanel 的焦点迁移。
+   * - 未保存的 file-editor 收集后一次性弹批量确认（避免逐次确认框相互覆盖）。
+   * 从集合末尾向头关闭，减少相邻面板激活索引漂移。 */
+  function handleBatchClose(panelIds: string[]) {
+    // 去除不可关的固定 tab（主 chat），并去重
+    const closable = [...new Set(panelIds)].filter((id) => !isPinnedPanel(id));
+    // 需未保存确认的 file-editor
+    const dirtyFiles = closable.filter((id) => {
+      const panel = mainPanes.flatMap((p) => p.panels).find((x) => x.id === id);
+      return panel?.type === "file-editor" && fileEditorStore.isDirty(id);
+    });
+    const clean = closable.filter((id) => !dirtyFiles.includes(id));
+    // 干净的先关（最后一次确认后集中销毁元数据）
+    for (let i = clean.length - 1; i >= 0; i--) {
+      layoutStore.closePanel(clean[i]);
+      fileEditorStore.dispose(clean[i]);
+    }
+    // 未保存文件：一次性批量确认，确认后全部关闭
+    if (dirtyFiles.length > 0) {
+      confirmReq = {
+        title: t("editorTabs.unsavedDialogTitle"),
+        message: t("editorTabs.unsavedDialogBody", { count: dirtyFiles.length }),
+        confirmLabel: t("fileEditor.discard"),
+        danger: true,
+        onConfirm: () => {
+          for (let i = dirtyFiles.length - 1; i >= 0; i--) {
+            layoutStore.closePanel(dirtyFiles[i]);
+            fileEditorStore.dispose(dirtyFiles[i]);
+          }
+        },
+      };
+    }
+  }
+
+  /** 主面板 tab 是否固定不可关：全局主 chat 面板（非 chat: 绑定窗口）固定。 */
+  function isPinnedPanel(panelId: string): boolean {
+    const panel = mainPanes.flatMap((p) => p.panels).find((x) => x.id === panelId);
+    return !!panel && panel.type === "chat" && !panel.id.startsWith("chat:");
+  }
+
   /** 对话标题：复用会话侧栏规则（后端摘要 preview = 首条 user/assistant 文本消息，无则占位）。 */
   let activeConversationTitle = $derived.by(() => {
     const conv = dataStore.state.conversations.find(
@@ -659,6 +700,8 @@
                     paneId={pane.id}
                     onSelect={(panelId) => layoutStore.setActivePanel(panelId)}
                     onClose={handleTabClose}
+                    onBatchClose={handleBatchClose}
+                    pinned={isPinnedPanel}
                     onDrop={(panelId, targetPaneId, targetIndex) =>
                       layoutStore.movePanel(panelId, targetPaneId, targetIndex)}
                     onDropToNewPane={(panelId) => layoutStore.movePanelToNewPane(panelId)}

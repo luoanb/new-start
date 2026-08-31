@@ -65,7 +65,7 @@ pnpm workspace monorepo，应用包位于 `packages/pulsar-app`：
 │       │   ├── inserts/              # 工具自描述契约（markdown）
 │       │   ├── Cargo.toml
 │       │   └── tauri.conf.json
-│       ├── .env.example              # DEV_PORT / DEV_HMR_PORT
+│       ├── .env.example              # dev 端口见 tauri.conf.json；本文件仅后端代理覆盖
 │       └── package.json
 ├── docs/                             # 设计文档 / specs / micro_specs / sdd-lab
 ├── pnpm-workspace.yaml
@@ -105,7 +105,15 @@ pnpm install
 cp packages/pulsar-app/.env.example packages/pulsar-app/.env
 ```
 
-- `DEV_PORT` / `DEV_HMR_PORT`：前端 dev server 端口（默认 1432 / 1433）
+- 前端 dev server 端口**唯一来源**为 `packages/pulsar-app/src-tauri/tauri.conf.json` 的 `build.devUrl`（默认 `http://localhost:1432`）；后端 dev 端口唯一来源为 `PULSAR_PORT`（默认 `8899`）。Vite 从环境变量读取这两个端口，Tauri 由 `tauri.conf.json`（前端）与 Rust `core::config`（后端）读取，始终一致。
+
+  `pnpm tauri:dev` 支持临时自定义前后端端口（在 `packages/pulsar-app` 下）：
+
+  ```bash
+  pnpm tauri:dev                                        # 默认（前端 1432 / 后端 8899）
+  pnpm tauri:dev --frontend-port 1450 --backend-port 9000
+  DEV_FRONT_PORT=1450 PULSAR_PORT=9000 pnpm tauri:dev
+  ```
 - Provider API Key 等凭据可配置在 `.pulsar/config.json`，或通过环境变量（如 `OPENAI_API_KEY`）注入，优先于配置文件且不入库
 
 ### 3. 运行
@@ -125,7 +133,7 @@ cd packages/pulsar-app && pnpm dev
 | 命令 | 说明 |
 |------|------|
 | `pnpm dev` | 仅前端 dev server（vite，端口 1432） |
-| `pnpm tauri:dev` | 完整桌面开发（Tauri + 前端热更新） |
+| `pnpm tauri:dev` | 完整桌面开发（Tauri + 前端热更新，可用 `--frontend-port`/`--backend-port` 自定义端口） |
 | `pnpm build` | 构建前端产物 |
 | `pnpm check` | Svelte 类型检查（svelte-check） |
 | `pnpm cli` | 运行 `pulsar-cli` |
