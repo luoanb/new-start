@@ -1,9 +1,9 @@
 {
   "workspaces": [
     {
-      "id": "ws-13703389a02e2b97",
-      "name": "new-start-wt",
-      "root": "/home/lab/Documents/trae_projects/new-start-wt",
+      "id": "ws-8193747a182d650e",
+      "name": "new-start",
+      "root": "/home/lab/Documents/trae_projects/new-start",
       "ignore": [
         ".git",
         "node_modules",
@@ -15,8 +15,8 @@
         "out",
         "coverage"
       ],
-      "created_at": 1787843402294
+      "created_at": 1788186412310
     }
   ],
-  "active_id": "ws-13703389a02e2b97"
+  "active_id": "ws-8193747a182d650e"
 }

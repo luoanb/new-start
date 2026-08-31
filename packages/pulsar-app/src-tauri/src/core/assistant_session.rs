@@ -701,15 +701,29 @@ impl AssistantSession {
     /// 供用户与前端感知失败原因；`from_message` 跳过 Error，不回灌模型输入。
     /// 驻留失败仅告警（不影响原错误向上传播）。
     fn persist_error_message(&self, session_id: &str, error: &AppError, class: crate::core::context_safety::ErrorClass) {
+        self.persist_error_content(
+            session_id,
+            format!(
+                "模型调用失败（{}，code={}）：{}",
+                class.as_str(),
+                error.code(),
+                error_brief(error)
+            ),
+            class,
+        );
+    }
+
+    /// 错误驻留（自定义文案）：供 hook 落非模型调用类错误（如课题绑定缺失）。
+    pub(crate) fn persist_error_content(
+        &self,
+        session_id: &str,
+        content: String,
+        class: crate::core::context_safety::ErrorClass,
+    ) {
         let message = Message {
             role: MessageRole::System,
             body: MessageBody::Error {
-                content: format!(
-                    "模型调用失败（{}，code={}）：{}",
-                    class.as_str(),
-                    error.code(),
-                    error_brief(error)
-                ),
+                content,
                 error_class: class.as_str().to_string(),
             },
             timestamp: super::conversation_store::now_ms(),

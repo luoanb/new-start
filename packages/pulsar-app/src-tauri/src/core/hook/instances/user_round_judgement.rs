@@ -1,7 +1,9 @@
-//! IP-1 AfterLoadContext · 用户轮合并裁决：①介入打分 ②课题路由（switch / create / none）。
+//! IP-1 AfterLoadContext · 用户轮合并裁决：①介入打分 ②课题路由（switch / create / continue）。
 //!
 //! 单次模型调用同时承担两项职责（2026-08-30 spec 合并自 score_feedback + match_topic）。
 //! 门控下沉在 run 内：未绑定课题（含首轮）必跑；已绑定课题每 3 条用户消息复核一次。
+//! 契约（2026-08-31）：助手模式下会话必须绑定课题；模型可见 action 仅三态，
+//! none 是程序内部降级 token（仅 fallback 返回），已从模型契约移除。
 
 use std::borrow::Cow;
 
@@ -26,7 +28,7 @@ pub const USER_ROUND_JUDGEMENT_SCHEMA: &str = r#"{
   "type": "object",
   "properties": {
     "score": { "type": "integer" },
-    "action": { "type": "string", "enum": ["switch", "create", "none"] },
+    "action": { "type": "string", "enum": ["switch", "create", "continue"] },
     "topic_id": { "type": ["string", "null"] },
     "name": { "type": ["string", "null"] },
     "description": { "type": ["string", "null"] },
@@ -48,7 +50,8 @@ pub const USER_ROUND_JUDGEMENT_SCHEMA: &str = r#"{
 }"#;
 
 fn fallback_user_round_judgement() -> Value {
-    // score=0 → 消费处视为「不打分」；action=none → 不创建、不切换。
+    // score=0 → 消费处视为「不打分」；action=none → 不创建、不切换（none 为程序内部
+    // 降级 token，仅此 fallback 使用，模型契约中已移除该值）。
     json!({
         "score": 0,
         "action": "none",
@@ -185,18 +188,20 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
         }
     }
 
-    // ② 路由消费：switch / create / none（分支逻辑自原 match_topic 迁移）。
+    // ② 路由消费：switch / create / continue（分支逻辑自原 match_topic 迁移）。
+    // 契约（2026-08-31）：助手模式下会话必须绑定课题；模型可见 action 仅三态，
+    // none 是程序内部降级 token（fallback 返回），模型契约已禁。
     let action = decision
         .get("action")
         .and_then(|v| v.as_str())
-        .unwrap_or("none");
+        .unwrap_or("continue");
     tracing::info!(phase = PHASE_HOOK_USER_ROUND_JUDGEMENT, action, "routing decision");
     match action {
         "switch" => {
             let Some(target_id) = decision.get("topic_id").and_then(|v| v.as_str()) else {
                 tracing::warn!(
                     phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
-                    "switch missing topic_id; treated as none"
+                    "switch missing topic_id; treated as continue"
                 );
                 return Ok(());
             };
@@ -251,33 +256,68 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
                 ctx.topic_id = Some(bound.id);
             }
         }
-        "none" => {
-            // 中性语义（A 降级兜底 action=none）：不创建、不切换，保持当前绑定。
-            tracing::info!(
-                phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
-                "routing decision: none (no-op)"
-            );
+        "create" | "continue" => {
+            // continue：复用当前课题——已绑定 → 保持；未绑定 → 契约违反（未绑定禁 continue），
+            // 与 create 一致走创建兜底，保证「会话必须绑定课题」不变量。
+            // create：新建课题并绑定（bind_session 单课题约束，仅未绑定会话可绑）。
+            if let Some(topic_id) = ctx.topic_id.clone() {
+                if action == "create" {
+                    tracing::warn!(
+                        phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
+                        topic_id = %topic_id,
+                        "create on bound session ignored: session bound to one topic; keep current"
+                    );
+                } else {
+                    tracing::info!(
+                        phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
+                        topic_id = %topic_id,
+                        "continue: keep bound topic"
+                    );
+                }
+                return Ok(());
+            }
+            match hooks.create_bound_topic_from_decision(ctx, decision, true) {
+                Ok(created) => {
+                    tracing::info!(
+                        phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
+                        topic_id = %created.id,
+                        scope_items = created.scope_in.len(),
+                        action,
+                        "bound new topic to session"
+                    );
+                    ctx.topic_id = Some(created.id);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
+                        error = %error,
+                        action,
+                        "create topic failed; session left unbound"
+                    );
+                }
+            }
         }
         _ => {
+            // none（程序内部降级 token，或模型违反契约仍输出 none）：
+            // 未绑定 → 错误驻留 + 保持未绑定（绝不默认建课题：模型返回 none 即「不建不动」，
+            // 下一条用户消息重新裁决）；已绑定 → 保持当前课题。
             if ctx.topic_id.is_none() {
-                match hooks.create_bound_topic_from_decision(ctx, decision, false) {
-                    Ok(created) => {
-                        tracing::info!(
-                            phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
-                            topic_id = %created.id,
-                            scope_items = created.scope_in.len(),
-                            "created bound topic with scope_in"
-                        );
-                        ctx.topic_id = Some(created.id);
-                    }
-                    Err(error) => {
-                        tracing::warn!(
-                            phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
-                            error = %error,
-                            "create topic failed; keep session unbound"
-                        );
-                    }
-                }
+                tracing::warn!(
+                    phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
+                    "none decision on unbound session; topic invariant unmet"
+                );
+                hooks.assistant.persist_error_content(
+                    &ctx.session_id,
+                    "助手模式必须绑定课题，但本次裁决未建立课题（action=none）；下一条消息将重新裁决。"
+                        .to_string(),
+                    crate::core::context_safety::ErrorClass::Permanent,
+                );
+            } else {
+                tracing::info!(
+                    phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
+                    topic_id = ?ctx.topic_id,
+                    "none decision; keep bound topic"
+                );
             }
         }
     }
