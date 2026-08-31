@@ -37,10 +37,17 @@ function parsePort(argv, name) {
   return null;
 }
 
+// 将任意输入解析为合法端口；undefined/空串/NaN 等一律视为未设置（返回 null）
+function toPort(value) {
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
 const argv = process.argv.slice(2);
 // 优先级：命令行参数 > 环境变量 > 默认值
-const frontPort = parsePort(argv, "frontend-port") ?? Number(process.env.DEV_FRONT_PORT) ?? baseFrontPort;
-const backPort = parsePort(argv, "backend-port") ?? Number(process.env.PULSAR_PORT) ?? defaultBackPort;
+// 注意：Number(undefined) === NaN，而 ?? 只回退 null/undefined，必须用 toPort 归一化
+const frontPort = parsePort(argv, "frontend-port") ?? toPort(process.env.DEV_FRONT_PORT) ?? baseFrontPort;
+const backPort = parsePort(argv, "backend-port") ?? toPort(process.env.PULSAR_PORT) ?? defaultBackPort;
 
 const args = ["exec", "tauri", "dev"];
 // 仅当覆盖默认前端端口时才注入配置合并，默认路径保持最小
