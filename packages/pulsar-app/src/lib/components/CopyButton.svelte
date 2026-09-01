@@ -89,10 +89,11 @@
     visibility: visible;
     color: var(--color-error, #e5484d);
   }
-  /* 仅支持 hover 的设备隐藏复制按钮（悬停折叠块或键盘聚焦时显示）；
-     触屏（hover: none）始终可见，保证可发现性。见 .cursor/rules/ui-hover-reveal.mdc */
+  /* hover-reveal 仅适用于折叠块头部（.block-header 内）场景；
+     独立场景（如 ChatMessage 错误卡片）按钮始终可见可点击。
+     见 .cursor/rules/ui-hover-reveal.mdc */
   @media (hover: hover) {
-    .copy-btn {
+    :global(.block-header) .copy-btn {
       opacity: 0;
       visibility: hidden;
     }

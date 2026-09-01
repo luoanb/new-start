@@ -1383,7 +1383,6 @@ fn spawn_poller_runtime(
                     }
                 }
                 Some(request) = step_rx.recv() => {
-                    tracing::info!(phase = PHASE_POLLER_RUNTIME, kind = "step_request", "received step request from channel");
                     let model = match providers.default_model_selection() {
                         Ok(Some(model)) => model,
                         _ => continue,
@@ -1394,7 +1393,7 @@ fn spawn_poller_runtime(
                     // 放到独立任务执行，tick 循环立即返回，绝不被模型调用拖住。
                     tauri::async_runtime::spawn(async move {
                         let Ok(_permit) = step_guard.try_lock() else {
-                            tracing::info!(phase = PHASE_POLLER_RUNTIME, "step request skipped: another step is in flight");
+                            tracing::debug!(phase = PHASE_POLLER_RUNTIME, "step request skipped: another step is in flight");
                             return;
                         };
                         let touched = assistant.process_step_request(request, &model).await;
