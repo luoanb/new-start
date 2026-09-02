@@ -149,9 +149,11 @@ flowchart TB
 
 ### Hook 域（`core/hook/`）
 
+> 独立域文档：[hook/](./hook/index.md)（结构架构：目录布局 / 类型契约 / 双注册体系 / 注入点与失败策略 / 扩展规则）。
+
 | 模块 | 职责 |
 |------|------|
-| `defs.rs` | 注入点即类型：`InjectPointId`（IP-1 AfterLoadContext / IP-2 AfterPersistInput / IP-3、IP-4 预留 / IP-5 AfterPersistOutcome）、`HookHandler`、`HookDef`、`HookRegistry`（IP-1 fail 策略、其余 ignore 策略；IP-1 支持会话切换 reload） |
+| `defs.rs` | 注入点即类型：`InjectPointId`（IP-1 AfterLoadContext / IP-2 AfterPersistInput / IP-3 AfterCallModel、IP-4 AfterExecuteTools（已实现分发，暂无注册者）/ IP-5 AfterPersistOutcome）、`HookHandler`、`HookDef`、`HookRegistry`（IP-1 fail 策略、其余 ignore 策略；IP-1 支持会话切换 reload） |
 | `registry.rs` | `HookInstance` + Before/After 执行签名；**ACTIVE_HOOKS（2 个）**：`user_round_judgement`（IP-1）、`round_review`（IP-5）；LEGACY_HOOKS（4 个休眠）：`score_feedback` / `match_topic` / `revise_topic` / `complete_scope` |
 | `instances/` | 一个 hook 一个文件（常量 + JSON schema + fallback + 执行逻辑） |
 | `judgement.rs` | 裁决共享类型（`JudgementStatus` / `JudgementOutcome` / `JudgementAnchor`）+ `hook_defs_meta()` |
@@ -509,6 +511,7 @@ GUI 卡死 / 系统「无响应」的根因与目标契约见正式 spec：
 | 文档 | 内容 |
 |------|------|
 | [neuron/](./neuron/index.md) | **Neuron 域独立文档**（概念边界 / 服务契约 / 生命周期 / 数据契约 / 愿景差距） |
+| [hook/](./hook/index.md) | **Hook 域独立文档**（结构架构：目录布局 / 类型契约 / 双注册体系 / 注入点与失败策略 / 扩展规则） |
 | [neuron-init.md](./neuron-init.md) | 神经元启动就绪流程与 mermaid 图 |
 | [storage.md](./storage.md) | 存储布局、配置字段、环境变量 |
 | [logging.md](./logging.md) | 滚动日志、Logs 面板、过滤器与级别 |
