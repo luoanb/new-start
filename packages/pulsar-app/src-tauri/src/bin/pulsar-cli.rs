@@ -52,6 +52,7 @@ async fn run() -> AppResult<()> {
         "call-model" => {
             let (provider_id, model_id, message) = take_model_call_args(args)?;
             let response = gateway
+                .providers()
                 .call_model(ModelCallRequest {
                     provider_id,
                     model_id,

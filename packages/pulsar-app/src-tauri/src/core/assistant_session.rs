@@ -58,13 +58,9 @@ use super::{
     topic_store::TopicStore,
 };
 
-pub const SYSTEM_TYPE_SELECT_NEURON: &str = "assistant_select_neuron";
 /// 合并裁决 system_type 常量唯一来源在 `hook::instances`（一 hook 一文件内聚），此处
 /// re-export 保持 `assistant_session::SYSTEM_TYPE_*` 既有引用路径不变。
 pub use crate::core::hook::instances::{SYSTEM_TYPE_ROUND_REVIEW, SYSTEM_TYPE_USER_ROUND_JUDGEMENT};
-
-/// Re-export default interval ticks (overridable via `config.json` → `poller`).
-pub use super::poller::DEFAULT_ASSISTANT_POLL_TICKS;
 
 /// 结构化输出能力级别（裁决 hook 的 `response_format` 降级链：json_schema → json_object → 无约束）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -547,17 +543,6 @@ impl AssistantSession {
         next
     }
 
-    /// 更新轮询并发推进数量（运行时生效），返回实际生效值。
-    pub fn set_poll_parallelism(&self, n: usize) -> usize {
-        let n = n.max(1);
-        self.poll_parallelism.store(n, Ordering::Relaxed);
-        n
-    }
-
-    pub fn enqueue_poll_all(&self) {
-        let _ = self.step_tx.send(AssistantStepRequest::PollAll);
-    }
-
     /// 用户主对话：User 触发一轮（IP-1 用户轮裁决 + IP-5 收尾轮复盘 + 干预标记）。
     pub async fn converse(
         &self,
@@ -845,7 +830,7 @@ impl AssistantSession {
             .await
     }
 
-    pub fn register_polling(&self, poller: &mut Poller, interval_ticks: u64) -> AppResult<()> {
+    pub fn register_polling(&self, poller: &mut Poller, interval_ticks: u64) {
         let tx = self.step_tx.clone();
         poller.register(
             ASSISTANT_POLL_TASK,

@@ -538,6 +538,7 @@ impl TuiApp {
 
                 match self
                     .gateway
+                    .providers()
                     .call_model(crate::core::ModelCallRequest {
                         provider_id,
                         model_id,

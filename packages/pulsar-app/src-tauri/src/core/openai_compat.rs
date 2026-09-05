@@ -19,12 +19,11 @@ use crate::core::log_phase::{
     PHASE_LLM_CALL_PERF, PHASE_LLM_REQUEST_OUT, PHASE_LLM_RESPONSE_IN,
 };
 
-/// 消息内容：纯文本或多模态部分列表（`image_url`/`input_audio`/`text`）。
+/// 消息内容：纯文本。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum MessageContent {
     Text(String),
-    Parts(Vec<ContentPart>),
 }
 
 /// 结构化输出契约（值类型，随 hook 走，不持有 hook 业务数据）。
@@ -50,15 +49,6 @@ impl MessageContent {
     pub fn text(s: impl Into<String>) -> Self {
         Self::Text(s.into())
     }
-}
-
-/// 多模态内容块（OpenAI 契约：`type` + 各自载荷）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ContentPart {
-    Text { text: String },
-    ImageUrl { image_url: Value },
-    InputAudio { input_audio: Value },
 }
 
 /// 工具调用（assistant 消息内 / 响应内）。
@@ -172,9 +162,6 @@ pub struct ChatRequest {
     /// 旧版 token 上限（非推理模型）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
-    /// 推理模型 token 上限（与 max_tokens 二选一）。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_completion_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -186,22 +173,6 @@ pub struct ChatRequest {
     // ── 工具 ──
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<ToolDef>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_choice: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parallel_tool_calls: Option<bool>,
-    // ── 流式 ──
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stream: Option<bool>,
-    // ── 其它 ──
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub n: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub logprobs: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub top_logprobs: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user: Option<String>,
     /// 特异性 / 未来扩展字段扁平透传（reasoning_effort、thinking、response_format…）。
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
@@ -215,19 +186,11 @@ impl ChatRequest {
             temperature: None,
             top_p: None,
             max_tokens: None,
-            max_completion_tokens: None,
             stop: None,
             presence_penalty: None,
             frequency_penalty: None,
             seed: None,
             tools: None,
-            tool_choice: None,
-            parallel_tool_calls: None,
-            stream: None,
-            n: None,
-            logprobs: None,
-            top_logprobs: None,
-            user: None,
             extra: BTreeMap::new(),
         }
     }
@@ -261,8 +224,6 @@ pub struct ResponseChoice {
     pub message: ResponseMessage,
     #[serde(default)]
     pub finish_reason: Option<String>,
-    #[serde(default)]
-    pub logprobs: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -519,7 +480,6 @@ impl Client {
                         index: choice.index,
                         message: ResponseMessage::default(),
                         finish_reason: None,
-                        logprobs: None,
                     });
                     // 拼接 delta 内容
                     if let Some(content) = &choice.delta.content {
@@ -541,8 +501,6 @@ impl Client {
                             .get_or_insert_with(Vec::new);
                         // OpenAI 流式工具调用按 index 分片，逐片拼接 arguments。
                         for tc in tool_calls {
-                            let idx = tc.r#type.is_empty() as usize; // fallback
-                            let _ = idx;
                             match calls.iter_mut().find(|c| c.id == tc.id) {
                                 Some(existing) if !tc.function.arguments.is_empty() => {
                                     existing.function.arguments.push_str(&tc.function.arguments);

@@ -18,9 +18,9 @@ use super::{
     mcp::{McpServerClient, McpServerStatus, McpServerStatusKind},
     models::{
         ChatModelSelection, ChatOptions, ChatResponse, Conversation, ConversationMode,
-        ConversationSummaryPage, Message, MessageBody, MessagePage, MessageRole, ModelCallRequest,
-        ModelCallResponse, ModelInfo, ProviderInfo, RuntimeStatus, ScopeInItem, SkillInfo,
-        SystemPromptStatus, TopicStatus, ToolInfo, ToolSource, ToolTag,
+        ConversationSummaryPage, Message, MessageBody, MessagePage, MessageRole, ModelInfo,
+        ProviderInfo, RuntimeStatus, SkillInfo, SystemPromptStatus, TopicStatus, ToolInfo,
+        ToolSource, ToolTag,
     },
     neuron_config::NeuronConfigReader,
     neuron_manager::NeuronManager,
@@ -59,20 +59,7 @@ use crate::fileops::workspace::WorkspaceStore;
 
 use super::events::{StateChange, StateEmitter};
 
-/// `StateEmitter`（`Arc<dyn Fn>`）不实现 `Debug`，用此包装承载并手动实现占位 Debug，
-/// 使 `Gateway` 可继续 `#[derive(Debug)]`。
-#[derive(Clone, Default)]
-pub struct EmitterSlot(pub Option<StateEmitter>);
-
-impl std::fmt::Debug for EmitterSlot {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("EmitterSlot")
-            .field(&self.0.is_some())
-            .finish()
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Gateway {
     /// 手动压缩（/compact 命令）：Chat/Agent 会话过长时可显式触发；自动压缩已随
     /// `Engine` 退役（Chat = execute_round 退化形态，压缩由用户按需触发）。
@@ -112,9 +99,15 @@ pub struct Gateway {
     assemble_lock: Arc<tokio::sync::Mutex<()>>,
     /// 状态事件发射器：流式入口（`send_model_message_stream`）内部广播
     /// `StateChange::MessageDelta` 增量与完成后的 `Conversations` 收敛；为 None（测试）时静默。
-    state_emit: EmitterSlot,
+    state_emit: Option<StateEmitter>,
     /// 终端桥接（方案 A）：运行期重装配时保持 execute_command 的可见执行能力。
     terminal: Option<Arc<crate::terminal::AgentTerminalBridge>>,
+}
+
+impl std::fmt::Debug for Gateway {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Gateway").finish_non_exhaustive()
+    }
 }
 
 impl Gateway {
@@ -123,20 +116,13 @@ impl Gateway {
     }
 
     pub fn new(store: ConversationStore) -> AppResult<Self> {
-        Self::with_state_emitter(store, None)
+        Self::with_state_emitter_and_terminal(store, None, None)
     }
 
-    /// 与 `new` 等价，但允许注入状态事件发射器，
-    /// 用于 Tauri 运行时向前端广播状态变更。
-    pub fn with_state_emitter(
-        store: ConversationStore,
-        state_emit: Option<StateEmitter>,
-    ) -> AppResult<Self> {
-        Self::build(store, state_emit, None, None, None)
-    }
-
-    /// 在 `with_state_emitter` 基础上追加终端桥接（方案 A）：`execute_command`
-    /// 的 `visible_terminal: true` 需要把输出广播到 Terminal 面板。
+    /// 构造并注入状态事件发射器与终端桥接（方案 A）：
+    /// - 状态事件发射器用于 Tauri 运行时向前端广播状态变更；
+    /// - 终端桥接让 `execute_command` 的 `visible_terminal: true`
+    ///   把输出广播到 Terminal 面板。
     pub fn with_state_emitter_and_terminal(
         store: ConversationStore,
         state_emit: Option<StateEmitter>,
@@ -466,7 +452,7 @@ impl Gateway {
             let mut guard = poller
                 .lock()
                 .map_err(|e| AppError::StorageError(format!("Poller lock error: {}", e)))?;
-            assistant.register_polling(&mut guard, poller_settings.assistant_interval_ticks)?;
+            assistant.register_polling(&mut guard, poller_settings.assistant_interval_ticks);
             if poller_settings.enabled {
                 guard.resume();
             } else {
@@ -511,7 +497,7 @@ impl Gateway {
             file_system,
             git_service,
             assemble_lock,
-            state_emit: EmitterSlot(state_emit),
+            state_emit,
             terminal,
         })
     }
@@ -778,10 +764,6 @@ impl Gateway {
         self.providers.require_model(provider_id, model_id)
     }
 
-    pub async fn call_model(&self, request: ModelCallRequest) -> AppResult<ModelCallResponse> {
-        self.providers.call_model(request).await
-    }
-
     pub async fn send_model_message(
         &self,
         input: impl AsRef<str>,
@@ -912,7 +894,7 @@ impl Gateway {
         let session_handle = session_tracker.register(&conversation_id)?;
 
         // 流式增量回调：conversation_id 在 resolve 后确定，闭包捕获之并转发为 MessageDelta。
-        let on_delta = self.state_emit.0.as_ref().map(|emitter| {
+        let on_delta = self.state_emit.as_ref().map(|emitter| {
             let emitter = Arc::clone(emitter);
             let cid = conversation_id.clone();
             Box::new(move |delta: StreamDelta| {
@@ -968,7 +950,7 @@ impl Gateway {
         };
         self.set_current_conversation_id(response.conversation_id.clone())?;
         // done 收敛后广播 Conversations：前端全量重拉（权威数据兜底）。
-        if let Some(emitter) = self.state_emit.0.as_ref() {
+        if let Some(emitter) = self.state_emit.as_ref() {
             emitter(StateChange::Conversations {
                 affected: vec![response.conversation_id.clone()],
             });
@@ -1647,7 +1629,7 @@ fn replace_statuses_shared(
 mod tests {
     use super::*;
     use crate::core::{
-        models::ToolCall,
+        models::{ModelCallRequest, ModelCallResponse, ScopeInItem, ToolCall},
         round_executor::ModelCaller,
         tool_config::{HttpToolConfig, McpServerConfig},
         tool_registry::Tool,

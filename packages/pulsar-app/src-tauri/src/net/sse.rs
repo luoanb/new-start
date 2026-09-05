@@ -9,8 +9,7 @@ use axum::{
     extract::State,
     response::sse::{Event, KeepAlive, Sse},
 };
-use futures_util::{Stream, StreamExt};
-use tokio_stream::wrappers::BroadcastStream;
+use futures_util::{stream, Stream};
 
 use crate::core::events::STATE_CHANGED_EVENT;
 
@@ -20,15 +19,25 @@ pub async fn handle_sse(
     State(state): State<NetState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let rx = state.events_tx.subscribe();
-    let stream = BroadcastStream::new(rx)
-        .filter_map(|result| async move { result.ok() })
-        .map(|change| {
-            let data = serde_json::to_string(&change).unwrap_or_default();
-            Ok::<_, Infallible>(
-                Event::default()
-                    .event(STATE_CHANGED_EVENT)
-                    .data(data),
-            )
-        });
+    let stream = stream::unfold(rx, |mut rx| async move {
+        loop {
+            match rx.recv().await {
+                Ok(change) => {
+                    let data = serde_json::to_string(&change).unwrap_or_default();
+                    return Some((
+                        Ok::<_, Infallible>(
+                            Event::default()
+                                .event(STATE_CHANGED_EVENT)
+                                .data(data),
+                        ),
+                        rx,
+                    ));
+                }
+                // Lagged / Closed：跳过丢失项继续；Closed 时结束流。
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    });
     Sse::new(stream).keep_alive(KeepAlive::default())
 }

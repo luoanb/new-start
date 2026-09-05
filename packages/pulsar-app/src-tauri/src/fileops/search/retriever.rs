@@ -266,20 +266,16 @@ impl Retriever {
 /// 索引根目录：`<index_root>/<sha256(root)[..16]>`。
 fn index_dir_for(index_root: &Path, ws_root: &Path) -> PathBuf {
     let canonical = ws_root.canonicalize().unwrap_or_else(|_| ws_root.to_path_buf());
-    let digest = sha256_prefix(&canonical.to_string_lossy(), 16);
+    let digest = sha256_prefix(&canonical.to_string_lossy());
     index_root.join(digest)
 }
 
-/// sha256 前 `len` 个十六进制字符（降低目录冲突、保持可读）。
-fn sha256_prefix(input: &str, len: usize) -> String {
-    use std::fmt::Write as _;
-    let digest = <sha2::Sha256 as sha2::Digest>::digest(input.as_bytes());
-    let mut hex = String::with_capacity(digest.len() * 2);
-    for byte in digest.iter() {
-        let _ = write!(hex, "{byte:02x}");
-    }
-    hex.truncate(len);
-    hex
+/// 索引目录名哈希：`DefaultHasher` 结果格式化为 16 位十六进制（降低目录冲突、保持可读）。
+fn sha256_prefix(input: &str) -> String {
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    hasher.write(input.as_bytes());
+    format!("{:016x}", hasher.finish())
 }
 
 fn init_schema(conn: &mut Connection) -> AppResult<()> {

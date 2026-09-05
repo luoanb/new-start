@@ -1882,8 +1882,8 @@ pub fn run() {
                 .map_err(|error| error.to_string())?
                 .on_web_resource_request(|_request, response| {
                     response.headers_mut().insert(
-                        http::header::CACHE_CONTROL,
-                        http::header::HeaderValue::from_static("no-store"),
+                        axum::http::header::CACHE_CONTROL,
+                        axum::http::header::HeaderValue::from_static("no-store"),
                     );
                 })
                 .build()

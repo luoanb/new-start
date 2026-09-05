@@ -107,22 +107,6 @@ impl fmt::Display for RegisterError {
 
 impl std::error::Error for RegisterError {}
 
-/// 卸载失败：id 不存在。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UnregisterError {
-    NotFound(String),
-}
-
-impl fmt::Display for UnregisterError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            UnregisterError::NotFound(id) => write!(f, "hook id not registered: {id}"),
-        }
-    }
-}
-
-impl std::error::Error for UnregisterError {}
-
 struct RegisteredHook {
     def: Arc<HookDef>,
 }
@@ -167,33 +151,6 @@ impl HookRegistry {
             .or_default()
             .push(RegisteredHook { def: Arc::new(def) });
         Ok(())
-    }
-
-    /// 卸载：按 id 移除（不区分注入点）。
-    pub fn unregister(&self, id: &str) -> Result<(), UnregisterError> {
-        let mut hooks = self.inner.lock().expect("hook registry lock");
-        for group in hooks.values_mut() {
-            if let Some(pos) = group.iter().position(|h| h.def.id == id) {
-                group.remove(pos);
-                return Ok(());
-            }
-        }
-        Err(UnregisterError::NotFound(id.to_string()))
-    }
-
-    /// 查询：id 是否已注册（装配幂等 / 单测断言用）。
-    pub fn is_registered(&self, id: &str) -> bool {
-        let hooks = self.inner.lock().expect("hook registry lock");
-        hooks.values().flatten().any(|h| h.def.id == id)
-    }
-
-    pub fn len(&self) -> usize {
-        let hooks = self.inner.lock().expect("hook registry lock");
-        hooks.values().map(|v| v.len()).sum()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     /// 组快照：锁内取 Arc 引用列表，锁外 await（std MutexGuard 不可跨 await 持有）。
@@ -383,21 +340,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn unregister_removes_by_id() {
-        let registry = HookRegistry::new();
-        registry
-            .register(HookDef {
-                id: "x",
-                label: "x",
-                inject_point: InjectPointId::AfterCallModel,
-                handler: HookHandler::AfterCallModel(Box::new(|_, _| ok())),
-            })
-            .unwrap();
-        assert!(registry.unregister("x").is_ok());
-        assert_eq!(registry.unregister("x"), Err(UnregisterError::NotFound("x".into())));
-    }
-
     #[tokio::test]
     async fn load_context_failure_propagates() {
         let registry = HookRegistry::new();
@@ -507,7 +449,6 @@ mod tests {
     #[tokio::test]
     async fn empty_registry_is_noop() {
         let registry = HookRegistry::new();
-        assert!(registry.is_empty());
         let mut c = ctx(None);
         registry
             .run_after_load_context(&mut c, |_| Ok(()))

@@ -12,7 +12,7 @@
 use std::{collections::HashMap, process::Stdio, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use http::{HeaderName, HeaderValue};
+use axum::http::{HeaderName, HeaderValue};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ClientCapabilities, ClientInfo,
     ContentBlock, Implementation,

@@ -65,8 +65,7 @@ pub use hook::{
 };
 
 pub use assistant_session::{
-    AssistantSession, SYSTEM_TYPE_ROUND_REVIEW, SYSTEM_TYPE_SELECT_NEURON,
-    SYSTEM_TYPE_USER_ROUND_JUDGEMENT,
+    AssistantSession, SYSTEM_TYPE_ROUND_REVIEW, SYSTEM_TYPE_USER_ROUND_JUDGEMENT,
 };
 pub use conversation_runner::ConversationRunner;
 pub use error::{AppError, AppResult};

@@ -292,8 +292,6 @@ pub enum ToolPolicy {
     None,
     /// 本轮 role 神经元的 `tool_ids ∩ 注册表`。
     FromNeuron,
-    /// 显式白名单 `∩ 注册表`。
-    Allowlist(Vec<String>),
 }
 
 /// 系统神经元行为（承载于 `system_type = 'session.<id>'` 的系统神经元的 behavior 列）。

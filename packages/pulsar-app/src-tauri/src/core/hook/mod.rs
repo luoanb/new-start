@@ -22,7 +22,7 @@ pub mod judgement;
 pub(crate) mod registry;
 pub mod store;
 
-pub use defs::{HookHandler, HookRegistry, InjectPointId, RegisterError, UnregisterError};
+pub use defs::{HookHandler, HookRegistry, InjectPointId, RegisterError};
 pub use judgement::{
     hook_def, hook_defs_meta, AttemptRecord, HookDef, HookDefMeta, JudgementAnchor,
     JudgementOutcome, JudgementStatus,

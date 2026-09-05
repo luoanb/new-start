@@ -3,11 +3,10 @@ use std::sync::Arc;
 use super::{
     conversation_store::{now_ms, ConversationStore},
     error::AppResult,
-    hook::defs::{HookDef, HookRegistry, RegisterError},
-    model_call_input::ModelCallInput,
+    hook::defs::HookRegistry,
     models::{
         ChatModelSelection, ChatResponse, Conversation, ConversationMode, Message, MessageBody,
-        MessageRole, ModelCallResponse, ModelMessage, Neuron, ThinkingConfig, ToolTag,
+        MessageRole, ModelCallResponse, Neuron, ThinkingConfig, ToolTag,
     },
     openai_compat,
     openai_compat::ResponseFormatSpec,
@@ -121,11 +120,6 @@ impl ConversationRunner {
     pub fn with_hooks(mut self, hooks: Arc<HookRegistry>) -> Self {
         self.hooks = hooks;
         self
-    }
-
-    /// 直接注册一个注入点 hook（内部加锁；同 id 重复注册 → Err）。
-    pub fn register_hook(&self, def: HookDef) -> Result<(), RegisterError> {
-        self.hooks.register(def)
     }
 
     /// 一轮端到端：读会话（seed/state/messages）→ IP-1 hooks（选型 / 课题路由等调度）
@@ -637,12 +631,6 @@ impl ConversationRunner {
                 response_format,
             )
             .await
-    }
-
-    /// 会话历史（模型侧，project_history 投影 + 防御过滤 + sanitize 后）。
-    pub fn history_for(&self, session_id: &str) -> AppResult<Vec<ModelMessage>> {
-        let conversation = self.store.require_conversation(session_id)?;
-        Ok(ModelCallInput::project_history(&conversation.messages))
     }
 
     /// Agent 收敛判据：会话最后一条消息是否为工具结果。

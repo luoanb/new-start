@@ -3637,7 +3637,6 @@ dependencies = [
  "crossterm 0.28.1",
  "futures-util",
  "globset",
- "http",
  "mlua",
  "parking_lot",
  "portable-pty",
@@ -3650,13 +3649,11 @@ dependencies = [
  "rust-embed",
  "serde",
  "serde_json",
- "sha2 0.11.0",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
  "tokio",
- "tokio-stream",
  "tokio-tungstenite 0.24.0",
  "tokio-util",
  "tower",
@@ -5670,7 +5667,6 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
- "tokio-util",
 ]
 
 [[package]]

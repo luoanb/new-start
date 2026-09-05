@@ -77,13 +77,8 @@ impl Compactor {
         Self { config }
     }
 
-    /// Returns the current config (useful for display).
-    pub fn config(&self) -> &CompactionConfig {
-        &self.config
-    }
-
     /// Rough token estimate for a full conversation.
-    pub fn estimate_conversation_tokens(&self, conversation: &Conversation) -> usize {
+    fn estimate_conversation_tokens(&self, conversation: &Conversation) -> usize {
         conversation
             .messages
             .iter()
@@ -145,7 +140,7 @@ impl Compactor {
     ///
     /// 覆盖压缩的结构性盲区：最新超大单条永远在 keep_last 保留区间内，
     /// 摘要够不到；此处在发送前直接把单条压到预算内。返回是否发生截断。
-    pub fn force_fit_single_message(&self, msgs: &mut [Message], budget: usize) -> bool {
+    fn force_fit_single_message(&self, msgs: &mut [Message], budget: usize) -> bool {
         let mut changed = false;
         for msg in msgs.iter_mut() {
             let estimated = estimate_tokens(msg.text());

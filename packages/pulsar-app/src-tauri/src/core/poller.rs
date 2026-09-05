@@ -167,17 +167,12 @@ impl Poller {
         n
     }
 
-    pub fn register(
-        &mut self,
-        name: &str,
-        interval_ticks: u64,
-        handler: Box<dyn PollHandler>,
-    ) -> AppResult<()> {
+    pub fn register(&mut self, name: &str, interval_ticks: u64, handler: Box<dyn PollHandler>) {
         let interval_ticks = interval_ticks.max(1);
         if let Some(existing) = self.tasks.iter_mut().find(|task| task.name == name) {
             existing.interval_ticks = interval_ticks;
             existing.handler = handler;
-            return Ok(());
+            return;
         }
         self.tasks.push(PollTask {
             name: name.to_string(),
@@ -185,7 +180,6 @@ impl Poller {
             last_fired_tick: self.tick_count,
             handler,
         });
-        Ok(())
     }
 
     pub fn tick(&mut self) {
@@ -214,10 +208,6 @@ impl Poller {
             // Handler errors must not break the scheduler.
             task.handler.on_tick();
         }
-    }
-
-    pub fn start(&mut self) {
-        self.state = PollerRunState::Running;
     }
 
     pub fn pause(&mut self) {
@@ -276,8 +266,7 @@ mod tests {
                 Box::new(CountingHandler {
                     counter: Arc::clone(&counter),
                 }),
-            )
-            .unwrap();
+            );
 
         poller.tick();
         poller.tick();
@@ -353,8 +342,7 @@ mod tests {
                 Box::new(CountingHandler {
                     counter: Arc::clone(&counter),
                 }),
-            )
-            .unwrap();
+            );
         poller.tick();
         poller.tick();
         assert_eq!(*counter.lock().unwrap(), 0);
@@ -372,8 +360,7 @@ mod tests {
                 Box::new(CountingHandler {
                     counter: Arc::clone(&counter),
                 }),
-            )
-            .unwrap();
+            );
 
         // Default paused: trigger still forces a run on next tick.
         poller.trigger();

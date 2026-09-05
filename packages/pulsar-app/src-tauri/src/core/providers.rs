@@ -7,16 +7,19 @@ use super::{
         ThinkingCapability, ThinkingConfig, ThinkingEffort,
     },
     openai_compat::{
-        self, ChatMessage, ChatRequest, FunctionCallWire, FunctionDef, MessageContent,
+        self, ChatMessage, ChatRequest, FunctionCallWire, FunctionDef,
         ResponseFormatSpec, ToolCallWire, ToolDef,
     },
 };
+#[cfg(test)]
+use openai_compat::MessageContent;
+#[cfg(test)]
+use std::borrow::Cow;
 use crate::core::log_phase::{
     PHASE_APPLY_TOOLS, PHASE_CALL_MODEL, PHASE_PARSE_TOOL_CALL,
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    borrow::Cow,
     collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{Arc, RwLock},
