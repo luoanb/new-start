@@ -122,6 +122,8 @@ flowchart TB
 
 ### Conversation 域（轮次管线）
 
+> 独立域文档：[conversation/](./conversation/index.md)（作用约定：真相源与落库 / 统一轮次管线 / 并发秩序 / 上下文安全 / 三种模式 / 压缩）。
+
 | 模块 | 职责 |
 |------|------|
 | `conversation_store.rs` | 会话/消息 JSON 持久化（`sessions/<id>.json`，写端全量写；读端已分页：`list_conversation_summaries` 轻量摘要分页、`history_page` 消息倒序切片） |
@@ -137,6 +139,8 @@ flowchart TB
 | `compactor.rs` | `Compactor`（token 估算 + LLM 摘要）：手动压缩入口 + 被复用为 IP-2 自动压缩 hook（超阈值仅压缩本轮 wire，不动真相源） |
 
 ### Assistant 域
+
+> 独立域文档：[assistant/](./assistant/index.md)（作用约定：业务编排 / 课题简报与轮次计数 / 后台轮询与熔断 / 运行态跟踪）。
 
 | 模块 | 职责 |
 |------|------|
@@ -174,10 +178,14 @@ flowchart TB
 
 ### Topic 域
 
+> 独立域文档：[topic/](./topic/index.md)（作用约定：课题与待办语义 / 状态机推导规则 / 会话绑定 / 写保护 / 消费方约定）。
+
 - `topic_store.rs` / `topic_manager.rs`：课题 CRUD、scope item 管理、状态机
   （todo / in_progress / paused / done / cancelled），存储于 SQLite `app.db` 的 `topics` 表。
 
 ### Provider 域
+
+> 独立域文档：[provider/](./provider/index.md)（作用约定：调用入口语义 / 服务商与模型治理 / 参数抹平合并 / 配置热重载 / 失败约定）。
 
 | 模块 | 职责 |
 |------|------|
@@ -187,6 +195,8 @@ flowchart TB
 | `model_call_input.rs` | system / user prompt 拼装模板 |
 
 ### Tool 域
+
+> 独立域文档：[tool/](./tool/index.md)（作用约定分两层：[注册](./tool/registration.md)——来源门禁 / 声明 / MCP 接入 / insert 手册；[使用](./tool/usage.md)——授权决策 / 执行容错 / 命令护栏）。
 
 | 模块 | 职责 |
 |------|------|
@@ -203,6 +213,8 @@ git 只读 6 个（status / diff / log / branch / blame / stash_list）。
 
 ### FileOps 域（`src-tauri/src/fileops/`）
 
+> 独立域文档：[fileops/](./fileops/index.md)（作用约定：工作区边界 / 文件操作护栏 / 覆盖保护 / git 确认与危险开关 / 语义搜索）。
+
 | 模块 | 职责 |
 |------|------|
 | `workspace.rs` | 工作区列表（`workspaces.json`）+ `resolve_in_workspace` 越界护栏 + 每工作区 ignore 规则 |
@@ -212,6 +224,8 @@ git 只读 6 个（status / diff / log / branch / blame / stash_list）。
 | `search/` | 语义搜索（本地实现，不调 LLM）：`indexer.rs` tree-sitter 语法感知分块；`retriever.rs` SQLite FTS5 + bm25 块级检索（mtime/size 增量，英文前缀 + 中文 2-gram），索引存 `<data>/search/<sha256(root)[..16]>/search.db`；`tools.rs` 暴露 `semantic_search` 工具 |
 
 ### Terminal 域（`src-tauri/src/terminal/`）
+
+> 独立域文档：[terminal/](./terminal/index.md)（作用约定：PTY 会话生命周期 / 双路事件流 / Agent 执行桥接 / 远程帧协议）。
 
 | 模块 | 职责 |
 |------|------|
@@ -512,6 +526,13 @@ GUI 卡死 / 系统「无响应」的根因与目标契约见正式 spec：
 |------|------|
 | [neuron/](./neuron/index.md) | **Neuron 域独立文档**（概念边界 / 服务契约 / 生命周期 / 数据契约 / 愿景差距） |
 | [hook/](./hook/index.md) | **Hook 域独立文档**（结构架构：目录布局 / 类型契约 / 双注册体系 / 注入点与失败策略 / 扩展规则） |
+| [topic/](./topic/index.md) | **Topic 域独立文档**（作用约定：课题与待办语义 / 状态机推导规则 / 会话绑定 / 写保护 / 消费方约定） |
+| [provider/](./provider/index.md) | **Provider 域独立文档**（作用约定：调用入口语义 / 服务商与模型治理 / 参数抹平合并 / 配置热重载 / 失败约定） |
+| [fileops/](./fileops/index.md) | **FileOps 域独立文档**（作用约定：工作区边界 / 文件操作护栏 / 覆盖保护 / git 确认与危险开关 / 语义搜索） |
+| [terminal/](./terminal/index.md) | **Terminal 域独立文档**（作用约定：PTY 会话生命周期 / 双路事件流 / Agent 执行桥接 / 远程帧协议） |
+| [conversation/](./conversation/index.md) | **Conversation 域独立文档**（作用约定：真相源与落库 / 统一轮次管线 / 并发秩序 / 上下文安全 / 三种模式 / 压缩） |
+| [tool/](./tool/index.md) | **Tool 域独立文档**（作用约定两层：[注册](./tool/registration.md) / [使用](./tool/usage.md)） |
+| [assistant/](./assistant/index.md) | **Assistant 域独立文档**（作用约定：业务编排 / 课题简报与轮次计数 / 后台轮询与熔断 / 运行态跟踪） |
 | [neuron-init.md](./neuron-init.md) | 神经元启动就绪流程与 mermaid 图 |
 | [storage.md](./storage.md) | 存储布局、配置字段、环境变量 |
 | [logging.md](./logging.md) | 滚动日志、Logs 面板、过滤器与级别 |
