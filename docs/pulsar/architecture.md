@@ -144,7 +144,7 @@ flowchart TB
 | `events.rs` | `StateChange` / `StateEmitter` 统一状态事件通道 |
 | `error.rs` | `AppError` 域错误统一编码 |
 | `log_phase.rs` | 全项目 tracing `phase=` 常量唯一注册表（供日志面板下拉） |
-| `hook/defs.rs` | Hook 插槽协议：注入点即类型 `InjectPointId`（IP-1～IP-5）、`HookHandler`、`HookDef`、`HookRegistry`、失败策略（IP-1 fail、其余 ignore） |
+| `hook/defs.rs` | Hook 插槽协议（**定义 / 注册 / 开启** 三阶段）：注入点即类型 `InjectPointId`（IP-1～IP-5）、`HookHandler`、`HookDef`（定义）、`HookRegistry`（注册默认关闭 + `set_enabled` 运行时开关 + 分发只跑 enabled）、失败策略（IP-1 fail、其余 ignore） |
 
 ### application/（应用驱动层 + 组合根）
 
@@ -156,34 +156,33 @@ flowchart TB
 | `drivers.rs` | 应用驱动层（架构重构 M3 / M6）：`RoundDriver` 四驱动（Chat / Agent / Assistant / Poller），只拥有循环策略，依赖 `dyn RoundService`；均实现阻塞 `run` 与流式 `run_stream`（Agent 以 `InputRecord::Continue` 续轮、上限 20 轮，流式在循环内跨轮共享同一 `on_delta`）；授权由核心按 `RoundMode` 默认（Agent→目录全量） |
 | `chat_session.rs` | Chat 模式业务接入（无 hooks）：阻塞与流式均经 `ChatDriver`（`run` / `run_stream`） |
 | `agent_session.rs` | Agent 模式业务接入：阻塞与流式的循环策略均在 `AgentDriver`（`run` / `run_stream`，`Continue` 续轮、上限 20 轮、流式跨轮共享回调）；授权由核心按 `RoundMode::Agent` 默认取目录全量 |
-| `assistant_session.rs` | 助手模式业务编排（含 `AssistantHooks` 业务上下文）：模式门控 / 课题解析 / 简报推进 / 计数；阻塞与流式均经 `AssistantDriver` / `PollerDriver`（`dyn RoundService`，`run` / `run_stream`）；通过 `install_hooks` 向 Hook 域注册 `assistant.round.before`（IP-1）与 `assistant.round.after`（IP-5）两个业务 hook |
+| `assistant_session.rs` | 助手模式业务编排（含 `AssistantHooks` 业务上下文）：模式门控 / 课题解析 / 简报推进 / 计数；阻塞与流式均经 `AssistantDriver` / `PollerDriver`（`dyn RoundService`，`run` / `run_stream`）。`install_hooks` 向核心 `HookRegistry` 注册并开启 4 条 hook（注册序即执行序）：`assistant.round.before`（IP-1 准备）、`assistant.user-round-judgement`（IP-1 裁决）、`assistant.round-review`（IP-5 裁决）、`assistant.round.after`（IP-5 计数） |
 | `poller.rs` + `poller_step.rs` | 后台轮询推进（`PollAll` / step），并行度共享原子值 |
 | `session_tracker.rs` | 运行中会话集合跟踪 + 注册跟踪工具（`RunningSession`） |
 | `insert_catalog.rs` | 自描述契约目录：`inserts/<id>.md`（rust-embed 内嵌），供模型读取决策契约 |
-| `hook/` | Hook 业务（见下「Hook 域」）：`registry.rs`（`HookInstance` / `HookRun` / `ACTIVE_HOOKS` / `LEGACY_HOOKS`）、`instances/`、`judgement.rs`、`store.rs`（`HookJudgementStore`）、`compaction.rs` |
+| `hook/` | 裁决业务（见下「Hook 域」）：`instances/`（裁决定义 `SPEC` + `register` 装配入口）、`judgement.rs`（`JudgementSpec` 定义元数据 + `JUDGEMENT_SPECS` 定义清单 + 查询）、`store.rs`（`HookJudgementStore` 账本）、`compaction.rs`（压缩 hook 装配） |
 
 > 历史说明：早期 `NeuronCallService`（`call_service.rs`）已退役，模型调用统一收敛到
 > 轮次服务（`round_service.rs` 的 `ConversationRunner`）+ `RoundExecutor`。
 
 ### Hook 域（协议 `core/hook/` + 业务 `application/hook/`）
 
-> 独立域文档：[hook/](./hook/index.md)（结构架构：目录布局 / 类型契约 / 双注册体系 / 注入点与失败策略 / 扩展规则）。
+> 独立域文档：[hook/](./hook/index.md)（结构架构：目录布局 / 定义·注册·开启三阶段 / 注入点与失败策略 / 扩展规则）。
 
 协议（封闭核心，`core/hook/`）：
 
 | 模块 | 职责 |
 |------|------|
-| `defs.rs` | 注入点即类型：`InjectPointId`（IP-1 AfterLoadContext / IP-2 AfterPersistInput / IP-3 AfterCallModel、IP-4 AfterExecuteTools（已实现分发，暂无注册者）/ IP-5 AfterPersistOutcome）、`HookHandler`、`HookDef`、`HookRegistry`（IP-1 fail 策略、其余 ignore 策略；IP-1 支持会话切换 reload） |
+| `defs.rs` | 注入点即类型：`InjectPointId`（IP-1 AfterLoadContext / IP-2 AfterPersistInput / IP-3 AfterCallModel、IP-4 AfterExecuteTools（已实现分发，暂无注册者）/ IP-5 AfterPersistOutcome）、`HookHandler`、`HookDef`（**定义**）、`HookRegistry`（**注册 + 开启** + 分发：`register` 默认关闭、`set_enabled` 运行时可开关、分发只跑 enabled 条目；IP-1 fail 策略、其余 ignore 策略；IP-1 支持会话切换 reload） |
 
 业务（应用侧，`application/hook/`）：
 
 | 模块 | 职责 |
 |------|------|
-| `registry.rs` | `HookInstance` + `HookRun`（Before/After 执行签名）；**ACTIVE_HOOKS（2 个）**：`user_round_judgement`（IP-1）、`round_review`（IP-5）；LEGACY_HOOKS（4 个休眠）：`score_feedback` / `match_topic` / `revise_topic` / `complete_scope` |
-| `instances/` | 一个 hook 一个文件（常量 + JSON schema + fallback + 执行逻辑） |
-| `judgement.rs` | 裁决共享类型（`JudgementStatus` / `JudgementOutcome` / `JudgementAnchor`）+ `hook_defs_meta()` |
+| `instances/` | 裁决定义：一个 hook 一个文件（常量 + JSON schema + fallback + **`SPEC`（定义）** + `run`）。装配中的两条（`user_round_judgement` IP-1 / `round_review` IP-5）各有 `register` 装配入口，把定义注册进核心 `HookRegistry`；旧 4 条（`score_feedback` / `match_topic` / `revise_topic` / `complete_scope`）为**定义·未注册**（源码与 inserts 契约保留、不进定义清单） |
+| `judgement.rs` | 裁决定义元数据层：`JudgementSpec`（定义，不含注册 / 开启状态）+ `JUDGEMENT_SPECS` 定义清单 + `judgement_spec()` / `hook_defs_meta()` + `JudgementStatus` / `JudgementOutcome` / `JudgementAnchor` |
 | `store.rs` | `HookJudgementStore`：裁决调用全量账本，存 SQLite `app.db` 的 `hook_judgements` 表（两阶段写入 pending→终态，只读不删改） |
-| `compaction.rs` | 把 `Compactor` 封装为 IP-2 hook（id `core.compaction`），gateway 装配期注册 |
+| `compaction.rs` | 把 `Compactor` 封装为 IP-2 hook（id `core.compaction`），gateway 装配期注册并开启 |
 
 ### providers/（模型 Provider Adapter）
 

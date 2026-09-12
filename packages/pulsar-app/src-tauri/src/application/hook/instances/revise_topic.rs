@@ -1,21 +1,22 @@
 //! （休眠）IP-5 · 课题范围修订 hook：模型裁决 scope_in 增删改，逐项容错落库并留痕。
 //!
-//! 已被 [`super::round_review`]（合并复盘）取代，整体保留为休眠单元；
-//! 回切 = 本实例移入 `registry::ACTIVE_HOOKS`。
+//! 已被 [`super::round_review`]（合并复盘）取代，源码保留为「**定义·未注册**」：
+//! 有 `SPEC` 与 `run` 定义，但不进 `JUDGEMENT_SPECS`、不注册、不开启。
+//! 回切 = 重建 `register` 装配入口（git 历史为准）。
 
 use std::borrow::Cow;
 
 use serde_json::{json, Value};
 
-use crate::application::assistant_session::{append_revision_log, parse_scope_revision, AssistantHooks};
-use crate::core::round_service::{RoundContext, RoundTriggerKind};
+use crate::application::assistant_session::{
+    append_revision_log, parse_scope_revision, AssistantHooks,
+};
+use crate::application::hook::judgement::{JudgementAnchor, JudgementSpec};
 use crate::core::error::{AppError, AppResult};
-use crate::core::hook::defs::{BoxFuture, InjectPointId};
-use crate::application::hook::judgement::{HookDef, JudgementAnchor};
-use crate::application::hook::registry::{HookInstance, HookRun};
+use crate::core::hook::defs::InjectPointId;
 use crate::core::log_phase::PHASE_HOOK_REVISE_TOPIC;
-use crate::core::models::TopicStatus;
-use crate::core::models::ResponseFormatSpec;
+use crate::core::models::{ResponseFormatSpec, TopicStatus};
+use crate::core::round_service::{RoundContext, RoundTriggerKind};
 use crate::stores::topic_store::now_ms;
 
 pub const SYSTEM_TYPE_REVISE_TOPIC: &str = "assistant_revise_topic";
@@ -65,18 +66,16 @@ fn fallback_revise_topic() -> Value {
     })
 }
 
-pub(crate) const INSTANCE: HookInstance = HookInstance {
-    def: HookDef {
-        system_type: SYSTEM_TYPE_REVISE_TOPIC,
-        label: "hook.reviseTopic",
-        inject_point: InjectPointId::AfterPersistOutcome.as_str(),
-        response_format: Some(ResponseFormatSpec::JsonSchema {
-            name: Cow::Borrowed("revise_topic"),
-            schema: Cow::Borrowed(REVISE_TOPIC_SCHEMA),
-        }),
-        neutral_fallback: fallback_revise_topic,
-    },
-    run: HookRun::After(run_boxed),
+/// 裁决定义（**定义·未注册**：源码保留，不进定义清单、不注册、不开启）。
+pub(crate) const SPEC: JudgementSpec = JudgementSpec {
+    system_type: SYSTEM_TYPE_REVISE_TOPIC,
+    label: "hook.reviseTopic",
+    inject_point: InjectPointId::AfterPersistOutcome.as_str(),
+    response_format: Some(ResponseFormatSpec::JsonSchema {
+        name: Cow::Borrowed("revise_topic"),
+        schema: Cow::Borrowed(REVISE_TOPIC_SCHEMA),
+    }),
+    neutral_fallback: fallback_revise_topic,
 };
 
 pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppResult<()> {
@@ -137,7 +136,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
     );
     // 同源：用本轮主对话同一模型（用户所选），不读配置默认。
     let model = &ctx.model;
-    let def = &INSTANCE.def;
+    let def = &SPEC;
     // after hook：用户消息已落库，锚点 = 触发轮用户消息在列表中的位置（本轮输入为末尾一条）。
     let anchor = JudgementAnchor {
         conversation_id: ctx.session_id.clone(),
@@ -245,9 +244,3 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
     Ok(())
 }
 
-fn run_boxed<'a>(
-    hooks: &'a AssistantHooks<'a>,
-    ctx: &'a RoundContext,
-) -> BoxFuture<'a, AppResult<()>> {
-    Box::pin(run(hooks, ctx))
-}

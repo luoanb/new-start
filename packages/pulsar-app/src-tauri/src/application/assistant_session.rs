@@ -28,18 +28,10 @@ use crate::core::log_phase::{
 };
 
 use crate::application::hook::{
-    active_hooks_at, AttemptRecord, HookDef, HookRun, JudgementAnchor, JudgementOutcome,
-    JudgementStatus,
+    instances, AttemptRecord, JudgementAnchor, JudgementOutcome, JudgementSpec, JudgementStatus,
 };
 use crate::application::hook::store::{new_hook_judgement_id, HookJudgementStore};
-use crate::core::hook::defs::{
-    // 命名约定：`defs::HookDef`（注册单元）与 `hook::HookDef`（裁决规则表）同名不同物，
-    // 注册单元以别名 `HookRegistration` 引用，`HookDef` 保持裁决规则表（既有消费者）。
-    HookDef as HookRegistration,
-    HookHandler,
-    HookRegistry,
-    InjectPointId,
-};
+use crate::core::hook::defs::{HookDef, HookHandler, HookRegistry, InjectPointId};
 use super::{
     drivers::{AssistantDriver, PollerDriver},
     poller::{Poller, SharedPollParallelism},
@@ -113,7 +105,10 @@ fn capability_cache() -> &'static Mutex<HashMap<(String, String, u64), Structure
 
 /// 支持级别 → 实际下发的 response_format（json_schema 可用则下发；JsonObject 级
 /// 实验下线（zhipu 慢路径证据见函数内注释），与 None 同样无约束，靠解析兜底链）。
-fn format_for_support(def: &HookDef, support: StructuredOutputSupport) -> Option<ResponseFormatSpec> {
+fn format_for_support(
+    def: &JudgementSpec,
+    support: StructuredOutputSupport,
+) -> Option<ResponseFormatSpec> {
     match support {
         StructuredOutputSupport::JsonSchema => def.response_format.clone(),
         // JsonObject 级下线（2026-08-31 实验）：zhipu 对 json_object 约束 + 超长 prompt
@@ -219,21 +214,43 @@ impl AssistantSession {
         }
     }
 
-    /// 装配期注册单轮注入点 hooks（Gateway 创建 `AssistantSession` 后调用）：
-    /// - IP-1 AfterLoadContext：`assistant.round.before`（课题路由 / 简报推进 / 打分）
-    /// - IP-5 AfterPersistOutcome：`assistant.round.after`（范围修订 / 进度验收 / 计数）
+    /// 装配期注册 Assistant 承载的核心 hook，并显式开启（注册默认关闭）。
+    ///
+    /// 注册序即同注入点内执行序：
+    /// - **IP-1**：`assistant.round.before`（模式门控 / 课题解析 / 简报推进）→
+    ///   `assistant.user-round-judgement`（裁决定义）；`assistant.select-neuron` 由 Gateway
+    ///   在本方法之后注册，排在裁决之后。
+    /// - **IP-5**：`assistant.round-review`（裁决定义）→ `assistant.round.after`（轮次计数）。
     ///
     /// 以 `Weak` 捕获自身防循环引用（Gateway → AssistantSession；Runner → HookRegistry →
     /// Weak），执行期 `upgrade` 后调用；会话已销毁时静默跳过（正常装配下不会发生）。
-    ///
-    /// IP-1 组内顺序敏感：装配方须在注册选型 hook **之前**调用本方法——课题路由
-    /// （可能切换会话 / 计算 reselect）先于选型（resolve 需基于路由后的最终会话）执行。
     pub fn install_hooks(self: &Arc<Self>, registry: &HookRegistry) -> AppResult<()> {
+        self.register_round_before(registry)?;
+        instances::user_round_judgement::register(registry, self)
+            .map_err(|e| AppError::RuntimeError(format!("register hook failed: {e}")))?;
+        instances::round_review::register(registry, self)
+            .map_err(|e| AppError::RuntimeError(format!("register hook failed: {e}")))?;
+        self.register_round_after(registry)?;
+        for id in [
+            "assistant.round.before",
+            instances::SYSTEM_TYPE_USER_ROUND_JUDGEMENT,
+            instances::SYSTEM_TYPE_ROUND_REVIEW,
+            "assistant.round.after",
+        ] {
+            registry
+                .set_enabled(id, true)
+                .map_err(|e| AppError::RuntimeError(format!("enable hook failed: {e}")))?;
+        }
+        Ok(())
+    }
+
+    /// IP-1 `assistant.round.before`：模式门控 / 课题解析 / 简报推进（不含裁决）。
+    fn register_round_before(self: &Arc<Self>, registry: &HookRegistry) -> AppResult<()> {
         let weak = Arc::downgrade(self);
         registry
-            .register(HookRegistration {
+            .register(HookDef {
                 id: "assistant.round.before",
-                label: "用户轮裁决 / 简报推进（IP-1）",
+                label: "助手轮前准备（IP-1：课题解析 / 简报推进）",
                 inject_point: InjectPointId::AfterLoadContext,
                 handler: HookHandler::AfterLoadContext(Box::new(move |ctx| {
                     let weak = Weak::clone(&weak);
@@ -253,12 +270,16 @@ impl AssistantSession {
                     })
                 })),
             })
-            .map_err(|e| AppError::RuntimeError(format!("register hook failed: {e}")))?;
+            .map_err(|e| AppError::RuntimeError(format!("register hook failed: {e}")))
+    }
+
+    /// IP-5 `assistant.round.after`：轮次计数（裁决在 `assistant.round-review`）。
+    fn register_round_after(self: &Arc<Self>, registry: &HookRegistry) -> AppResult<()> {
         let weak = Arc::downgrade(self);
         registry
-            .register(HookRegistration {
+            .register(HookDef {
                 id: "assistant.round.after",
-                label: "轮次复盘 / 计数（IP-5）",
+                label: "轮次计数（IP-5）",
                 inject_point: InjectPointId::AfterPersistOutcome,
                 handler: HookHandler::AfterPersistOutcome(Box::new(move |ctx| {
                     let weak = Weak::clone(&weak);
@@ -278,8 +299,7 @@ impl AssistantSession {
                     })
                 })),
             })
-            .map_err(|e| AppError::RuntimeError(format!("register hook failed: {e}")))?;
-        Ok(())
+            .map_err(|e| AppError::RuntimeError(format!("register hook failed: {e}")))
     }
 
     /// 裁决类系统提示词调用：懒创建系统神经元 → 用 [`ConversationRunner::run_raw_round`]
@@ -298,7 +318,7 @@ impl AssistantSession {
     /// 全链路落库：`insert_start`（pending + 锚点事件）→ `finish`（终态收敛 + 终态事件）。
     pub(crate) async fn call_judgement(
         &self,
-        def: &HookDef,
+        def: &JudgementSpec,
         anchor: JudgementAnchor,
         user_payload: Value,
         model: &ChatModelSelection,
@@ -1114,31 +1134,19 @@ pub(crate) struct AssistantHooks<'a> {
 }
 
 impl AssistantHooks<'_> {
-    /// IP-1 AfterLoadContext：`assistant.round.before`。课题路由与简报推进。
+    /// IP-1 `assistant.round.before`：模式门控 / 课题解析 / 简报推进（裁决已独立注册）。
     async fn round_before(&self, ctx: &mut RoundContext) -> AppResult<()> {
         // 业务层语义：课题副作用仅 Assistant/System 模式承载（Chat 直连 / Agent 循环不参与）。
-        // 旧实现由调用方按模式决定是否装配 hooks；hook 全局注册后在此还原该边界。
         if !matches!(ctx.mode, ConversationMode::Assistant | ConversationMode::System) {
             return Ok(());
         }
         // 会话可能已绑定课题（第二轮起的 User 输入 / 手动 / 轮询推进）。
         self.resolve_bound_topic(ctx)?;
         match ctx.trigger {
-            RoundTriggerKind::User => {
-                // 用户接入即解除等待用户状态（blocked 项 → pending，恢复课题轮询）。
-                self.release_waiting_user(ctx)?;
-                // IP-1 hook 本体按注入点遍历启用清单（注册式）；裁决门控下沉在实例 run 内
-                //（未绑定必跑、已绑定低频复核）。
-                for instance in active_hooks_at(InjectPointId::AfterLoadContext) {
-                    match &instance.run {
-                        HookRun::Before(run) => run(self, ctx).await?,
-                        HookRun::After(_) => unreachable!("after hooks never mount at IP-1"),
-                    }
-                }
-            }
-            RoundTriggerKind::ManualStep | RoundTriggerKind::Poller => {
-                self.advance_brief(ctx)?;
-            }
+            // 用户接入即解除等待用户状态（blocked 项 → pending，恢复课题轮询）。
+            // 裁决（`assistant.user-round-judgement`）是独立注册的 IP-1 hook，注册序在其后。
+            RoundTriggerKind::User => self.release_waiting_user(ctx)?,
+            RoundTriggerKind::ManualStep | RoundTriggerKind::Poller => self.advance_brief(ctx)?,
             RoundTriggerKind::AgentLoop => {
                 unreachable!("assistant hooks never run agent-loop rounds")
             }
@@ -1146,51 +1154,32 @@ impl AssistantHooks<'_> {
         Ok(())
     }
 
-    /// IP-5 AfterPersistOutcome：`assistant.round.after`。产物已落库，只读整轮上下文。
+    /// IP-5 `assistant.round.after`：轮次计数（复盘已独立注册为 `assistant.round-review`，
+    /// 注册序在本 hook 之前）。
     async fn round_after(&self, ctx: &RoundContext) -> AppResult<()> {
         // 与 round_before 同一模式边界：课题副作用仅 Assistant/System 模式承载。
         if !matches!(ctx.mode, ConversationMode::Assistant | ConversationMode::System) {
             return Ok(());
         }
         if ctx.outcome.is_none() {
-            // 无已完成轮（异常路径）：无产物可复盘，仅保留计数语义缺失时的静默跳过。
+            // 无已完成轮（异常路径）：无计数语义，静默跳过。
             return Ok(());
         }
-        // IP-5 hook 本体按注入点遍历启用清单（注册式）：User/Manual 轮错误上抛，
-        // Poller 轮吞错（轮询推进不得被课题副作用打断）。收尾轮门控下沉在各实例 run 内
-        //（round_review 的 is_settling_round 门；legacy 实例每轮跑，回切语义忠实）。
         match ctx.trigger {
-            RoundTriggerKind::User => {
-                self.run_after_hooks(ctx).await?;
-                self.tick_round_counters(ctx, true)?;
-            }
-            RoundTriggerKind::ManualStep => {
-                self.run_after_hooks(ctx).await?;
-                self.tick_round_counters(ctx, false)?;
-            }
+            RoundTriggerKind::User => self.tick_round_counters(ctx, true)?,
+            RoundTriggerKind::ManualStep => self.tick_round_counters(ctx, false)?,
+            // Poller 轮吞错（轮询推进不得被计数副作用打断）。
             RoundTriggerKind::Poller => {
-                if let Err(error) = self.run_after_hooks(ctx).await {
+                if let Err(error) = self.tick_round_counters(ctx, false) {
                     tracing::error!(
                         phase = PHASE_ASSISTANT_POLLER,
                         error = %error,
-                        "assistant afterhook failed; ignored"
+                        "assistant round counter failed; ignored"
                     );
                 }
-                let _ = self.tick_round_counters(ctx, false);
             }
             RoundTriggerKind::AgentLoop => {
                 unreachable!("assistant hooks never run agent-loop rounds")
-            }
-        }
-        Ok(())
-    }
-
-    /// 按注入点遍历 IP-5 启用实例执行（编排中立：实例自带门控）。
-    async fn run_after_hooks(&self, ctx: &RoundContext) -> AppResult<()> {
-        for instance in active_hooks_at(InjectPointId::AfterPersistOutcome) {
-            match &instance.run {
-                HookRun::After(run) => run(self, ctx).await?,
-                HookRun::Before(_) => unreachable!("before hooks never mount at IP-5"),
             }
         }
         Ok(())
@@ -1724,7 +1713,7 @@ pub(crate) fn interval_neuron_ids(messages: &[Message], anchor_index: usize) -> 
 
 #[cfg(test)]
 mod tests {
-    use crate::application::hook::hook_def;
+    use crate::application::hook::judgement_spec;
 
     use super::*;
     // `#[async_trait]` 仅测试 harness 使用（MockNeuronSelector / SequenceModelCaller）。
@@ -2424,7 +2413,7 @@ mod tests {
         let h = judgement_harness(
             r#"{"openai":{"models":[{"id":"gpt-4o-400","capabilities":{"chat":true,"tools":true,"streaming":true,"structured_output":true}}]}}"#,
         );
-        let def = hook_def(SYSTEM_TYPE_ROUND_REVIEW).expect("known hook");
+        let def = judgement_spec(SYSTEM_TYPE_ROUND_REVIEW).expect("known hook");
         h.caller.errors.lock().unwrap().push_back(
             "provider returned 400 Bad Request: This response_format type is unavailable now"
                 .into(),
@@ -2475,7 +2464,7 @@ mod tests {
         let h = judgement_harness(
             r#"{"openai":{"models":[{"id":"gpt-4o","capabilities":{"chat":true,"tools":true,"streaming":true,"structured_output":true}}]}}"#,
         );
-        let def = hook_def(SYSTEM_TYPE_ROUND_REVIEW).expect("known hook");
+        let def = judgement_spec(SYSTEM_TYPE_ROUND_REVIEW).expect("known hook");
         // 首轮散文（无 JSON）→ 重试轮合法 JSON。
         h.caller.responses.lock().unwrap().extend([
             "Sorry, I cannot output JSON here.".to_string(),
@@ -2520,7 +2509,7 @@ mod tests {
         let h = judgement_harness(
             r#"{"openai":{"models":[{"id":"gpt-4o","capabilities":{"chat":true,"tools":true,"streaming":true,"structured_output":true}}]}}"#,
         );
-        let def = hook_def(SYSTEM_TYPE_ROUND_REVIEW).expect("known hook");
+        let def = judgement_spec(SYSTEM_TYPE_ROUND_REVIEW).expect("known hook");
         // 两次都返回散文 → A 中性降级，主轮次不报错。
         h.caller.responses.lock().unwrap().extend([
             "散文输出，没有 JSON。".to_string(),
@@ -2561,7 +2550,7 @@ mod tests {
         let h = judgement_harness(
             r#"{"openai":{"models":[{"id":"gpt-4o","capabilities":{"chat":true,"tools":true,"streaming":true,"structured_output":true}}]}}"#,
         );
-        let def = hook_def(SYSTEM_TYPE_ROUND_REVIEW).expect("known hook");
+        let def = judgement_spec(SYSTEM_TYPE_ROUND_REVIEW).expect("known hook");
         h.caller.responses.lock().unwrap().extend([
             r#"{"reason":"once","add_items":[],"remove_item_ids":[],"update_items":[],"completed_item_ids":["s1"],"blocked_item_ids":[]}"#.to_string(),
         ]);

@@ -1,20 +1,20 @@
 //! （休眠）IP-1 · 介入区间打分 hook：对上一介入区间的盖章神经元打分（-5..=5，非 0）。
 //!
-//! 已被 [`super::user_round_judgement`]（合并裁决）取代，整体保留为休眠单元；
-//! 回切 = 本实例移入 `registry::ACTIVE_HOOKS`（inserts 契约与神经元种子仍在原位）。
+//! 已被 [`super::user_round_judgement`]（合并裁决）取代，源码保留为「**定义·未注册**」：
+//! 有 `SPEC` 与 `run` 定义，但不进 `JUDGEMENT_SPECS`、不注册、不开启（inserts 契约与神经元种子仍在原位）；
+//! 回切 = 重建 `register` 装配入口（git 历史为准）。
 
 use std::borrow::Cow;
 
 use serde_json::{json, Value};
 
 use crate::application::assistant_session::{interval_neuron_ids, AssistantHooks};
-use crate::core::round_service::RoundContext;
+use crate::application::hook::judgement::{JudgementAnchor, JudgementSpec, JudgementStatus};
 use crate::core::error::{AppError, AppResult};
-use crate::core::hook::defs::{BoxFuture, InjectPointId};
-use crate::application::hook::judgement::{HookDef, JudgementAnchor, JudgementStatus};
-use crate::application::hook::registry::{HookInstance, HookRun};
+use crate::core::hook::defs::InjectPointId;
 use crate::core::log_phase::PHASE_HOOK_SCORE_FEEDBACK;
 use crate::core::models::ResponseFormatSpec;
+use crate::core::round_service::RoundContext;
 
 pub const SYSTEM_TYPE_SCORE_FEEDBACK: &str = "assistant_score_feedback";
 
@@ -32,18 +32,16 @@ fn fallback_score_feedback() -> Value {
     json!({ "score": 0 })
 }
 
-pub(crate) const INSTANCE: HookInstance = HookInstance {
-    def: HookDef {
-        system_type: SYSTEM_TYPE_SCORE_FEEDBACK,
-        label: "hook.scoreFeedback",
-        inject_point: InjectPointId::AfterLoadContext.as_str(),
-        response_format: Some(ResponseFormatSpec::JsonSchema {
-            name: Cow::Borrowed("score_feedback"),
-            schema: Cow::Borrowed(SCORE_FEEDBACK_SCHEMA),
-        }),
-        neutral_fallback: fallback_score_feedback,
-    },
-    run: HookRun::Before(run_boxed),
+/// 裁决定义（**定义·未注册**：源码保留，不进定义清单、不注册、不开启）。
+pub(crate) const SPEC: JudgementSpec = JudgementSpec {
+    system_type: SYSTEM_TYPE_SCORE_FEEDBACK,
+    label: "hook.scoreFeedback",
+    inject_point: InjectPointId::AfterLoadContext.as_str(),
+    response_format: Some(ResponseFormatSpec::JsonSchema {
+        name: Cow::Borrowed("score_feedback"),
+        schema: Cow::Borrowed(SCORE_FEEDBACK_SCHEMA),
+    }),
+    neutral_fallback: fallback_score_feedback,
 };
 
 pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> AppResult<()> {
@@ -88,7 +86,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
     );
     // 同源：用本轮主对话同一模型（用户所选），不读配置默认。
     let model = &ctx.model;
-    let def = &INSTANCE.def;
+    let def = &SPEC;
     // before hook：用户消息尚未落库，锚点 = 当前消息列表末尾（用户消息即将落库的位置）。
     let anchor = JudgementAnchor {
         conversation_id: session_id.clone(),
@@ -136,9 +134,3 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
         .await
 }
 
-fn run_boxed<'a>(
-    hooks: &'a AssistantHooks<'a>,
-    ctx: &'a mut RoundContext,
-) -> BoxFuture<'a, AppResult<()>> {
-    Box::pin(run(hooks, ctx))
-}

@@ -6,20 +6,20 @@
 //! none 是程序内部降级 token（仅 fallback 返回），已从模型契约移除。
 
 use std::borrow::Cow;
+use std::sync::{Arc, Weak};
 
 use serde_json::{json, Value};
 
 use crate::application::assistant_session::{
     emergency_scope_in, interval_neuron_ids, need_user_round_judgement, read_assistant_state,
-    AssistantHooks,
+    AssistantHooks, AssistantSession,
 };
-use crate::core::round_service::RoundContext;
+use crate::application::hook::judgement::{JudgementAnchor, JudgementSpec};
 use crate::core::error::AppResult;
-use crate::core::hook::defs::{BoxFuture, InjectPointId};
-use crate::application::hook::judgement::{HookDef, JudgementAnchor};
-use crate::application::hook::registry::{HookInstance, HookRun};
+use crate::core::hook::defs::{HookDef, HookHandler, HookRegistry, InjectPointId, RegisterError};
 use crate::core::log_phase::PHASE_HOOK_USER_ROUND_JUDGEMENT;
-use crate::core::models::ResponseFormatSpec;
+use crate::core::models::{ConversationMode, ResponseFormatSpec};
+use crate::core::round_service::{RoundContext, RoundTriggerKind};
 
 pub const SYSTEM_TYPE_USER_ROUND_JUDGEMENT: &str = "assistant_user_round_judgement";
 
@@ -62,22 +62,56 @@ fn fallback_user_round_judgement() -> Value {
     })
 }
 
-pub(crate) const INSTANCE: HookInstance = HookInstance {
-    def: HookDef {
-        system_type: SYSTEM_TYPE_USER_ROUND_JUDGEMENT,
-        label: "hook.userRoundJudgement",
-        inject_point: InjectPointId::AfterLoadContext.as_str(),
-        response_format: Some(ResponseFormatSpec::JsonSchema {
-            name: Cow::Borrowed("user_round_judgement"),
-            schema: Cow::Borrowed(USER_ROUND_JUDGEMENT_SCHEMA),
-        }),
-        neutral_fallback: fallback_user_round_judgement,
-    },
-    run: HookRun::Before(run_boxed),
+/// 裁决定义（**定义**，不代表注册或开启）。
+pub(crate) const SPEC: JudgementSpec = JudgementSpec {
+    system_type: SYSTEM_TYPE_USER_ROUND_JUDGEMENT,
+    label: "hook.userRoundJudgement",
+    inject_point: InjectPointId::AfterLoadContext.as_str(),
+    response_format: Some(ResponseFormatSpec::JsonSchema {
+        name: Cow::Borrowed("user_round_judgement"),
+        schema: Cow::Borrowed(USER_ROUND_JUDGEMENT_SCHEMA),
+    }),
+    neutral_fallback: fallback_user_round_judgement,
 };
 
+/// 装配期注册（**注册**，默认关闭；开启由装配方 [`HookRegistry::set_enabled`] 显式设置）。
+///
+/// handler 是核心闭包：捕获 `Weak<AssistantSession>`（防循环引用）+ [`SPEC`]，
+/// 直接进核心注册表，无需壳 hook 二次分发。
+pub(crate) fn register(
+    registry: &HookRegistry,
+    assistant: &Arc<AssistantSession>,
+) -> Result<(), RegisterError> {
+    let weak = Arc::downgrade(assistant);
+    registry.register(HookDef {
+        id: SPEC.system_type,
+        label: SPEC.label,
+        inject_point: InjectPointId::AfterLoadContext,
+        handler: HookHandler::AfterLoadContext(Box::new(move |ctx| {
+            let weak = Weak::clone(&weak);
+            Box::pin(async move {
+                let Some(assistant) = weak.upgrade() else {
+                    return Ok(());
+                };
+                run(&AssistantHooks { assistant: &assistant }, ctx).await
+            })
+        })),
+    })
+}
+
 pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> AppResult<()> {
-    // 门控：未绑定课题（含首轮 user_rounds==0）必跑；已绑定按 user_rounds 低频复核。
+    // 门控（下沉）：课题副作用仅 Assistant/System 模式的 **User 轮**承载
+    //（Chat/Agent 轮不参与；Manual/Poller 轮走 advance_brief，不做裁决）。
+    if !matches!(
+        ctx.mode,
+        ConversationMode::Assistant | ConversationMode::System
+    ) {
+        return Ok(());
+    }
+    if !matches!(ctx.trigger, RoundTriggerKind::User) {
+        return Ok(());
+    }
+    // 频率门控：未绑定课题（含首轮 user_rounds==0）必跑；已绑定按 user_rounds 低频复核。
     // user_rounds 在 IP-1 时刻是上一轮完成后的累计值（本轮未 tick），0 % N == 0 天然含首轮。
     let topic_id = ctx.topic_id.clone();
     let topic = match topic_id.as_ref() {
@@ -122,7 +156,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
         unfinished = unfinished.len(),
         "calling user-round-judgement model"
     );
-    let def = &INSTANCE.def;
+    let def = &SPEC;
     // before hook：用户消息尚未落库，锚点 = 当前消息列表末尾（用户消息即将落库的位置）。
     let anchor = JudgementAnchor {
         conversation_id: ctx.session_id.clone(),
@@ -322,11 +356,4 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
         }
     }
     Ok(())
-}
-
-fn run_boxed<'a>(
-    hooks: &'a AssistantHooks<'a>,
-    ctx: &'a mut RoundContext,
-) -> BoxFuture<'a, AppResult<()>> {
-    Box::pin(run(hooks, ctx))
 }

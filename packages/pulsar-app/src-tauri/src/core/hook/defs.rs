@@ -1,4 +1,6 @@
-//! 注入点契约：`InjectPointId` 规格卡 + `HookDef`（注册单元）+ `HookRegistry`（注册与执行）。
+//! 注入点契约：`InjectPointId` 规格卡 + `HookDef`（**定义**）+ `HookRegistry`（**注册 + 开启** + 执行）。
+//!
+//! 三阶段分离：定义（构造 `HookDef`）/ 注册（`register`，默认关闭）/ 开启（`set_enabled`）。
 //!
 //! 设计原则（多轮讨论收敛，用户拍板）：
 //! - **注入点即类型**：hook 的能力边界由注入点（挂载位置）规格卡写死，无独立 kind 分类；
@@ -91,30 +93,45 @@ pub struct HookDef {
     pub handler: HookHandler,
 }
 
-/// 注册失败：同 id 重复注册。
+/// 注册 / 开关失败。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegisterError {
+    /// 同 id 重复注册。
     DuplicateId(String),
+    /// 目标 id 未注册（`set_enabled` 找不到条目）。
+    UnknownId(String),
 }
 
 impl fmt::Display for RegisterError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RegisterError::DuplicateId(id) => write!(f, "hook id already registered: {id}"),
+            RegisterError::UnknownId(id) => write!(f, "hook id not registered: {id}"),
         }
     }
 }
 
 impl std::error::Error for RegisterError {}
 
+/// 注册条目：定义（`HookDef`）+ 开启状态。
+///
+/// **定义 / 注册 / 开启三阶段分离**：
+/// - 定义 = `HookDef` 本身（构造它不注册任何东西）；
+/// - 注册 = [`HookRegistry::register`]（登记进注册表，默认**关闭**）；
+/// - 开启 = [`HookRegistry::set_enabled`]（注册条目是否真正参与分发）。
+///
+/// 故「定义着不注册」「注册了不开启」都是合法状态。
 struct RegisteredHook {
     def: Arc<HookDef>,
+    enabled: bool,
 }
 
 /// 注入点注册表：按注入点分组、组内按注册顺序执行；`&mut` 直接链式传值——
 /// runner 按注册顺序调用，后注册 hook 自然看到前注册 hook 的修改，可继续改写。
 ///
-/// 内部 `Mutex`：注册 / 卸载 / 执行均为 `&self`（runner 以 `Arc<HookRegistry>` 共享，
+/// 分发只跑 `enabled` 条目（注册默认关闭，开启由装配期或运行期显式设置）。
+///
+/// 内部 `Mutex`：注册 / 开关 / 执行均为 `&self`（runner 以 `Arc<HookRegistry>` 共享，
 /// 装配期与执行期并发访问；run_* 内部快照 hook 列表后锁外 await，不跨 await 持锁）。
 #[derive(Default)]
 pub struct HookRegistry {
@@ -140,7 +157,8 @@ impl HookRegistry {
         Self::default()
     }
 
-    /// 注册：同 id 重复 → `Err(DuplicateId)`；成功挂到 `def.inject_point` 组内末尾（执行顺序）。
+    /// 注册（**默认关闭**）：同 id 重复 → `Err(DuplicateId)`；成功挂到
+    /// `def.inject_point` 组内末尾（执行顺序）。开启须显式 [`Self::set_enabled`]。
     pub fn register(&self, def: HookDef) -> Result<(), RegisterError> {
         let mut hooks = self.inner.lock().expect("hook registry lock");
         if hooks.values().flatten().any(|h| h.def.id == def.id) {
@@ -149,16 +167,55 @@ impl HookRegistry {
         hooks
             .entry(def.inject_point)
             .or_default()
-            .push(RegisteredHook { def: Arc::new(def) });
+            .push(RegisteredHook {
+                def: Arc::new(def),
+                enabled: false,
+            });
         Ok(())
     }
 
-    /// 组快照：锁内取 Arc 引用列表，锁外 await（std MutexGuard 不可跨 await 持有）。
+    /// 开启 / 关闭已注册条目（装配期或运行期均可调）；目标 id 不存在 → `Err(UnknownId)`。
+    ///
+    /// 关闭后条目仍在册（`is_registered` 为真），只是分发时被跳过；可再次开启。
+    pub fn set_enabled(&self, id: &str, on: bool) -> Result<(), RegisterError> {
+        let mut hooks = self.inner.lock().expect("hook registry lock");
+        for hook in hooks.values_mut().flatten() {
+            if hook.def.id == id {
+                hook.enabled = on;
+                return Ok(());
+            }
+        }
+        Err(RegisterError::UnknownId(id.to_string()))
+    }
+
+    /// 条目是否已开启（未注册视为未开启）。
+    pub fn is_enabled(&self, id: &str) -> bool {
+        let hooks = self.inner.lock().expect("hook registry lock");
+        hooks
+            .values()
+            .flatten()
+            .any(|h| h.def.id == id && h.enabled)
+    }
+
+    /// 条目是否已注册（与是否开启无关）。
+    pub fn is_registered(&self, id: &str) -> bool {
+        let hooks = self.inner.lock().expect("hook registry lock");
+        hooks.values().flatten().any(|h| h.def.id == id)
+    }
+
+    /// 组快照（**只取已开启条目**）：锁内取 Arc 引用列表，锁外 await
+    /// （std MutexGuard 不可跨 await 持有）。
     fn snapshot(&self, point: InjectPointId) -> Vec<Arc<HookDef>> {
         let hooks = self.inner.lock().expect("hook registry lock");
         hooks
             .get(&point)
-            .map(|group| group.iter().map(|h| Arc::clone(&h.def)).collect())
+            .map(|group| {
+                group
+                    .iter()
+                    .filter(|h| h.enabled)
+                    .map(|h| Arc::clone(&h.def))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -317,6 +374,7 @@ mod tests {
                     })),
                 })
                 .unwrap();
+            registry.set_enabled(id, true).unwrap();
         }
         let mut c = ctx(None);
         registry.run_after_persist_input(&mut c).await;
@@ -351,6 +409,7 @@ mod tests {
                 handler: HookHandler::AfterLoadContext(Box::new(|_| boom())),
             })
             .unwrap();
+        registry.set_enabled("fail", true).unwrap();
         let mut c = ctx(None);
         assert!(registry
             .run_after_load_context(&mut c, |_| Ok(()))
@@ -369,6 +428,7 @@ mod tests {
                 handler: HookHandler::AfterPersistInput(Box::new(|_| boom())),
             })
             .unwrap();
+        registry.set_enabled("p", true).unwrap();
         let mut c = ctx(None);
         registry.run_after_persist_input(&mut c).await; // 不 panic、不返回 Err
         assert_eq!(c.session_id, "s-1");
@@ -390,6 +450,7 @@ mod tests {
                 })),
             })
             .unwrap();
+        registry.set_enabled("rewrite", true).unwrap();
         let mut c = ctx(None);
         let mut resp = sample_response();
         registry.run_after_call_model(&mut c, &mut resp).await;
@@ -412,6 +473,7 @@ mod tests {
                 })),
             })
             .unwrap();
+        registry.set_enabled("drop", true).unwrap();
         let mut c = ctx(None);
         let mut results = vec![ToolResult {
             tool_call_id: "t1".into(),
@@ -441,6 +503,7 @@ mod tests {
                 })),
             })
             .unwrap();
+        registry.set_enabled("audit", true).unwrap();
         let c = ctx(Some("n-1"));
         registry.run_after_persist_outcome(&c).await;
         assert_eq!(seen.lock().unwrap().as_deref(), Some("s-1"));
@@ -480,6 +543,7 @@ mod tests {
                 })),
             })
             .unwrap();
+        registry.set_enabled("route", true).unwrap();
         // hook2：基于 reload 后的最终会话数据执行（模拟选型 hook）。
         let seen = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
         let seen2 = std::sync::Arc::clone(&seen);
@@ -497,6 +561,7 @@ mod tests {
                 })),
             })
             .unwrap();
+        registry.set_enabled("selection", true).unwrap();
         let mut c = ctx(None);
         let reload_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let reload_calls2 = std::sync::Arc::clone(&reload_calls);
@@ -524,5 +589,76 @@ mod tests {
             c.seed,
             Some(crate::core::round_types::SessionSeed::Neuron(ref n)) if n == "reloaded"
         ));
+    }
+
+    #[tokio::test]
+    async fn registered_but_disabled_does_not_run() {
+        let registry = HookRegistry::new();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls2 = std::sync::Arc::clone(&calls);
+        registry
+            .register(HookDef {
+                id: "off",
+                label: "off",
+                inject_point: InjectPointId::AfterPersistInput,
+                handler: HookHandler::AfterPersistInput(Box::new(move |_ctx| {
+                    let calls = std::sync::Arc::clone(&calls2);
+                    Box::pin(async move {
+                        calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        Ok(())
+                    })
+                })),
+            })
+            .unwrap();
+        // 注册默认关闭：定义与注册都在，但不参与分发。
+        assert!(registry.is_registered("off"));
+        assert!(!registry.is_enabled("off"));
+        let mut c = ctx(None);
+        registry.run_after_persist_input(&mut c).await;
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn set_enabled_toggles_runtime() {
+        let registry = HookRegistry::new();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls2 = std::sync::Arc::clone(&calls);
+        registry
+            .register(HookDef {
+                id: "toggle",
+                label: "toggle",
+                inject_point: InjectPointId::AfterPersistInput,
+                handler: HookHandler::AfterPersistInput(Box::new(move |_ctx| {
+                    let calls = std::sync::Arc::clone(&calls2);
+                    Box::pin(async move {
+                        calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        Ok(())
+                    })
+                })),
+            })
+            .unwrap();
+        let mut c = ctx(None);
+        registry.set_enabled("toggle", true).unwrap();
+        registry.run_after_persist_input(&mut c).await;
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        registry.set_enabled("toggle", false).unwrap();
+        registry.run_after_persist_input(&mut c).await;
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "关闭后不再分发"
+        );
+        assert!(registry.is_registered("toggle"), "关闭不等于注销");
+    }
+
+    #[test]
+    fn set_enabled_unknown_id_errors() {
+        let registry = HookRegistry::new();
+        assert_eq!(
+            registry.set_enabled("nope", true),
+            Err(RegisterError::UnknownId("nope".into()))
+        );
+        assert!(!registry.is_enabled("nope"));
+        assert!(!registry.is_registered("nope"));
     }
 }

@@ -1,31 +1,37 @@
-//! Hook 概念收拢层：裁决 hook 的**共享类型**，与 `hook_judgements` 账本（数据库表）区分。
+//! 裁决定的**定义元数据**层：`JudgementSpec` + 定义清单 + 查询入口。
 //!
-//! - **HookDef 是「规则」**：`system_type` 标识、展示名 `label`、结构化输出契约 `response_format`、
-//!   中性降级默认值 `neutral_fallback` —— 每个 hook 自带，就近定义在
-//!   `hook/instances/<hook>.rs`，经 `registry::ACTIVE_HOOKS` 汇聚。
-//! - **注册式管理**：新增/下线 hook = 实例清单增删（见 `registry`）；本模块只保留类型
-//!   与查询入口，`hook_def()` / `hook_defs_meta()` 只查 `ACTIVE_HOOKS`
-//!   （legacy system_type 在存量账本中按未知类型回退展示）。
-//! - `SYSTEM_TYPE_SELECT_NEURON`（候选选择）非裁决 hook，不收拢；常量保留在
-//!   `assistant_session.rs` 原位。
+//! 三阶段分离（定义 / 注册 / 开启，见 `core::hook::defs::HookRegistry`）：
+//! - **定义**：`JudgementSpec` 就近定义在 `hook/instances/<hook>.rs`，经 `JUDGEMENT_SPECS`
+//!   汇聚成本构建装配的裁决定义清单——**清单不代表注册，也不代表开启**。
+//! - **注册 + 开启**：装配期把定义对应的核心 `HookDef` 注册进 `HookRegistry`，再显式开启。
+//! - `SYSTEM_TYPE_SELECT_NEURON`（候选选择）非裁决，不收拢；常量保留在 `assistant_session.rs`。
 
 use serde::{Deserialize, Serialize};
 
-use super::registry::ACTIVE_HOOKS;
+use super::instances;
 
-/// 单个裁决 hook 的静态定义。
-pub struct HookDef {
+/// 单个裁决的**定义元数据**（不含注册 / 开启状态）。
+pub struct JudgementSpec {
     /// system_type 标识（常量就近定义在 `hook/instances/<hook>.rs`）。
     pub system_type: &'static str,
     /// 展示名 i18n key（面板过滤下拉与记录展示的数据源）。
     pub label: &'static str,
     /// 挂载注入点（账本 `inject_point` 列来源；裁决均在 IP-1/IP-5 挂载）。
     pub inject_point: &'static str,
-    /// hook 自带结构化输出契约（schema 就近定义；None = 无约束）。
+    /// 自带结构化输出契约（schema 就近定义；None = 无约束）。
     pub response_format: Option<crate::core::models::ResponseFormatSpec>,
     /// 中性降级默认值（A 方案兜底语义：裁决失败时主轮次不中断）。
     pub neutral_fallback: fn() -> serde_json::Value,
 }
+
+/// 本构建装配的裁决定义清单（**定义**，不含注册 / 开启状态）。
+///
+/// 休眠的四条旧裁决（`score_feedback` / `match_topic` / `revise_topic` / `complete_scope`）
+/// 源码保留为「定义·未注册」，不进本清单、不注册、不开启。
+pub(crate) static JUDGEMENT_SPECS: &[&JudgementSpec] = &[
+    &instances::user_round_judgement::SPEC,
+    &instances::round_review::SPEC,
+];
 
 /// hook 元信息（命令 `hook_defs_list` 出参；前端不感知 Rust 静态表）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,21 +97,21 @@ pub struct JudgementAnchor {
     pub anchor_message_index: Option<i64>,
 }
 
-/// 按 system_type 查启用 hook 定义（只查 `registry::ACTIVE_HOOKS`）。
-pub fn hook_def(system_type: &str) -> Option<&'static HookDef> {
-    ACTIVE_HOOKS
+/// 按 system_type 查裁决定义。
+pub fn judgement_spec(system_type: &str) -> Option<&'static JudgementSpec> {
+    JUDGEMENT_SPECS
         .iter()
-        .map(|h| &h.def)
-        .find(|def| def.system_type == system_type)
+        .copied()
+        .find(|spec| spec.system_type == system_type)
 }
 
-/// 启用 hook 元信息列表（命令 `hook_defs_list` 出参）。
+/// 裁决定义元信息列表（命令 `hook_defs_list` 出参）。
 pub fn hook_defs_meta() -> Vec<HookDefMeta> {
-    ACTIVE_HOOKS
+    JUDGEMENT_SPECS
         .iter()
-        .map(|h| HookDefMeta {
-            system_type: h.def.system_type.to_string(),
-            label: h.def.label.to_string(),
+        .map(|spec| HookDefMeta {
+            system_type: spec.system_type.to_string(),
+            label: spec.label.to_string(),
         })
         .collect()
 }
@@ -118,28 +124,30 @@ mod tests {
     };
 
     #[test]
-    fn hook_def_finds_merged_two() {
-        assert!(hook_def(SYSTEM_TYPE_USER_ROUND_JUDGEMENT).is_some());
-        assert!(hook_def(SYSTEM_TYPE_ROUND_REVIEW).is_some());
-        // 旧四条休眠不注册（存量账本记录走面板未知类型回退）。
-        assert!(hook_def("assistant_match_topic").is_none());
-        assert!(hook_def("assistant_complete_scope").is_none());
-        assert!(hook_def("assistant_score_feedback").is_none());
-        assert!(hook_def("assistant_revise_topic").is_none());
-        assert!(hook_def("assistant_select_neuron").is_none());
-        assert!(hook_def("unknown").is_none());
+    fn judgement_spec_finds_wired_two() {
+        assert!(judgement_spec(SYSTEM_TYPE_USER_ROUND_JUDGEMENT).is_some());
+        assert!(judgement_spec(SYSTEM_TYPE_ROUND_REVIEW).is_some());
+        // 旧四条休眠为「定义·未注册」，不进定义清单。
+        assert!(judgement_spec("assistant_match_topic").is_none());
+        assert!(judgement_spec("assistant_complete_scope").is_none());
+        assert!(judgement_spec("assistant_score_feedback").is_none());
+        assert!(judgement_spec("assistant_revise_topic").is_none());
+        assert!(judgement_spec("assistant_select_neuron").is_none());
+        assert!(judgement_spec("unknown").is_none());
     }
 
     #[test]
     fn fallback_values_are_neutral() {
-        let user_round = (hook_def(SYSTEM_TYPE_USER_ROUND_JUDGEMENT)
+        let user_round = (judgement_spec(SYSTEM_TYPE_USER_ROUND_JUDGEMENT)
             .unwrap()
             .neutral_fallback)();
         assert_eq!(user_round["score"], serde_json::json!(0));
         assert_eq!(user_round["action"], serde_json::json!("none"));
         assert_eq!(user_round["topic_id"], serde_json::Value::Null);
 
-        let review = (hook_def(SYSTEM_TYPE_ROUND_REVIEW).unwrap().neutral_fallback)();
+        let review = (judgement_spec(SYSTEM_TYPE_ROUND_REVIEW)
+            .unwrap()
+            .neutral_fallback)();
         assert_eq!(review["reason"], serde_json::json!(""));
         assert_eq!(review["add_items"], serde_json::json!([]));
         assert_eq!(review["remove_item_ids"], serde_json::json!([]));
@@ -150,11 +158,14 @@ mod tests {
 
     #[test]
     fn each_hook_carries_response_format_schema() {
-        for h in ACTIVE_HOOKS {
+        for spec in JUDGEMENT_SPECS {
             assert!(
-                matches!(h.def.response_format, Some(crate::core::models::ResponseFormatSpec::JsonSchema { .. })),
+                matches!(
+                    spec.response_format,
+                    Some(crate::core::models::ResponseFormatSpec::JsonSchema { .. })
+                ),
                 "{} should carry a json_schema",
-                h.def.system_type
+                spec.system_type
             );
         }
     }
@@ -162,19 +173,19 @@ mod tests {
     #[test]
     fn schemas_are_valid_strict_json_schema() {
         // strict 模式要求：可解析为对象、顶层含 additionalProperties: false。
-        for h in ACTIVE_HOOKS {
+        for spec in JUDGEMENT_SPECS {
             let crate::core::models::ResponseFormatSpec::JsonSchema { schema, .. } =
-                h.def.response_format.as_ref().expect("hook carries schema")
+                spec.response_format.as_ref().expect("hook carries schema")
             else {
                 unreachable!()
             };
             let parsed = serde_json::from_str::<serde_json::Value>(schema.as_ref())
-                .unwrap_or_else(|e| panic!("{} schema must parse: {e}", h.def.system_type));
+                .unwrap_or_else(|e| panic!("{} schema must parse: {e}", spec.system_type));
             assert_eq!(
                 parsed["additionalProperties"],
                 serde_json::json!(false),
                 "{} schema must declare additionalProperties:false",
-                h.def.system_type
+                spec.system_type
             );
         }
     }

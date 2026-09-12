@@ -1,20 +1,20 @@
 //! （休眠）IP-1 · 课题匹配 hook：模型裁决 action（switch → 切已有课题；create → 新建）。
 //!
-//! 已被 [`super::user_round_judgement`]（合并裁决）取代，整体保留为休眠单元；
-//! 回切 = 本实例移入 `registry::ACTIVE_HOOKS`。
+//! 已被 [`super::user_round_judgement`]（合并裁决）取代，源码保留为「**定义·未注册**」：
+//! 有 `SPEC` 与 `run` 定义，但不进 `JUDGEMENT_SPECS`、不注册、不开启。
+//! 回切 = 重建 `register` 装配入口（git 历史为准）。
 
 use std::borrow::Cow;
 
 use serde_json::{json, Value};
 
 use crate::application::assistant_session::{emergency_scope_in, AssistantHooks};
-use crate::core::round_service::RoundContext;
+use crate::application::hook::judgement::{JudgementAnchor, JudgementSpec};
 use crate::core::error::{AppError, AppResult};
-use crate::core::hook::defs::{BoxFuture, InjectPointId};
-use crate::application::hook::judgement::{HookDef, JudgementAnchor};
-use crate::application::hook::registry::{HookInstance, HookRun};
+use crate::core::hook::defs::InjectPointId;
 use crate::core::log_phase::PHASE_HOOK_MATCH_TOPIC;
 use crate::core::models::ResponseFormatSpec;
+use crate::core::round_service::RoundContext;
 
 pub const SYSTEM_TYPE_MATCH_TOPIC: &str = "assistant_match_topic";
 
@@ -48,18 +48,16 @@ fn fallback_match_topic() -> Value {
     json!({ "action": "none" })
 }
 
-pub(crate) const INSTANCE: HookInstance = HookInstance {
-    def: HookDef {
-        system_type: SYSTEM_TYPE_MATCH_TOPIC,
-        label: "hook.matchTopic",
-        inject_point: InjectPointId::AfterLoadContext.as_str(),
-        response_format: Some(ResponseFormatSpec::JsonSchema {
-            name: Cow::Borrowed("match_topic"),
-            schema: Cow::Borrowed(MATCH_TOPIC_SCHEMA),
-        }),
-        neutral_fallback: fallback_match_topic,
-    },
-    run: HookRun::Before(run_boxed),
+/// 裁决定义（**定义·未注册**：源码保留，不进定义清单、不注册、不开启）。
+pub(crate) const SPEC: JudgementSpec = JudgementSpec {
+    system_type: SYSTEM_TYPE_MATCH_TOPIC,
+    label: "hook.matchTopic",
+    inject_point: InjectPointId::AfterLoadContext.as_str(),
+    response_format: Some(ResponseFormatSpec::JsonSchema {
+        name: Cow::Borrowed("match_topic"),
+        schema: Cow::Borrowed(MATCH_TOPIC_SCHEMA),
+    }),
+    neutral_fallback: fallback_match_topic,
 };
 
 pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> AppResult<()> {
@@ -72,7 +70,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
         session_id = %ctx.session_id,
         "calling match-topic model"
     );
-    let def = &INSTANCE.def;
+    let def = &SPEC;
     // before hook：用户消息尚未落库，锚点 = 当前消息列表末尾（用户消息即将落库的位置）。
     let anchor = JudgementAnchor {
         conversation_id: ctx.session_id.clone(),
@@ -184,11 +182,4 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
         }
     }
     Ok(())
-}
-
-fn run_boxed<'a>(
-    hooks: &'a AssistantHooks<'a>,
-    ctx: &'a mut RoundContext,
-) -> BoxFuture<'a, AppResult<()>> {
-    Box::pin(run(hooks, ctx))
 }

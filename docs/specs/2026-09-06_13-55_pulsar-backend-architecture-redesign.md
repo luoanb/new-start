@@ -357,6 +357,8 @@ pub trait RoundDriver: Send + Sync {
 Hook 是轮次协议中的命名插槽，而不是独立领域。核心只规定插槽位置、上下文、失败策略和是否允许要求重新载入会话；具体的评分、课题匹配、简报和复盘逻辑由注册实例提供。注入点沿用现有 IP-1～IP-5 编号，与轮次协议的对应关系固定为：
 
 > **物理落点（2026-09-12 修订）**：插槽协议（`InjectPointId` / `HookHandler` / `HookDef` / `HookRegistry` / 失败策略）在 `core/hook/defs.rs`；注册表与实例（`HookInstance` / `HookRun` / `ACTIVE_HOOKS` / 各 IP 注册实现）连同其业务上下文 `AssistantHooks` 归应用侧 `application/hook/`。理由：实例的 `HookRun` 签名需要应用侧业务上下文（课题 / 评分 / 裁决），与 Assistant 会话同层才不产生「策略反向依赖应用流程」的环；`policies/` 只保留 Topic / Neuron / Review 策略。
+>
+> **落地记录（2026-09-12 后续修订，superseded）**：`HookInstance` / `HookRun` / `ACTIVE_HOOKS` / `LEGACY_HOOKS` 已删除——裁决改为**定义（`JudgementSpec` + `run`）/ 注册（`HookRegistry::register`，默认关闭）/ 开启（`set_enabled`，运行时可切）**三阶段；裁决 handler 直接是核心 `HookHandler` 闭包（装配期注册进同一 `HookRegistry`），不再有独立注册表与壳 hook 二次分发。`application/hook/` 现承载裁决定义（`instances/`）、定义元数据（`judgement.rs` 的 `JudgementSpec` / `JUDGEMENT_SPECS`）与账本。见 [2026-09-12 Hook 三阶段分离 spec](./2026-09-12_10-42_hook-definition-registration-enablement.md)。
 
 | 注入点 | 轮次协议位置 | 失败策略（沿用现状） |
 |---|---|---|
@@ -530,6 +532,7 @@ Application Drivers ──▶ RoundService ──▶ ModelPort
 - 2026-09-09：**M2-M5 落地（全部里程碑完成）**：M2 扩展端口（`ModelPort` blanket 适配 / `CapabilityExecutor` + `RegistryToolExecutor` 单处实现 / `ConversationStore` 四原语 / `EventSink` Fact-Delta）；M3 四驱动（`drivers.rs`，阻塞路径经 `dyn RoundService`，Agent 收敛切换契约判据）；M4 CLI 迁移真实用例；M5 删除绕核存根 `Gateway::send_message`、反向同步架构与域文档。全量 `cargo test --all-targets` 455 通过 / 0 失败 / 0 警告（详见 §9 各里程碑落地记录）。遗留：流式路径端口化（见 Open Questions）；仓库 rustfmt 风格债（见 Validation）。
 - 2026-09-12：**hook 物理分层修订**（§四架构图、§5.2）：插槽协议（`InjectPointId` / `HookHandler` / `HookDef` / `HookRegistry` / 失败策略）留核心 `core/hook/defs.rs`；注册表与实例（`HookInstance` / `HookRun` / `ACTIVE_HOOKS` / IP 注册实现）连同业务上下文 `AssistantHooks` 归应用侧 `application/hook/`（扩展子图与 `policies` 节点同步收敛为 Topic / Neuron / Review）。动机：消除「策略实例反向依赖应用流程」的层间环。落地见《Pulsar 后端架构契约落地计划》。
 - 2026-09-12：**M6 落地（结构层 + 契约层 + 流式端口化）**：目录分层 `core/` / `application/` / `providers/` / `tools/` / `stores/` / `policies/` / `sinks/` / `infra/`（core 不引用其它目录、扩展只引用 core 稳定类型、application 组合、入口只引用 application；待拆例外 `round_resolver`→neuron / `insert_catalog`）；契约真实更名（删 alias，`RegistryToolExecutor`→`CapabilityAdapter`、JSON 实现→`JsonConversationStore`），新增 `ToolCatalog` / `SessionSnapshot` / `PersistedOutcome`，`ConversationStore` 落地同步原语 + 异步契约面，`RoundRequest` 收窄为 `{ session_id, input, mode }`，新增 `core/round_policy.rs` 默认策略（授权按 `RoundMode`、思考按触发），模型选型归会话（`extra.session.state.model`）；`RoundService::run_stream` / `RoundDriver::run_stream` 与 `StreamDelta` / `DomainEvent::Delta` 契约化（供应商增量更名 `models::SseDelta`）。**未落地**：`RoundContext` 形状 / `ModelRef` / `ToolDescriptor` / `Preparation`（详见 §九 M6 与 Open Questions）。验证：`cargo check --all-targets` 0 错 0 警告，`cargo test --all-targets` 455 通过 / 0 失败，四入口编译通过。
+- 2026-09-12：**Hook 三阶段分离（定义 / 注册 / 开启）**：`HookRegistry::register` 改为默认关闭并新增 `set_enabled` / `is_enabled` / `is_registered`（分发只跑 enabled）；`judgement::HookDef` 更名 `JudgementSpec`（同名冲突消除）+ 定义清单 `JUDGEMENT_SPECS`；裁决 handler 直接注册为核心 `HookHandler` 闭包，**删除** `HookInstance` / `HookRun` / `ACTIVE_HOOKS` / `LEGACY_HOOKS` / `active_hooks_at` 与壳 hook 二次分发；休眠 4 条改「定义·未注册」。§5.2 物理落点随之 superseded（见该节落地记录）。验证：`cargo check --all-targets` 0 错 0 警告，`cargo test --all-targets` 452 通过 / 0 失败。详见 [2026-09-12 三阶段分离 spec](./2026-09-12_10-42_hook-definition-registration-enablement.md)。
 
 ## Validation
 

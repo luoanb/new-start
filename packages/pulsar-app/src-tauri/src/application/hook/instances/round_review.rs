@@ -7,21 +7,20 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::sync::{Arc, Weak};
 
 use serde_json::{json, Value};
 
 use crate::application::assistant_session::{
     append_revision_log, is_settling_round, parse_scope_revision, should_delay_close,
-    AssistantHooks,
+    AssistantHooks, AssistantSession,
 };
-use crate::core::round_service::{RoundContext, RoundTriggerKind};
+use crate::application::hook::judgement::{JudgementAnchor, JudgementSpec};
 use crate::core::error::AppResult;
-use crate::core::hook::defs::{BoxFuture, InjectPointId};
-use crate::application::hook::judgement::{HookDef, JudgementAnchor};
-use crate::application::hook::registry::{HookInstance, HookRun};
+use crate::core::hook::defs::{HookDef, HookHandler, HookRegistry, InjectPointId, RegisterError};
 use crate::core::log_phase::PHASE_HOOK_ROUND_REVIEW;
-use crate::core::models::TopicStatus;
-use crate::core::models::ResponseFormatSpec;
+use crate::core::models::{ConversationMode, ResponseFormatSpec, TopicStatus};
+use crate::core::round_service::{RoundContext, RoundTriggerKind};
 use crate::stores::topic_store::now_ms;
 
 pub const SYSTEM_TYPE_ROUND_REVIEW: &str = "assistant_round_review";
@@ -78,21 +77,51 @@ fn fallback_round_review() -> Value {
     })
 }
 
-pub(crate) const INSTANCE: HookInstance = HookInstance {
-    def: HookDef {
-        system_type: SYSTEM_TYPE_ROUND_REVIEW,
-        label: "hook.roundReview",
-        inject_point: InjectPointId::AfterPersistOutcome.as_str(),
-        response_format: Some(ResponseFormatSpec::JsonSchema {
-            name: Cow::Borrowed("round_review"),
-            schema: Cow::Borrowed(ROUND_REVIEW_SCHEMA),
-        }),
-        neutral_fallback: fallback_round_review,
-    },
-    run: HookRun::After(run_boxed),
+/// 裁决定义（**定义**，不代表注册或开启）。
+pub(crate) const SPEC: JudgementSpec = JudgementSpec {
+    system_type: SYSTEM_TYPE_ROUND_REVIEW,
+    label: "hook.roundReview",
+    inject_point: InjectPointId::AfterPersistOutcome.as_str(),
+    response_format: Some(ResponseFormatSpec::JsonSchema {
+        name: Cow::Borrowed("round_review"),
+        schema: Cow::Borrowed(ROUND_REVIEW_SCHEMA),
+    }),
+    neutral_fallback: fallback_round_review,
 };
 
+/// 装配期注册（**注册**，默认关闭；开启由装配方 [`HookRegistry::set_enabled`] 显式设置）。
+///
+/// handler 是核心闭包：捕获 `Weak<AssistantSession>`（防循环引用）+ [`SPEC`]，
+/// 直接进核心注册表，无需壳 hook 二次分发。
+pub(crate) fn register(
+    registry: &HookRegistry,
+    assistant: &Arc<AssistantSession>,
+) -> Result<(), RegisterError> {
+    let weak = Arc::downgrade(assistant);
+    registry.register(HookDef {
+        id: SPEC.system_type,
+        label: SPEC.label,
+        inject_point: InjectPointId::AfterPersistOutcome,
+        handler: HookHandler::AfterPersistOutcome(Box::new(move |ctx| {
+            let weak = Weak::clone(&weak);
+            Box::pin(async move {
+                let Some(assistant) = weak.upgrade() else {
+                    return Ok(());
+                };
+                run(&AssistantHooks { assistant: &assistant }, ctx).await
+            })
+        })),
+    })
+}
+
 pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppResult<()> {
+    // 门控（下沉）：课题副作用仅 Assistant/System 模式承载。
+    if !matches!(
+        ctx.mode,
+        ConversationMode::Assistant | ConversationMode::System
+    ) {
+        return Ok(());
+    }
     let Some(topic_id) = ctx.topic_id.clone() else {
         tracing::info!(phase = PHASE_HOOK_ROUND_REVIEW, "skip: no topic");
         return Ok(());
@@ -183,7 +212,7 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
     );
     // 同源：用本轮主对话同一模型（用户所选），不读配置默认。
     let model = &ctx.model;
-    let def = &INSTANCE.def;
+    let def = &SPEC;
     // after hook：用户消息已落库，锚点 = 触发轮用户消息在列表中的位置（本轮输入为末尾一条）。
     let anchor = JudgementAnchor {
         conversation_id: ctx.session_id.clone(),
@@ -355,11 +384,4 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
         );
     }
     Ok(())
-}
-
-fn run_boxed<'a>(
-    hooks: &'a AssistantHooks<'a>,
-    ctx: &'a RoundContext,
-) -> BoxFuture<'a, AppResult<()>> {
-    Box::pin(run(hooks, ctx))
 }

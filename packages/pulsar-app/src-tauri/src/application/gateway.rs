@@ -450,11 +450,18 @@ impl Gateway {
                 .map_err(|e| {
                     AppError::RuntimeError(format!("register selection hook failed: {e}"))
                 })?;
+            // 注册默认关闭：装配期显式开启。
+            registry
+                .set_enabled("assistant.select-neuron", true)
+                .map_err(|e| AppError::RuntimeError(format!("enable selection hook failed: {e}")))?;
         }
         // 压缩 hook（IP-2，上层注册，非核心流程）：wire 落库后、call_model 前，超阈值自动
         // 生成摘要替换本次发送（不落库；project_history 跳过 summary_of 覆盖的旧消息）。
         super::hook::compaction::register(&registry, compactor.clone(), providers.clone())
             .map_err(|e| AppError::RuntimeError(format!("register compaction hook failed: {e}")))?;
+        registry
+            .set_enabled("core.compaction", true)
+            .map_err(|e| AppError::RuntimeError(format!("enable compaction hook failed: {e}")))?;
 
         let poller = Arc::new(Mutex::new(Poller::new(
             poller_settings.base_interval_ms,
