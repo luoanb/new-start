@@ -579,6 +579,14 @@ export type Translations = {
     unstage: string;
     stageAll: string;
     unstageAll: string;
+    /** 更改区：移除单个文件改动（丢弃未暂存改动 / 删除未跟踪文件）。 */
+    removeChange: string;
+    /** 更改区：一次移除全部更改。 */
+    removeAllChanges: string;
+    removeConfirmTitle: string;
+    removeConfirmBody: string;
+    /** 移除确认弹窗追加行：其中 N 个为新增未跟踪文件（将被删除，无法恢复）。 */
+    removeConfirmUntracked: string;
     filesCount: string;
     commitPlaceholder: string;
     commit: string;
@@ -1313,6 +1321,12 @@ export const en: Translations = {
     unstage: "Unstage",
     stageAll: "Stage All",
     unstageAll: "Unstage All",
+    removeChange: "Remove File Change",
+    removeAllChanges: "Remove All Changes",
+    removeConfirmTitle: "Remove file changes",
+    removeConfirmBody:
+      "This will discard changes in {n} file(s) and delete untracked files. This cannot be undone. Continue?",
+    removeConfirmUntracked: "({n} untracked file(s) will be deleted, not just reverted)",
     filesCount: "{n} files",
     commitPlaceholder: "Commit message…",
     commit: "Commit",
@@ -2046,6 +2060,11 @@ export const zh: Translations = {
     unstage: "取消暂存",
     stageAll: "全部暂存",
     unstageAll: "全部取消暂存",
+    removeChange: "移除文件更改",
+    removeAllChanges: "移除全部更改",
+    removeConfirmTitle: "移除文件更改",
+    removeConfirmBody: "将丢弃 {n} 个文件中的改动，并删除其中的新增未跟踪文件。此操作不可撤销，继续？",
+    removeConfirmUntracked: "（其中 {n} 个为新增未跟踪文件，将被直接删除而非还原）",
     filesCount: "{n} 个文件",
     commitPlaceholder: "提交信息…",
     commit: "提交",

@@ -802,6 +802,17 @@ async function gitRestore(paths: string[]): Promise<void> {
   await refreshGit();
 }
 
+/**
+ * 从「更改」列表移除文件改动（单个或批量，需确认）：
+ * tracked → 丢弃工作区改动；untracked → 删除新增未跟踪文件。
+ * 两组都为空时直接返回（不发请求，避免后端报错）。
+ */
+async function gitRemove(tracked: string[], untracked: string[]): Promise<void> {
+  if (tracked.length === 0 && untracked.length === 0) return;
+  await api.call(c.gitRemove, { tracked, untracked });
+  await refreshGit();
+}
+
 /** 提交暂存区（需确认，弹窗展示 staged diff 摘要）。 */
 async function gitCommit(message: string): Promise<void> {
   await api.call(c.gitCommit, { message });
@@ -930,6 +941,7 @@ export const dataStore = {
   gitAdd,
   gitUnstage,
   gitRestore,
+  gitRemove,
   gitCommit,
   gitReset,
   gitCheckout,

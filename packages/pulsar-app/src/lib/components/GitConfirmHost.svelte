@@ -37,14 +37,22 @@
         };
       case "Reset":
       case "Checkout": {
-        // Reset 携带 lost 清单；restore/丢弃携带 paths 清单；分支切换仅携带 target。
-        const files = [...list("lost"), ...list("paths")];
+        // Reset 携带 lost 清单；restore/丢弃携带 paths；移除更改携带 tracked + untracked；分支切换仅携带 target。
+        const tracked = list("tracked");
+        const untracked = list("untracked");
+        const files = [...list("lost"), ...list("paths"), ...tracked, ...untracked];
         if (files.length === 0 && req.kind === "Checkout" && d.target) {
           return {
             title: t("git.discardConfirmTitle"),
             message: t("git.checkoutConfirmBody", { target: String(d.target) }),
             danger: true,
           };
+        }
+        if (req.kind === "Checkout" && (tracked.length > 0 || untracked.length > 0)) {
+          let message = t("git.removeConfirmBody", { n: files.length });
+          if (untracked.length > 0) message += "\n" + t("git.removeConfirmUntracked", { n: untracked.length });
+          if (files.length > 0) message += "\n" + files.map((f) => `  • ${f}`).join("\n");
+          return { title: t("git.removeConfirmTitle"), message, danger: true };
         }
         let message = t("git.discardConfirmBody", { n: files.length });
         if (files.length > 0) message += "\n" + files.map((f) => `  • ${f}`).join("\n");

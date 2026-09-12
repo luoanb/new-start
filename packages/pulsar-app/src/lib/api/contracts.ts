@@ -223,6 +223,7 @@ export const c = {
   gitAdd: def<{ paths: string[]; all: boolean }, void>("git_add"),
   gitUnstage: def<{ paths: string[] }, void>("git_unstage"),
   gitRestore: def<{ paths: string[] }, void>("git_restore"),
+  gitRemove: def<{ tracked: string[]; untracked: string[] }, void>("git_remove"),
   gitCommit: def<{ message: string }, void>("git_commit"),
   gitReset: def<{ mode: GitResetMode; target?: string }, void>("git_reset"),
   gitCheckout: def<{ target: string }, void>("git_checkout"),

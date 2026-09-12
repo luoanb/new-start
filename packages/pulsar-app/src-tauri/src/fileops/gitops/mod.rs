@@ -276,6 +276,14 @@ pub trait GitBackend: Send + Sync {
     async fn stage(&self, repo: &GitRepo, paths: &[String], all: bool) -> AppResult<()>;
     async fn unstage(&self, repo: &GitRepo, paths: &[String]) -> AppResult<()>;
     async fn restore(&self, repo: &GitRepo, paths: &[String]) -> AppResult<()>;
+    /// 从「更改」列表移除文件改动（tracked → `restore`；untracked → `clean -f`）。
+    /// 调用方负责确认门禁；两组路径由调用方按 status 分组后传入，互不重叠。
+    async fn remove_changes(
+        &self,
+        repo: &GitRepo,
+        tracked: &[String],
+        untracked: &[String],
+    ) -> AppResult<()>;
     async fn commit(&self, repo: &GitRepo, message: &str) -> AppResult<()>;
     /// 高危写：先 dry-run 计算将丢失改动清单（preview），再执行。
     async fn reset(

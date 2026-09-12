@@ -16,7 +16,24 @@
         "coverage"
       ],
       "created_at": 1788186412310
+    },
+    {
+      "id": "ws-13703389a02e2b97",
+      "name": "new-start-wt",
+      "root": "/home/lab/Documents/trae_projects/new-start-wt",
+      "ignore": [
+        ".git",
+        "node_modules",
+        "target",
+        "dist",
+        ".pulsar",
+        ".DS_Store",
+        "build",
+        "out",
+        "coverage"
+      ],
+      "created_at": 1789192036871
     }
   ],
-  "active_id": "ws-8193747a182d650e"
+  "active_id": "ws-13703389a02e2b97"
 }

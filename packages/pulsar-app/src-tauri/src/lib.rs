@@ -1227,6 +1227,42 @@ async fn git_commit(
     Ok(())
 }
 
+/// 从「更改」列表移除指定文件改动（单个或批量）：
+/// tracked 路径走 `git restore --`（丢弃工作区改动），untracked 路径走
+/// `git clean -f -d --`（删除新增未跟踪文件）。需用户确认。
+#[tauri::command]
+async fn git_remove(
+    gateway: State<'_, Gateway>,
+    state_emit: State<'_, StateEmitter>,
+    tracked: Option<Vec<String>>,
+    untracked: Option<Vec<String>>,
+) -> TauriResult<()> {
+    let tracked = tracked.unwrap_or_default();
+    let untracked = untracked.unwrap_or_default();
+    if tracked.is_empty() && untracked.is_empty() {
+        return Err(
+            crate::core::AppError::InvalidInput("git_remove requires at least one path".into())
+                .payload(),
+        );
+    }
+    let svc = gateway.inner().git_service();
+    let repo = svc.active_repo().await.map_err(|error| error.payload())?;
+    let detail = json!({ "tracked": tracked, "untracked": untracked });
+    let outcome = svc
+        .confirm()
+        .request_and_wait(GitOpKind::Checkout, "移除文件更改".into(), detail)
+        .await
+        .map_err(|error| error.payload())?;
+    if outcome == ConfirmOutcome::Approved {
+        svc.backend()
+            .remove_changes(&repo, &tracked, &untracked)
+            .await
+            .map_err(|error| error.payload())?;
+        state_emit.inner()(StateChange::Git);
+    }
+    Ok(())
+}
+
 /// 重置到目标（默认 HEAD）；`--hard/--keep` 属高危写：默认关闭，需先开启
 /// `git.dangerous_writes` 开关，且仍走确认服务（展示将丢失改动清单）。
 #[tauri::command]
@@ -2022,6 +2058,7 @@ pub fn run() {
             git_add,
             git_unstage,
             git_restore,
+            git_remove,
             git_commit,
             git_reset,
             git_checkout,
