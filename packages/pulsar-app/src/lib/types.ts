@@ -445,6 +445,42 @@ export type HookDefMeta = {
   label: string;
 };
 
+// ── 周期管理（Hook Cycle，与后端 core/hook 契约 serde 一致）──
+
+/** 可调项取值：由后端 `CycleValue`（untagged）序列化而来。 */
+export type CycleValue = boolean | number | string | string[];
+
+/** 可调项形态（决定面板控件；后端 `HookParamKindView` camelCase 同构）。 */
+export type HookParamKind =
+  | { kind: "enum"; values: string[]; multi: boolean }
+  | { kind: "bool" }
+  | { kind: "number"; min: number; max: number };
+
+/** 可调项（声明 + 当前取值）。 */
+export type HookParamView = {
+  key: string;
+  /** 展示名 i18n key（由动作声明给出，面板不硬编码）。 */
+  label: string;
+  /** `call_gate` = 参与调用前判定；`internal` = 动作内部读取。 */
+  usage: "call_gate" | "internal";
+  kind: HookParamKind;
+  default: CycleValue;
+  value: CycleValue;
+};
+
+/** `hooks_list` 出参：动作清单（完全由后端声明派生，面板零领域硬编码）。 */
+export type HookEntry = {
+  id: string;
+  label: string;
+  /** 分组 i18n key（开放键）。 */
+  group: string;
+  injectPoint: string;
+  enabled: boolean;
+  /** 关停风险提示（i18n key）；null = 无提示。**不阻止关停**。 */
+  disableHint: string | null;
+  params: HookParamView[];
+};
+
 // ── Running Sessions ──
 
 export type RunningSession = {

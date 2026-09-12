@@ -30,6 +30,8 @@ pub const PHASE_HOOK_MATCH_TOPIC: &str = "match_topic_hook";
 pub const PHASE_HOOK_COMPACTION: &str = "compaction_hook";
 pub const PHASE_HOOK_SELECT_NEURON: &str = "select_neuron_hook";
 pub const PHASE_HOOK_ASSISTANT: &str = "assistant_hook";
+/// 周期判定：hook 调用前统一门控求值（未命中记 skip）。
+pub const PHASE_HOOK_CYCLE_GATE: &str = "hook_cycle_gate";
 
 // ── 轮次执行 ──
 pub const PHASE_RUN_ROUND: &str = "run_round";
@@ -114,6 +116,7 @@ pub const ALL: &[PhaseInfo] = &[
     PhaseInfo { value: PHASE_HOOK_COMPACTION, group: "Hook 执行", label: "上下文压缩" },
     PhaseInfo { value: PHASE_HOOK_SELECT_NEURON, group: "Hook 执行", label: "神经元选型" },
     PhaseInfo { value: PHASE_HOOK_ASSISTANT, group: "Hook 执行", label: "助手钩子" },
+    PhaseInfo { value: PHASE_HOOK_CYCLE_GATE, group: "Hook 执行", label: "周期判定（门控跳过）" },
     // ── 轮次执行 ──
     PhaseInfo { value: PHASE_RUN_ROUND, group: "轮次执行", label: "执行轮次" },
     PhaseInfo { value: PHASE_RUN_ROUND_STREAM, group: "轮次执行", label: "执行轮次(流式)" },

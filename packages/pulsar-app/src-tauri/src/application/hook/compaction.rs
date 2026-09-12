@@ -30,8 +30,12 @@ pub fn register(
     registry
         .register(HookDef {
             id: "core.compaction",
-            label: "自动压缩（IP-2：超阈值生成摘要替换本次 wire）",
+            label: "cycle.hookCompaction",
             inject_point: InjectPointId::AfterPersistInput,
+            group: "cycle.groupInfra",
+            disable_hint: Some("cycle.hintCompaction"),
+            // 周期可调项：无 —— 「是否压缩」不属周期（动作每轮调用，内部按阈值检测）。
+            cycle_params: &[],
             handler: HookHandler::AfterPersistInput(Box::new(move |ctx| {
                 let compactor = compactor.clone();
                 let providers = providers.clone();

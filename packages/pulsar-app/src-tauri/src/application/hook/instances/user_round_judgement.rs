@@ -1,25 +1,29 @@
 //! IP-1 AfterLoadContext · 用户轮合并裁决：①介入打分 ②课题路由（switch / create / continue）。
 //!
 //! 单次模型调用同时承担两项职责（2026-08-30 spec 合并自 score_feedback + match_topic）。
-//! 门控下沉在 run 内：未绑定课题（含首轮）必跑；已绑定课题每 3 条用户消息复核一次。
+//! 周期门控（调用前判定）：模式窗口（仅助手/系统）+ 轮次来源（仅用户轮）；
+//! 复核节奏因需与「未绑定课题必跑」（业务状态）取 OR，留在 `run` 内按周期可调项读取。
 //! 契约（2026-08-31）：助手模式下会话必须绑定课题；模型可见 action 仅三态，
 //! none 是程序内部降级 token（仅 fallback 返回），已从模型契约移除。
 
 use std::borrow::Cow;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, OnceLock, Weak};
 
 use serde_json::{json, Value};
 
 use crate::application::assistant_session::{
-    emergency_scope_in, interval_neuron_ids, need_user_round_judgement, read_assistant_state,
-    AssistantHooks, AssistantSession,
+    emergency_scope_in, interval_neuron_ids, mode_window_spec, need_user_round_judgement,
+    read_assistant_state, AssistantHooks, AssistantSession, USER_ROUND_JUDGEMENT_EVERY_N_ROUNDS,
 };
 use crate::application::hook::judgement::{JudgementAnchor, JudgementSpec};
 use crate::core::error::AppResult;
 use crate::core::hook::defs::{HookDef, HookHandler, HookRegistry, InjectPointId, RegisterError};
+use crate::core::hook::{
+    CycleField, CycleParamKind, CycleParamSpec, CycleParamUsage, CycleValue, RoundRef,
+};
 use crate::core::log_phase::PHASE_HOOK_USER_ROUND_JUDGEMENT;
-use crate::core::models::{ConversationMode, ResponseFormatSpec};
-use crate::core::round_service::{RoundContext, RoundTriggerKind};
+use crate::core::models::ResponseFormatSpec;
+use crate::core::round_service::RoundContext;
 
 pub const SYSTEM_TYPE_USER_ROUND_JUDGEMENT: &str = "assistant_user_round_judgement";
 
@@ -74,6 +78,40 @@ pub(crate) const SPEC: JudgementSpec = JudgementSpec {
     neutral_fallback: fallback_user_round_judgement,
 };
 
+/// 周期可调项：模式窗口 + 仅用户轮（调用判定）；复核节奏（动作内部）。
+///
+/// 「未绑定课题必跑」是**业务状态**判断 → 不进周期条件，留在 [`run`] 内。
+pub(crate) fn cycle_params() -> &'static [CycleParamSpec] {
+    static P: OnceLock<Vec<CycleParamSpec>> = OnceLock::new();
+    P.get_or_init(|| {
+        vec![
+            mode_window_spec(),
+            CycleParamSpec {
+                key: "round_origin",
+                label: "cycle.paramRoundOrigin",
+                field: Some(CycleField::RoundOrigin),
+                round_ref: RoundRef::Current,
+                kind: CycleParamKind::Enum {
+                    values: &["user_round", "scheduled_round"],
+                    multi: false,
+                },
+                default: CycleValue::Str("user_round".into()),
+                usage: CycleParamUsage::CallGate,
+            },
+            CycleParamSpec {
+                key: "review_every_n",
+                label: "cycle.paramReviewEveryN",
+                field: None,
+                round_ref: RoundRef::Current,
+                kind: CycleParamKind::Number { min: 1, max: 50 },
+                default: CycleValue::Int(USER_ROUND_JUDGEMENT_EVERY_N_ROUNDS as i64),
+                usage: CycleParamUsage::Internal,
+            },
+        ]
+    })
+    .as_slice()
+}
+
 /// 装配期注册（**注册**，默认关闭；开启由装配方 [`HookRegistry::set_enabled`] 显式设置）。
 ///
 /// handler 是核心闭包：捕获 `Weak<AssistantSession>`（防循环引用）+ [`SPEC`]，
@@ -87,6 +125,9 @@ pub(crate) fn register(
         id: SPEC.system_type,
         label: SPEC.label,
         inject_point: InjectPointId::AfterLoadContext,
+        group: "cycle.groupJudgement",
+        disable_hint: None,
+        cycle_params: cycle_params(),
         handler: HookHandler::AfterLoadContext(Box::new(move |ctx| {
             let weak = Weak::clone(&weak);
             Box::pin(async move {
@@ -100,19 +141,8 @@ pub(crate) fn register(
 }
 
 pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> AppResult<()> {
-    // 门控（下沉）：课题副作用仅 Assistant/System 模式的 **User 轮**承载
-    //（Chat/Agent 轮不参与；Manual/Poller 轮走 advance_brief，不做裁决）。
-    if !matches!(
-        ctx.mode,
-        ConversationMode::Assistant | ConversationMode::System
-    ) {
-        return Ok(());
-    }
-    if !matches!(ctx.trigger, RoundTriggerKind::User) {
-        return Ok(());
-    }
-    // 频率门控：未绑定课题（含首轮 user_rounds==0）必跑；已绑定按 user_rounds 低频复核。
-    // user_rounds 在 IP-1 时刻是上一轮完成后的累计值（本轮未 tick），0 % N == 0 天然含首轮。
+    // 模式窗口 / 轮次来源（仅用户轮）由**周期门控**在调用前判定，handler 内不再自查。
+    // 频率门控因与「未绑定课题必跑」（业务状态）取 OR，故留在 handler 内按可调项读取。
     let topic_id = ctx.topic_id.clone();
     let topic = match topic_id.as_ref() {
         Some(id) => hooks.assistant.topics()?.get(id)?,
@@ -122,11 +152,16 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &mut RoundContext) -> A
         .as_ref()
         .map(|t| read_assistant_state(t).user_rounds)
         .unwrap_or(0);
-    if !need_user_round_judgement(topic.is_some(), user_rounds) {
+    let every_n = hooks
+        .assistant
+        .cycle_int(SPEC.system_type, "review_every_n", USER_ROUND_JUDGEMENT_EVERY_N_ROUNDS as i64)
+        .max(1) as u64;
+    if !need_user_round_judgement(topic.is_some(), user_rounds, every_n) {
         tracing::info!(
             phase = PHASE_HOOK_USER_ROUND_JUDGEMENT,
             topic_id = ?topic_id,
             user_rounds,
+            every_n,
             "skip: judgement gated"
         );
         return Ok(());

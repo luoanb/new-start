@@ -49,9 +49,28 @@ pub struct AppConfigFile {
     /// 上下文安全配置（顶层 `context` 键）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<ContextSection>,
+    /// 周期管理配置（顶层 `hooks` 键）：启停覆盖 + 可调项取值覆盖。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hooks: Option<HooksSection>,
     /// 尚未建模的顶层字段原样保留，写回时不丢数据。
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+/// 周期管理配置（顶层 `hooks` 键）。
+///
+/// 结构刻意保持**无领域知识**（不出现任何具体动作 id / 参数名）：
+/// - `enabled`：`{ "<hook id>": true|false }`
+/// - `values`：`{ "<hook id>": { "<param key>": value } }`
+///
+/// 合法性由注册表按各动作声明校验（key 是否声明、形态 / 候选值 / 范围），
+/// 非法项在应用时跳过并 warn（不阻断启动）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HooksSection {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<Value>,
 }
 
 /// 上下文安全配置（顶层 `context` 键）：工具结果统一上限 + poller 熔断阈值。

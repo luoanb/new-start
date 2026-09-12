@@ -2572,6 +2572,9 @@ mod tests {
                 id: fail_id,
                 label: "failing pre-hook",
                 inject_point: crate::core::hook::InjectPointId::AfterLoadContext,
+                group: "test.group",
+                disable_hint: None,
+                cycle_params: &[],
                 handler: crate::core::hook::HookHandler::AfterLoadContext(Box::new(|_ctx| {
                     Box::pin(async move {
                         Err(AppError::InvalidInput("pre-hook boom".into()))

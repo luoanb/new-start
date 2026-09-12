@@ -140,10 +140,53 @@ application/hook/store.rs ──（独立账本，仅依赖 error / events）
 
 不变量（测试锁定）：`register` 默认关闭；注册未开启不分发；`set_enabled` 可运行期开关；`set_enabled` 未知 id 报错；每实例必带 strict schema 与中性 fallback。
 
+## 8b. 周期契约（调度）
+
+**周期 = 调度**（何时调用动作）。判定素材**只能**由调度方从 `RoundContext` 派生；业务状态（课题是否绑定等）**不进**周期条件，由动作内部自查。
+
+### 周期字段（`core/hook/cycle.rs` → `CycleFacts::derive`）
+
+| 字段 | 派生式 |
+|---|---|
+| `Mode` / `Trigger` | `ctx` 直取 |
+| `RoundIndex` | `messages` 中 `role == Assistant` 的条数 |
+| `UserRounds` | `messages` 中 `role == User` 的条数 |
+| `RoundsSinceUser` | 最后一条 `User` 之后的 `Assistant` 条数 |
+| `RoundOrigin` | `trigger == User` ? 用户轮 : 调度轮 |
+| `RoundShape`（可指定轮次 `RoundRef::{Current, Previous}`） | 有 `tool_calls` / `tool_results` ? 工具轮 : 收尾轮 |
+
+- 派生值**不写回、不落库**（与既有 `topic.extra` 计数并存，仅服务周期判定）。
+- IP-1 / IP-2 口径为「不含本轮」，且 `RoundShape(Current) = None`（产物未产生）→ 该条件不可用，需要判产物形态时用 `Previous`。
+
+### 可调项（`CycleParamSpec`）
+
+**一个概念 + 一个属性**：所有可调项都是「周期参数」，`usage` 决定消费位置。
+
+| 字段 | 含义 |
+|---|---|
+| `key` / `label` | 标识 / 展示名 i18n key |
+| `field` + `round_ref` | 绑定的周期字段与轮次（仅 `CallGate` 需要） |
+| `kind` | `Enum { values, multi }` / `Bool` / `Number { min, max }` |
+| `default` | 默认值（= 原硬编码行为值） |
+| `usage` | `CallGate` = 框架调用前判定；`Internal` = 动作内部读取 |
+
+### 判定与分发（`core/hook/defs.rs`）
+
+- 5 个 `run_*`：每个 hook 前派生 `CycleFacts` → `gate_check`（全部 `CallGate` 项满足才放行）→ 通过才调 handler；未命中记 skip（`PHASE_HOOK_CYCLE_GATE`，含 `hook_id` 与未命中的 `param`）。
+- `Enum(multi)` **空集合 = 不限**；缺失字段 / 形态不匹配 = **不匹配**（fail-safe，不误放行）。
+- **无硬保护**：任何动作都可 `set_enabled(false)`；`disable_hint` 仅作面板风险提示，不参与分发与校验。
+
+### 配置与命令
+
+- `config.json` → `hooks` 节：`enabled: { "<id>": bool }`、`values: { "<id>": { "<key>": value } }`（结构**无领域知识**）；启动装配后应用覆盖，非法项跳过并 warn。
+- 命令：`hooks_list`（由声明派生）/ `hook_set_enabled` / `hook_set_value`（内存 + 落盘双写）；RPC 同步。
+- 前端「周期管理」面板由 `hooks_list` 驱动渲染，**无任何动作 id / 选项的硬编码**。
+
 ## 9. 快速索引
 
 - 启用实例作用约定 → [user-round-judgement.md](./user-round-judgement.md)（用户轮裁决）· [round-review.md](./round-review.md)（轮次复盘）
 - 三阶段分离（定义 / 注册 / 开启）→ [specs/2026-09-12_10-42_hook-definition-registration-enablement.md](../../specs/2026-09-12_10-42_hook-definition-registration-enablement.md)
+- 周期管理（周期字段 / 可调项 / 调用前判定 / 配置与命令）→ [sdd-lab/2026-09-12_19-57_hook-cycle-management/technical-plan.md](../../sdd-lab/2026-09-12_19-57_hook-cycle-management/technical-plan.md)
 - 合并裁决的门控与契约 → [specs/2026-08-30_10-30_hook-gating-merged-judgement.md](../../specs/2026-08-30_10-30_hook-gating-merged-judgement.md)
 - 注册式重构（历史：instances / 双清单）→ [specs/2026-08-30_13-40_hook-registry-refactor.md](../../specs/2026-08-30_13-40_hook-registry-refactor.md)
 - 模型同源 → [micro_specs/2026-08-14_16-45_hook-model-same-source.md](../../micro_specs/2026-08-14_16-45_hook-model-same-source.md)

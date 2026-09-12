@@ -447,7 +447,7 @@ export type Translations = {
     git: string;
     gitDiff: string;
     search: string;
-    flowDecisions: string;
+    cycleManagement: string;
   };
   searchPanel: {
     placeholder: string;
@@ -503,6 +503,49 @@ export type Translations = {
     scoreFeedback: string;
     userRoundJudgement: string;
     roundReview: string;
+  };
+  /** 周期管理面板文案（标签由动作声明给出 i18n key，面板不硬编码领域选项）。 */
+  cycle: {
+    tabHooks: string;
+    tabRecords: string;
+    refresh: string;
+    loadFailed: string;
+    empty: string;
+    noParams: string;
+    saveOk: string;
+    saveFailed: string;
+    stateEnabled: string;
+    stateDisabled: string;
+    enabled: string;
+    hookRoundBefore: string;
+    hookRoundAfter: string;
+    hookSelectNeuron: string;
+    hookCompaction: string;
+    disableHint: string;
+    schedule: string;
+    params: string;
+    groupShell: string;
+    groupJudgement: string;
+    groupInfra: string;
+    groupSelection: string;
+    hintRoundBefore: string;
+    hintRoundAfter: string;
+    hintCompaction: string;
+    paramMode: string;
+    paramRoundOrigin: string;
+    paramRoundShape: string;
+    paramReviewEveryN: string;
+    paramBriefEveryN: string;
+    paramBriefOnPrevSettling: string;
+    paramSelectionEveryN: string;
+    valueChat: string;
+    valueAgent: string;
+    valueAssistant: string;
+    valueSystem: string;
+    valueUserRound: string;
+    valueScheduledRound: string;
+    valueToolRound: string;
+    valueSettlingRound: string;
   };
   fileExplorer: {
     addWorkspace: string;
@@ -1163,7 +1206,7 @@ export const en: Translations = {
     git: "Git",
     gitDiff: "Diff",
     search: "Search",
-    flowDecisions: "Flow Decisions",
+    cycleManagement: "Cycle Management",
   },
   searchPanel: {
     placeholder: "Search symbols, functions, types…",
@@ -1219,6 +1262,48 @@ export const en: Translations = {
     scoreFeedback: "Score Feedback",
     userRoundJudgement: "User Round Judgement",
     roundReview: "Round Review",
+  },
+  cycle: {
+    tabHooks: "Hooks",
+    tabRecords: "Records",
+    refresh: "Refresh",
+    loadFailed: "Load failed: {error}",
+    empty: "No actions available",
+    noParams: "No params",
+    saveOk: "Saved",
+    saveFailed: "Save failed: {error}",
+    stateEnabled: "Enabled",
+    stateDisabled: "Disabled",
+    enabled: "Enabled",
+    hookRoundBefore: "Round preparation",
+    hookRoundAfter: "Round counters",
+    hookSelectNeuron: "Neuron selection",
+    hookCompaction: "Auto compaction",
+    disableHint: "Risk",
+    schedule: "Trigger",
+    params: "Params",
+    groupShell: "Shell",
+    groupJudgement: "Judgement",
+    groupInfra: "Infrastructure",
+    groupSelection: "Selection",
+    hintRoundBefore: "Disabling loses topic resolution and brief advance",
+    hintRoundAfter: "Disabling loses the pending-round marker used by poller",
+    hintCompaction: "Disabling may fail on very long contexts",
+    paramMode: "Mode window",
+    paramRoundOrigin: "Round origin",
+    paramRoundShape: "Round shape",
+    paramReviewEveryN: "Review every N user messages",
+    paramBriefEveryN: "Refresh brief every N advance rounds",
+    paramBriefOnPrevSettling: "Refresh when last round had no tool",
+    paramSelectionEveryN: "Select neuron every N advance rounds",
+    valueChat: "Chat",
+    valueAgent: "Agent",
+    valueAssistant: "Assistant",
+    valueSystem: "System",
+    valueUserRound: "User round",
+    valueScheduledRound: "Scheduled round",
+    valueToolRound: "Tool round",
+    valueSettlingRound: "Settling round",
   },
   fileExplorer: {
     addWorkspace: "Add Workspace",
@@ -1898,7 +1983,7 @@ export const zh: Translations = {
     git: "Git",
     gitDiff: "差异",
     search: "搜索",
-    flowDecisions: "流程决策",
+    cycleManagement: "周期管理",
   },
   searchPanel: {
     placeholder: "搜索符号、函数、类型…",
@@ -1954,6 +2039,48 @@ export const zh: Translations = {
     scoreFeedback: "评分反馈",
     userRoundJudgement: "用户轮裁决",
     roundReview: "轮次复盘",
+  },
+  cycle: {
+    tabHooks: "动作",
+    tabRecords: "执行记录",
+    refresh: "刷新",
+    loadFailed: "加载失败：{error}",
+    empty: "暂无可用动作",
+    noParams: "无可调参数",
+    saveOk: "已保存",
+    saveFailed: "保存失败：{error}",
+    stateEnabled: "启用",
+    stateDisabled: "停用",
+    enabled: "启用",
+    hookRoundBefore: "轮前准备",
+    hookRoundAfter: "轮次计数",
+    hookSelectNeuron: "神经元选型",
+    hookCompaction: "自动压缩",
+    disableHint: "风险",
+    schedule: "触发",
+    params: "参数",
+    groupShell: "业务壳",
+    groupJudgement: "裁决",
+    groupInfra: "基础设施",
+    groupSelection: "选型",
+    hintRoundBefore: "关停将失去课题解析与简报推进",
+    hintRoundAfter: "关停将失去轮询依赖的「末轮待续推」标记",
+    hintCompaction: "关停后超长上下文可能请求失败",
+    paramMode: "模式窗口",
+    paramRoundOrigin: "轮次来源",
+    paramRoundShape: "产物形态",
+    paramReviewEveryN: "每 N 条用户消息复核",
+    paramBriefEveryN: "每 N 个推进轮刷新简报",
+    paramBriefOnPrevSettling: "上轮非工具结束时刷新简报",
+    paramSelectionEveryN: "每 N 个推进轮选型",
+    valueChat: "对话",
+    valueAgent: "智能体",
+    valueAssistant: "助手",
+    valueSystem: "系统",
+    valueUserRound: "用户轮",
+    valueScheduledRound: "调度轮",
+    valueToolRound: "工具轮",
+    valueSettlingRound: "收尾轮",
   },
   fileExplorer: {
     addWorkspace: "添加工作区",

@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 
 use super::{
     agent_session::AgentSession,
-    assistant_session::AssistantSession,
+    assistant_session::{select_neuron_cycle_params, AssistantSession},
     chat_session::ChatSession,
     poller::{new_shared_poll_parallelism, Poller, PollerConfigReader},
     poller_step::AssistantStepRequest,
@@ -17,6 +17,7 @@ use crate::core::{
     round_service::{write_session_state, ConversationRunner, StreamDelta},
     error::{AppError, AppResult},
     hook::defs::{HookDef, HookHandler, HookRegistry, InjectPointId},
+    hook::CycleValue,
     log_phase::{
         PHASE_NEURON_BOOTSTRAP_NEURONS, PHASE_NEURON_RECYCLE_RUNTIME, PHASE_POLLER_CONFIG,
         PHASE_POLLER_RUNTIME, PHASE_HOOK_SELECT_NEURON, PHASE_SEND_MODEL_MESSAGE,
@@ -83,6 +84,8 @@ pub struct Gateway {
     chat: ChatSession,
     agent: AgentSession,
     assistant: Arc<AssistantSession>,
+    /// 注入点注册表：周期管理命令（清单 / 启停 / 取值）经此读写，与 runner / 业务共享同一实例。
+    hook_registry: Arc<HookRegistry>,
     poller: Arc<Mutex<Poller>>,
     session_tracker: SessionTracker,
     /// 会话级串行协调器：与 runner 共享同一实例。停止语义统一走 `stop_session`
@@ -392,6 +395,7 @@ impl Gateway {
             Arc::clone(&neuron_store),
             Arc::clone(&hook_judgement_store),
             Arc::new(providers.clone()),
+            Arc::clone(&registry),
             runner.clone(),
             step_tx,
             session_tracker.clone(),
@@ -402,7 +406,7 @@ impl Gateway {
         ));
         // 课题路由 / 简报推进 / 打分（IP-1）与 范围修订 / 验收 / 计数（IP-5）随装配注册。
         // IP-1 组内顺序敏感：先课题路由（可能切换会话 / 计算 reselect），再选型。
-        assistant.install_hooks(&registry)?;
+        assistant.install_hooks()?;
         // 选型 hook（IP-1，上层注册，非核心流程）：resolve + 角色拼接 + 锚点写回。
         // 注册在课题路由之后——同一注入点组内按注册顺序执行，选型基于路由后的最终会话
         // （match_topic 可能切换会话触发 reload；advance_brief 计算 reselect 频率）。
@@ -412,8 +416,11 @@ impl Gateway {
             registry
                 .register(HookDef {
                     id: "assistant.select-neuron",
-                    label: "选型（resolve + 角色拼接 + 锚点写回）",
+                    label: "cycle.hookSelectNeuron",
                     inject_point: InjectPointId::AfterLoadContext,
+                    group: "cycle.groupSelection",
+                    disable_hint: None,
+                    cycle_params: select_neuron_cycle_params(),
                     handler: HookHandler::AfterLoadContext(Box::new(move |ctx| {
                         let resolver = Arc::clone(&resolver);
                         let store = store.clone();
@@ -462,6 +469,9 @@ impl Gateway {
         registry
             .set_enabled("core.compaction", true)
             .map_err(|e| AppError::RuntimeError(format!("enable compaction hook failed: {e}")))?;
+        // 周期管理：应用 config.json 的 `hooks` 节覆盖（缺省 = 全部保持装配默认）。
+        // 非法项跳过并 warn，不阻断启动。
+        apply_hook_config(&registry, &store.root().to_path_buf());
 
         let poller = Arc::new(Mutex::new(Poller::new(
             poller_settings.base_interval_ms,
@@ -507,6 +517,7 @@ impl Gateway {
             chat,
             agent,
             assistant,
+            hook_registry: registry,
             poller,
             session_tracker,
             coordinator,
@@ -1228,6 +1239,64 @@ impl Gateway {
         self.providers.clone()
     }
 
+    /// 注入点注册表（周期管理命令：清单 / 启停 / 取值）。
+    pub fn hook_registry(&self) -> Arc<HookRegistry> {
+        Arc::clone(&self.hook_registry)
+    }
+
+    /// 周期启停：注册表内存 + `config.json` 双写（**无硬保护**，任何动作都可关停）。
+    pub fn set_hook_enabled_persist(&self, id: &str, on: bool) -> AppResult<()> {
+        self.hook_registry
+            .set_enabled(id, on)
+            .map_err(|e| AppError::InvalidInput(format!("set hook enabled failed: {e}")))?;
+        let id_owned = id.to_string();
+        ConfigStore::new(self.store.root().to_path_buf()).update(|c| {
+            let hooks = c.hooks.get_or_insert_with(Default::default);
+            let enabled = hooks
+                .enabled
+                .get_or_insert_with(|| serde_json::json!({}));
+            if !enabled.is_object() {
+                *enabled = serde_json::json!({});
+            }
+            if let Some(map) = enabled.as_object_mut() {
+                map.insert(id_owned, serde_json::Value::Bool(on));
+            }
+        })
+    }
+
+    /// 周期取值：注册表内存 + `config.json` 双写（按该动作声明的 spec 校验）。
+    pub fn set_hook_value_persist(
+        &self,
+        id: &str,
+        key: &str,
+        value: CycleValue,
+    ) -> AppResult<()> {
+        self.hook_registry
+            .set_value(id, key, value.clone())
+            .map_err(|e| AppError::InvalidInput(format!("set hook value failed: {e}")))?;
+        let (id_owned, key_owned) = (id.to_string(), key.to_string());
+        let json_value = serde_json::to_value(&value)
+            .map_err(|e| AppError::InvalidInput(format!("encode hook value failed: {e}")))?;
+        ConfigStore::new(self.store.root().to_path_buf()).update(|c| {
+            let hooks = c.hooks.get_or_insert_with(Default::default);
+            let values = hooks.values.get_or_insert_with(|| serde_json::json!({}));
+            if !values.is_object() {
+                *values = serde_json::json!({});
+            }
+            if let Some(root) = values.as_object_mut() {
+                let entry = root
+                    .entry(id_owned)
+                    .or_insert_with(|| serde_json::json!({}));
+                if !entry.is_object() {
+                    *entry = serde_json::json!({});
+                }
+                if let Some(params) = entry.as_object_mut() {
+                    params.insert(key_owned, json_value);
+                }
+            }
+        })
+    }
+
     pub fn conversation_store(&self) -> JsonConversationStore {
         self.store.clone()
     }
@@ -1382,6 +1451,59 @@ fn spawn_neuron_recycle_runtime(
             }
         }
     });
+}
+
+/// 应用 `config.json` 的 `hooks` 节覆盖（启动装配后调用）。
+///
+/// 结构无领域知识：`enabled` 为 `{id: bool}`，`values` 为 `{id: {key: value}}`；
+/// 合法性由注册表按各动作声明校验，非法项跳过并 warn（不阻断启动）。
+fn apply_hook_config(registry: &HookRegistry, storage_root: &std::path::Path) {
+    let Ok(config) = ConfigStore::new(storage_root.to_path_buf()).read() else {
+        tracing::warn!("read config.json failed; hook cycle overrides skipped");
+        return;
+    };
+    let Some(hooks) = config.hooks else {
+        return;
+    };
+    if let Some(map) = hooks.enabled.as_ref().and_then(|v| v.as_object()) {
+        for (id, value) in map {
+            let Some(on) = value.as_bool() else {
+                tracing::warn!(hook_id = %id, "hook enabled override is not bool; skipped");
+                continue;
+            };
+            if let Err(error) = registry.set_enabled(id, on) {
+                tracing::warn!(hook_id = %id, error = %error, "apply hook enabled override failed");
+            }
+        }
+    }
+    if let Some(map) = hooks.values.as_ref().and_then(|v| v.as_object()) {
+        for (id, params) in map {
+            let Some(params) = params.as_object() else {
+                tracing::warn!(hook_id = %id, "hook values override is not object; skipped");
+                continue;
+            };
+            for (key, value) in params {
+                match serde_json::from_value::<CycleValue>(value.clone()) {
+                    Ok(parsed) => {
+                        if let Err(error) = registry.set_value(id, key, parsed) {
+                            tracing::warn!(
+                                hook_id = %id,
+                                param = %key,
+                                error = %error,
+                                "apply hook value override failed; using default"
+                            );
+                        }
+                    }
+                    Err(error) => tracing::warn!(
+                        hook_id = %id,
+                        param = %key,
+                        error = %error,
+                        "hook value override has invalid shape; skipped"
+                    ),
+                }
+            }
+        }
+    }
 }
 
 /// 从 config.json 顶层 `git.dangerous_writes` 读取危险写开关（默认关）。

@@ -17,6 +17,7 @@ use crate::application::{
     insert_catalog::InsertCatalog,
 };
 use crate::core::{
+    hook::CycleValue,
     AppError, AppResult, ChatOptions, ConversationMode,
     ModelRequest, NeuronCreate, NeuronKindFilter, NeuronUpdate, SessionBehavior, SessionSeed,
     StateChange, TopicStatus, TopicUpdate,
@@ -216,6 +217,23 @@ struct TopicListParams {
 #[serde(rename_all = "camelCase")]
 struct HookJudgementsListParams {
     filters: Option<HookJudgementFilter>,
+}
+
+/// 周期启停入参（`hook_set_enabled`）。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HookSetEnabledParams {
+    id: String,
+    on: bool,
+}
+
+/// 周期取值入参（`hook_set_value`）；`value` 形态由注册表按各动作声明校验。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HookSetValueParams {
+    id: String,
+    key: String,
+    value: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -642,6 +660,27 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
         }
         "hook_defs_list" => {
             value(hook_defs_meta())
+        }
+
+        // ── 周期管理（Hook Cycle）──
+        "hooks_list" => value(state.gateway.hook_registry().snapshot_all()),
+        "hook_set_enabled" => {
+            let p: HookSetEnabledParams = from_params(params)?;
+            state
+                .gateway
+                .set_hook_enabled_persist(&p.id, p.on)
+                .map_err(RpcErrorBody::from)?;
+            value(())
+        }
+        "hook_set_value" => {
+            let p: HookSetValueParams = from_params(params)?;
+            let parsed: CycleValue = serde_json::from_value(p.value)
+                .map_err(|e| bad_request(format!("invalid hook value shape: {e}")))?;
+            state
+                .gateway
+                .set_hook_value_persist(&p.id, &p.key, parsed)
+                .map_err(RpcErrorBody::from)?;
+            value(())
         }
 
         // ── Poller ──

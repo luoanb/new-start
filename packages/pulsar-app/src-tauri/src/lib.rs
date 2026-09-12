@@ -25,6 +25,7 @@ use crate::application::{
 use crate::infra::config::{server_env_overrides, ConfigStore, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT};
 use crate::core::{
     error::AppErrorPayload,
+    hook::{CycleValue, HookEntry},
     log_phase::{PHASE_NEURON_BOOTSTRAP_NEURONS, PHASE_SCORE_FEEDBACK_COMMAND},
     ChatModelSelection, ChatOptions, ChatResponse, Connection, Conversation, ConversationMode,
     ConversationSummaryPage, Message, MessagePage, ModelRequest,
@@ -545,6 +546,42 @@ async fn hook_judgements_list(
 #[tauri::command]
 fn hook_defs_list() -> Vec<crate::application::hook::HookDefMeta> {
     hook_defs_meta()
+}
+
+// ── 周期管理（Hook Cycle）──
+
+/// 周期清单：由各动作声明（`HookDef`）+ 生效值派生；**命令层不含任何领域知识**
+/// （既无具体动作 id，也无参数名 / 候选值的硬编码）。
+#[tauri::command]
+async fn hooks_list(gateway: State<'_, Gateway>) -> TauriResult<Vec<HookEntry>> {
+    Ok(gateway.inner().hook_registry().snapshot_all())
+}
+
+/// 周期启停：统一可切（**无硬保护**；关停风险仅由前端按 `disableHint` 提示）。
+#[tauri::command]
+async fn hook_set_enabled(gateway: State<'_, Gateway>, id: String, on: bool) -> TauriResult<()> {
+    gateway
+        .inner()
+        .set_hook_enabled_persist(&id, on)
+        .map_err(|e| e.payload())
+}
+
+/// 周期取值：按该动作声明的 spec 校验（形态 / 候选值 / 范围）后「内存 + config.json」双写。
+#[tauri::command]
+async fn hook_set_value(
+    gateway: State<'_, Gateway>,
+    id: String,
+    key: String,
+    value: serde_json::Value,
+) -> TauriResult<()> {
+    let value: CycleValue = serde_json::from_value(value).map_err(|e| AppErrorPayload {
+        code: "invalid_input",
+        message: format!("invalid hook value shape: {e}"),
+    })?;
+    gateway
+        .inner()
+        .set_hook_value_persist(&id, &key, value)
+        .map_err(|e| e.payload())
 }
 
 // ── Poller ──
@@ -1953,6 +1990,10 @@ pub fn run() {
             // Hook Judgements
             hook_judgements_list,
             hook_defs_list,
+            // 周期管理（Hook Cycle）
+            hooks_list,
+            hook_set_enabled,
+            hook_set_value,
             // Poller
             poll_status,
             poll_pause,

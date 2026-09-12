@@ -32,6 +32,9 @@ use crate::application::hook::{
 };
 use crate::application::hook::store::{new_hook_judgement_id, HookJudgementStore};
 use crate::core::hook::defs::{HookDef, HookHandler, HookRegistry, InjectPointId};
+use crate::core::hook::{
+    CycleField, CycleParamKind, CycleParamSpec, CycleParamUsage, CycleValue, RoundRef,
+};
 use super::{
     drivers::{AssistantDriver, PollerDriver},
     poller::{Poller, SharedPollParallelism},
@@ -152,6 +155,9 @@ pub struct AssistantSession {
     hook_judgement_store: Arc<Mutex<HookJudgementStore>>,
     /// 模型能力探测（`response_format` 降级链依据：json_schema → json_object → 无约束）。
     providers: Arc<ProviderRegistry>,
+    /// 周期注册表：读取周期可调项（`usage = Internal`，如简报刷新节奏 / 选型节奏）。
+    /// 动作是否被调用由注册表在分发前按 `CallGate` 项判定（本结构不参与判定）。
+    pub(crate) hooks: Arc<HookRegistry>,
     /// 单轮编排：读会话 → before hooks → 三段管道 → after hooks → 落库。
     /// 裁决调用（call_judgement）经 `run_raw_round` 与主对话共用同一三段管道。
     pub(crate) runner: ConversationRunner,
@@ -203,6 +209,7 @@ impl AssistantSession {
         neuron_store: Arc<Mutex<NeuronStore>>,
         hook_judgement_store: Arc<Mutex<HookJudgementStore>>,
         providers: Arc<ProviderRegistry>,
+        hooks: Arc<HookRegistry>,
         runner: ConversationRunner,
         step_tx: UnboundedSender<AssistantStepRequest>,
         session_tracker: SessionTracker,
@@ -219,6 +226,7 @@ impl AssistantSession {
             neuron_store,
             hook_judgement_store,
             providers,
+            hooks,
             runner,
             assistant_driver: AssistantDriver::new(Arc::clone(&service)),
             poller_driver: PollerDriver::new(service),
@@ -243,13 +251,14 @@ impl AssistantSession {
     ///
     /// 以 `Weak` 捕获自身防循环引用（Gateway → AssistantSession；Runner → HookRegistry →
     /// Weak），执行期 `upgrade` 后调用；会话已销毁时静默跳过（正常装配下不会发生）。
-    pub fn install_hooks(self: &Arc<Self>, registry: &HookRegistry) -> AppResult<()> {
-        self.register_round_before(registry)?;
-        instances::user_round_judgement::register(registry, self)
+    pub fn install_hooks(self: &Arc<Self>) -> AppResult<()> {
+        let registry = Arc::clone(&self.hooks);
+        self.register_round_before()?;
+        instances::user_round_judgement::register(&registry, self)
             .map_err(|e| AppError::RuntimeError(format!("register hook failed: {e}")))?;
-        instances::round_review::register(registry, self)
+        instances::round_review::register(&registry, self)
             .map_err(|e| AppError::RuntimeError(format!("register hook failed: {e}")))?;
-        self.register_round_after(registry)?;
+        self.register_round_after()?;
         for id in [
             "assistant.round.before",
             instances::SYSTEM_TYPE_USER_ROUND_JUDGEMENT,
@@ -263,14 +272,33 @@ impl AssistantSession {
         Ok(())
     }
 
-    /// IP-1 `assistant.round.before`：模式门控 / 课题解析 / 简报推进（不含裁决）。
-    fn register_round_before(self: &Arc<Self>, registry: &HookRegistry) -> AppResult<()> {
+    /// 读取周期可调项（`Internal`）：整数项，缺省回落 `fallback`。
+    pub(crate) fn cycle_int(&self, hook_id: &str, key: &str, fallback: i64) -> i64 {
+        match self.hooks.param_of(hook_id, key) {
+            Some(CycleValue::Int(v)) => v,
+            _ => fallback,
+        }
+    }
+
+    /// 读取周期可调项（`Internal`）：布尔项，缺省回落 `fallback`。
+    pub(crate) fn cycle_bool(&self, hook_id: &str, key: &str, fallback: bool) -> bool {
+        match self.hooks.param_of(hook_id, key) {
+            Some(CycleValue::Bool(v)) => v,
+            _ => fallback,
+        }
+    }
+
+    /// IP-1 `assistant.round.before`：课题解析 / 简报推进（模式窗口由周期门控承担）。
+    fn register_round_before(self: &Arc<Self>) -> AppResult<()> {
         let weak = Arc::downgrade(self);
-        registry
+        self.hooks
             .register(HookDef {
                 id: "assistant.round.before",
-                label: "助手轮前准备（IP-1：课题解析 / 简报推进）",
+                label: "cycle.hookRoundBefore",
                 inject_point: InjectPointId::AfterLoadContext,
+                group: "cycle.groupShell",
+                disable_hint: Some("cycle.hintRoundBefore"),
+                cycle_params: round_before_cycle_params(),
                 handler: HookHandler::AfterLoadContext(Box::new(move |ctx| {
                     let weak = Weak::clone(&weak);
                     Box::pin(async move {
@@ -293,13 +321,16 @@ impl AssistantSession {
     }
 
     /// IP-5 `assistant.round.after`：轮次计数（裁决在 `assistant.round-review`）。
-    fn register_round_after(self: &Arc<Self>, registry: &HookRegistry) -> AppResult<()> {
+    fn register_round_after(self: &Arc<Self>) -> AppResult<()> {
         let weak = Arc::downgrade(self);
-        registry
+        self.hooks
             .register(HookDef {
                 id: "assistant.round.after",
-                label: "轮次计数（IP-5）",
+                label: "cycle.hookRoundAfter",
                 inject_point: InjectPointId::AfterPersistOutcome,
+                group: "cycle.groupShell",
+                disable_hint: Some("cycle.hintRoundAfter"),
+                cycle_params: round_after_cycle_params(),
                 handler: HookHandler::AfterPersistOutcome(Box::new(move |ctx| {
                     let weak = Weak::clone(&weak);
                     Box::pin(async move {
@@ -1252,12 +1283,11 @@ pub(crate) struct AssistantHooks<'a> {
 }
 
 impl AssistantHooks<'_> {
-    /// IP-1 `assistant.round.before`：模式门控 / 课题解析 / 简报推进（裁决已独立注册）。
+    /// IP-1 `assistant.round.before`：课题解析 / 简报推进。
+    ///
+    /// 模式窗口（仅 Assistant/System）由**周期门控**（`CallGate` 的 `mode` 项）在调用前判定，
+    /// handler 内不再自查。
     async fn round_before(&self, ctx: &mut RoundContext) -> AppResult<()> {
-        // 业务层语义：课题副作用仅 Assistant/System 模式承载（Chat 直连 / Agent 循环不参与）。
-        if !matches!(ctx.mode, ConversationMode::Assistant | ConversationMode::System) {
-            return Ok(());
-        }
         // 会话可能已绑定课题（第二轮起的 User 输入 / 手动 / 轮询推进）。
         self.resolve_bound_topic(ctx)?;
         match ctx.trigger {
@@ -1274,11 +1304,9 @@ impl AssistantHooks<'_> {
 
     /// IP-5 `assistant.round.after`：末轮待续推标记 + 轮次计数（复盘已独立注册为
     /// `assistant.round-review`，注册序在本 hook 之前）。
+    ///
+    /// 模式窗口由周期门控承担（见 [`Self::round_before`]）。
     async fn round_after(&self, ctx: &RoundContext) -> AppResult<()> {
-        // 与 round_before 同一模式边界：课题副作用仅 Assistant/System 模式承载。
-        if !matches!(ctx.mode, ConversationMode::Assistant | ConversationMode::System) {
-            return Ok(());
-        }
         let Some(outcome) = ctx.outcome.as_ref() else {
             // 无已完成轮（异常路径）：无计数语义，标记保持原值（失败恢复交给熔断/退避）。
             return Ok(());
@@ -1382,20 +1410,32 @@ impl AssistantHooks<'_> {
         })?;
         let state = read_assistant_state(&topic);
         let fresh = build_topic_brief(&topic);
+        // 周期可调项（`Internal`）：简报刷新节奏 / 选型节奏（默认 = 原常量 3 / 5）。
+        let brief_every_n =
+            self.assistant
+                .cycle_int("assistant.round.before", "brief_every_n", BRIEF_EVERY_N_ROUNDS as i64) as u64;
+        let brief_on_prev_settling = self.assistant.cycle_bool(
+            "assistant.round.before",
+            "brief_on_prev_settling",
+            true,
+        );
+        let selection_every_n = self.assistant.selection_every_n();
         // 上轮若以工具调用结束，历史自带工具返回，简报非必选（可复用缓存）。
         let last_is_tool = self
             .assistant
             .runner
             .last_message_is_tool_result(&ctx.session_id)?;
-        // 三条件任一命中即刷新简报：①距上次生成 ≥ BRIEF_EVERY_N_ROUNDS 轮（频率兜底）
+        // 三条件任一命中即刷新简报：①距上次生成 ≥ N 轮（频率兜底，N 可配）
         // ②课题有变化（fresh 与缓存不同，自动覆盖进度/scope/切换/新增）
-        // ③上轮非工具调用结束（模型需课题状态锚定，屏除轮次限制）。
+        // ③上轮非工具调用结束（模型需课题状态锚定，屏除轮次限制；开关可配）。
         let need_fresh = should_refresh_brief(
             &fresh,
             state.brief_cache.as_deref(),
             state.poll_count,
             state.last_brief_round,
             last_is_tool,
+            brief_every_n,
+            brief_on_prev_settling,
         );
         tracing::info!(
             phase = PHASE_HOOK_ASSISTANT,
@@ -1405,7 +1445,9 @@ impl AssistantHooks<'_> {
             need_fresh,
             last_is_tool,
             poll_count = state.poll_count,
-            reselect = state.poll_count % SELECTION_EVERY_N_ROUNDS == 0,
+            brief_every_n,
+            brief_on_prev_settling,
+            reselect = state.poll_count % selection_every_n == 0,
             "advance brief refresh decision"
         );
         if need_fresh {
@@ -1422,9 +1464,9 @@ impl AssistantHooks<'_> {
         } else {
             ctx.model_input = state.brief_cache.clone().unwrap_or(fresh);
         }
-        // 选型频率（业务层算好）：每 SELECTION_EVERY_N_ROUNDS 个推进轮做一次选型，
+        // 选型频率（业务层算好，N 可配）：每 N 个推进轮做一次选型，
         // 中间轮沿用 last_selected 锚点；User 轮不设（默认 true，每轮选型）。
-        ctx.reselect = state.poll_count % SELECTION_EVERY_N_ROUNDS == 0;
+        ctx.reselect = state.poll_count % selection_every_n == 0;
         Ok(())
     }
 
@@ -1601,17 +1643,104 @@ fn build_topic_brief(topic: &Topic) -> String {
     out
 }
 
-/// 课题简报刷新频率：每 N 个推进轮至少刷新一次（另有课题变更 / 上轮非工具结束即时刷新）。
+/// 课题简报刷新频率默认值：每 N 个推进轮至少刷新一次（可经周期可调项覆盖）。
 const BRIEF_EVERY_N_ROUNDS: u64 = 3;
 
-/// IP-1 合并裁决复核频率：已绑定课题时每 N 条用户消息复核一次（未绑定课题必跑）。
-const USER_ROUND_JUDGEMENT_EVERY_N_ROUNDS: u64 = 3;
+/// IP-1 合并裁决复核频率默认值：已绑定课题时每 N 条用户消息复核一次（未绑定课题必跑）。
+/// 可经周期可调项 `assistant.user-round-judgement.review_every_n` 覆盖。
+pub(crate) const USER_ROUND_JUDGEMENT_EVERY_N_ROUNDS: u64 = 3;
 
-/// IP-1 门控（纯函数便于单测）：未绑定课题（含首轮 `user_rounds == 0`）必跑；
+/// 裁决复核门控（纯函数便于单测）：未绑定课题（含首轮 `user_rounds == 0`）必跑；
 /// 已绑定课题按 `user_rounds` 低频复核。IP-1 时刻读到的是上一轮完成后的累计值
 /// （本轮未 tick），`0 % N == 0` 天然覆盖首轮。
-pub(crate) fn need_user_round_judgement(topic_bound: bool, user_rounds: u64) -> bool {
-    !topic_bound || user_rounds % USER_ROUND_JUDGEMENT_EVERY_N_ROUNDS == 0
+///
+/// `every_n` 来自周期可调项（`Internal`，默认 [`USER_ROUND_JUDGEMENT_EVERY_N_ROUNDS`]）。
+pub(crate) fn need_user_round_judgement(topic_bound: bool, user_rounds: u64, every_n: u64) -> bool {
+    !topic_bound || (every_n > 0 && user_rounds % every_n == 0)
+}
+
+// ── 周期可调项声明（动作提供方：默认值 = 原常量，消费方仅在其范围内取值）────────────
+
+const MODE_VALUES: &[&str] = &["chat", "agent", "assistant", "system"];
+const MODE_DEFAULT: &[&str] = &["assistant", "system"];
+
+pub(crate) fn mode_window_spec() -> CycleParamSpec {
+    CycleParamSpec {
+        key: "mode",
+        label: "cycle.paramMode",
+        field: Some(CycleField::Mode),
+        round_ref: RoundRef::Current,
+        kind: CycleParamKind::Enum {
+            values: MODE_VALUES,
+            multi: true,
+        },
+        default: CycleValue::Strs(MODE_DEFAULT.iter().map(|s| s.to_string()).collect()),
+        usage: CycleParamUsage::CallGate,
+    }
+}
+
+/// `assistant.round.before` 可调项：模式窗口（调用判定）+ 简报刷新节奏 / 上轮非工具开关（动作内部）。
+pub(crate) fn round_before_cycle_params() -> &'static [CycleParamSpec] {
+    static P: OnceLock<Vec<CycleParamSpec>> = OnceLock::new();
+    P.get_or_init(|| {
+        vec![
+            mode_window_spec(),
+            CycleParamSpec {
+                key: "brief_every_n",
+                label: "cycle.paramBriefEveryN",
+                field: None,
+                round_ref: RoundRef::Current,
+                kind: CycleParamKind::Number { min: 1, max: 50 },
+                default: CycleValue::Int(BRIEF_EVERY_N_ROUNDS as i64),
+                usage: CycleParamUsage::Internal,
+            },
+            CycleParamSpec {
+                key: "brief_on_prev_settling",
+                label: "cycle.paramBriefOnPrevSettling",
+                field: None,
+                round_ref: RoundRef::Previous,
+                kind: CycleParamKind::Bool,
+                default: CycleValue::Bool(true),
+                usage: CycleParamUsage::Internal,
+            },
+        ]
+    })
+    .as_slice()
+}
+
+/// `assistant.round.after` 可调项：模式窗口（调用判定）。
+pub(crate) fn round_after_cycle_params() -> &'static [CycleParamSpec] {
+    static P: OnceLock<Vec<CycleParamSpec>> = OnceLock::new();
+    P.get_or_init(|| vec![mode_window_spec()]).as_slice()
+}
+
+/// `assistant.select-neuron` 可调项：选型节奏（动作内部）。
+pub(crate) fn select_neuron_cycle_params() -> &'static [CycleParamSpec] {
+    static P: OnceLock<Vec<CycleParamSpec>> = OnceLock::new();
+    P.get_or_init(|| {
+        vec![CycleParamSpec {
+            key: "selection_every_n",
+            label: "cycle.paramSelectionEveryN",
+            field: None,
+            round_ref: RoundRef::Current,
+            kind: CycleParamKind::Number { min: 1, max: 50 },
+            default: CycleValue::Int(SELECTION_EVERY_N_ROUNDS as i64),
+            usage: CycleParamUsage::Internal,
+        }]
+    })
+    .as_slice()
+}
+
+impl AssistantSession {
+    /// 选型节奏（周期可调项，`Internal`）：每 N 个推进轮做一次选型。
+    pub(crate) fn selection_every_n(&self) -> u64 {
+        self.cycle_int(
+            "assistant.select-neuron",
+            "selection_every_n",
+            SELECTION_EVERY_N_ROUNDS as i64,
+        )
+        .max(1) as u64
+    }
 }
 
 /// IP-5 收尾轮判定（纯函数便于单测）：主轮无工具声明且无工具执行结果
@@ -1842,10 +1971,12 @@ fn should_refresh_brief(
     poll_count: u64,
     last_brief_round: u64,
     last_is_tool: bool,
+    every_n: u64,
+    on_prev_settling: bool,
 ) -> bool {
     fresh != cache.unwrap_or("")
-        || !last_is_tool
-        || poll_count.saturating_sub(last_brief_round) >= BRIEF_EVERY_N_ROUNDS
+        || (on_prev_settling && !last_is_tool)
+        || (every_n > 0 && poll_count.saturating_sub(last_brief_round) >= every_n)
 }
 
 /// 轮次计数语义（纯函数便于单测）：`total_rounds` 每成功轮 +1；User 轮 `user_rounds` +1 且
@@ -2037,26 +2168,31 @@ mod tests {
 
     #[test]
     fn brief_refresh_round_gap_condition() {
-        // ③ 频率兜底：poll_count - last_brief_round ≥ 3 且其余条件不命中时也刷新。
-        assert!(!should_refresh_brief("brief", Some("brief"), 1, 0, true));
-        assert!(!should_refresh_brief("brief", Some("brief"), 2, 0, true));
-        assert!(should_refresh_brief("brief", Some("brief"), 3, 0, true));
-        assert!(should_refresh_brief("brief", Some("brief"), 5, 2, true));
+        // ③ 频率兜底：poll_count - last_brief_round ≥ N（默认 3）且其余条件不命中时也刷新。
+        assert!(!should_refresh_brief("brief", Some("brief"), 1, 0, true, 3, true));
+        assert!(!should_refresh_brief("brief", Some("brief"), 2, 0, true, 3, true));
+        assert!(should_refresh_brief("brief", Some("brief"), 3, 0, true, 3, true));
+        assert!(should_refresh_brief("brief", Some("brief"), 5, 2, true, 3, true));
+        // 节奏可配：N=10 时 3 轮不再刷新，10 轮才刷新
+        assert!(!should_refresh_brief("brief", Some("brief"), 3, 0, true, 10, true));
+        assert!(should_refresh_brief("brief", Some("brief"), 10, 0, true, 10, true));
     }
 
     #[test]
     fn brief_refresh_topic_changed_condition() {
         // ① 课题变化（进度/scope/切换/新增）：fresh ≠ cache 立即刷新，不受频率与工具结束限制。
-        assert!(should_refresh_brief("brief-v2", Some("brief-v1"), 0, 0, true));
-        assert!(should_refresh_brief("brief", None, 0, 0, true)); // 无缓存视为变化
+        assert!(should_refresh_brief("brief-v2", Some("brief-v1"), 0, 0, true, 3, true));
+        assert!(should_refresh_brief("brief", None, 0, 0, true, 3, true)); // 无缓存视为变化
     }
 
     #[test]
     fn brief_refresh_non_tool_end_condition() {
         // ② 上轮非工具调用结束：屏除轮次限制，直接给简报。
-        assert!(should_refresh_brief("brief", Some("brief"), 1, 0, false));
+        assert!(should_refresh_brief("brief", Some("brief"), 1, 0, false, 3, true));
         // 上轮工具结束 + 无变化 + 未达频率 → 复用缓存。
-        assert!(!should_refresh_brief("brief", Some("brief"), 1, 0, true));
+        assert!(!should_refresh_brief("brief", Some("brief"), 1, 0, true, 3, true));
+        // 开关关闭：上轮非工具结束也不再触发（仅剩「内容变化 / 频率兜底」两条）
+        assert!(!should_refresh_brief("brief", Some("brief"), 1, 0, false, 3, false));
     }
 
     #[test]
@@ -2144,19 +2280,23 @@ mod tests {
     #[test]
     fn judgement_gate_unbound_always_runs() {
         // 未绑定课题（含首轮）必跑：路由需要建课 / 找课。
-        assert!(need_user_round_judgement(false, 0));
-        assert!(need_user_round_judgement(false, 7));
+        assert!(need_user_round_judgement(false, 0, 3));
+        assert!(need_user_round_judgement(false, 7, 3));
     }
 
     #[test]
     fn judgement_gate_bound_follows_interval() {
         // 已绑定：user_rounds==0（首轮）必跑；中间轮跳过；每 N=3 复核一次。
-        assert!(need_user_round_judgement(true, 0));
-        assert!(!need_user_round_judgement(true, 1));
-        assert!(!need_user_round_judgement(true, 2));
-        assert!(need_user_round_judgement(true, 3));
-        assert!(!need_user_round_judgement(true, 4));
-        assert!(need_user_round_judgement(true, 6));
+        assert!(need_user_round_judgement(true, 0, 3));
+        assert!(!need_user_round_judgement(true, 1, 3));
+        assert!(!need_user_round_judgement(true, 2, 3));
+        assert!(need_user_round_judgement(true, 3, 3));
+        assert!(!need_user_round_judgement(true, 4, 3));
+        assert!(need_user_round_judgement(true, 6, 3));
+        // 节奏可配：N=5 时按 5 的倍数复核
+        assert!(!need_user_round_judgement(true, 3, 5));
+        assert!(need_user_round_judgement(true, 5, 5));
+        assert!(need_user_round_judgement(true, 10, 5));
     }
 
     fn settling_outcome(
@@ -2601,6 +2741,7 @@ mod tests {
         // 共享同一 ProviderRegistry：热失效测试经 harness 侧 save_config / 读盘修改配置，
         // assistant 侧能力探测（model_capabilities → 读盘）即时反映。
         let registry = Arc::new(ProviderRegistry::new(root.clone()));
+        let hooks = Arc::new(HookRegistry::new());
         let assistant = Arc::new(AssistantSession::new(
             conversation_store,
             Arc::clone(&manager),
@@ -2608,6 +2749,7 @@ mod tests {
             neuron_store,
             Arc::clone(&hook_store),
             registry.clone(),
+            Arc::clone(&hooks),
             runner,
             step_tx,
             SessionTracker::new(),

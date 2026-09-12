@@ -13,6 +13,7 @@ import type {
   Connection,
   Conversation,
   ConversationSummaryPage,
+  CycleValue,
   FsEntry,
   FsInfo,
   FsReadResult,
@@ -29,6 +30,7 @@ import type {
   GitStashEntry,
   GitStatusView,
   HookDefMeta,
+  HookEntry,
   HookJudgementFilter,
   HookJudgementListResult,
   LogEntry,
@@ -137,6 +139,13 @@ export const c = {
     HookJudgementListResult
   >("hook_judgements_list"),
   hookDefsList: def<undefined, HookDefMeta[]>("hook_defs_list"),
+
+  // ── 周期管理（Hook Cycle）──
+  hooksList: def<undefined, HookEntry[]>("hooks_list"),
+  hookSetEnabled: def<{ id: string; on: boolean }, void>("hook_set_enabled"),
+  hookSetValue: def<{ id: string; key: string; value: CycleValue }, void>(
+    "hook_set_value",
+  ),
 
   // ── Poller ──
   pollStatus: def<undefined, PollerStatus>("poll_status"),

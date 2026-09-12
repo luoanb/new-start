@@ -2,24 +2,28 @@
 //! （completed / blocked）。单次模型调用先修订后验收（2026-08-30 spec 合并自
 //! revise_topic + complete_scope）。
 //!
-//! 门控下沉在 run 内：仅收尾轮触发（`is_settling_round`：无工具声明且无工具执行），
-//! 工具轮中间产物不做裁决；暂停 / 等待用户课题不写入。
+//! 周期门控（调用前判定）：模式窗口（仅助手/系统）+ 本轮产物形态（仅收尾轮）；
+//! 业务不变量（暂停 / 等待用户不写、空 scope 收尾、WrappingUp 关闭、completed 仅用户轮）
+//! 留在 `run` 内。
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, OnceLock, Weak};
 
 use serde_json::{json, Value};
 
 use crate::application::assistant_session::{
-    append_revision_log, is_settling_round, parse_scope_revision, should_delay_close,
+    append_revision_log, mode_window_spec, parse_scope_revision, should_delay_close,
     AssistantHooks, AssistantSession,
 };
 use crate::application::hook::judgement::{JudgementAnchor, JudgementSpec};
 use crate::core::error::AppResult;
 use crate::core::hook::defs::{HookDef, HookHandler, HookRegistry, InjectPointId, RegisterError};
+use crate::core::hook::{
+    CycleField, CycleParamKind, CycleParamSpec, CycleParamUsage, CycleValue, RoundRef,
+};
 use crate::core::log_phase::PHASE_HOOK_ROUND_REVIEW;
-use crate::core::models::{ConversationMode, ResponseFormatSpec, TopicStatus};
+use crate::core::models::{ResponseFormatSpec, TopicStatus};
 use crate::core::round_service::{RoundContext, RoundTriggerKind};
 use crate::stores::topic_store::now_ms;
 
@@ -89,6 +93,31 @@ pub(crate) const SPEC: JudgementSpec = JudgementSpec {
     neutral_fallback: fallback_round_review,
 };
 
+/// 周期可调项：模式窗口 + 本轮产物形态（**仅收尾轮**）——均为调用判定。
+///
+/// 暂停 / 等待用户不写、空 scope 收尾等属**业务不变量**，不进周期条件（留在 [`run`]）。
+pub(crate) fn cycle_params() -> &'static [CycleParamSpec] {
+    static P: OnceLock<Vec<CycleParamSpec>> = OnceLock::new();
+    P.get_or_init(|| {
+        vec![
+            mode_window_spec(),
+            CycleParamSpec {
+                key: "shape",
+                label: "cycle.paramRoundShape",
+                field: Some(CycleField::RoundShape),
+                round_ref: RoundRef::Current,
+                kind: CycleParamKind::Enum {
+                    values: &["tool_round", "settling_round"],
+                    multi: false,
+                },
+                default: CycleValue::Str("settling_round".into()),
+                usage: CycleParamUsage::CallGate,
+            },
+        ]
+    })
+    .as_slice()
+}
+
 /// 装配期注册（**注册**，默认关闭；开启由装配方 [`HookRegistry::set_enabled`] 显式设置）。
 ///
 /// handler 是核心闭包：捕获 `Weak<AssistantSession>`（防循环引用）+ [`SPEC`]，
@@ -102,6 +131,9 @@ pub(crate) fn register(
         id: SPEC.system_type,
         label: SPEC.label,
         inject_point: InjectPointId::AfterPersistOutcome,
+        group: "cycle.groupJudgement",
+        disable_hint: None,
+        cycle_params: cycle_params(),
         handler: HookHandler::AfterPersistOutcome(Box::new(move |ctx| {
             let weak = Weak::clone(&weak);
             Box::pin(async move {
@@ -115,13 +147,7 @@ pub(crate) fn register(
 }
 
 pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppResult<()> {
-    // 门控（下沉）：课题副作用仅 Assistant/System 模式承载。
-    if !matches!(
-        ctx.mode,
-        ConversationMode::Assistant | ConversationMode::System
-    ) {
-        return Ok(());
-    }
+    // 模式窗口 + 「仅收尾轮」由**周期门控**在调用前判定，handler 内不再自查。
     let Some(topic_id) = ctx.topic_id.clone() else {
         tracing::info!(phase = PHASE_HOOK_ROUND_REVIEW, "skip: no topic");
         return Ok(());
@@ -185,14 +211,10 @@ pub(crate) async fn run(hooks: &AssistantHooks<'_>, ctx: &RoundContext) -> AppRe
         }
         return Ok(());
     }
-    // 收尾轮门控：工具轮（声明或执行任一存在）的中间产物不触发裁决。
-    let Some(outcome) = ctx.outcome.as_ref().filter(|o| is_settling_round(o)) else {
-        tracing::info!(
-            phase = PHASE_HOOK_ROUND_REVIEW,
-            tool_calls = ctx.outcome.as_ref().map_or(0, |o| o.tool_calls.as_ref().map_or(0, Vec::len)),
-            tool_results = ctx.outcome.as_ref().map_or(0, |o| o.tool_results.len()),
-            "skip: not a settling round"
-        );
+    // 「仅收尾轮」由周期门控（`CallGate` 的 `shape` 项，默认 `settling_round`）承担；
+    // 此处只确保本轮产物存在（异常路径无产物 → 跳过）。
+    let Some(outcome) = ctx.outcome.as_ref() else {
+        tracing::info!(phase = PHASE_HOOK_ROUND_REVIEW, "skip: no round product");
         return Ok(());
     };
     let model_output = outcome.model_output.clone();

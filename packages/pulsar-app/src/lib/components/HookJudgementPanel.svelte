@@ -1,11 +1,12 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { api, c } from "$lib/api";
-  import type { HookDefMeta, HookJudgementRecord } from "$lib/types";
+  import type { HookDefMeta, HookEntry, HookJudgementRecord, HookParamView } from "$lib/types";
   import { t } from "$lib/i18n";
   import { errorMessage } from "$lib/errorMessage";
   import { useViewContext } from "$lib/layout/viewContext";
   import Select from "./Select.svelte";
+  import Toggle from "./Toggle.svelte";
 
   const ctx = useViewContext();
 
@@ -104,6 +105,7 @@
   }
 
   onMount(() => {
+    void loadHooks();
     void loadPage(true);
     // 两阶段事件驱动：pending（裁决开始）→ 终态（ok/retried_ok/downgraded）。
     // 收到事件后重置重拉首页，保证列表与计数实时一致。
@@ -197,7 +199,150 @@
       ctx.stores.layout.requestLocate(record.conversation_id, record.anchor_message_index);
     }
   }
+
+  // ── 周期（动作清单）：完全由后端声明驱动渲染，面板零领域硬编码 ──
+  let activeTab = $state<"hooks" | "records">("hooks");
+  let hooks = $state<HookEntry[]>([]);
+  let hooksLoading = $state(false);
+  let hooksError = $state("");
+  let savingKey = $state<string | null>(null);
+  let expandedHookId = $state<string | null>(null);
+
+  /** 枚举取值展示名（后端给的是稳定值；label 由面板 i18n 映射）。 */
+  const VALUE_KEYS: Record<string, string> = {
+    chat: "cycle.valueChat",
+    agent: "cycle.valueAgent",
+    assistant: "cycle.valueAssistant",
+    system: "cycle.valueSystem",
+    user_round: "cycle.valueUserRound",
+    scheduled_round: "cycle.valueScheduledRound",
+    tool_round: "cycle.valueToolRound",
+    settling_round: "cycle.valueSettlingRound",
+  };
+  function valueLabel(value: string): string {
+    const key = VALUE_KEYS[value];
+    return key ? t(key) : value;
+  }
+  function asBool(value: unknown): boolean {
+    return value === true;
+  }
+  function asNum(value: unknown): number {
+    return typeof value === "number" ? value : 0;
+  }
+  function asArr(value: unknown): string[] {
+    return Array.isArray(value) ? value : [];
+  }
+
+  async function loadHooks() {
+    hooksLoading = true;
+    hooksError = "";
+    try {
+      hooks = await api.call(c.hooksList, undefined);
+    } catch (e) {
+      hooksError = t("cycle.loadFailed", { error: errorMessage(e) });
+    } finally {
+      hooksLoading = false;
+    }
+  }
+
+  /** 启停：统一可切（无硬保护）；失败回滚到服务端状态。 */
+  async function toggleHook(entry: HookEntry, on: boolean) {
+    savingKey = `${entry.id}:enabled`;
+    hooksError = "";
+    try {
+      await api.call(c.hookSetEnabled, { id: entry.id, on });
+      await loadHooks();
+    } catch (e) {
+      hooksError = t("cycle.saveFailed", { error: errorMessage(e) });
+      await loadHooks();
+    } finally {
+      savingKey = null;
+    }
+  }
+
+  /** 取值：按后端声明的形态提交（enum 多选 → 数组；单选 → 字符串；bool → 布尔；number → 数字）。 */
+  async function setHookValue(entry: HookEntry, param: HookParamView, value: unknown) {
+    const key = `${entry.id}:${param.key}`;
+    savingKey = key;
+    hooksError = "";
+    try {
+      await api.call(c.hookSetValue, { id: entry.id, key: param.key, value: value as never });
+      await loadHooks();
+    } catch (e) {
+      hooksError = t("cycle.saveFailed", { error: errorMessage(e) });
+      await loadHooks();
+    } finally {
+      savingKey = null;
+    }
+  }
+
+  function toggleEnumMulti(entry: HookEntry, param: HookParamView, value: string) {
+    const current = asArr(param.value);
+    const next = current.includes(value)
+      ? current.filter((v) => v !== value)
+      : [...current, value];
+    void setHookValue(entry, param, next);
+  }
 </script>
+
+{#snippet paramRow(entry: HookEntry, param: HookParamView)}
+  <!-- 宽控件（枚举）转上下布局避免挤压；窄控件（开关 / 数值）保持左右 -->
+  <div class="param-row" class:stacked={param.kind.kind === "enum"}>
+    <span class="param-label">{t(param.label)}</span>
+    {#if param.kind.kind === "bool"}
+      <span
+        class="toggle-wrap"
+        onchange={(e) => setHookValue(entry, param, (e.target as HTMLInputElement).checked)}
+      >
+        <Toggle
+          checked={asBool(param.value)}
+          disabled={savingKey === `${entry.id}:${param.key}`}
+        />
+      </span>
+    {:else if param.kind.kind === "number"}
+      <input
+        class="param-number"
+        type="number"
+        min={param.kind.min}
+        max={param.kind.max}
+        value={asNum(param.value)}
+        disabled={savingKey === `${entry.id}:${param.key}`}
+        onchange={(e) => {
+          const raw = Number((e.currentTarget as HTMLInputElement).value);
+          if (Number.isFinite(raw)) void setHookValue(entry, param, raw);
+        }}
+      />
+    {:else if param.kind.multi}
+      <div class="chips">
+        {#each param.kind.values as value (value)}
+          <button
+            type="button"
+            class="chip"
+            class:on={asArr(param.value).includes(value)}
+            disabled={savingKey === `${entry.id}:${param.key}`}
+            onclick={() => toggleEnumMulti(entry, param, value)}
+          >{valueLabel(value)}</button>
+        {/each}
+      </div>
+    {:else}
+      <Select
+        value={typeof param.value === "string" ? param.value : ""}
+        options={param.kind.values.map((v) => ({ value: v, label: valueLabel(v) }))}
+        onchange={(v) => setHookValue(entry, param, String(v))}
+      />
+    {/if}
+  </div>
+{/snippet}
+
+{#snippet paramGroup(entry: HookEntry, usage: "call_gate" | "internal", title: string)}
+  {@const list = entry.params.filter((p) => p.usage === usage)}
+  {#if list.length > 0}
+    <p class="group-title">{title}</p>
+    {#each list as param (param.key)}
+      {@render paramRow(entry, param)}
+    {/each}
+  {/if}
+{/snippet}
 
 <div class="judgement-panel">
   {#if errorMsg}
@@ -206,12 +351,12 @@
 
   <!-- 面板标题栏：对齐 ToolPanel / TopicPanel 的 panel-toolbar 词汇 -->
   <div class="panel-toolbar">
-    <span class="panel-title">{t("views.flowDecisions")}</span>
+    <span class="panel-title">{t("views.cycleManagement")}</span>
     <div class="toolbar-actions">
       <button
         class="icon-btn"
-        onclick={() => loadPage(true)}
-        disabled={loading}
+        onclick={() => (activeTab === "hooks" ? loadHooks() : loadPage(true))}
+        disabled={activeTab === "hooks" ? hooksLoading : loading}
         title={t("judgement.refresh")}
         aria-label={t("judgement.refresh")}
       >
@@ -220,25 +365,108 @@
     </div>
   </div>
 
-  <!-- 过滤条：类型 / 状态下拉 + 结果计数（total = 过滤后总数） -->
-  <div class="filter-bar">
-    <Select
-      bind:value={filterHookType}
-      options={hookTypeOptions}
-      onchange={(v) => applyFilter("hookType", String(v))}
-    />
-    <Select
-      bind:value={filterStatus}
-      options={statusOptions}
-      onchange={(v) => applyFilter("status", String(v))}
-    />
-    <span class="count">{total}</span>
+  <!-- 分区 tab：动作（周期）/ 执行记录 -->
+  <div class="tabs">
+    <button
+      type="button"
+      class="tab"
+      class:active={activeTab === "hooks"}
+      onclick={() => (activeTab = "hooks")}
+    >{t("cycle.tabHooks")}</button>
+    <button
+      type="button"
+      class="tab"
+      class:active={activeTab === "records"}
+      onclick={() => (activeTab = "records")}
+    >{t("cycle.tabRecords")}</button>
   </div>
 
-  <div class="list" bind:this={listEl} onscroll={onScroll}>
-    {#if records.length === 0}
-      <p class="empty">{hasFilter ? t("judgement.noMatch") : t("judgement.empty")}</p>
-    {:else}
+  {#if activeTab === "hooks"}
+    <!-- 动作清单：完全由 hooks_list 声明驱动（启停 + 参数），无领域硬编码 -->
+    <div class="list hook-list">
+      {#if hooksError}
+        <button class="error-banner" type="button" onclick={() => (hooksError = "")}>
+          {hooksError}
+        </button>
+      {/if}
+      {#if hooks.length === 0}
+        <p class="empty">{t("cycle.empty")}</p>
+      {:else}
+        {#each hooks as entry (entry.id)}
+          <div class="hook-row" class:expanded={expandedHookId === entry.id}>
+            <button
+              type="button"
+              class="hook-head"
+              onclick={() => (expandedHookId = expandedHookId === entry.id ? null : entry.id)}
+            >
+              <span class="hook-text">
+                <span class="hook-label">{t(entry.label)}</span>
+                <span class="hook-meta">
+                  <span>{t(entry.group)}</span>
+                  <span class="dot">·</span>
+                  <span class="hook-ip" title={entry.injectPoint}>{entry.injectPoint}</span>
+                </span>
+              </span>
+              {#if !entry.enabled}
+                <span class="hook-state">{t("cycle.stateDisabled")}</span>
+              {/if}
+              <span class="chevron" class:open={expandedHookId === entry.id} aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+              </span>
+            </button>
+
+            {#if expandedHookId === entry.id}
+              <div class="hook-detail">
+                <!-- 启停开关：Toggle 内部为原生 checkbox，change 冒泡到包裹层 -->
+                <div class="param-row">
+                  <span class="param-label">{t("cycle.enabled")}</span>
+                  <span
+                    class="toggle-wrap"
+                    onchange={(e) => toggleHook(entry, (e.target as HTMLInputElement).checked)}
+                  >
+                    <Toggle
+                      checked={entry.enabled}
+                      disabled={savingKey === `${entry.id}:enabled`}
+                    />
+                  </span>
+                </div>
+
+                {#if entry.disableHint}
+                  <p class="hook-warn">{t(entry.disableHint)}</p>
+                {/if}
+
+                {#if entry.params.length === 0}
+                  <p class="detail-note">{t("cycle.noParams")}</p>
+                {:else}
+                  {@render paramGroup(entry, "call_gate", t("cycle.schedule"))}
+                  {@render paramGroup(entry, "internal", t("cycle.params"))}
+                {/if}
+              </div>
+            {/if}
+          </div>
+        {/each}
+      {/if}
+    </div>
+  {:else}
+    <!-- 执行记录：过滤条 + 单层滚动列表（原「流程决策」账本时间线） -->
+    <div class="filter-bar">
+      <Select
+        bind:value={filterHookType}
+        options={hookTypeOptions}
+        onchange={(v) => applyFilter("hookType", String(v))}
+      />
+      <Select
+        bind:value={filterStatus}
+        options={statusOptions}
+        onchange={(v) => applyFilter("status", String(v))}
+      />
+      <span class="count">{total}</span>
+    </div>
+
+    <div class="list" bind:this={listEl} onscroll={onScroll}>
+      {#if records.length === 0}
+        <p class="empty">{hasFilter ? t("judgement.noMatch") : t("judgement.empty")}</p>
+      {:else}
       {#each records as record (record.id)}
         <div
           class="record {record.status}"
@@ -371,7 +599,8 @@
         <p class="list-footer">{t("judgement.allLoaded", { total })}</p>
       {/if}
     {/if}
-  </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -621,4 +850,171 @@
   }
   .attempt-no { font-weight: 600; }
   .attempt-error { color: var(--color-error, #c0392b); }
+
+  /* ── 周期（动作）区样式：通栏扁平 + token ── */
+  .tabs {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 0 var(--space-2) var(--space-1) var(--space-2);
+    border-bottom: var(--border-width) solid var(--color-border);
+  }
+  .tab {
+    background: none;
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--fs-sm);
+    color: var(--color-text-muted);
+    cursor: pointer;
+  }
+  .tab:hover { background: var(--color-hover); color: var(--color-text); }
+  .tab.active {
+    background: color-mix(in oklch, var(--color-primary) 14%, transparent);
+    color: var(--color-text);
+  }
+  .hook-row {
+    flex-shrink: 0;
+    border-bottom: var(--border-width) solid var(--color-border);
+  }
+  .hook-row:last-child { border-bottom: none; }
+  /* 行间用 hairline 分隔，不用 .list 的卡片间距；
+     左溢面板根容器的内边距 + 右侧不留白 → hover 背景直达面板左右边缘 */
+  .hook-list {
+    gap: 0;
+    padding-right: 0;
+    margin-left: calc(-1 * var(--space-2));
+  }
+  .hook-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    padding: var(--space-1) var(--space-2);
+    background: none;
+    border: none;
+    color: var(--color-text);
+    cursor: pointer;
+    text-align: left;
+  }
+  .hook-head:hover { background: var(--color-hover); }
+  .hook-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .hook-label {
+    font-size: var(--fs-sm);
+    line-height: 1.35;
+  }
+  .hook-label,
+  .hook-meta {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .hook-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-size: var(--fs-xs);
+    color: var(--color-text-muted);
+  }
+  .hook-meta .dot { opacity: 0.5; }
+  .hook-ip {
+    font-family: var(--font-mono, monospace);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .hook-state {
+    flex-shrink: 0;
+    font-size: var(--fs-xs);
+    color: var(--color-text-muted);
+  }
+  .chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    color: var(--color-text-muted);
+    transition: transform var(--duration-fast) var(--ease-out);
+    transform-origin: center;
+  }
+  .chevron svg { width: 12px; height: 12px; display: block; }
+  .chevron.open { transform: rotate(90deg); }
+  .hook-warn {
+    margin: 0;
+    font-size: var(--fs-xs);
+    color: var(--color-warning);
+  }
+  .hook-detail {
+    padding: var(--space-1) var(--space-2) var(--space-2);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+  .group-title {
+    margin: var(--space-1) 0 0 0;
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    color: var(--color-text-muted);
+  }
+  .detail-note {
+    margin: 0;
+    font-size: var(--fs-xs);
+    color: var(--color-text-muted);
+  }
+  .param-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+  .param-row.stacked {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-1);
+  }
+  .param-label {
+    font-size: var(--fs-xs);
+    color: var(--color-text);
+  }
+  .param-number {
+    width: 72px;
+    padding: 2px 6px;
+    border: var(--border-width) solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface);
+    color: var(--color-text);
+    font-size: var(--fs-xs);
+  }
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+  }
+  .chip {
+    padding: 2px 8px;
+    border: var(--border-width) solid var(--color-border);
+    border-radius: var(--radius-full);
+    background: transparent;
+    color: var(--color-text-muted);
+    font-size: var(--fs-xs);
+    cursor: pointer;
+  }
+  .chip:hover:not(:disabled) { color: var(--color-text); }
+  .chip.on {
+    border-color: transparent;
+    background: color-mix(in oklch, var(--color-primary) 14%, transparent);
+    color: var(--color-primary);
+  }
+  .chip:disabled { opacity: 0.5; cursor: default; }
+  .toggle-wrap {
+    display: inline-flex;
+    align-items: center;
+  }
 </style>
