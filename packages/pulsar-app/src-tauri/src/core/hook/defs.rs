@@ -4,7 +4,7 @@
 //! - **注入点即类型**：hook 的能力边界由注入点（挂载位置）规格卡写死，无独立 kind 分类；
 //!   挂在哪决定了它能消费什么上下文、能做什么操作。
 //! - **放权**：上下文尽量给（每个注入点丢当前轮完整 `RoundContext`）、操作权限尽量给
-//!   （能 `&mut` 就 `&mut`，不设字段级权限；`ModelCallResponse` / `Vec<ToolResultItem>`
+//!   （能 `&mut` 就 `&mut`，不设字段级权限；`ModelResponse` / `Vec<ToolResult>`
 //!   两个局部产物就近作第二 `&mut` 参数）、边界只画在当前轮（不跨会话 / 不跨轮 / 不给全局）。
 //! - **失败策略梯度**：越靠前越硬（IP-1=fail）、越靠后越软（IP-2~IP-5=ignore）——
 //!   数据一旦入库（persist_input 后），中止会丢轮次产物。
@@ -17,10 +17,10 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use crate::core::{
-    conversation_runner::RoundContext,
     error::AppResult,
-    models::ModelCallResponse,
-    round_types::ToolResultItem,
+    models::ModelResponse,
+    round_service::RoundContext,
+    round_types::ToolResult,
 };
 
 /// handler 返回的 async future：`run_round` 本身是 async，注入点分发天然在 async 上下文。
@@ -65,7 +65,7 @@ pub enum HookHandler {
     /// AfterCallModel：追加 call_model 返回值，可改写响应 / 拦截工具调用。
     AfterCallModel(
         Box<
-            dyn for<'a> Fn(&'a mut RoundContext, &'a mut ModelCallResponse) -> BoxFuture<'a, AppResult<()>>
+            dyn for<'a> Fn(&'a mut RoundContext, &'a mut ModelResponse) -> BoxFuture<'a, AppResult<()>>
                 + Send
                 + Sync,
         >,
@@ -73,7 +73,7 @@ pub enum HookHandler {
     /// AfterExecuteTools：追加 execute_tools 产出的工具结果，可改写 / 丢弃。
     AfterExecuteTools(
         Box<
-            dyn for<'a> Fn(&'a mut RoundContext, &'a mut Vec<ToolResultItem>) -> BoxFuture<'a, AppResult<()>>
+            dyn for<'a> Fn(&'a mut RoundContext, &'a mut Vec<ToolResult>) -> BoxFuture<'a, AppResult<()>>
                 + Send
                 + Sync,
         >,
@@ -202,7 +202,7 @@ impl HookRegistry {
     }
 
     /// IP-3：call_model 后、execute_tools 前。**ignore 策略**——Err 用原响应继续。
-    pub async fn run_after_call_model(&self, ctx: &mut RoundContext, response: &mut ModelCallResponse) {
+    pub async fn run_after_call_model(&self, ctx: &mut RoundContext, response: &mut ModelResponse) {
         for def in self.snapshot(InjectPointId::AfterCallModel) {
             if let HookHandler::AfterCallModel(f) = &def.handler {
                 if let Err(e) = f(ctx, response).await {
@@ -220,7 +220,7 @@ impl HookRegistry {
     pub async fn run_after_execute_tools(
         &self,
         ctx: &mut RoundContext,
-        results: &mut Vec<ToolResultItem>,
+        results: &mut Vec<ToolResult>,
     ) {
         for def in self.snapshot(InjectPointId::AfterExecuteTools) {
             if let HookHandler::AfterExecuteTools(f) = &def.handler {
@@ -273,7 +273,7 @@ mod tests {
             model_input: String::new(),
             model: crate::core::models::ChatModelSelection::new("test-provider", "test-model"),
             tool_override: None,
-            trigger: crate::core::conversation_runner::RoundTriggerKind::User,
+            trigger: crate::core::round_service::RoundTriggerKind::User,
             topic_id: None,
             reselect: true,
             nudge_persist: false,
@@ -282,8 +282,8 @@ mod tests {
         }
     }
 
-    fn sample_response() -> ModelCallResponse {
-        ModelCallResponse {
+    fn sample_response() -> ModelResponse {
+        ModelResponse {
             provider_id: "p".into(),
             model_id: "m".into(),
             output: "hello".into(),
@@ -413,7 +413,7 @@ mod tests {
             })
             .unwrap();
         let mut c = ctx(None);
-        let mut results = vec![ToolResultItem {
+        let mut results = vec![ToolResult {
             tool_call_id: "t1".into(),
             tool_name: "tool".into(),
             content: "ok".into(),

@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-use super::conversation_runner::RoundTriggerKind;
+use super::round_service::RoundTriggerKind;
 use crate::core::log_phase::PHASE_SESSION_COORDINATOR;
 
 /// 活动轮次条目：取消令牌 + 收敛信号发送端。

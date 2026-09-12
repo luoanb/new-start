@@ -7,17 +7,17 @@
 use std::sync::Arc;
 
 use super::{
-    conversation_store::now_ms,
     error::{AppError, AppResult},
-    insert_catalog::InsertCatalog,
     model_call_input::ModelCallInput,
     models::{
         AssistantCandidateScope, Message, MessageBody, MessageRole, NeighborhoodPoolPolicy, Neuron,
         SelectionPolicy, SessionBehavior, ToolPolicy, DEFAULT_ASSISTANT_GLOBAL_LIMIT,
     },
-    neuron_manager::NeuronManager,
     round_types::SessionSeed,
 };
+use crate::application::insert_catalog::InsertCatalog;
+use crate::policies::neuron::manager::NeuronManager;
+use crate::infra::time::now_ms;
 use crate::core::log_phase::{PHASE_RESOLVE, PHASE_RESOLVE_ROLE};
 
 /// 选型决策组件：只做「本轮选谁、把角色上下文拼进 messages」，不做模型调用/工具执行。

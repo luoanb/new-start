@@ -21,8 +21,8 @@ use super::{
     GitDiff, GitDiffLine, GitDiffLineKind, GitFileDiff, GitHunk, GitRepo, GitResetMode,
     GitResetPreview, GitShowFile, GitStashAction, GitStashEntry, GitStatusEntry, GitStatusView,
 };
-use crate::core::cmd_exec::{truncate_output, MAX_CONCURRENT, MAX_OUTPUT_CHARS};
 use crate::core::error::{AppError, AppResult};
+use crate::tools::cmd_exec::{truncate_output, MAX_CONCURRENT, MAX_OUTPUT_CHARS};
 
 /// repo 发现上限。
 const MAX_DEPTH: usize = 8;
@@ -107,7 +107,7 @@ impl CliGitBackend {
         };
 
         let (wait_res, stdout_res, stderr_res) = match tokio::time::timeout(
-            Duration::from_millis(crate::core::cmd_exec::DEFAULT_TIMEOUT_MS),
+            Duration::from_millis(crate::tools::cmd_exec::DEFAULT_TIMEOUT_MS),
             async { tokio::join!(wait_fut, read_stdout, read_stderr) },
         )
         .await
@@ -124,7 +124,7 @@ impl CliGitBackend {
                 );
                 return Err(AppError::RuntimeError(format!(
                     "git command timed out after {}ms",
-                    crate::core::cmd_exec::DEFAULT_TIMEOUT_MS
+                    crate::tools::cmd_exec::DEFAULT_TIMEOUT_MS
                 )));
             }
         };

@@ -12,7 +12,8 @@ use super::manager::TerminalManager;
 use super::session::{SessionInfo, TerminalSession};
 use super::resolve_spawn_cwd;
 use crate::core::error::AppErrorPayload;
-use crate::core::{AppError, Gateway};
+use crate::application::gateway::Gateway;
+use crate::core::AppError;
 
 type TauriResult<T> = Result<T, AppErrorPayload>;
 

@@ -22,7 +22,7 @@ use super::confirm::{ConfirmOutcome, GitOpKind};
 use super::service::GitService;
 use super::{ConflictTake, GitRepo, GitResetMode, GitStashAction};
 use crate::core::error::{AppError, AppResult};
-use crate::core::tool_registry::{Tool, ToolRegistry};
+use crate::tools::tool_registry::{Tool, ToolRegistry};
 
 /// git 工具共享上下文：组合服务（backend + 确认 + active repo + 开关）。
 pub struct GitToolContext {

@@ -1,8 +1,11 @@
+use pulsar_app_lib::application::gateway::Gateway;
 use pulsar_app_lib::core::{
-    app_log, storage, AppError, AppResult, Conversation, Gateway, Message, MessageRole,
-    ModelAppendTemplate, ModelCallInput, ModelCallRequest, ModelInfo, ProviderInfo, RuntimeStatus,
+    AppError, AppResult, ChatOptions, Conversation, Message, MessageRole,
+    ModelAppendTemplate, ModelCallInput, ModelRequest, ModelInfo, ProviderInfo, RuntimeStatus,
     SkillInfo, ThinkingConfig,
 };
+use pulsar_app_lib::stores::storage;
+use pulsar_app_lib::sinks::app_log;
 use std::{env, process};
 
 #[tokio::main]
@@ -39,7 +42,25 @@ async fn run() -> AppResult<()> {
         "chat" => {
             let (conversation_id, message_parts) = take_conversation_arg(args)?;
             let message = message_parts.join(" ");
-            let response = gateway.send_message(message, conversation_id)?;
+            // 应用用例统一入口（M4）：CLI 与 Tauri / RPC / TUI 共用同一模型轮次管线，
+            // 不再保留绕过核心的本地存根回复。
+            let selection = gateway.default_model_selection()?.ok_or_else(|| {
+                AppError::InvalidInput(
+                    "no default model configured; set `defaults` in .pulsar/config.json or use the GUI".into(),
+                )
+            })?;
+            let response = gateway
+                .send_model_message(
+                    message,
+                    ChatOptions {
+                        provider_id: selection.provider_id,
+                        model_id: selection.model_id,
+                        conversation_id,
+                        params: selection.params,
+                        thinking: selection.thinking,
+                    },
+                )
+                .await?;
             println!("conversation: {}", response.conversation_id);
             println!("{}", response.response);
         }
@@ -53,7 +74,7 @@ async fn run() -> AppResult<()> {
             let (provider_id, model_id, message) = take_model_call_args(args)?;
             let response = gateway
                 .providers()
-                .call_model(ModelCallRequest {
+                .call_model(ModelRequest {
                     provider_id,
                     model_id,
                     messages: ModelCallInput::assemble(

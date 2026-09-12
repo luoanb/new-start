@@ -24,7 +24,8 @@ use axum::{
 use serde::Serialize;
 use tokio::sync::broadcast;
 
-use crate::core::{events::STATE_CHANGED_EVENT, Gateway, StateChange, StateEmitter};
+use crate::application::gateway::Gateway;
+use crate::core::{events::STATE_CHANGED_EVENT, StateChange, StateEmitter};
 use crate::terminal::{events::TerminalEventHub, manager::TerminalManager};
 
 /// 内嵌 server 运行配置（源自 `config.json` `server` 节，缺省不启动）。
@@ -154,7 +155,7 @@ pub async fn run_server(cfg: ServerConfig, state: NetState) -> Result<(), String
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::conversation_store::ConversationStore;
+    use crate::stores::conversation_store::JsonConversationStore;
     use axum::{
         body::{to_bytes, Body},
         http::{header, Method, Request, StatusCode},
@@ -177,7 +178,7 @@ mod tests {
                 .expect("clock")
                 .as_nanos()
         ));
-        let store = ConversationStore::new(&dir).expect("temp conversation store");
+        let store = JsonConversationStore::new(&dir).expect("temp conversation store");
         let gateway = Gateway::new(store).expect("gateway");
         let state_emit: StateEmitter = Arc::new(|_| {});
         let (events_tx, _) = broadcast::channel::<StateChange>(16);

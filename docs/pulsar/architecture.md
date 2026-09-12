@@ -1,6 +1,6 @@
 # Pulsar 架构（pulsar-app）
 
-> 最近核对：2026-09-01，与 `packages/pulsar-app` 当前代码同步。
+> 最近核对：2026-09-12，与 `packages/pulsar-app` 当前代码同步（后端架构重构 M1-M6 已落地：目录分层 `core/` / `application/` / `providers/` / `tools/` / `stores/` / `policies/` / `sinks/` / `infra/`，hook 协议入 core、业务入 application；契约真实更名与 `RoundRequest` 收窄，核心默认策略 `round_policy`，流式路径端口化 `RoundService::run_stream` / `RoundDriver::run_stream` + `StreamDelta` / `DomainEvent::Delta` 契约化。见 `docs/specs/2026-09-06_13-55_pulsar-backend-architecture-redesign.md` §九 M6）。
 
 ## 概览
 
@@ -39,19 +39,31 @@ flowchart TB
     net["net/<br/>axum: /api/rpc /api/events /api/ws /api/healthz"]
   end
 
-  subgraph core["Rust Core（core/）"]
-    gateway["Gateway 编排器<br/>组合全部分域，可 Clone，无外层 Mutex"]
-    subgraph domains["分域模块"]
-      conv["Conversation 域<br/>conversation_store / conversation_runner / round_resolver /<br/>round_executor / round_types / session_coordinator / context_safety /<br/>chat / agent / compactor"]
-      assistant["Assistant 域<br/>assistant_session / poller / poller_step / session_tracker"]
-      hook["Hook 域<br/>hook/（注入点 defs / registry / instances / judgement / store / compaction）"]
-      neuron["Neuron 域<br/>neuron/ 子模块（manager / store / selection ...）"]
-      topic["Topic 域<br/>topic_store / topic_manager（SQLite）"]
-      provider["Provider 域<br/>providers / openai_compat / model_call_input / models"]
-      tool["Tool 域<br/>tool_registry / tool_config / dynamic_tool / mcp / cmd_exec / insert_catalog"]
-      infra["基础设施<br/>storage / config / app_log / log_phase / events / error"]
+  subgraph app["Rust 应用层（application/）"]
+    gateway["Gateway 编排器 / 组合根（gateway.rs）<br/>组合全部领域组件，可 Clone，无外层 Mutex"]
+    subgraph drivers["应用驱动与会话"]
+      conv["轮次与会话<br/>drivers.rs（Chat / Agent / Assistant / Poller 四驱动）/ chat_session /<br/>agent_session / assistant_session（AssistantHooks 业务上下文）/<br/>poller / poller_step / session_tracker / insert_catalog"]
+      hookbiz["Hook 业务<br/>hook/（registry / instances / judgement / store / compaction）"]
     end
-    gateway --> conv & assistant & hook & neuron & topic & provider & tool & infra
+    gateway --> conv & hookbiz
+  end
+
+  subgraph core["Rust 封闭核心（core/）"]
+    contract["契约与端口（round_contract.rs）<br/>RoundService（run/cancel）/ RoundRequest / RoundOutcome / RoundStatus /<br/>ConversationId / RoundMode / InputRecord / RoundDriver /<br/>扩展端口：ModelPort / CapabilityExecutor / ToolCatalog /<br/>ConversationStore / EventSink"]
+    subgraph coreimpl["核心实现与稳定类型"]
+      crnd["round_service（ConversationRunner，原 conversation_runner）/<br/>round_executor / round_resolver / round_types / session_coordinator /<br/>context_safety / model_call_input / models / events / error / log_phase"]
+      hookproto["Hook 插槽协议<br/>hook/defs.rs（InjectPointId / HookHandler / HookDef / HookRegistry / 失败策略）"]
+    end
+    contract --> coreimpl
+  end
+
+  subgraph extimpl["扩展实现（端口 Adapter）"]
+    provider["providers/<br/>providers（ProviderRegistry）/ openai_compat"]
+    tool["tools/<br/>tool_registry（ToolCatalog 实现）/ capability_adapter<br/>（CapabilityAdapter）/ tool_config / mcp / dynamic_tool / cmd_exec / current_time"]
+    store["stores/<br/>conversation_store（JsonConversationStore）/ storage /<br/>topic_store / topic_manager"]
+    policy["policies/<br/>compactor / neuron（manager / store / selection ...）"]
+    sink["sinks/<br/>state_sinks / app_log / log_redact"]
+    infra["infra/<br/>config / time"]
   end
 
   subgraph workspace_mod["工作区能力（fileops/ + terminal/）"]
@@ -77,11 +89,14 @@ flowchart TB
   net --> gateway
   tty --> gateway
   fops --> gateway
+  gateway --> contract
+  contract --> coreimpl
+  provider & tool & store & policy & sink & infra -.->|实现端口| contract
   provider --> llm
   tool --> mcp
   tool --> shell
   fops --> git
-  conv & topic & hook & neuron & fops & infra --> disk
+  store & policy & hookbiz & sink & infra & fops --> disk
 ```
 
 ## 入口层
@@ -90,7 +105,7 @@ flowchart TB
 |------|------|------|
 | Tauri GUI | `src-tauri/src/lib.rs` | 默认入口；命令适配 + 分域 State 管理 + 启动装配/引导 |
 | headless server | `src-tauri/src/bin/pulsar-server.rs` | 无 GUI/WebView，直接启动 net 服务；与 GUI 共用 `server_runtime.rs` 装配与 config `server` 节（覆盖链 CLI > env > config > 默认） |
-| CLI | `src-tauri/src/bin/pulsar-cli.rs` | 参数解析、终端输出、shell 友好退出码 |
+| CLI | `src-tauri/src/bin/pulsar-cli.rs` | 参数解析、终端输出、shell 友好退出码；`chat` 走统一模型轮次管线（`send_model_message`，解析默认模型） |
 | TUI | `src-tauri/src/bin/pulsar-tui.rs` + `src-tauri/src/tui/` | 交互式终端会话，斜杠命令映射共享命令模型 |
 | 远程模式 | `src-tauri/src/net/` | 内嵌 axum server：RPC + SSE + WS + 静态资源托管；GUI 与 headless 共用 |
 
@@ -100,116 +115,134 @@ flowchart TB
   --features embed-static` 单命令启动（`PULSAR_HOST=0.0.0.0 PULSAR_PORT=9999`）。
 - 入口层只做适配，不实现独立业务分支。新功能先改 spec、扩展 core，再在各入口暴露。
 
-## Rust Core 分域
+## Rust 分层与目录职责
 
-`src-tauri/src/core/` 按业务能力分域，模块与职责：
+`src-tauri/src/` 按「封闭核心 + 扩展实现 + 应用组合根」分层。依赖方向规则：
 
-### Gateway（编排器）
+- `core/` 不引用其它业务目录（只依赖自身稳定类型与标准库）。
+- 扩展目录（`providers/` / `tools/` / `stores/` / `policies/` / `sinks/` / `infra/`）只引用 `core/` 的稳定类型。
+- `application/` 组合核心与扩展。
+- 入口层（`lib.rs` / `net/` / `tui/` / `bin/`）只引用 `application/`。
+- **已登记的阶段二待拆例外**：`core/round_resolver.rs` → `policies::neuron::manager::NeuronManager` 与 → `application::insert_catalog::InsertCatalog`（核心选型当前仍直连这两者，待后续迭代拆除）。
 
-- 文件：`core/gateway.rs`
-- 组合全部领域组件，对外提供统一入口（`send_model_message` / `send_model_message_stream` /
-  `compact_conversation` / `list_*` / `save_*` 等）。
-- 主要字段：`store`（ConversationStore）、`providers`、`tool_registry`、`topic_store`、
-  `neuron_store`、`hook_judgement_store`、`neuron_manager`、`chat`、`agent`、`assistant`、
-  `poller`、`session_tracker`、`coordinator`（会话级串行）、`workspace_store`、`file_system`、
-  `git_service`、`terminal`（`Option<Arc<AgentTerminalBridge>>`）、`mcp_server_statuses`、
-  `assemble_lock`（MCP/工具装配串行化）、`state_emit`。
-- **可 Clone**：内层 `current_conversation_id: Arc<Mutex<String>>`，无外层 `Mutex<Gateway>`，
-  可安全跨 Tauri State / 后台 task 共享，不持锁跨网络。
-- 后台 runtime：① poller runtime（`spawn_poller_runtime`）；② neuron 容量回收 runtime
-  （`spawn_neuron_recycle_runtime`）；③ 启动期 MCP/工具后台装配（经 `assemble_lock` 串行化，
-  完成后广播 `StateChange::Tools`）。
+### core/（封闭核心 + 稳定类型）
 
-### Conversation 域（轮次管线）
-
-> 独立域文档：[conversation/](./conversation/index.md)（作用约定：真相源与落库 / 统一轮次管线 / 并发秩序 / 上下文安全 / 三种模式 / 压缩）。
+> 轮次管线独立域文档：[conversation/](./conversation/index.md)（作用约定：真相源与落库 / 统一轮次管线 / 并发秩序 / 上下文安全 / 三种模式 / 压缩）。
 
 | 模块 | 职责 |
 |------|------|
-| `conversation_store.rs` | 会话/消息 JSON 持久化（`sessions/<id>.json`，写端全量写；读端已分页：`list_conversation_summaries` 轻量摘要分页、`history_page` 消息倒序切片） |
-| `conversation_runner.rs` | 统一轮次编排：`run_round`（load_context → IP-1 hooks → persist_input → IP-2 hooks → call_model → 落库 → IP-5 hooks），另含 `InputRecord`（User/Nudge/Continue）、流式 `run_round_stream` |
-| `round_types.rs` | 纯数据契约：`SessionSeed` / `SessionState` / `RoundOutcome` / `ToolResultItem` |
-| `round_resolver.rs` | 选型决策 + 角色上下文拼接（种子分派 / select_one，可含 LLM 选型，不落库） |
-| `round_executor.rs` | 执行面：`ModelCaller` trait、工具授权、模型调用、单轮全部 tool_calls 执行 → `RoundOutcome`；支持 `response_format` 与 thinking 覆盖 |
+| `round_contract.rs` | 封闭核心契约 + 扩展端口（架构重构 M1-M2 / M6）：`RoundService`（run / run_stream / cancel）/ `RoundRequest`（`{ session_id, input, mode }`）/ `RoundOutcome` / `RoundStatus` / `ConversationId` / `RoundMode` / `InputRecord` / `RoundDriver`（run / run_stream）/ `MessageTextUpdate` / `SessionSnapshot` / `PersistedOutcome` / `StreamDelta`（Delta 契约载荷）；扩展端口 `ModelPort` / `CapabilityExecutor` / `ToolCatalog`（只读工具目录端口）/ `ConversationStore`（核心管线原语 `require_conversation` / `add_message` / `update_message_at` / `save_conversation` + 异步契约面 `load` / `append_input` / `append_outcome` / `update_text_at` / `save`）/ `EventSink`（`DomainEvent` = Fact / Delta`{conversation_id, delta}`） |
+| `round_service.rs` | 统一轮次编排（原 `conversation_runner.rs`）：`ConversationRunner` 实现 `RoundService`（`run` / `run_stream` / `cancel`），`run_round`（load_context → IP-1 hooks → persist_input → IP-2 hooks → call_model → 落库 → IP-5 hooks）；流式 `run_stream` 为公开入口、转私有 `run_round_stream`（Delta 载荷 `StreamDelta` 定义在 `round_contract.rs`）；另含 `RoundContext`（hook 共享上下文，`model: ChatModelSelection`）、`InputRecord` 契约词汇再导出、会话元数据读写（`session_seed` / `read_session_state` / `write_session_state` / `set_session_model`） |
+| `round_types.rs` | 纯数据契约：`SessionSeed` / `SessionState` / `RoundProduct`（执行产物，原 `RoundOutcome`）/ `ToolResult` |
+| `round_executor.rs` | 执行面：`ModelCaller` trait（`call_model` / `call_model_stream`）、工具授权（读 `ToolCatalog` 端口：override 优先 → behavior 三策略 → 标签并入）、模型调用、单轮全部 tool_calls 执行 → `RoundProduct`；单调用执行语义由 `CapabilityExecutor` 端口承载（实现见 `tools/capability_adapter.rs`）；支持 `response_format` 与 thinking 覆盖 |
+| `round_resolver.rs` | 选型决策 + 角色上下文拼接（种子分派 / select_one，可含 LLM 选型，不落库）。**待拆例外**：仍直连 `policies::neuron::NeuronManager` 与 `application::insert_catalog::InsertCatalog` |
+| `round_policy.rs` | 核心默认策略（M6）：`default_tool_override(mode, catalog)` 按 `RoundMode` 定授权默认（`Agent`→目录全量；`Chat`/`Assistant`/`Poller`→`None`，执行面回退神经元 `tool_ids`）；`default_thinking(trigger)` 按**触发类型**定思考默认（`User`/`AgentLoop`→跟随会话/模型；`ManualStep`/`Poller`→显式关闭）。模型选型不在此处（来自会话运行态 `SessionState.model`） |
 | `session_coordinator.rs` | 会话级串行协调（同一会话同一时刻仅一轮）：User 轮可抢占取消当前轮，非 User 轮遇忙跳过；RAII guard 自动释放 |
 | `context_safety.rs` | 上下文安全：工具结果统一截断（`cap_tool_result`）+ poller 熔断退避状态机（`ContextSafetyConfig`） |
+| `model_call_input.rs` | system / user prompt 拼装模板（`ModelCallInput` / `ModelAppendTemplate`） |
+| `models.rs` | 领域模型（Message / Conversation / Neuron / ProviderInfo / ToolInfo / StateChange / ThinkingConfig 等），并含自 `openai_compat` 迁入的协议类型（`ResponseFormatSpec` / `StreamChunk` / `StreamChoice` / `SseDelta`（供应商 SSE 增量，原 `StreamDelta`；契约层 `StreamDelta` 见 `round_contract.rs`）/ `ToolCallWire` / `FunctionCallWire` / `Usage`） |
+| `events.rs` | `StateChange` / `StateEmitter` 统一状态事件通道 |
+| `error.rs` | `AppError` 域错误统一编码 |
 | `log_phase.rs` | 全项目 tracing `phase=` 常量唯一注册表（供日志面板下拉） |
-| `chat_session.rs` | Chat 模式业务接入（无 hooks 单轮直调） |
-| `agent_session.rs` | Agent 模式（tool loop）业务接入：授权注册表全部工具，循环至收敛，上限 20 轮 |
-| `compactor.rs` | `Compactor`（token 估算 + LLM 摘要）：手动压缩入口 + 被复用为 IP-2 自动压缩 hook（超阈值仅压缩本轮 wire，不动真相源） |
+| `hook/defs.rs` | Hook 插槽协议：注入点即类型 `InjectPointId`（IP-1～IP-5）、`HookHandler`、`HookDef`、`HookRegistry`、失败策略（IP-1 fail、其余 ignore） |
 
-### Assistant 域
+### application/（应用驱动层 + 组合根）
 
-> 独立域文档：[assistant/](./assistant/index.md)（作用约定：业务编排 / 课题简报与轮次计数 / 后台轮询与熔断 / 运行态跟踪）。
+> 助手模式独立域文档：[assistant/](./assistant/index.md)（作用约定：业务编排 / 课题简报与轮次计数 / 后台轮询与熔断 / 运行态跟踪）。
 
 | 模块 | 职责 |
 |------|------|
-| `assistant_session.rs` | 助手模式业务编排：模式门控 / 课题解析 / 简报推进 / 计数；通过 `install_hooks` 向 Hook 域注册 `assistant.round.before`（IP-1）与 `assistant.round.after`（IP-5）两个业务 hook |
+| `gateway.rs` | `Gateway` 编排器 / 组合根：组合全部领域组件，对外提供统一入口（`send_model_message` / `send_model_message_stream` / `compact_conversation` / `list_*` / `save_*` 等）。主要字段：`store`（`JsonConversationStore`，端口 `ConversationStore`）、`providers`、`tool_registry`、`topic_store`、`neuron_store`、`hook_judgement_store`、`neuron_manager`、`chat`、`agent`、`assistant`、`poller`、`session_tracker`、`coordinator`（会话级串行）、`workspace_store`、`file_system`、`git_service`、`terminal`（`Option<Arc<AgentTerminalBridge>>`）、`mcp_server_statuses`、`assemble_lock`（MCP/工具装配串行化）、`state_emit`。**可 Clone**：内层 `current_conversation_id: Arc<Mutex<String>>`，无外层 `Mutex<Gateway>`，可安全跨 Tauri State / 后台 task 共享，不持锁跨网络。后台 runtime：① poller runtime（`spawn_poller_runtime`）；② neuron 容量回收 runtime（`spawn_neuron_recycle_runtime`）；③ 启动期 MCP/工具后台装配（经 `assemble_lock` 串行化，完成后广播 `StateChange::Tools`） |
+| `drivers.rs` | 应用驱动层（架构重构 M3 / M6）：`RoundDriver` 四驱动（Chat / Agent / Assistant / Poller），只拥有循环策略，依赖 `dyn RoundService`；均实现阻塞 `run` 与流式 `run_stream`（Agent 以 `InputRecord::Continue` 续轮、上限 20 轮，流式在循环内跨轮共享同一 `on_delta`）；授权由核心按 `RoundMode` 默认（Agent→目录全量） |
+| `chat_session.rs` | Chat 模式业务接入（无 hooks）：阻塞与流式均经 `ChatDriver`（`run` / `run_stream`） |
+| `agent_session.rs` | Agent 模式业务接入：阻塞与流式的循环策略均在 `AgentDriver`（`run` / `run_stream`，`Continue` 续轮、上限 20 轮、流式跨轮共享回调）；授权由核心按 `RoundMode::Agent` 默认取目录全量 |
+| `assistant_session.rs` | 助手模式业务编排（含 `AssistantHooks` 业务上下文）：模式门控 / 课题解析 / 简报推进 / 计数；阻塞与流式均经 `AssistantDriver` / `PollerDriver`（`dyn RoundService`，`run` / `run_stream`）；通过 `install_hooks` 向 Hook 域注册 `assistant.round.before`（IP-1）与 `assistant.round.after`（IP-5）两个业务 hook |
 | `poller.rs` + `poller_step.rs` | 后台轮询推进（`PollAll` / step），并行度共享原子值 |
 | `session_tracker.rs` | 运行中会话集合跟踪 + 注册跟踪工具（`RunningSession`） |
+| `insert_catalog.rs` | 自描述契约目录：`inserts/<id>.md`（rust-embed 内嵌），供模型读取决策契约 |
+| `hook/` | Hook 业务（见下「Hook 域」）：`registry.rs`（`HookInstance` / `HookRun` / `ACTIVE_HOOKS` / `LEGACY_HOOKS`）、`instances/`、`judgement.rs`、`store.rs`（`HookJudgementStore`）、`compaction.rs` |
 
 > 历史说明：早期 `NeuronCallService`（`call_service.rs`）已退役，模型调用统一收敛到
-> `ConversationRunner` + `RoundExecutor`。
+> 轮次服务（`round_service.rs` 的 `ConversationRunner`）+ `RoundExecutor`。
 
-### Hook 域（`core/hook/`）
+### Hook 域（协议 `core/hook/` + 业务 `application/hook/`）
 
 > 独立域文档：[hook/](./hook/index.md)（结构架构：目录布局 / 类型契约 / 双注册体系 / 注入点与失败策略 / 扩展规则）。
+
+协议（封闭核心，`core/hook/`）：
 
 | 模块 | 职责 |
 |------|------|
 | `defs.rs` | 注入点即类型：`InjectPointId`（IP-1 AfterLoadContext / IP-2 AfterPersistInput / IP-3 AfterCallModel、IP-4 AfterExecuteTools（已实现分发，暂无注册者）/ IP-5 AfterPersistOutcome）、`HookHandler`、`HookDef`、`HookRegistry`（IP-1 fail 策略、其余 ignore 策略；IP-1 支持会话切换 reload） |
-| `registry.rs` | `HookInstance` + Before/After 执行签名；**ACTIVE_HOOKS（2 个）**：`user_round_judgement`（IP-1）、`round_review`（IP-5）；LEGACY_HOOKS（4 个休眠）：`score_feedback` / `match_topic` / `revise_topic` / `complete_scope` |
+
+业务（应用侧，`application/hook/`）：
+
+| 模块 | 职责 |
+|------|------|
+| `registry.rs` | `HookInstance` + `HookRun`（Before/After 执行签名）；**ACTIVE_HOOKS（2 个）**：`user_round_judgement`（IP-1）、`round_review`（IP-5）；LEGACY_HOOKS（4 个休眠）：`score_feedback` / `match_topic` / `revise_topic` / `complete_scope` |
 | `instances/` | 一个 hook 一个文件（常量 + JSON schema + fallback + 执行逻辑） |
 | `judgement.rs` | 裁决共享类型（`JudgementStatus` / `JudgementOutcome` / `JudgementAnchor`）+ `hook_defs_meta()` |
 | `store.rs` | `HookJudgementStore`：裁决调用全量账本，存 SQLite `app.db` 的 `hook_judgements` 表（两阶段写入 pending→终态，只读不删改） |
 | `compaction.rs` | 把 `Compactor` 封装为 IP-2 hook（id `core.compaction`），gateway 装配期注册 |
 
-### Neuron 域
-
-> 独立域文档：[neuron/](./neuron/index.md)（概念边界 / 服务契约 / 生命周期 / 数据契约 / 愿景差距）。
-
-- 目录：`core/neuron/`（子模块：`manager` / `store` / `model` / `config` / `creation` /
-  `evolution` / `selection` / `query` / `spec` / `tools`），通过 `mod.rs` 提供兼容别名
-  `neuron_manager` / `neuron_store` / `neuron_config` / `neuron_model` / `spec_manager`。
-- 能力：系统神经元 ensure/bootstrap、创建/进化、连接与权重调整、邻域选择（候选池）、
-  分页管理查询、容量回收；`neuron_versions` 表保留内容版本历史。
-- 对外服务：**提示词服务**（`select_role` 选型，返回角色）与**评价服务**
-  （`apply_score_feedback` 打分落网，外部只供分、域内决定如何落网）。
-
-### Topic 域
-
-> 独立域文档：[topic/](./topic/index.md)（作用约定：课题与待办语义 / 状态机推导规则 / 会话绑定 / 写保护 / 消费方约定）。
-
-- `topic_store.rs` / `topic_manager.rs`：课题 CRUD、scope item 管理、状态机
-  （todo / in_progress / paused / done / cancelled），存储于 SQLite `app.db` 的 `topics` 表。
-
-### Provider 域
+### providers/（模型 Provider Adapter）
 
 > 独立域文档：[provider/](./provider/index.md)（作用约定：调用入口语义 / 服务商与模型治理 / 参数抹平合并 / 配置热重载 / 失败约定）。
 
 | 模块 | 职责 |
 |------|------|
-| `providers.rs` | `ProviderRegistry`：内置 + 配置服务商统一管理，模型注册表，`call_model` 调用，API key 掩码回显，保存即热重载；thinking / response_format 参数透传 |
+| `providers.rs` | `ProviderRegistry`：内置 + 配置服务商统一管理，模型注册表，`call_model` 调用（`impl ModelCaller for ProviderRegistry`），API key 掩码回显，保存即热重载；thinking / response_format 参数透传 |
 | `openai_compat.rs` | OpenAI Chat Completions 协议封装（serde + reqwest + SSE 流式解析），只做协议层不含服务商策略；`ResponseFormatSpec::JsonSchema` 结构化输出支持 |
-| `models.rs` | 领域模型（Message / Conversation / Neuron / ProviderInfo / ToolInfo / StateChange / ThinkingConfig 等） |
-| `model_call_input.rs` | system / user prompt 拼装模板 |
 
-### Tool 域
+### tools/（能力声明与执行）
 
 > 独立域文档：[tool/](./tool/index.md)（作用约定分两层：[注册](./tool/registration.md)——来源门禁 / 声明 / MCP 接入 / insert 手册；[使用](./tool/usage.md)——授权决策 / 执行容错 / 命令护栏）。
 
 | 模块 | 职责 |
 |------|------|
-| `tool_registry.rs` | 共享工具注册表（`Arc<RwLock<ToolRegistry>>`）：`register_core`（Core 组，随主对话 wire 常驻）与 `register`（按组授权）两级登记；register 要求 `inserts/<tool.name>.md` |
+| `tool_registry.rs` | 共享工具注册表（`Arc<RwLock<ToolRegistry>>`）：`register_core`（Core 组，随主对话 wire 常驻）与 `register`（按组授权）两级登记；register 要求 `inserts/<tool.name>.md`；`impl ToolCatalog for RwLock<ToolRegistry>` 提供只读工具目录端口 |
+| `capability_adapter.rs` | `CapabilityAdapter`（原 `round_executor.rs` 里的 `RegistryToolExecutor`）：`CapabilityExecutor` 真实实现，注册表驱动的单调用执行（授权 / 失败转结果 / 截断） |
 | `tool_config.rs` | 动态工具配置（`dynamic_tools.json`）、MCP 配置（`mcp_servers.json`）、校验与原子写回 |
 | `dynamic_tool.rs` | `CommandTool`（本机命令）、`HttpTool`（HTTP 请求） |
-| `cmd_exec.rs` / `current_time.rs` | 内置工具 `execute_command`（经 AgentTerminalBridge 走 PTY，输出与终端面板同源）/ `get_current_time` |
+| `cmd_exec.rs` / `current_time.rs` | 内置工具 `execute_command`（经 AgentTerminalBridge 走 PTY，输出与终端面板同源）/ `get_current_time`（`GetCurrentTimeTool`，原 `core/current_time.rs`） |
 | `mcp.rs` | MCP server 客户端与状态（Connecting / Connected / Failed），后台渐进装配 |
-| `insert_catalog.rs` | 自描述契约目录：`inserts/<id>.md`（rust-embed 内嵌），供模型读取决策契约 |
 
 Core 组常驻工具：`execute_command` / `get_current_time` + 文件工具 11 个（LS / Read / Write /
 SearchReplace / Delete / Glob / Grep / SemanticSearch / FileInfo / CreateDirectory / Rename）+
 git 只读 6 个（status / diff / log / branch / blame / stash_list）。
+
+### stores/（持久化介质）
+
+> 课题独立域文档：[topic/](./topic/index.md)（作用约定：课题与待办语义 / 状态机推导规则 / 会话绑定 / 写保护 / 消费方约定）。
+
+| 模块 | 职责 |
+|------|------|
+| `conversation_store.rs` | 会话/消息 JSON 持久化实现 `JsonConversationStore`（原实现更名；端口 `ConversationStore` 定义在 `core/round_contract.rs`）：`sessions/<id>.json`，写端全量写；读端已分页（`list_conversation_summaries` 轻量摘要分页、`history_page` 消息倒序切片） |
+| `topic_store.rs` / `topic_manager.rs` | 课题 CRUD、scope item 管理、状态机（todo / in_progress / paused / done / cancelled），存储于 SQLite `app.db` 的 `topics` 表 |
+| `storage.rs` | 数据目录解析（`.pulsar`，自动从旧 `.agent-app` 迁移） |
+
+### policies/（轮次前后策略扩展）
+
+> 神经元独立域文档：[neuron/](./neuron/index.md)（概念边界 / 服务契约 / 生命周期 / 数据契约 / 愿景差距）。
+
+| 模块 | 职责 |
+|------|------|
+| `compactor.rs` | `Compactor`（token 估算 + LLM 摘要）：手动压缩入口 + 被复用为 IP-2 自动压缩 hook（超阈值仅压缩本轮 wire，不动真相源） |
+| `neuron/` | 神经元域（原 `core/neuron/`；子模块：`manager` / `store` / `model` / `config` / `creation` / `evolution` / `selection` / `query` / `spec` / `tools`）。能力：系统神经元 ensure/bootstrap、创建/进化、连接与权重调整、邻域选择（候选池）、分页管理查询、容量回收；`neuron_versions` 表保留内容版本历史。对外服务：**提示词服务**（`select_role` 选型，返回角色）与**评价服务**（`apply_score_feedback` 打分落网，外部只供分、域内决定如何落网） |
+
+### sinks/（观测出口）
+
+| 模块 | 职责 |
+|------|------|
+| `state_sinks.rs` | `StateEventSink`（`EventSink` 实现）：把领域事件（Fact / Delta）映射为前端 `StateChange` 广播，GUI 经桌面 IPC、headless 经 SSE broadcast |
+| `app_log.rs` + `log_redact.rs` | 滚动日志文件、GUI Logs 面板、级别控制、敏感信息脱敏 |
+
+### infra/（通用基础设施）
+
+| 模块 | 职责 |
+|------|------|
+| `config.rs` | `config.json` 读写（`ConfigStore`，原 `core/config.rs`）：建模节 `poller` / `neuron` / `server` / `git`（dangerous_writes）/ `context`（tool_result_max_chars / poll 熔断参数）；`providers` / `defaults` 等未建模键经 `extra` 原样保留 |
+| `time.rs` | `now_ms`（Unix 毫秒时间戳，原 `core/conversation_store.rs` 迁出），供核心与各扩展目录共享 |
 
 ### FileOps 域（`src-tauri/src/fileops/`）
 
@@ -241,21 +274,11 @@ git 只读 6 个（status / diff / log / branch / blame / stash_list）。
 - `runtime/script_engine.rs`：mlua（vendored, lua54）Lua VM，`eval` 执行 Lua 并映射 JSON。
 - **当前仅声明，未接入工具链与启动流程**（无对应 command / 调用点）。
 
-### 基础设施
-
-| 模块 | 职责 |
-|------|------|
-| `storage.rs` | 数据目录解析（`.pulsar`，自动从旧 `.agent-app` 迁移） |
-| `config.rs` | `config.json` 读写（ConfigStore）：建模节 `poller` / `neuron` / `server` / `git`（dangerous_writes）/ `context`（tool_result_max_chars / poll 熔断参数）；`providers` / `defaults` 等未建模键经 `extra` 原样保留 |
-| `app_log.rs` + `log_redact.rs` + `log_phase.rs` | 滚动日志文件、GUI Logs 面板、级别控制、敏感信息脱敏、`phase=` 阶段标识 |
-| `events.rs` | `StateChange` / `StateEmitter` 统一状态事件通道 |
-| `error.rs` | `AppError` 域错误统一编码 |
-
 ## Tauri 适配层（lib.rs）
 
 - **分域 State**（`app.manage`，12 个）：`Arc<NeuronManager>`、`Arc<StdMutex<TopicStore>>`、
   `Arc<StdMutex<HookJudgementStore>>`、`Arc<AssistantSession>`、`Arc<StdMutex<Poller>>`、
-  `SessionTracker`、`ProviderRegistry`、`ConversationStore`、`TerminalEventHub`、
+  `SessionTracker`、`ProviderRegistry`、`JsonConversationStore`、`TerminalEventHub`、
   `Arc<TerminalManager>`、`Gateway`、`StateEmitter`。命令按域取 State；
   WorkspaceStore / FileSystem / GitService 不单独 manage，经 Gateway 内部访问。
 - **108 个 commands**（lib.rs 103 + terminal/commands.rs 5），按域分组：
@@ -392,8 +415,8 @@ sequenceDiagram
   E->>P: call_model(request)
   P->>LLM: openai_compat chat completion（SSE）
   LLM-->>P: response
-  P-->>E: ModelCallResponse
-  E-->>R: RoundOutcome（含单轮全部 tool_calls 结果）
+  P-->>E: ModelResponse
+  E-->>R: RoundProduct（含单轮全部 tool_calls 结果）
   R-->>G: persist 落库 + IP-5 hooks（round_review）
   G-->>C: ChatResponse
   C-->>A: ok + data
@@ -401,7 +424,7 @@ sequenceDiagram
   DS-->>UI: 重拉受影响会话消息
 ```
 
-流式分支：`send_model_message_stream` 以 `message_delta` kind 增量广播，前端合并渲染。
+流式分支（M6 已端口化）：`send_model_message_stream` → 会话层（`chat_session` / `agent_session` / `assistant_session`）→ 驱动 `run_stream` → `RoundService::run_stream`（内部转私有 `run_round_stream`）；逐块增量载荷 `StreamDelta` 经 `DomainEvent::Delta` 由 Gateway 转发为 `StateChange::MessageDelta`（`message_delta` kind 增量广播），前端合并渲染，`done:true` 后收敛为全量重拉。会话层不再直调 `run_round_stream`。
 
 ### 后台推进（Poller）
 
@@ -424,7 +447,7 @@ flowchart TB
   subgraph ent["入口"]
     UI["前端 sendMessage"] --> GW["Gateway.send_model_message<br/>(gateway.rs) 按 mode 路由"]
   end
-  GW -->|"mode = Assistant / System"| RUNNER["ConversationRunner.run_round<br/>(conversation_runner.rs)"]
+  GW -->|"mode = Assistant / System"| RUNNER["ConversationRunner.run_round<br/>(round_service.rs)"]
 
   subgraph runner["run_round 内部顺序"]
     LC["load_context<br/>读会话 seed / state / messages"]

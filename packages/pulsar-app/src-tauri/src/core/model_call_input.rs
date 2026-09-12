@@ -4,7 +4,7 @@
 //! - `docs/specs/2026-08-02_model-call-input.md`
 //! - `docs/specs/2026-08-02_19-29_model-call-input-call-sites.md`
 //!
-//! This type does not look up inserts or assemble a full `ModelCallRequest`.
+//! This type does not look up inserts or assemble a full `ModelRequest`.
 
 use std::collections::HashSet;
 
@@ -253,7 +253,7 @@ impl ModelCallInput {
     /// `Message` → `ModelMessage` 投影（原 `call_service::message_to_model` 迁入）。
     ///
     /// - `Compaction` 摘要按 System 角色携带（与 engine 对齐），避免长会话压缩后丢失上下文。
-    /// - `ToolResult` / `ToolCall` 按 tool / assistant 角色发送（OpenAI 兼容接口要求配对）。
+    /// - `ToolResult` / `AuthorizedToolCall` 按 tool / assistant 角色发送（OpenAI 兼容接口要求配对）。
     /// - `Nudge`（轮询简报）与 `RoleContext`（B2 角色声明）落库后均回灌为 User 文本：
     ///   落库顺序与 wire 注入顺序一致（首轮 System → RC → 输入 → 产物），回灌即还原模型
     ///   实际所见（历史 = wire，严格前缀累积）；条数由「生成一次落库一次」与每轮一次注入控制。
@@ -376,7 +376,7 @@ fn render_manual_template(content: &str, user_input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::models::ToolCall;
+    use super::super::models::AuthorizedToolCall;
     use super::*;
 
     fn msg(role: ModelMessageRole, content: &str) -> ModelMessage {
@@ -405,7 +405,7 @@ mod tests {
             content: content.to_string(),
             tool_calls: Some(
                 ids.iter()
-                    .map(|id| ToolCall {
+                    .map(|id| AuthorizedToolCall {
                         id: id.to_string(),
                         name: "test_tool".to_string(),
                         arguments: serde_json::json!({}),

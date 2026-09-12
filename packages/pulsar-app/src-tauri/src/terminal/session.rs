@@ -249,7 +249,7 @@ fn default_shell() -> String {
     }
 }
 
-/// 一次性命令的 PTY 启动方式，与 `core/cmd_exec::build_command` 保持一致：
+/// 一次性命令的 PTY 启动方式，与 `tools/cmd_exec::build_command` 保持一致：
 /// Unix `sh -c`，Windows `cmd /C`。
 #[cfg(windows)]
 fn shell_command_builder(command: &str) -> CommandBuilder {

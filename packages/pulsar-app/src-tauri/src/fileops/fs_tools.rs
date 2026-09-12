@@ -13,10 +13,8 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::core::{
-    error::{AppError, AppResult},
-    tool_registry::{Tool, ToolRegistry},
-};
+use crate::core::error::{AppError, AppResult};
+use crate::tools::tool_registry::{Tool, ToolRegistry};
 use super::{
     fs::FileSystem,
     search::tools::SemanticSearchTool,

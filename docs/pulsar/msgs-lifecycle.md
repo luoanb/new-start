@@ -32,7 +32,7 @@ sequenceDiagram
   EX->>LLM: call_model(model_messages)
   LLM-->>EX: ModelCallResponse（文本 或 tool_calls）
   EX->>EX: 执行本轮全部 tool_calls，结果拼接进 output
-  EX-->>R: RoundOutcome
+  EX-->>R: RoundProduct
   R->>ST: persist_outcome（发送后：产物）
   Note over R,ST: 第 N 轮结束，messages 追加完成
   Note over R,ST: 第 N+1 轮：读库 → from_message 回灌<br/>历史 = 第 N 轮 wire 的严格前缀

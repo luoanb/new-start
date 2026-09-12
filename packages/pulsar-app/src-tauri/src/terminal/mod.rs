@@ -5,7 +5,7 @@
 //! - `manager`：会话注册表（session_id ↔ TerminalSession）。
 //! - `commands`：Tauri invoke 命令 + 高频输出事件（`app://terminal-output` / `app://terminal-exit`）。
 //!
-//! Agent 可见执行（execute_command 接入）由 `core/cmd_exec` 通过
+//! Agent 可见执行（execute_command 接入）由 `tools/cmd_exec` 通过
 //! `TerminalManager` 的会话句柄旁路广播，本模块不感知 core 内部细节。
 
 use crate::core::AppResult;

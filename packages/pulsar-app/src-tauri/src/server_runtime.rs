@@ -6,17 +6,17 @@
 
 use std::{path::Path, sync::Arc};
 
-use crate::core::{
+use crate::application::{
     assistant_session::AssistantSession,
-    conversation_store::ConversationStore,
-    hook_judgement_store::HookJudgementStore,
-    neuron_manager::NeuronManager,
+    gateway::Gateway,
+    hook::store::HookJudgementStore,
     poller::Poller,
-    providers::ProviderRegistry,
     session_tracker::SessionTracker,
-    topic_store::TopicStore,
-    Gateway, StateEmitter,
 };
+use crate::core::StateEmitter;
+use crate::policies::neuron::manager::NeuronManager;
+use crate::stores::{conversation_store::JsonConversationStore, topic_store::TopicStore};
+use crate::providers::providers::ProviderRegistry;
 use crate::terminal::{AgentTerminalBridge, TerminalEventHub, TerminalManager};
 
 /// 服务器运行上下文：Gateway + 分域服务的句柄 + 终端设施。
@@ -29,7 +29,7 @@ pub struct ServerRuntime {
     pub poller: Arc<std::sync::Mutex<Poller>>,
     pub sessions: SessionTracker,
     pub providers: ProviderRegistry,
-    pub conversation_store: ConversationStore,
+    pub conversation_store: JsonConversationStore,
     pub terminal_manager: Arc<TerminalManager>,
     pub terminal_bridge: Arc<AgentTerminalBridge>,
     pub terminal_hub: TerminalEventHub,
@@ -41,7 +41,7 @@ pub fn build_server_runtime(
     state_emit: StateEmitter,
     terminal_hub: TerminalEventHub,
 ) -> Result<ServerRuntime, String> {
-    let store = ConversationStore::new(storage_root).map_err(|error| error.to_string())?;
+    let store = JsonConversationStore::new(storage_root).map_err(|error| error.to_string())?;
     // 终端桥接（方案 A）：先于 Gateway 创建，注入 execute_command 可见执行能力；
     // 同一 manager 由 command 层（app.manage）与 Agent 工具桥接共用。
     let terminal_manager = Arc::new(TerminalManager::new());

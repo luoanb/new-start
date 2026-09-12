@@ -11,21 +11,24 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
-use crate::core::{
-    app_log,
+use crate::application::{
     hook::hook_defs_meta,
-    hook_judgement_store::{HookJudgementFilter, HookJudgementListResult},
-    insert_catalog::InsertCatalog, providers::ProviderConfigView,
-    tool_config::ToolConfigView,
+    hook::store::{HookJudgementFilter, HookJudgementListResult},
+    insert_catalog::InsertCatalog,
+};
+use crate::core::{
     AppError, AppResult, ChatOptions, ConversationMode,
-    ModelCallRequest, NeuronCreate, NeuronKindFilter, NeuronUpdate, SessionBehavior, SessionSeed,
+    ModelRequest, NeuronCreate, NeuronKindFilter, NeuronUpdate, SessionBehavior, SessionSeed,
     StateChange, TopicStatus, TopicUpdate,
 };
+use crate::providers::providers::ProviderConfigView;
+use crate::tools::tool_config::ToolConfigView;
 use crate::fileops::search::chunk::SemanticSearchResult;
 use crate::fileops::search::retriever::Retriever;
 use crate::fileops::workspace::{WorkspaceEntry, WorkspaceStore};
 use crate::fileops::gitops::confirm::{ConfirmOutcome, GitOpKind};
 use crate::fileops::gitops::{ConflictTake, GitResetMode, GitStashAction};
+use crate::sinks::app_log;
 
 use super::NetState;
 
@@ -81,7 +84,7 @@ fn value<T: Serialize>(data: T) -> Result<Value, RpcErrorBody> {
 
 fn with_topic<T>(
     state: &NetState,
-    f: impl FnOnce(&crate::core::TopicStore) -> AppResult<T>,
+    f: impl FnOnce(&crate::stores::topic_store::TopicStore) -> AppResult<T>,
 ) -> Result<T, RpcErrorBody> {
     let store = state.gateway.topic_store().map_err(RpcErrorBody::from)?;
     let guard = store.lock().map_err(|_| {
@@ -95,7 +98,7 @@ fn with_topic<T>(
 
 fn with_hook_judgement<T>(
     state: &NetState,
-    f: impl FnOnce(&crate::core::hook_judgement_store::HookJudgementStore) -> AppResult<T>,
+    f: impl FnOnce(&crate::application::hook::store::HookJudgementStore) -> AppResult<T>,
 ) -> Result<T, RpcErrorBody> {
     let store = state
         .gateway
@@ -112,7 +115,7 @@ fn with_hook_judgement<T>(
 
 fn with_poller<T>(
     state: &NetState,
-    f: impl FnOnce(&mut crate::core::Poller) -> AppResult<T>,
+    f: impl FnOnce(&mut crate::application::poller::Poller) -> AppResult<T>,
 ) -> Result<T, RpcErrorBody> {
     let poller = state.gateway.poller();
     let mut guard = poller.lock().map_err(|_| {
@@ -372,7 +375,7 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .parent()
                 .unwrap()
-                .join(crate::core::storage::STORAGE_DIR_NAME)
+                .join(crate::stores::storage::STORAGE_DIR_NAME)
         ))),
 
         // ── Chat ──
@@ -465,7 +468,7 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
             value(models)
         }
         "call_model" => {
-            let p: ViewParams<ModelCallRequest> = from_params(params)?;
+            let p: ViewParams<ModelRequest> = from_params(params)?;
             let res = state
                 .gateway
                 .providers()

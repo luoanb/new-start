@@ -8,10 +8,8 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-use crate::core::{
-    error::{AppError, AppResult},
-    tool_registry::Tool,
-};
+use crate::core::error::{AppError, AppResult};
+use crate::tools::tool_registry::Tool;
 use crate::fileops::fs_tools::FileToolContext;
 use crate::fileops::workspace::WorkspaceEntry;
 

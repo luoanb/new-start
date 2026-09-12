@@ -48,7 +48,7 @@ impl Default for ContextSafetyConfig {
 
 impl ContextSafetyConfig {
     /// 由 config.json `context` 节构造；未建模/缺省字段回落内置默认。
-    pub fn from_section(section: &super::config::ContextSection) -> Self {
+    pub fn from_section(section: &crate::infra::config::ContextSection) -> Self {
         Self {
             tool_result_max_chars: section
                 .tool_result_max_chars

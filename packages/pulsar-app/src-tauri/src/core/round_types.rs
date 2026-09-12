@@ -1,7 +1,7 @@
 //! 单轮对话的数据契约：会话种子 / 运行态 / 产物。
 //!
 //! 原定义于 `call_service.rs`；取消 NeuronCallService 后迁入本文件，作为内外握手的显式数据边界。
-//! 约定：本文件只含类型，不含逻辑（读写会话元数据在 `conversation_runner.rs`，消息映射在
+//! 约定：本文件只含类型，不含逻辑（读写会话元数据在 `round_service.rs`，消息映射在
 //! `model_call_input.rs`，选型决策在 `round_resolver.rs`，执行在 `round_executor.rs`）。
 //!
 //! 真相源约定：管道内全程 `Vec<Message>`（`MessageBody` 带 kind，自描述）；落库原样增量落，
@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::models::{ChatModelSelection, ToolCall};
+use super::models::{AuthorizedToolCall, ChatModelSelection};
 
 /// 会话级运行态（`conversation.extra.session.state`）：仅保留选型锚点 + 会话级模型选择。
 ///
@@ -43,26 +43,27 @@ pub enum SessionSeed {
     Neuron(String),
 }
 
-/// ③ 单轮产物：仅模型侧结果；落库由上层（ConversationRunner）负责。
+/// ③ 单轮执行产物（原 `RoundOutcome`；M1 契约化后更名，让位给驱动层契约结果
+/// `round_contract::RoundOutcome`）：仅模型侧结果；落库由上层（ConversationRunner）负责。
 #[derive(Debug, Clone)]
-pub struct RoundOutcome {
+pub struct RoundProduct {
     /// 最终文本（含工具结果拼接），返回给用户。
     pub response: String,
     /// 模型原始输出（tool_call 消息落库用）。
     pub model_output: Option<String>,
     /// 模型本轮声明的工具调用（全部声明，落库 tool_call 消息用）。
-    pub tool_calls: Option<Vec<ToolCall>>,
+    pub tool_calls: Option<Vec<AuthorizedToolCall>>,
     /// 本轮全部工具执行结果（一轮内多个 tool_calls 全部执行）。
-    pub tool_results: Vec<ToolResultItem>,
-    /// 推理模型思维链（透传 `ModelCallResponse.reasoning`；非推理模型为 None）。
+    pub tool_results: Vec<ToolResult>,
+    /// 推理模型思维链（透传 `ModelResponse.reasoning`；非推理模型为 None）。
     pub reasoning: Option<String>,
     /// 本轮选中神经元 id（产物落库盖章；未选中为 None）。
     pub selected_neuron_id: Option<String>,
 }
 
-/// 单条工具执行结果：与 `ToolCall.id` 配对，落库为一条 Tool 消息。
+/// 单条工具执行结果：与 `AuthorizedToolCall.id` 配对，落库为一条 Tool 消息。
 #[derive(Debug, Clone, Serialize)]
-pub struct ToolResultItem {
+pub struct ToolResult {
     pub tool_call_id: String,
     pub tool_name: String,
     pub content: String,

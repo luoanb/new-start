@@ -6,12 +6,30 @@
 
 use std::sync::Arc;
 
-use serde::Serialize;
-
-use super::poller::PollerStatus;
+use serde::{Deserialize, Serialize};
 
 /// 前端监听的后端状态变更事件名。
 pub const STATE_CHANGED_EVENT: &str = "app://state-changed";
+
+/// 轮询运行态（`StateChange::Poller` 的 wire 词汇，自 `poller` 迁入）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PollerRunState {
+    Running,
+    Paused,
+}
+
+/// 轮询状态快照（`StateChange::Poller` 的 wire 词汇，自 `poller` 迁入）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PollerStatus {
+    pub state: PollerRunState,
+    pub tick_count: u64,
+    pub base_interval_ms: u64,
+    pub task_count: usize,
+    pub pending_trigger: bool,
+    /// 单次 PollAll 内同时推进的课题数上限（运行时值）。
+    pub assistant_poll_parallelism: u64,
+}
 
 /// 状态变更载荷：`kind` 区分数据域，避免事件爆炸。
 #[derive(Debug, Clone, Serialize)]

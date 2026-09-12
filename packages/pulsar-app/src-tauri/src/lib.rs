@@ -1,37 +1,41 @@
+pub mod application;
 pub mod core;
 pub mod fileops;
+pub mod infra;
 pub mod net;
+pub mod policies;
+pub mod providers;
 pub mod runtime;
 pub mod server_runtime;
+pub mod sinks;
+pub mod stores;
 pub mod terminal;
+pub mod tools;
 pub mod tui;
 
-use crate::core::{
-    app_log::{self, LogEntry},
+use crate::application::{
     assistant_session::AssistantSession,
-    config::{server_env_overrides, ConfigStore, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT},
-    conversation_store::ConversationStore,
-    error::AppErrorPayload,
+    gateway::Gateway,
     hook::hook_defs_meta,
-    hook_judgement_store::{
-        HookJudgementFilter, HookJudgementListResult, HookJudgementStore,
-    },
+    hook::store::{HookJudgementFilter, HookJudgementListResult, HookJudgementStore},
     insert_catalog::{InsertCatalog, InsertInfo},
-    log_phase::{PHASE_NEURON_BOOTSTRAP_NEURONS, PHASE_SCORE_FEEDBACK_COMMAND},
-    neuron_manager::NeuronManager,
     poller::Poller,
-    providers::{ProviderConfigView, ProviderRegistry},
     session_tracker::{RunningSession, SessionTracker},
-    storage,
-    tool_config::ToolConfigView,
-    topic_store::TopicStore,
+};
+use crate::infra::config::{server_env_overrides, ConfigStore, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT};
+use crate::core::{
+    error::AppErrorPayload,
+    log_phase::{PHASE_NEURON_BOOTSTRAP_NEURONS, PHASE_SCORE_FEEDBACK_COMMAND},
     ChatModelSelection, ChatOptions, ChatResponse, Connection, Conversation, ConversationMode,
-    ConversationSummaryPage, Gateway, McpServerStatus, Message, MessagePage, ModelCallRequest,
-    ModelCallResponse, ModelInfo, Neuron,
+    ConversationSummaryPage, Message, MessagePage, ModelRequest,
+    ModelResponse, ModelInfo, Neuron,
     NeuronCreate, NeuronKindFilter, NeuronPage, NeuronSubgraph, NeuronUpdate, PollerStatus,
     ProviderInfo, RuntimeStatus, SamplingParams, SessionBehavior, SessionSeed, SkillInfo, StateChange,
     StateEmitter, ThinkingConfig, ToolInfo, Topic, TopicStatus, TopicUpdate, STATE_CHANGED_EVENT,
 };
+use crate::policies::neuron::manager::NeuronManager;
+use crate::stores::{conversation_store::JsonConversationStore, storage, topic_store::TopicStore};
+use crate::providers::providers::{ProviderConfigView, ProviderRegistry};
 use crate::fileops::fs::{
     FsEntry, FsInfo, FsMatch, FsReadResult, FsSuggestEntry, FsWriteResult, GrepMatch,
 };
@@ -44,9 +48,12 @@ use crate::fileops::search::chunk::SemanticSearchResult;
 use crate::fileops::search::retriever::Retriever;
 use crate::fileops::workspace::{WorkspaceEntry, WorkspaceView};
 use crate::net::{NetState, ServerConfig, ServerInfo};
+use crate::sinks::app_log::{self, LogEntry};
 use crate::terminal::commands::{
     terminal_kill, terminal_list, terminal_resize, terminal_spawn, terminal_write,
 };
+use crate::tools::mcp::McpServerStatus;
+use crate::tools::tool_config::ToolConfigView;
 use serde_json::json;
 use std::{
     path::PathBuf,
@@ -271,8 +278,8 @@ async fn list_models(
 #[tauri::command]
 async fn call_model(
     providers: State<'_, ProviderRegistry>,
-    request: ModelCallRequest,
-) -> TauriResult<ModelCallResponse> {
+    request: ModelRequest,
+) -> TauriResult<ModelResponse> {
     providers
         .inner()
         .call_model(request)
@@ -308,7 +315,7 @@ async fn save_provider_config(
 }
 
 #[tauri::command]
-async fn list_conversations(store: State<'_, ConversationStore>) -> TauriResult<Vec<Conversation>> {
+async fn list_conversations(store: State<'_, JsonConversationStore>) -> TauriResult<Vec<Conversation>> {
     store
         .inner()
         .list_conversations()
@@ -329,7 +336,7 @@ async fn history(
 /// 会话列表摘要分页（前端会话侧栏）：只读元信息（含消息条数与首条文本摘要），不携带消息正文。
 #[tauri::command]
 async fn list_conversation_summaries(
-    store: State<'_, ConversationStore>,
+    store: State<'_, JsonConversationStore>,
     page: Option<usize>,
     page_size: Option<usize>,
 ) -> TauriResult<ConversationSummaryPage> {
@@ -521,7 +528,7 @@ async fn hook_judgements_list(
 
 /// Hook 元信息表（启用 hook 清单出参：面板过滤下拉的数据源）。
 #[tauri::command]
-fn hook_defs_list() -> Vec<crate::core::hook::HookDefMeta> {
+fn hook_defs_list() -> Vec<crate::application::hook::HookDefMeta> {
     hook_defs_meta()
 }
 

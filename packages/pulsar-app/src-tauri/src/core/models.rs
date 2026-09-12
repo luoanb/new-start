@@ -1,8 +1,8 @@
+use std::borrow::Cow;
+
 use serde::{Deserialize, Serialize};
 
 use serde_json;
-
-use super::openai_compat::ResponseFormatSpec;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -30,7 +30,7 @@ pub enum MessageBody {
         reasoning: Option<String>,
         /// 模型发起的工具调用（同一轮响应的平级字段）。
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        tool_calls: Option<Vec<ToolCall>>,
+        tool_calls: Option<Vec<AuthorizedToolCall>>,
     },
     /// 工具返回：携带关联的调用 id 与工具名。
     ToolResult {
@@ -121,7 +121,7 @@ impl Message {
     }
 
     /// 工具调用消息的 tool_calls 数组。
-    pub fn tool_calls(&self) -> Option<&[ToolCall]> {
+    pub fn tool_calls(&self) -> Option<&[AuthorizedToolCall]> {
         match &self.body {
             MessageBody::Text { tool_calls, .. } => tool_calls.as_deref(),
             _ => None,
@@ -183,7 +183,7 @@ pub struct Conversation {
 
 // ── 会话列表摘要（列表分页专用，不携带 messages）─────────────
 
-/// 会话列表摘要：`message_count` / `preview` 由轻量反序列化产出（见 conversation_store.rs），
+/// 会话列表摘要：`message_count` / `preview` 由轻量反序列化产出（见 stores/conversation_store.rs），
 /// 前端会话列表只消费本类型，避免全量传输会话内消息正文。
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ConversationSummary {
@@ -532,7 +532,7 @@ pub struct ModelMessage {
     pub role: ModelMessageRole,
     pub content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_calls: Option<Vec<ToolCall>>,
+    pub tool_calls: Option<Vec<AuthorizedToolCall>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
     /// 推理模型思维链（DeepSeek 等，与 content 同级）。有工具调用的多轮必须回传。
@@ -541,7 +541,7 @@ pub struct ModelMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ToolCall {
+pub struct AuthorizedToolCall {
     pub id: String,
     pub name: String,
     pub arguments: serde_json::Value,
@@ -594,7 +594,7 @@ pub struct ToolInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ModelCallRequest {
+pub struct ModelRequest {
     pub provider_id: String,
     pub model_id: String,
     pub messages: Vec<ModelMessage>,
@@ -613,17 +613,127 @@ pub struct ModelCallRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ModelCallResponse {
+pub struct ModelResponse {
     pub provider_id: String,
     pub model_id: String,
     pub output: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_calls: Option<Vec<ToolCall>>,
+    pub tool_calls: Option<Vec<AuthorizedToolCall>>,
     #[serde(default)]
     pub finish_reason: String,
     /// 推理模型思维链（非流式 / 流式聚合后同源；存量 / 非推理模型为 None）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<String>,
+}
+
+// ── Provider 协议稳定类型（自 openai_compat 迁入）─────────────────────
+//
+// 这些类型是「Provider 协议层」与「核心执行面」共享的稳定词汇：核心
+// （`round_executor` / `round_service`）只通过它们感知流式增量与结构化输出契约，
+// 供应商差异（请求体塑形、参数抹平）仍由 `providers` 负责。
+// 自 `openai_compat` 迁入的原因：核心不得引用扩展目录（spec §六）。
+
+/// 结构化输出契约（值类型，随 hook 走，不持有 hook 业务数据）。
+///
+/// wire 形态（经 `extra` 扁平透传为请求体顶层 `response_format`，严格对齐 OpenAI
+/// 官方 Structured Outputs 契约）：
+/// - `JsonSchema` → `{"type":"json_schema","json_schema":{"name","strict","schema":{...}}}`
+///   （`name` 由调用方提供，协议层只透传）
+/// - `JsonObject` → `{"type":"json_object"}`
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ResponseFormatSpec {
+    /// 显式 JSON Schema（`name` 为调用方给出的 schema 标识；`schema` 为 schema 原文，
+    /// 服务商要求对象形态时反序列化后注入）。
+    JsonSchema {
+        name: Cow<'static, str>,
+        schema: Cow<'static, str>,
+    },
+    /// 仅要求输出 JSON 对象（不校验结构）。
+    JsonObject,
+}
+
+/// 工具调用（assistant 消息内 / 响应内）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ToolCallWire {
+    pub id: String,
+    #[serde(default)]
+    pub r#type: String,
+    pub function: FunctionCallWire,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct FunctionCallWire {
+    pub name: String,
+    /// 参数为 JSON 字符串（OpenAI 契约如此）。
+    pub arguments: String,
+}
+
+// ── 流式响应（SSE chunk）──────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct StreamChunk {
+    pub id: String,
+    #[serde(default)]
+    pub object: String,
+    #[serde(default)]
+    pub created: i64,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub choices: Vec<StreamChoice>,
+    #[serde(default)]
+    pub usage: Option<Usage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct StreamChoice {
+    #[serde(default)]
+    pub index: usize,
+    #[serde(default)]
+    pub delta: SseDelta,
+    #[serde(default)]
+    pub finish_reason: Option<String>,
+}
+
+/// 供应商协议 SSE 增量（SSE `choices[].delta`）；核心轮次增量契约见
+/// `round_contract::StreamDelta`。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub struct SseDelta {
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub reasoning_content: Option<String>,
+    #[serde(default)]
+    pub tool_calls: Option<Vec<ToolCallWire>>,
+}
+
+// ── token 用量 ────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Usage {
+    #[serde(default)]
+    pub prompt_tokens: u32,
+    #[serde(default)]
+    pub completion_tokens: u32,
+    #[serde(default)]
+    pub total_tokens: u32,
+    #[serde(default)]
+    pub completion_tokens_details: Option<CompletionTokensDetails>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct CompletionTokensDetails {
+    #[serde(default)]
+    pub reasoning_tokens: Option<u32>,
 }
 
 // ── Topic / Project Management ─────────────────────────────────────

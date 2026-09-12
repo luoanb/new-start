@@ -1,4 +1,6 @@
-use pulsar_app_lib::core::{app_log, storage, Gateway};
+use pulsar_app_lib::application::gateway::Gateway;
+use pulsar_app_lib::stores::storage;
+use pulsar_app_lib::sinks::app_log;
 
 #[tokio::main]
 async fn main() {

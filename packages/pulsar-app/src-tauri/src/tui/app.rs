@@ -1,9 +1,10 @@
 use ratatui::widgets::ListState;
 use ratatui_textarea::TextArea;
 
+use crate::application::gateway::Gateway;
 use crate::core::{
     AppError, AppResult, CandidateQuery, ChatModelSelection, ChatOptions, Conversation,
-    ConversationMode, CreateNeuronInput, EnsureSystemOpts, Gateway, MessageRole,
+    ConversationMode, CreateNeuronInput, EnsureSystemOpts, MessageRole,
     ModelAppendTemplate, ModelCallInput, ModelInfo, NeuronUpdate, ProviderInfo, RuntimeStatus,
     ThinkingConfig,
 };
@@ -539,7 +540,7 @@ impl TuiApp {
                 match self
                     .gateway
                     .providers()
-                    .call_model(crate::core::ModelCallRequest {
+                    .call_model(crate::core::ModelRequest {
                         provider_id,
                         model_id,
                         messages: ModelCallInput::assemble(

@@ -111,7 +111,7 @@ erDiagram
 
 ### 3.2 模型 → 落库映射（persist_outcome 产物）
 
-发送后经 `persist_outcome`（[conversation_runner.rs](file:///home/lab/Documents/trae_projects/new-start-wt/packages/pulsar-app/src-tauri/src/core/conversation_runner.rs#L354-L423)）把 `RoundOutcome` 落库：
+发送后经 `persist_outcome`（[conversation_runner.rs](file:///home/lab/Documents/trae_projects/new-start/packages/pulsar-app/src-tauri/src/core/conversation_runner.rs)）把 `RoundProduct` 落库：
 
 - 有 tool_calls → 1 条 `assistant(tool_call)` + 每个声明 1 条 `tool(tool_result)`（一一配对，不落 assistant text）。
 - 无 tool_calls → 1 条 `assistant(text)`（`outcome.response`）。
@@ -142,7 +142,7 @@ flowchart TB
     AN["写回锚点（发送前）<br/>last_selected_neuron_id"]
     AI["构造输入消息<br/>append_input_message（User / Nudge）"]
     PI["persist_input（发送前）<br/>wire[old_len..] 增量，全落"]
-    EX["② execute<br/>RoundExecutor：工具授权 → 投影 ModelMessage<br/>→ 模型调用 → 单轮工具执行 → RoundOutcome"]
+    EX["② execute<br/>RoundExecutor：工具授权 → 投影 ModelMessage<br/>→ 模型调用 → 单轮工具执行 → RoundProduct"]
     PO["persist_outcome（发送后）<br/>产物落库"]
     AH["after hooks<br/>（课题副作用，失败不丢产物）"]
   end
@@ -270,7 +270,7 @@ sequenceDiagram
   EX->>LLM: call_model（含 [当前角色] RoleContext + 标签工具）
   LLM-->>EX: ModelCallResponse（文本 或 tool_calls）
   EX->>EX: 执行本轮全部工具（结果拼接进 response）
-  EX-->>RUN: RoundOutcome
+  EX-->>RUN: RoundProduct
   RUN->>RUN: persist_outcome（发送后：产物落库）
   RUN->>AS: after_round hooks（round_review → tick_round_counters）
   RUN-->>GW: ChatResponse

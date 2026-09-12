@@ -1,11 +1,11 @@
-//! ③ 执行：模型调用 + 工具授权 + 单轮工具执行 → [`RoundOutcome`]。
+//! ③ 执行：模型调用 + 工具授权 + 单轮工具执行 → [`RoundProduct`]。
 //!
 //! 原 `NeuronCallService::converse` 的执行段迁入。不选型、不拼接（wire = `Vec<Message>` 由
 //! resolve + runner 追加输入后传入），发送前统一投影 `ModelMessage`；不落库、不感知会话与
 //! 业务触发语义。
 
 use std::collections::HashSet;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
@@ -13,44 +13,27 @@ use super::{
     error::{AppError, AppResult},
     model_call_input::ModelCallInput,
     models::{
-        ChatModelSelection, Message, ModelCallRequest, ModelCallResponse, Neuron, ThinkingConfig,
-        ToolTag,
+        ChatModelSelection, Message, ModelRequest, ModelResponse, Neuron,
+        ResponseFormatSpec, StreamChunk, ThinkingConfig, ToolTag,
     },
-    openai_compat,
-    openai_compat::ResponseFormatSpec,
-    round_types::{RoundOutcome, ToolResultItem},
-    tool_registry::ToolRegistry,
+    round_types::{RoundProduct, ToolResult},
 };
 use crate::core::log_phase::{PHASE_ROUND_EXECUTE, PHASE_TOOL_AUTHORIZATION};
+use crate::core::round_contract::{CapabilityExecutor, ToolCatalog};
 
-/// 模型调用抽象：生产用 [`super::providers::ProviderRegistry`]，测试可注入替身。
+/// 模型调用抽象：生产用 [`crate::providers::providers::ProviderRegistry`]，测试可注入替身。
 #[async_trait]
 pub trait ModelCaller: Send + Sync {
-    async fn call_model(&self, request: ModelCallRequest) -> AppResult<ModelCallResponse>;
+    async fn call_model(&self, request: ModelRequest) -> AppResult<ModelResponse>;
 
     /// 流式模型调用：on_chunk 每块增量回调（协议层 `StreamChunk`），聚合完成后返回完整响应。
     /// 默认实现回退非流式 `call_model`（测试替身无需实现；生产 ProviderRegistry 覆盖为本实现）。
     async fn call_model_stream(
         &self,
-        request: ModelCallRequest,
-        _on_chunk: Box<dyn FnMut(openai_compat::StreamChunk) + Send>,
-    ) -> AppResult<ModelCallResponse> {
+        request: ModelRequest,
+        _on_chunk: Box<dyn FnMut(StreamChunk) + Send>,
+    ) -> AppResult<ModelResponse> {
         self.call_model(request).await
-    }
-}
-
-#[async_trait]
-impl ModelCaller for super::providers::ProviderRegistry {
-    async fn call_model(&self, request: ModelCallRequest) -> AppResult<ModelCallResponse> {
-        super::providers::ProviderRegistry::call_model(self, request).await
-    }
-
-    async fn call_model_stream(
-        &self,
-        request: ModelCallRequest,
-        on_chunk: Box<dyn FnMut(openai_compat::StreamChunk) + Send>,
-    ) -> AppResult<ModelCallResponse> {
-        super::providers::ProviderRegistry::call_model_stream(self, request, on_chunk).await
     }
 }
 
@@ -58,9 +41,10 @@ impl ModelCaller for super::providers::ProviderRegistry {
 /// 单轮全部 tool_calls 执行 + 响应拼接。不持有组装/选型知识。
 pub struct RoundExecutor {
     model_caller: Arc<dyn ModelCaller>,
-    tool_registry: Arc<RwLock<ToolRegistry>>,
-    /// 单条工具结果截断上限（字符）；来自 config.json `context` 节，缺省回落内置默认。
-    tool_result_max_chars: usize,
+    /// 工具目录（只读端口）：授权决策与 wire 工具声明来源。
+    tool_catalog: Arc<dyn ToolCatalog>,
+    /// 能力执行器（§3.4）：单调用执行语义唯一归属。
+    capability: Arc<dyn CapabilityExecutor>,
 }
 
 impl std::fmt::Debug for RoundExecutor {
@@ -72,14 +56,19 @@ impl std::fmt::Debug for RoundExecutor {
 impl RoundExecutor {
     pub fn new(
         model_caller: Arc<dyn ModelCaller>,
-        tool_registry: Arc<RwLock<ToolRegistry>>,
-        tool_result_max_chars: usize,
+        tool_catalog: Arc<dyn ToolCatalog>,
+        capability: Arc<dyn CapabilityExecutor>,
     ) -> Self {
         Self {
             model_caller,
-            tool_registry,
-            tool_result_max_chars,
+            tool_catalog,
+            capability,
         }
+    }
+
+    /// 工具目录只读端口：授权默认策略（`RoundMode::Agent` → 目录全量）经此查询。
+    pub fn tool_catalog(&self) -> &dyn ToolCatalog {
+        self.tool_catalog.as_ref()
     }
 
     /// 单轮执行：工具授权 → 模型调用（发送前投影 ModelMessage）→ 授权校验 → 全部 tool_calls 执行。
@@ -100,7 +89,7 @@ impl RoundExecutor {
         thinking_override: Option<ThinkingConfig>,
         // 结构化输出契约覆盖（裁决 hook 传入；None = 无约束）。
         response_format: Option<ResponseFormatSpec>,
-    ) -> AppResult<RoundOutcome> {
+    ) -> AppResult<RoundProduct> {
         let (model_response, _authorized_tool_ids) = self
             .call_model(
                 neuron,
@@ -131,7 +120,7 @@ impl RoundExecutor {
         thinking_override: Option<ThinkingConfig>,
         // 结构化输出契约覆盖（裁决 hook 传入；None = 无约束）。
         response_format: Option<ResponseFormatSpec>,
-    ) -> AppResult<(ModelCallResponse, Vec<String>)> {
+    ) -> AppResult<(ModelResponse, Vec<String>)> {
         let (request, authorized_tool_ids) = self.build_model_call_request(
             neuron,
             messages,
@@ -165,8 +154,8 @@ impl RoundExecutor {
         thinking_override: Option<ThinkingConfig>,
         // 结构化输出契约覆盖（裁决 hook 传入；None = 无约束）。
         response_format: Option<ResponseFormatSpec>,
-        on_chunk: Box<dyn FnMut(openai_compat::StreamChunk) + Send>,
-    ) -> AppResult<(ModelCallResponse, Vec<String>)> {
+        on_chunk: Box<dyn FnMut(StreamChunk) + Send>,
+    ) -> AppResult<(ModelResponse, Vec<String>)> {
         let (request, authorized_tool_ids) = self.build_model_call_request(
             neuron,
             messages,
@@ -191,7 +180,7 @@ impl RoundExecutor {
         Ok((model_response, authorized_tool_ids))
     }
 
-    /// 工具授权 + 发送前投影 → 构造 `ModelCallRequest`（`call_model` / `call_model_stream` 共用）。
+    /// 工具授权 + 发送前投影 → 构造 `ModelRequest`（`call_model` / `call_model_stream` 共用）。
     fn build_model_call_request(
         &self,
         neuron: Option<&Neuron>,
@@ -202,37 +191,29 @@ impl RoundExecutor {
         thinking_override: Option<ThinkingConfig>,
         // 结构化输出契约覆盖（裁决 hook 传入；None = 无约束）。
         response_format: Option<ResponseFormatSpec>,
-    ) -> AppResult<(ModelCallRequest, Vec<String>)> {
+    ) -> AppResult<(ModelRequest, Vec<String>)> {
         // 工具授权：override 优先；否则取选中神经元的 tool_ids（∩ 注册表）。
         let tool_ids = match tool_override {
             Some(ids) => ids,
             None => neuron.map(|n| n.tool_ids.clone()).unwrap_or_default(),
         };
-        // 块作用域持有读锁：保证跨 await 前释放（RwLockReadGuard 非 Send）。
+        // 工具目录经只读端口访问：授权决策与 wire 声明不再感知注册表与锁。
         // 标签并入：数据驱动——调用方按模式算好（ConversationMode::tool_tags），service 不感知模式；
         // 空 tool_tags = 不注入（Chat 对话、内部裁决），完全沿用 override/behavior。
-        let (authorized_tool_ids, tools) = {
-            let guard = self
-                .tool_registry
-                .read()
-                .expect("tool registry lock should not be poisoned");
-            let mut final_ids = Vec::new();
-            for tag in &tool_tags {
-                final_ids.extend(guard.tools_with_tag(*tag));
-            }
-            let authorized_tool_ids = filter_authorized_tool_ids(&guard, &tool_ids);
+        let mut authorized_tool_ids = Vec::new();
+        for tag in &tool_tags {
+            authorized_tool_ids.extend(self.tool_catalog.tools_with_tag(*tag));
+        }
+        for id in filter_authorized_tool_ids(self.tool_catalog.as_ref(), &tool_ids) {
             // 去重保序（工具数少，O(n²) 可接受）：Core/System 在前，策略工具随后。
-            for id in authorized_tool_ids {
-                if !final_ids.contains(&id) {
-                    final_ids.push(id);
-                }
+            if !authorized_tool_ids.contains(&id) {
+                authorized_tool_ids.push(id);
             }
-            let tools = if final_ids.is_empty() {
-                None
-            } else {
-                Some(guard.definitions_for(&final_ids))
-            };
-            (final_ids, tools)
+        }
+        let tools = if authorized_tool_ids.is_empty() {
+            None
+        } else {
+            Some(self.tool_catalog.definitions_for(&authorized_tool_ids))
         };
         tracing::info!(
             phase = PHASE_ROUND_EXECUTE,
@@ -261,7 +242,7 @@ impl RoundExecutor {
             "model input (final messages)"
         );
         Ok((
-            ModelCallRequest {
+            ModelRequest {
                 provider_id: model.provider_id.clone(),
                 model_id: model.model_id.clone(),
                 messages: model_messages,
@@ -280,7 +261,7 @@ impl RoundExecutor {
     /// 此时声明尚未落库，不会产生孤儿记录）。
     fn validate_authorized(
         &self,
-        model_response: &ModelCallResponse,
+        model_response: &ModelResponse,
         authorized_tool_ids: &[String],
     ) -> AppResult<()> {
         if let Some(calls) = model_response.tool_calls.as_ref() {
@@ -300,63 +281,22 @@ impl RoundExecutor {
     /// 失败信息作为 Tool 结果回传模型（见下方 match），保证声明与结果成对/独立落库。
     pub async fn execute_tools(
         &self,
-        model_response: ModelCallResponse,
+        model_response: ModelResponse,
         neuron_id: Option<String>,
-    ) -> AppResult<RoundOutcome> {
+    ) -> AppResult<RoundProduct> {
         let mut output = model_response.output.clone();
-        let mut tool_results: Vec<ToolResultItem> = Vec::new();
+        let mut tool_results: Vec<ToolResult> = Vec::new();
         // 单轮单次工具阶段：模型可能一次声明多个 tool_calls（并行调用），引擎全部执行。
         // 每个声明都会产生一条结果（成功或失败文本），供独立落库；孤儿的排除统一在
         // 「消息 → 模型入参」投影时由 sanitize_tool_pairs 过滤（见 project_history）。
         let tool_calls = model_response.tool_calls.clone();
         if let Some(calls) = tool_calls.as_ref() {
             for call in calls {
-                let tool = self
-                    .tool_registry
-                    .read()
-                    .expect("tool registry lock should not be poisoned")
-                    .get_tool(&call.name)
-                    .ok_or_else(|| AppError::SkillNotFound(call.name.clone()))?;
-                tracing::info!(
-                    phase = PHASE_ROUND_EXECUTE,
-                    tool = %call.name,
-                    args_len = call.arguments.to_string().len(),
-                    "executing tool"
-                );
-                let result = match tool.execute(call.arguments.clone()).await {
-                    Ok(result) => result,
-                    Err(error) => {
-                        // 工具失败不阻塞整轮：把失败信息作为工具结果回传给模型，
-                        // 由模型决定重试、换工具或直接基于失败继续作答。
-                        let message =
-                            format!("[tool:{}] 工具调用失败：{error}", call.name);
-                        tracing::warn!(
-                            phase = PHASE_ROUND_EXECUTE,
-                            tool = %call.name,
-                            error = %error,
-                            "tool failed; error passed back to model"
-                        );
-                        message
-                    }
-                };
-                tracing::info!(
-                    phase = PHASE_ROUND_EXECUTE,
-                    tool = %call.name,
-                    result_len = result.len(),
-                    "tool executed"
-                );
-                // 统一上下文安全兜底：任何工具结果超上限 → head/tail 截断 + 提示。
-                // 落库点执行（结果随后既落库又拼进本轮输出，一处截断两头受益）。
-                let result = super::context_safety::cap_tool_result(
-                    &call.name,
-                    result,
-                    self.tool_result_max_chars,
-                );
-                tool_results.push(ToolResultItem {
-                    tool_call_id: call.id.clone(),
-                    tool_name: call.name.clone(),
-                    content: result.clone(),
-                });
+                // 单调用执行语义（授权 / 失败转结果 / 截断）统一在能力执行器：
+                // 执行面与 CapabilityExecutor 端口共用同一实现（架构设计 §2.3 / §3.4）。
+                let item = self.capability.execute(call.clone()).await?;
+                let result = item.content.clone();
+                tool_results.push(item);
                 output = if output.trim().is_empty() {
                     result
                 } else {
@@ -365,7 +305,7 @@ impl RoundExecutor {
             }
         }
 
-        Ok(RoundOutcome {
+        Ok(RoundProduct {
             response: output,
             model_output: Some(model_response.output.clone()),
             tool_calls,
@@ -376,9 +316,9 @@ impl RoundExecutor {
     }
 }
 
-/// 工具白名单 ∩ 注册表：仅授权真实存在的工具。
-pub fn filter_authorized_tool_ids(registry: &ToolRegistry, tool_ids: &[String]) -> Vec<String> {
-    let known: HashSet<String> = registry
+/// 工具白名单 ∩ 工具目录：仅授权真实存在的工具。
+pub fn filter_authorized_tool_ids(catalog: &dyn ToolCatalog, tool_ids: &[String]) -> Vec<String> {
+    let known: HashSet<String> = catalog
         .list_definitions()
         .into_iter()
         .map(|d| d.name)
@@ -400,11 +340,14 @@ pub fn filter_authorized_tool_ids(registry: &ToolRegistry, tool_ids: &[String]) 
 
 #[cfg(test)]
 mod tests {
+    use std::sync::RwLock;
+
     use async_trait::async_trait;
     use serde_json::json;
 
     use super::*;
-    use crate::core::{models::ToolSource, tool_registry::Tool};
+    use crate::core::models::ToolSource;
+    use crate::tools::tool_registry::{Tool, ToolRegistry};
 
     /// 测试工具：仅用于注册表存在性校验。
     struct DummyTool(&'static str);
@@ -427,9 +370,12 @@ mod tests {
 
     #[test]
     fn filter_drops_unknown_tool_ids() {
-        let mut registry = ToolRegistry::new();
-        registry.register_source(DummyTool("echo"), ToolSource::Config);
-        let out = filter_authorized_tool_ids(&registry, &["echo".into(), "nope".into()]);
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        registry
+            .write()
+            .unwrap()
+            .register_source(DummyTool("echo"), ToolSource::Config);
+        let out = filter_authorized_tool_ids(registry.as_ref(), &["echo".into(), "nope".into()]);
         assert_eq!(out, vec!["echo".to_string()]);
     }
 }
