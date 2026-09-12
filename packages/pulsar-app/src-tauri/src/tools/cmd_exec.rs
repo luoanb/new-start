@@ -6,7 +6,8 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::sync::Semaphore;
 
-use crate::terminal::{AgentTerminalBridge, TerminalSession};
+use crate::fileops::workspace::WorkspaceStore;
+use crate::terminal::{resolve_spawn_cwd, AgentTerminalBridge, TerminalSession};
 
 use crate::core::error::{AppError, AppResult};
 use super::tool_registry::Tool;
@@ -60,6 +61,8 @@ pub struct ExecuteCommandTool {
     /// 方案 A 桥接：注入后 `visible_terminal: true` 的命令在独立 PTY 会话中
     /// 执行并实时广播到 Terminal 面板；未注入（如单元测试）时降级为隐藏执行。
     terminal: Option<Arc<AgentTerminalBridge>>,
+    /// 工作区存储：未显式指定 `cwd` 时回退到 active 工作区根（与终端面板同口径）。
+    workspace: Option<Arc<WorkspaceStore>>,
 }
 
 impl ExecuteCommandTool {
@@ -67,6 +70,7 @@ impl ExecuteCommandTool {
         Self {
             semaphore: Semaphore::new(MAX_CONCURRENT),
             terminal: None,
+            workspace: None,
         }
     }
 
@@ -74,6 +78,38 @@ impl ExecuteCommandTool {
     pub fn with_terminal(mut self, bridge: Arc<AgentTerminalBridge>) -> Self {
         self.terminal = Some(bridge);
         self
+    }
+
+    /// 注入工作区存储（构建时调用）：默认工作目录跟随用户选中的工作区。
+    pub fn with_workspace(mut self, workspace: Arc<WorkspaceStore>) -> Self {
+        self.workspace = Some(workspace);
+        self
+    }
+
+    /// 解析实际工作目录：显式 `cwd` 优先；否则回退 active 工作区根；无工作区沿用进程 cwd。
+    fn resolve_cwd(&self, explicit: Option<String>) -> AppResult<Option<String>> {
+        match self.workspace.as_ref() {
+            Some(store) => resolve_spawn_cwd(explicit, store),
+            None => Ok(explicit),
+        }
+    }
+
+    /// `cwd` 参数说明：把 active 工作区根的**具体路径**写进工具 schema。
+    ///
+    /// 模型看不到进程环境，不给实际路径就只能猜（典型表现是硬编码 `cd <猜的路径>`）。
+    /// 每次组装工具 schema 时现取，切换工作区后即刻生效。
+    fn cwd_description(&self) -> String {
+        match self
+            .workspace
+            .as_ref()
+            .and_then(|store| store.active().ok().flatten())
+        {
+            Some(workspace) => format!(
+                "Optional working directory; defaults to the active workspace root: {}. Omit it unless you need a subdirectory.",
+                workspace.root.display()
+            ),
+            None => "Optional working directory; defaults to the process's current directory (no active workspace)".to_string(),
+        }
     }
 }
 
@@ -125,7 +161,7 @@ impl Tool for ExecuteCommandTool {
                 },
                 "cwd": {
                     "type": "string",
-                    "description": "Optional working directory; defaults to the process's current directory"
+                    "description": self.cwd_description()
                 },
                 "timeout_ms": {
                     "type": "number",
@@ -162,7 +198,9 @@ impl Tool for ExecuteCommandTool {
             ));
         }
 
-        let cwd = args.get("cwd").and_then(|v| v.as_str()).map(str::to_string);
+        let cwd = self.resolve_cwd(
+            args.get("cwd").and_then(|v| v.as_str()).map(str::to_string),
+        )?;
         let timeout_ms = args
             .get("timeout_ms")
             .and_then(|v| v.as_u64())

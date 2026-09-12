@@ -391,6 +391,7 @@ impl ConversationRunner {
                     },
                     timestamp: now_ms(),
                     neuron_id: ctx.selected_neuron.as_ref().map(|n| n.id.clone()),
+                    elapsed_ms: None,
                 },
             )?
             .messages
@@ -613,6 +614,7 @@ impl ConversationRunner {
                         },
                         timestamp: now_ms(),
                         neuron_id: outcome.selected_neuron_id.clone(),
+                        elapsed_ms: None,
                     },
                 )?;
             }
@@ -686,6 +688,7 @@ impl ConversationRunner {
                 },
                 timestamp: now_ms(),
                 neuron_id: None,
+                elapsed_ms: None,
             });
         }
         self.executor
@@ -786,6 +789,7 @@ impl ConversationRunner {
                     },
                     timestamp: now_ms(),
                     neuron_id: None,
+                    elapsed_ms: None,
                 });
             }
             RoundTriggerKind::Poller => {
@@ -800,6 +804,7 @@ impl ConversationRunner {
                         },
                         timestamp: now_ms(),
                         neuron_id: ctx.selected_neuron.as_ref().map(|n| n.id.clone()),
+                        elapsed_ms: None,
                     });
                 }
             }
@@ -843,6 +848,7 @@ impl ConversationRunner {
             },
             timestamp: now_ms(),
             neuron_id: None,
+            elapsed_ms: None,
         };
         if let Err(error) = self.store.add_message(&ctx.session_id, message) {
             tracing::error!(
@@ -888,6 +894,7 @@ impl ConversationRunner {
                 },
                 timestamp: now_ms(),
                 neuron_id: stamped,
+                elapsed_ms: None,
             },
         )?;
         Ok(())
@@ -931,6 +938,7 @@ impl ConversationRunner {
                         },
                         timestamp: now_ms(),
                         neuron_id: stamped.clone(),
+                        elapsed_ms: None,
                     },
                 )?;
             }
@@ -946,6 +954,7 @@ impl ConversationRunner {
                     },
                     timestamp: now_ms(),
                     neuron_id: stamped.clone(),
+                    elapsed_ms: None,
                 },
             )?;
         }
@@ -1367,6 +1376,7 @@ mod tests {
                 },
                 timestamp: now_ms(),
                 neuron_id: None,
+                elapsed_ms: None,
             });
         }
         let outcome = h
@@ -1398,6 +1408,7 @@ mod tests {
             },
             timestamp: now_ms(),
             neuron_id: None,
+            elapsed_ms: None,
         }
     }
 

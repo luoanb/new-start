@@ -85,6 +85,8 @@ export type Message = {
   timestamp: number;
   /** 所属神经元（assistant 模式每轮选中，落库盖章；旧消息 / 非 assistant 模式缺失）。 */
   neuron_id?: string | null;
+  /** 介入轮耗时（毫秒）：仅写在该轮触发的那条用户消息上；未结束 / 非用户消息缺失。 */
+  elapsed_ms?: number | null;
 };
 
 export type RuntimeStatus = {

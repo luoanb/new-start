@@ -706,6 +706,7 @@ mod tests {
             },
             timestamp: 0,
             neuron_id: None,
+            elapsed_ms: None,
         };
         let context = Message {
             role: MessageRole::User,
@@ -714,6 +715,7 @@ mod tests {
             },
             timestamp: 0,
             neuron_id: None,
+            elapsed_ms: None,
         };
         // 落库简报与角色声明均回灌为 User 文本（历史 = wire，严格前缀累积）。
         let nudge_back = ModelCallInput::from_message(&nudge).expect("nudge refills");
@@ -741,6 +743,7 @@ mod tests {
                 },
                 timestamp: i,
                 neuron_id: None,
+                elapsed_ms: None,
             })
             .collect();
         // 模拟 Compactor 落库形态：摘要插入头部，summary_of = 被覆盖旧消息 timestamps。
@@ -754,6 +757,7 @@ mod tests {
                 },
                 timestamp: 0,
                 neuron_id: None,
+                elapsed_ms: None,
             },
         );
         let projected = ModelCallInput::project_history(&messages);
@@ -775,6 +779,7 @@ mod tests {
             },
             timestamp: 0,
             neuron_id: None,
+            elapsed_ms: None,
         };
         assert!(ModelCallInput::from_message(&error).is_none());
         let projected = ModelCallInput::project_history(&[error]);

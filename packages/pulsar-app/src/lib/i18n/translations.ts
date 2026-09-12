@@ -82,6 +82,8 @@ export type Translations = {
     copy: string;
     rate: string;
     copied: string;
+    /** 用户介入轮耗时标签（{duration} 为格式化后的时长）。 */
+    turnElapsed: string;
   };
   sidePanel: {
     providers: string;
@@ -822,6 +824,7 @@ export const en: Translations = {
     copy: "Copy",
     rate: "Rate",
     copied: "Copied",
+    turnElapsed: "Turn took {duration}",
   },
   sidePanel: {
     providers: "Providers",
@@ -1600,6 +1603,7 @@ export const zh: Translations = {
     copy: "复制",
     rate: "评价",
     copied: "已复制",
+    turnElapsed: "本轮耗时 {duration}",
   },
   sidePanel: {
     providers: "服务商",

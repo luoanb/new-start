@@ -67,6 +67,9 @@ pub struct Message {
     /// 所属神经元（assistant 模式每轮选中，落库盖章；旧消息 / 非 assistant 模式为 None）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub neuron_id: Option<String>,
+    /// 介入轮耗时（毫秒，仅写在该轮触发的那条用户消息上；未结束 / 非用户消息为 None）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
 }
 
 impl Message {

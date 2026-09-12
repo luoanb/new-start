@@ -1,5 +1,11 @@
 # Spec: 对话滚动对齐 Gemini（智能自动跟随 + 问句对齐顶部）
 
+> **已更新（2026-09-13）**：滚动语义收敛为**仅用户主动发送时滚动**。原「未上滑则自动跟随到底」与
+> 「吸顶展示期 `stickyRound`」已废弃——助手模式一轮会追加多条消息（工具调用 / 工具结果 / 正文 / 下一轮），
+> `stickyRound` 只挡住第一条，第二条起即落到 `scrollToNewest()`，反复把视图拽到底部打断阅读。
+> `userScrolled` / `stickyRound` / `scrollToNewest` 已从代码移除，`pendingAlignTop` 吸顶保留。
+> 详见 `2026-09-13_01-45_scroll-only-on-send-and-shell-cwd.md`。
+
 ## Goal
 
 - 要解决什么问题：ChatArea 消息列表原为"每次 messages 变化都强制滚到底部"，用户上滑阅读历史时会被新消息/回复拽回底部，打断阅读；且缺少 Gemini 式"发送问句后对齐视口顶部、为回答预留空间"的交互。
@@ -74,6 +80,7 @@ $effect(() => {
 
 ## Change Log
 
+- 2026-09-13（修订 4）：**滚动语义收敛为「仅用户主动发送时滚动」**——移除 `userScrolled` / `stickyRound` / `scrollToNewest` 与自动跟随分支；`$effect` 仅在 `pendingAlignTop` 且消息数增长时对最后一条 `.message.user` 吸顶。原因：助手模式一轮追加多条消息，`stickyRound` 只挡第一条，之后每次回复更新都拽底。
 - 2026-08-15（修订 3）：**消息按轮分组**（纯前端展示层）——一轮 = 以用户输入为起点、到下一条用户输入前（不含）为止的连续消息；nudge 简报（role=user, body.kind==="nudge"）不作为轮起点并入轮内；每组包一层 `.message-round` 容器，`min-height` = 对话容器可视高度（`viewportH`，ResizeObserver 测量，CSS 百分比在滚动容器内无法解析故内联注入像素值）。移除 `.answer-spacer`（轮次容器自身等高后已提供吸顶底部空间）。吸顶目标仍为最后一条 `.message.user`，分组后实测 `userAlign≈0` 生效。
 - 2026-08-15（修订 2）：回答到达时**不再额外滚动**（移除 block:end 对齐）——问题已吸顶在视口顶部，回答自然出现在下方；再滚动会把问题顶出视口、破坏吸顶。回答短则问题+回答都在视口内，回答长时用户按需自行滚动。
 - 2026-08-15（修订 1）：浏览器实测确认根因（底部无预留空间 → maxScrollTop clamp → 吸顶失败），改为 `answer-spacer`（55vh/min 240px）提供底部预留 + `scrollToTopOf` 临时覆盖 smooth 后 scrollIntoView(block:'start')。实测发送后新问题 `userAlign≈0`（吸顶成功），`db≈181`（预留空间）。

@@ -575,6 +575,7 @@ mod tests {
             },
             timestamp: now_ms(),
             neuron_id: None,
+            elapsed_ms: None,
         }
     }
 
@@ -655,6 +656,7 @@ mod tests {
                     },
                     timestamp: now_ms(),
                     neuron_id: None,
+                    elapsed_ms: None,
                 },
             )
             .unwrap();
@@ -834,6 +836,7 @@ mod tests {
                     },
                     timestamp: now_ms(),
                     neuron_id: None,
+                    elapsed_ms: None,
                 },
             )
             .unwrap();
@@ -932,6 +935,7 @@ mod tests {
                     },
                     timestamp: now_ms(),
                     neuron_id: None,
+                    elapsed_ms: None,
                 },
             )
             .unwrap();
@@ -954,6 +958,7 @@ mod tests {
                     },
                     timestamp: now_ms(),
                     neuron_id: None,
+                    elapsed_ms: None,
                 },
             )
             .unwrap();

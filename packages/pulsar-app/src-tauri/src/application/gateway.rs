@@ -1108,7 +1108,8 @@ impl Gateway {
     /// Poller 推进一视同仁）；② 暂停该会话绑定的可推进课题（Todo / InProgress /
     /// WrappingUp——即 Poller 跳过清单之外会被自动续跑的状态），防止「停止后下个轮询
     /// tick 又自动续跑」；`Paused` / `WaitingUser` 本就不被推进，终态（Done / Cancelled）
-    /// 不动；③ 摘除 tracker 运行条目（无条目时无害，NotFound 静默——停止幂等）。
+    /// 不动；③ 摘除 tracker 运行条目（无条目时无害，NotFound 静默——停止幂等）；
+    /// ④ 给开启中的介入轮盖耗时（点停止 = 这一轮到此为止，失败仅告警）。
     /// 恢复走课题现有 resume（前端恢复按钮）。
     pub fn stop_session(&self, conversation_id: &str) -> AppResult<String> {
         // ① 取消活动轮次：协调器是轮次存续的唯一权威，与谁注册 tracker 无关。
@@ -1148,6 +1149,17 @@ impl Gateway {
         }
         // ③ 摘除运行条目（纯展示职责；无条目 = 本就不在运行，NotFound 静默，停止幂等）。
         let _ = self.session_tracker.close(conversation_id);
+        // ④ 介入轮收尾兜底：点停止即这一轮到止，把耗时定格（失败仅告警，不阻断停止）。
+        if let Err(error) =
+            crate::application::assistant_session::stamp_open_user_turn(&self.store, conversation_id)
+        {
+            tracing::warn!(
+                phase = PHASE_STOP_SESSION,
+                conversation_id = %conversation_id,
+                error = %error,
+                "stamp user turn elapsed on stop failed"
+            );
+        }
         Ok(format!("Stopped session: {conversation_id}"))
     }
 
@@ -1537,7 +1549,7 @@ fn assemble_local_tools(
     let mut registry = ToolRegistry::new();
     // 内置工具全部打标 Core（用户决策）：任何对话都得带上。
     // 方案 A：注入终端桥接后 execute_command 支持 visible_terminal 可见执行。
-    let mut exec_tool = ExecuteCommandTool::new();
+    let mut exec_tool = ExecuteCommandTool::new().with_workspace(file_ctx.workspace_store());
     if let Some(bridge) = terminal {
         exec_tool = exec_tool.with_terminal(bridge);
     }

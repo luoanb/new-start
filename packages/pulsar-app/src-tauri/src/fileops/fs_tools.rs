@@ -57,6 +57,11 @@ impl FileToolContext {
                 "no active workspace; add one via the Files view before using file tools".into(),
             ))
     }
+
+    /// 工作区存储句柄（终端 / 命令工具复用同一 active 工作区根解析）。
+    pub(crate) fn workspace_store(&self) -> Arc<WorkspaceStore> {
+        Arc::clone(&self.store)
+    }
 }
 
 /// 把全部文件工具注册进 registry（native + Core 标签，任何对话都带上）。

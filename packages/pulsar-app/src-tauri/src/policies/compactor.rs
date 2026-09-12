@@ -203,6 +203,7 @@ impl Compactor {
             },
             timestamp: crate::infra::time::now_ms(),
             neuron_id: None,
+            elapsed_ms: None,
         };
 
         // Insert the compaction summary at position 0 (original messages kept intact)
@@ -244,6 +245,7 @@ impl Compactor {
             },
             timestamp: crate::infra::time::now_ms(),
             neuron_id: None,
+            elapsed_ms: None,
         };
 
         // Insert the compaction summary at position 0 (original messages kept intact)
@@ -302,6 +304,7 @@ mod tests {
             },
             timestamp: now_ms(),
             neuron_id: None,
+            elapsed_ms: None,
         }
     }
 

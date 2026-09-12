@@ -46,6 +46,18 @@
   );
   let isRunning = $derived(!!runningSession);
 
+  // 介入轮「进行中」的兜底信号：最后一条真实用户输入（role=user 且文本；nudge/role_context 不算）。
+  // 仅用于后端进行中标记（elapsed_ms=0）落库前的首轮窗口；标记落库后不再依赖运行态。
+  const lastUserInputIndex = $derived(
+    (() => {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i];
+        if (msg.role === "user" && msg.body.kind === "text") return i;
+      }
+      return -1;
+    })()
+  );
+
   const onSend = (text: string) => {
     pendingAlignTop = true;
     if (boundConversationId) {
@@ -81,24 +93,17 @@
     return () => ro.disconnect();
   });
 
-  // ── Gemini 式对话滚动 ──
-  // 语义：仅当用户已在底部时才自动跟随新消息；上滑阅读历史时锁定（不被打断），
-  // 回到底部解锁；发送问句后把新问题对齐视口顶部，为回答预留空间。
-  let userScrolled = $state(false); // true = 用户已上滑离开底部（锁定自动跟随）
+  // ── 对话滚动 ──
+  // 语义：只在用户主动发送时滚动（把新问题对齐视口顶部）；模型回复 / 工具推进一律
+  // 不动视口，避免多轮推进时反复把视图拽到底部打断阅读。
   let pendingAlignTop = $state(false); // 发送后待对齐顶部
-  let stickyRound = $state(false); // 吸顶展示期：问题吸顶后，回答到达不跳到底（Gemini 形态）
-  let autoScrolling = false; // 程序化滚动中：抑制 onscroll 误判为用户上滑
+  let autoScrolling = false; // 程序化滚动中：抑制 onscroll 误判
   let lastMessageCount = 0;
   let lastMessageRole = "";
 
   function handleScroll() {
     const el = containerEl;
     if (!el || autoScrolling) return;
-    // 距底剩余像素，5px 容错防亚像素抖动；离开底部即锁定，回到底部解锁。
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    userScrolled = distanceFromBottom > 5;
-    // 用户主动滚动即结束吸顶展示期，交还控制权。
-    if (userScrolled) stickyRound = false;
     // 上滑近顶部：追加加载更早消息（滚动位置由 loadOlderMessages 按高度差恢复）。
     if (el.scrollTop <= 40) {
       void loadOlderMessages();
@@ -123,12 +128,6 @@
     });
   }
 
-  function scrollToNewest() {
-    requestAnimationFrame(() => {
-      if (containerEl) containerEl.scrollTop = containerEl.scrollHeight;
-    });
-  }
-
   /** 把目标消息对齐到滚动容器顶部。临时覆盖容器 CSS 的 scroll-behavior:smooth，
    *  否则 scrollIntoView(block:'start') 会被平滑动画吞掉、只滚到接近底部。 */
   function scrollToTopOf(target: HTMLElement) {
@@ -145,47 +144,28 @@
     if (list.length === 0 || !containerEl) return;
     const last = list[list.length - 1];
 
-    // 列表被重置（切换会话/清空历史）：解锁并回到底部。
+    // 列表被重置（切换会话/清空历史）：重置计数基线。
     if (list.length < lastMessageCount) {
-      userScrolled = false;
-      stickyRound = false;
       lastMessageCount = 0;
       lastMessageRole = "";
     }
 
-    const isNewMessage = list.length > lastMessageCount;
-
-    if (pendingAlignTop && isNewMessage) {
-      // Gemini 行为：发送后把新问题对齐视口顶部，为回答预留空间。
-      // 列表末尾的 .answer-spacer 提供底部预留空间，让"最后一条消息"也能
-      // 真正吸顶到视口顶部（无预留时受 maxScrollTop 限制会被 clamp 回底部）。
+    if (pendingAlignTop && list.length > lastMessageCount) {
+      // 仅用户发送：把新问题对齐视口顶部，为回答预留空间（轮次容器自身等高提供
+      // 底部空间，故可真正吸顶）。回答 / 工具消息到达一律不滚动。
       pendingAlignTop = false;
-      stickyRound = true;
       requestAnimationFrame(() => {
         const el = containerEl;
         if (!el) return;
         const items = el.querySelectorAll(".message.user");
         const target = items[items.length - 1] as HTMLElement | undefined;
         if (target) {
-          // 发送是用户主动操作，视为回到最新：解锁后续自动跟随。
-          userScrolled = false;
           autoScrolling = true;
           scrollToTopOf(target);
-          // 下一帧恢复 onscroll 监听，避免本次程序化滚动被判定为用户上滑。
+          // 下一帧恢复 onscroll 监听，避免本次程序化滚动触发分页判定。
           requestAnimationFrame(() => (autoScrolling = false));
         }
       });
-    } else if (isNewMessage && !userScrolled) {
-      if (stickyRound) {
-        // 吸顶展示期收到新消息（回答到达）：问题已吸顶在视口顶部，回答自然
-        // 出现在其下方，无需额外滚动（再滚动会把问题顶出视口、破坏吸顶）。
-        // 回答短则问题+回答都在视口内；回答长时用户按需自行滚动。
-        // 吸顶展示期到此结束，交还控制权。
-        stickyRound = false;
-      } else {
-        // 其余新消息：仅在用户未上滑时自动跟随到底。
-        scrollToNewest();
-      }
     }
 
     lastMessageCount = list.length;
@@ -225,6 +205,49 @@
     });
     return groups;
   });
+
+  // ── 介入轮耗时（展示在分组底部）──
+  // `elapsed_ms` 三态：0 = 后端标记「进行中」→ 按起点本地 tick；>0 = 已收尾定格；缺失 = 未追踪。
+  let nowMs = $state(Date.now());
+
+  /** 该轮（以用户输入为起点）是否处于「进行中」。 */
+  const roundTurnOpen = (round: MessageRound): boolean => {
+    const anchor = round.messages[0];
+    if (!anchor || anchor.role !== "user" || anchor.body.kind !== "text") return false;
+    if (anchor.elapsed_ms === 0) return true;
+    // 进行中标记落库前的首轮窗口：运行中 + 最后一条用户输入。
+    return anchor.elapsed_ms == null && isRunning && round.startIndex === lastUserInputIndex;
+  };
+  const hasOpenTurn = $derived(rounds.some(roundTurnOpen));
+  $effect(() => {
+    if (!hasOpenTurn) return;
+    nowMs = Date.now();
+    const timer = setInterval(() => {
+      nowMs = Date.now();
+    }, 1000);
+    return () => clearInterval(timer);
+  });
+
+  /** 墙钟时长格式化：`45s` / `2m13s` / `1h05m`。 */
+  function formatDuration(ms: number): string {
+    const totalSec = Math.max(0, Math.floor(ms / 1000));
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    if (h > 0) return `${h}h${m.toString().padStart(2, "0")}m`;
+    if (m > 0) return `${m}m${s.toString().padStart(2, "0")}s`;
+    return `${s}s`;
+  }
+
+  /** 本轮介入轮耗时的展示文本（`null` = 不展示）。 */
+  function formatRoundElapsed(round: MessageRound): string | null {
+    const anchor = round.messages[0];
+    if (!anchor || anchor.role !== "user" || anchor.body.kind !== "text") return null;
+    const settled = anchor.elapsed_ms;
+    if (typeof settled === "number" && settled > 0) return formatDuration(settled);
+    if (roundTurnOpen(round)) return formatDuration(Math.max(0, nowMs - anchor.timestamp));
+    return null;
+  }
 
   async function handleCopy(msg: Message): Promise<boolean> {
     return CopyToClipboard.copyText(msg.body.content);
@@ -340,6 +363,7 @@
       </div>
     {:else}
       {#each rounds as round, i}
+        {@const turnElapsed = formatRoundElapsed(round)}
         <div
           class="message-round"
           class:last={i === rounds.length - 1}
@@ -370,6 +394,9 @@
                 <span class="running-step">{runningSession.current_step}</span>
               {/if}
             </div>
+          {/if}
+          {#if turnElapsed !== null}
+            <div class="turn-elapsed">{t("chatMessage.turnElapsed", { duration: turnElapsed })}</div>
           {/if}
         </div>
       {/each}
@@ -414,6 +441,8 @@
   .empty-content h3 { margin: 0 0 var(--space-2); font-size: var(--fs-lg); font-weight: 600; color: var(--color-text); }
   .empty-content p { margin: 0; font-size: var(--fs-sm); color: var(--color-text-muted); }
   .loading-indicator { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-5); font-size: var(--fs-sm); color: var(--color-text-muted); }
+  /* 介入轮耗时：分组底部的汇总脚注（与消息内容左边缘对齐，弱化展示）。 */
+  .turn-elapsed { padding: var(--space-1) var(--space-4) 0; font-size: var(--fs-xs); color: var(--color-text-muted); opacity: 0.7; }
   .running-step { font-family: var(--font-mono, monospace); font-size: var(--fs-xs); color: var(--color-primary); opacity: 0.85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .dot-pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--color-primary); animation: pulse 1.2s ease-in-out infinite; }
   @keyframes pulse { 0%, 100% { opacity: 0.3; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.2); } }

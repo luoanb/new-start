@@ -273,6 +273,7 @@ impl RoundResolver {
                 },
                 timestamp: now_ms(),
                 neuron_id: None,
+                elapsed_ms: None,
             });
         } else if Some(neuron.id.as_str()) == last_selected {
             // 角色未变（复用锚点 / 选型结果相同）：不重复注入，历史回灌自带角色声明。
@@ -289,6 +290,7 @@ impl RoundResolver {
                 },
                 timestamp: now_ms(),
                 neuron_id: Some(neuron.id.clone()),
+                elapsed_ms: None,
             });
         }
         out
@@ -389,6 +391,7 @@ mod tests {
             },
             timestamp: 0,
             neuron_id: None,
+            elapsed_ms: None,
         }];
         let out = RoundResolver::attach_role(&history, Some(&neuron_with_insert(Some("assistant.match_topic"))), None);
         assert_eq!(out.len(), 2);
@@ -413,6 +416,7 @@ mod tests {
             },
             timestamp: 0,
             neuron_id: None,
+            elapsed_ms: None,
         }];
         let out = RoundResolver::attach_role(&history, Some(&neuron_with_insert(Some("assistant.match_topic"))), Some("prev-anchor-id"));
         assert_eq!(out.len(), 2);
@@ -436,6 +440,7 @@ mod tests {
             },
             timestamp: 0,
             neuron_id: None,
+            elapsed_ms: None,
         }];
         let out = RoundResolver::attach_role(&history, Some(&neuron_with_insert(None)), Some("n_test"));
         assert_eq!(out.len(), 1);
@@ -453,6 +458,7 @@ mod tests {
             },
             timestamp: 0,
             neuron_id: None,
+            elapsed_ms: None,
         }];
         let out = RoundResolver::attach_role(&history, None, None);
         assert_eq!(out.len(), 1);

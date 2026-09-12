@@ -820,6 +820,7 @@ impl AssistantSession {
             },
             timestamp: crate::infra::time::now_ms(),
             neuron_id: None,
+            elapsed_ms: None,
         };
         if let Err(e) = self.store.add_message(session_id, message) {
             tracing::warn!(
@@ -1293,7 +1294,11 @@ impl AssistantHooks<'_> {
         match ctx.trigger {
             // 用户接入即解除等待用户状态（blocked 项 → pending，恢复课题轮询）。
             // 裁决（`assistant.user-round-judgement`）是独立注册的 IP-1 hook，注册序在其后。
-            RoundTriggerKind::User => self.release_waiting_user(ctx)?,
+            RoundTriggerKind::User => {
+                self.release_waiting_user(ctx)?;
+                // 上一次介入轮若仍开启，被本次输入取代：此刻新消息尚未落库，定位到的仍是它。
+                self.close_superseded_user_turn(ctx);
+            }
             RoundTriggerKind::ManualStep | RoundTriggerKind::Poller => self.advance_brief(ctx)?,
             RoundTriggerKind::AgentLoop => {
                 unreachable!("assistant hooks never run agent-loop rounds")
@@ -1318,10 +1323,12 @@ impl AssistantHooks<'_> {
             RoundTriggerKind::User => {
                 self.write_pending_round(&ctx.session_id, pending_round)?;
                 self.tick_round_counters(ctx, true)?;
+                self.finish_or_mark_user_turn(ctx, pending_round);
             }
             RoundTriggerKind::ManualStep => {
                 self.write_pending_round(&ctx.session_id, pending_round)?;
                 self.tick_round_counters(ctx, false)?;
+                self.finish_or_mark_user_turn(ctx, pending_round);
             }
             // Poller 轮吞错（轮询推进不得被标记/计数副作用打断）。
             RoundTriggerKind::Poller => {
@@ -1335,6 +1342,7 @@ impl AssistantHooks<'_> {
                         "assistant round-after side effects failed; ignored"
                     );
                 }
+                self.finish_or_mark_user_turn(ctx, pending_round);
             }
             RoundTriggerKind::AgentLoop => {
                 unreachable!("assistant hooks never run agent-loop rounds")
@@ -1354,6 +1362,57 @@ impl AssistantHooks<'_> {
         }
         set_pending_round(&mut conversation.extra, pending);
         self.assistant.store.save_conversation(&conversation)
+    }
+
+    /// 介入轮状态落账（IP-5）：未收尾 → 标记进行中；已收尾 → 定格墙钟耗时。
+    ///
+    /// 口径 = 整个介入轮：`pending_round` 转 false（不再续推）或绑定课题进入终态即收尾。
+    /// 进行中标记让前端在轮询等待空档也能按起点持续 tick（不依赖 `runningSessions`）。
+    /// 纯观测副作用——写失败仅 `warn`，不打断主轮。
+    fn finish_or_mark_user_turn(&self, ctx: &RoundContext, pending_round: bool) {
+        let still_running = pending_round && !self.bound_topic_is_terminal(ctx);
+        let result = if still_running {
+            mark_user_turn_open(&self.assistant.store, &ctx.session_id)
+        } else {
+            stamp_open_user_turn(&self.assistant.store, &ctx.session_id)
+        };
+        if let Err(error) = result {
+            tracing::warn!(
+                phase = PHASE_ASSISTANT_POLLER,
+                session_id = %ctx.session_id,
+                error = %error,
+                "user turn elapsed write failed; ignored"
+            );
+        }
+    }
+
+    /// 上一次介入轮若仍开启，被本次用户输入取代 → 定格耗时（纯观测，失败仅 `warn`）。
+    fn close_superseded_user_turn(&self, ctx: &RoundContext) {
+        if let Err(error) = stamp_open_user_turn(&self.assistant.store, &ctx.session_id) {
+            tracing::warn!(
+                phase = PHASE_ASSISTANT_POLLER,
+                session_id = %ctx.session_id,
+                error = %error,
+                "superseded user turn stamp failed; ignored"
+            );
+        }
+    }
+
+    /// 绑定课题是否已进入终态（完结 / 阻塞 / 暂停 / 取消）——终态即介入轮结束。
+    fn bound_topic_is_terminal(&self, ctx: &RoundContext) -> bool {
+        let Some(topic_id) = ctx.topic_id.as_ref() else {
+            return false;
+        };
+        let Ok(Some(topic)) = self.assistant.topics().and_then(|store| store.get(topic_id)) else {
+            return false;
+        };
+        matches!(
+            topic.status,
+            TopicStatus::Done
+                | TopicStatus::WaitingUser
+                | TopicStatus::Paused
+                | TopicStatus::Cancelled
+        )
     }
 
     /// 若当前未指定课题，则按会话解析已绑定课题（不存在保持 None）。
@@ -1750,6 +1809,71 @@ pub(crate) fn is_settling_round(outcome: &RoundProduct) -> bool {
     outcome.tool_calls.is_none() && outcome.tool_results.is_empty()
 }
 
+/// 真实用户输入：`role = User` 且 body 为文本。Nudge（轮询简报）同样是 `role = User`，
+/// 必须按 body 区分，否则推进轮会被误判为介入轮起点。
+fn is_real_user_input(message: &Message) -> bool {
+    message.role == MessageRole::User && matches!(message.body, MessageBody::Text { .. })
+}
+
+/// 介入轮「进行中」哨兵：`elapsed_ms == 0` 表示该轮尚未收尾，前端按 `timestamp` 本地 tick；
+/// `> 0` = 已收尾的墙钟毫秒；字段缺失 = 未纳入追踪（历史数据 / 非助手模式）。
+pub(crate) const USER_TURN_IN_PROGRESS: u64 = 0;
+
+/// 定位「最后一条真实用户输入」，按 `decide` 决定新值（`None` = 不改，不写盘）。
+///
+/// 会话级公共入口（IP-5 状态落账 / `stop_session` 兜底 / 被取代收尾共用）。仅助手模式
+/// 生效（与 `round_after` 的周期门控一致）：Chat / Agent 无课题推进，不算介入轮。
+fn write_user_turn_elapsed(
+    store: &JsonConversationStore,
+    session_id: &str,
+    decide: impl FnOnce(&Message) -> Option<u64>,
+) -> AppResult<()> {
+    let conversation = store.require_conversation(session_id)?;
+    if !matches!(
+        conversation.mode,
+        ConversationMode::Assistant | ConversationMode::System
+    ) {
+        return Ok(());
+    }
+    let Some(index) = conversation.messages.iter().rposition(is_real_user_input) else {
+        return Ok(());
+    };
+    let current = conversation.messages[index].elapsed_ms;
+    let Some(next) = decide(&conversation.messages[index]) else {
+        return Ok(());
+    };
+    if Some(next) == current {
+        return Ok(());
+    }
+    store
+        .update_message_at(session_id, index, |message| {
+            message.elapsed_ms = Some(next);
+        })
+        .map(|_| ())
+}
+
+/// 标记介入轮进行中（`elapsed_ms = 0`）；未纳入追踪时登记，已进行中 / 已收尾不动。
+pub(crate) fn mark_user_turn_open(
+    store: &JsonConversationStore,
+    session_id: &str,
+) -> AppResult<()> {
+    write_user_turn_elapsed(store, session_id, |message| {
+        message.elapsed_ms.is_none().then_some(USER_TURN_IN_PROGRESS)
+    })
+}
+
+/// 收尾介入轮：把墙钟耗时写回最后一条真实用户输入；已收尾的不再改动（幂等）。
+pub(crate) fn stamp_open_user_turn(
+    store: &JsonConversationStore,
+    session_id: &str,
+) -> AppResult<()> {
+    let now = crate::infra::time::now_ms();
+    write_user_turn_elapsed(store, session_id, |message| {
+        matches!(message.elapsed_ms, None | Some(USER_TURN_IN_PROGRESS))
+            .then(|| now.saturating_sub(message.timestamp) as u64)
+    })
+}
+
 /// 主对话选型频率：每 N 个推进轮做一次 LLM 选型，中间轮沿用 `last_selected` 锚点
 /// （业务层算好 `poll_count % N == 0` 后传 `reselect`，引擎不持有频率概念）。
 const SELECTION_EVERY_N_ROUNDS: u64 = 5;
@@ -2040,6 +2164,7 @@ mod tests {
             body,
             timestamp: 0,
             neuron_id: neuron_id.map(String::from),
+            elapsed_ms: None,
         }
     }
 
@@ -2065,6 +2190,81 @@ mod tests {
             },
             Some(neuron),
         )
+    }
+
+    fn nudge(text: &str) -> Message {
+        msg(
+            MessageRole::User,
+            MessageBody::Nudge {
+                content: text.into(),
+            },
+            None,
+        )
+    }
+
+    /// 临时目录会话存储（`stamp_open_user_turn` 单测用，不拉完整 harness）。
+    fn turn_store(name: &str) -> JsonConversationStore {
+        let root = std::env::temp_dir().join(format!(
+            "pulsar-turn-elapsed-{name}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        JsonConversationStore::new(root).unwrap()
+    }
+
+    #[test]
+    fn stamp_open_user_turn_marks_last_user_input_once() {
+        let store = turn_store("once");
+        let conversation = store
+            .create_conversation(Some("conv-stamp".into()), ConversationMode::Assistant)
+            .unwrap();
+        store.add_message(&conversation.id, user("hi")).unwrap();
+        store.add_message(&conversation.id, asst("hello", "n1")).unwrap();
+
+        stamp_open_user_turn(&store, &conversation.id).unwrap();
+        let stored = store.require_conversation(&conversation.id).unwrap();
+        let index = stored.messages.iter().position(is_real_user_input).unwrap();
+        let first = stored.messages[index].elapsed_ms;
+        assert!(first.is_some(), "介入轮收尾应给最后一条用户输入盖耗时");
+
+        // 二次调用（纯推进轮）不得改写已收尾的介入轮。
+        stamp_open_user_turn(&store, &conversation.id).unwrap();
+        let again = store.require_conversation(&conversation.id).unwrap();
+        assert_eq!(again.messages[index].elapsed_ms, first);
+    }
+
+    #[test]
+    fn stamp_open_user_turn_skips_non_assistant_and_nudge_only() {
+        let store = turn_store("skip");
+
+        // Chat 模式无课题推进，不算介入轮。
+        let chat = store
+            .create_conversation(Some("conv-chat".into()), ConversationMode::Chat)
+            .unwrap();
+        store.add_message(&chat.id, user("hi")).unwrap();
+        stamp_open_user_turn(&store, &chat.id).unwrap();
+        assert!(store
+            .require_conversation(&chat.id)
+            .unwrap()
+            .messages
+            .iter()
+            .all(|message| message.elapsed_ms.is_none()));
+
+        // 助手模式但只有 nudge（role=user / kind=nudge）：无真实用户输入，不盖章。
+        let assistant = store
+            .create_conversation(Some("conv-nudge".into()), ConversationMode::Assistant)
+            .unwrap();
+        store.add_message(&assistant.id, nudge("brief")).unwrap();
+        stamp_open_user_turn(&store, &assistant.id).unwrap();
+        assert!(store
+            .require_conversation(&assistant.id)
+            .unwrap()
+            .messages
+            .iter()
+            .all(|message| message.elapsed_ms.is_none()));
     }
 
     #[test]
@@ -3086,6 +3286,93 @@ mod tests {
         assert!(
             !h.assistant.collect_poll_candidates().contains(&conversation.id),
             "无课题 + 收尾轮 → 必须退出轮询候选"
+        );
+    }
+
+    #[tokio::test]
+    async fn round_after_stamps_user_turn_elapsed_only_when_settling() {
+        let h = judgement_harness(r#"{}"#);
+        let conversation = h
+            .assistant
+            .store
+            .create_conversation(Some("sess-elapsed".into()), ConversationMode::Assistant)
+            .unwrap();
+        h.assistant
+            .store
+            .add_message(&conversation.id, user("do it"))
+            .unwrap();
+        h.assistant
+            .store
+            .add_message(&conversation.id, asst("done", "n1"))
+            .unwrap();
+        let hooks = AssistantHooks {
+            assistant: &h.assistant,
+        };
+        let stamp = |h: &JudgementHarness| {
+            let stored = h
+                .assistant
+                .store
+                .require_conversation(&conversation.id)
+                .unwrap();
+            let index = stored.messages.iter().position(is_real_user_input).unwrap();
+            stored.messages[index].elapsed_ms
+        };
+
+        // 工具轮（有声明）→ 干到一半：只标记「进行中」，不定格。
+        let mut open_ctx = bare_ctx(RoundTriggerKind::Poller);
+        open_ctx.session_id = conversation.id.clone();
+        open_ctx.outcome = Some(settling_outcome(Some(Vec::new()), Vec::new()));
+        hooks.round_after(&open_ctx).await.unwrap();
+        assert_eq!(
+            stamp(&h),
+            Some(USER_TURN_IN_PROGRESS),
+            "工具轮应把介入轮标记为进行中"
+        );
+
+        // 收尾轮（无声明、无结果）→ 介入轮结束，定格墙钟耗时。
+        let mut settle_ctx = bare_ctx(RoundTriggerKind::Poller);
+        settle_ctx.session_id = conversation.id.clone();
+        settle_ctx.outcome = Some(settling_outcome(None, Vec::new()));
+        hooks.round_after(&settle_ctx).await.unwrap();
+        assert!(
+            stamp(&h).is_some_and(|ms| ms > 0),
+            "收尾轮必须把介入轮定格为墙钟耗时"
+        );
+    }
+
+    #[tokio::test]
+    async fn round_before_stamps_superseded_user_turn() {
+        let h = judgement_harness(r#"{}"#);
+        let conversation = h
+            .assistant
+            .store
+            .create_conversation(Some("sess-superseded".into()), ConversationMode::Assistant)
+            .unwrap();
+        // 上一介入轮已开启（进行中标记）。
+        let mut previous = user("first");
+        previous.elapsed_ms = Some(USER_TURN_IN_PROGRESS);
+        h.assistant
+            .store
+            .add_message(&conversation.id, previous)
+            .unwrap();
+        let hooks = AssistantHooks {
+            assistant: &h.assistant,
+        };
+
+        // 新的 User 轮到达（此刻新用户消息尚未落库）→ 上一轮被取代并定格。
+        let mut ctx = bare_ctx(RoundTriggerKind::User);
+        ctx.session_id = conversation.id.clone();
+        hooks.round_before(&mut ctx).await.unwrap();
+
+        let stored = h
+            .assistant
+            .store
+            .require_conversation(&conversation.id)
+            .unwrap();
+        let index = stored.messages.iter().position(is_real_user_input).unwrap();
+        assert!(
+            stored.messages[index].elapsed_ms.is_some_and(|ms| ms > 0),
+            "被新输入取代的介入轮必须定格"
         );
     }
 

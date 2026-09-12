@@ -370,6 +370,7 @@ mod tests {
             },
             timestamp: 0,
             neuron_id: None,
+            elapsed_ms: None,
         }
     }
 
