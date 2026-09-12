@@ -1301,10 +1301,9 @@ fn spawn_poller_runtime(
         base_interval_ms,
         "poller runtime loop starting via tauri async runtime"
     );
-    // 串行化 assistant step 处理：同一时刻只允许一个 PollAll 在跑，
-    // 避免阻塞 tick 循环（select 分支内的 await 会拖住 interval），
-    // 也避免并发推进同一批课题。
-    let step_guard = Arc::new(tokio::sync::Mutex::new(()));
+    // 不再串行化 step 处理：并发额度由 `AssistantSession` 的全局在飞额度统一约束
+    // （额度 = poll_parallelism，批次可重叠而不超限；额度耗尽只跳过本轮、下 tick 重试）。
+    // 独占锁曾是"丢弃整批请求"的根因——A 的长轮会阻塞条件已满足的 B。
     tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(base_interval_ms));
         loop {
@@ -1326,16 +1325,11 @@ fn spawn_poller_runtime(
                     };
                     let assistant = assistant.clone();
                     let emit = state_emit.clone();
-                    let step_guard = step_guard.clone();
                     // 放到独立任务执行，tick 循环立即返回，绝不被模型调用拖住。
                     tauri::async_runtime::spawn(async move {
-                        let Ok(_permit) = step_guard.try_lock() else {
-                            tracing::debug!(phase = PHASE_POLLER_RUNTIME, "step request skipped: another step is in flight");
-                            return;
-                        };
                         let touched = assistant.process_step_request(request, &model).await;
                         // 仅在实际推进了会话（写入消息/课题）时才通知前端重新拉取；
-                        // 空转轮询（无未完成课题 / 全部跳过）不发事件，避免无效刷新与滚动。
+                        // 空转轮询（无候选 / 全部跳过 / 额度耗尽）不发事件，避免无效刷新与滚动。
                         // 课题变化由 TopicStore 写操作统一广播，这里只广播会话变化。
                         if !touched.is_empty() {
                             if let Some(emit) = emit.as_ref() {

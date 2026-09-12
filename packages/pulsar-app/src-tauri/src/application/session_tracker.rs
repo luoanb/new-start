@@ -97,6 +97,42 @@ impl SessionTracker {
         Ok(SessionHandle { token })
     }
 
+    /// 原子「不存在才注册」：单锁内 check + insert。
+    ///
+    /// 轮询派发用作占位（派发点即注册），使批次可重叠而不重复派发同一会话；
+    /// 已注册时返回 `Ok(None)`（调用方视为"已在跑"，跳过本轮）。
+    /// 注意与无条件 [`Self::register`] 的区别：后者是覆盖写，用于用户轮抢占路径。
+    pub fn register_if_absent(&self, session_id: &str) -> AppResult<Option<SessionHandle>> {
+        let token = Arc::new(());
+        let inserted = {
+            let mut map = self
+                .inner
+                .lock()
+                .map_err(|e| AppError::StorageError(format!("Lock error: {}", e)))?;
+            if map.contains_key(session_id) {
+                false
+            } else {
+                map.insert(
+                    session_id.to_string(),
+                    SessionCtx {
+                        info: RunningSession {
+                            session_id: session_id.to_string(),
+                            started_at: now_ms(),
+                            current_step: None,
+                        },
+                        token: Arc::clone(&token),
+                    },
+                );
+                true
+            }
+        };
+        if !inserted {
+            return Ok(None);
+        }
+        self.notify();
+        Ok(Some(SessionHandle { token }))
+    }
+
     /// Remove a session from the tracker (normal completion).
     ///
     /// 归属校验：仅当 `handle` 仍对应最新注册时才移除；过期句柄（该会话已被新轮
@@ -353,6 +389,27 @@ mod tests {
         let st = SessionTracker::new();
         let result = st.update_step("nonexistent", "step");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_register_if_absent_rejects_duplicate_and_respects_ownership() {
+        // 轮询派发占位：已存在（用户轮推进中 / 上一批未收尾）必须拒绝，不覆盖既有条目。
+        let st = SessionTracker::new();
+        let first = st.register_if_absent("sess-1").unwrap();
+        assert!(first.is_some(), "首次占位必须成功");
+        assert!(
+            st.register_if_absent("sess-1").unwrap().is_none(),
+            "已注册 → 必须拒绝（不覆盖、不夺取归属）"
+        );
+        // 归属校验：占位句柄收尾即摘除，之后可再次占位。
+        st.unregister("sess-1", first.as_ref().unwrap());
+        assert!(st.get("sess-1").unwrap().is_none());
+        assert!(
+            st.register_if_absent("sess-1").unwrap().is_some(),
+            "释放后可再次占位"
+        );
+        // 不同会话互不影响。
+        assert!(st.register_if_absent("sess-2").unwrap().is_some());
     }
 
     #[test]

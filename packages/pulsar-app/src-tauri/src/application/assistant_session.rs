@@ -9,10 +9,10 @@
 //! `user_round_judgement`（user_rounds 门控低频复核），原 revise_topic + complete_scope
 //! 合并为 IP-5 `round_review`（仅收尾轮触发）；旧四 system_type 成为遗留系统神经元（惰性遗弃）。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::{
-    atomic::Ordering,
+    atomic::{AtomicUsize, Ordering},
     Arc, Mutex, MutexGuard, OnceLock, Weak,
 };
 
@@ -58,7 +58,10 @@ use crate::infra::config::config_generation_value;
 use crate::policies::neuron::{
     manager::NeuronManager, model::extract_json_object, store::NeuronStore,
 };
-use crate::stores::{conversation_store::JsonConversationStore, topic_store::TopicStore};
+use crate::stores::{
+    conversation_store::{set_pending_round, JsonConversationStore, PollCandidate},
+    topic_store::TopicStore,
+};
 use crate::providers::providers::ProviderRegistry;
 
 /// 合并裁决 system_type 常量唯一来源在 `hook::instances`（一 hook 一文件内聚），此处
@@ -160,6 +163,9 @@ pub struct AssistantSession {
     session_tracker: SessionTracker,
     /// 与 Poller 共享的轮询并发推进数量（运行时可变，前端可调）。
     poll_parallelism: SharedPollParallelism,
+    /// 全局在飞轮询轮计数：额度 = [`Self::poll_parallelism`]（运行时可变，无需重建信号量）。
+    /// CAS 抢占（`try_reserve_poll_slot`）、`PollPermit` Drop 自减——批次可重叠而全局不超限。
+    poll_inflight: Arc<AtomicUsize>,
     /// 会话级 poller 失败状态机（熔断/退避，见 context_safety）。仅 poller 路径读写。
     failure_states: Mutex<HashMap<String, crate::core::context_safety::SessionFailureState>>,
     /// 熔断配置（config.json `context` 节，缺省回落内置默认）：
@@ -173,6 +179,18 @@ pub struct AssistantSession {
 impl fmt::Debug for AssistantSession {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AssistantSession").finish_non_exhaustive()
+    }
+}
+
+/// 全局轮询额度占用句柄：Drop 自减在飞计数（任何早退路径都不泄漏额度）。
+#[derive(Debug)]
+struct PollPermit {
+    inflight: Arc<AtomicUsize>,
+}
+
+impl Drop for PollPermit {
+    fn drop(&mut self) {
+        self.inflight.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -207,6 +225,7 @@ impl AssistantSession {
             step_tx,
             session_tracker,
             poll_parallelism,
+            poll_inflight: Arc::new(AtomicUsize::new(0)),
             failure_states: Mutex::new(HashMap::new()),
             poll_backoff_after,
             poll_pause_after,
@@ -893,9 +912,14 @@ impl AssistantSession {
         )
     }
 
-    /// 轮询调度壳：PollAll → 跨课题受限并发推进（互不干扰、信号量限流）。
-    /// 返回实际推进（register 成功）的会话 id 列表；空转（无未完成课题 / 全部
-    /// 被跳过）返回空 Vec，调用方据此决定是否广播刷新事件，避免无效通知。
+    /// 轮询调度壳：PollAll → 会话级候选受限并发推进（互不干扰、全局额度限流、批次可重叠）。
+    ///
+    /// 返回实际派发推进的会话 id 列表；空转（无候选 / 全部被跳过 / 额度耗尽）返回空 Vec，
+    /// 调用方据此决定是否广播刷新事件，避免无效通知。
+    ///
+    /// 与旧实现的两处关键差异：
+    /// - 额度是**全局**在飞上限（`poll_parallelism`），不是"每批"上限——批次重叠不超限；
+    /// - 额度耗尽只跳过本轮（下 tick 重试），不再整批丢弃请求。
     pub async fn process_step_request(
         self: Arc<Self>,
         request: AssistantStepRequest,
@@ -903,28 +927,10 @@ impl AssistantSession {
     ) -> Vec<String> {
         match request {
             AssistantStepRequest::PollAll => {
-                let topics = match self.topics().and_then(|store| store.list_unfinished()) {
-                    Ok(topics) => topics,
-                    Err(error) => {
-                        tracing::error!(
-                            error = %error,
-                            "PollAll topic list failed"
-                        );
-                        return Vec::new();
-                    }
-                };
-
-                let parallelism = self.poll_parallelism.load(Ordering::Relaxed).max(1);
-                let semaphore = Arc::new(tokio::sync::Semaphore::new(parallelism));
+                let candidates = self.collect_poll_candidates();
                 let touched = Arc::new(Mutex::new(Vec::<String>::new()));
                 let mut tasks = tokio::task::JoinSet::new();
-                for topic in topics {
-                    let Some(session_id) = topic.session_id else {
-                        continue;
-                    };
-                    if skip_polling(&topic.status) {
-                        continue;
-                    }
+                for session_id in candidates {
                     // 熔断/退避跳过：连续失败进入 BACKOFF/COOLDOWN 的会话跳过本轮 tick，
                     // 防止同一失败无限空转烧 token。
                     if let Ok(mut states) = self.failure_states.lock() {
@@ -935,24 +941,42 @@ impl AssistantSession {
                             }
                         }
                     }
-                    // 跳过已在运行的会话（用户手动 converse 推进中 / 上一批尚未收尾），
-                    // 避免对同一会话重复发起推进。
-                    if let Ok(Some(_)) = self.session_tracker.get(&session_id) {
-                        continue;
-                    }
+                    // 全局额度：已满则本轮跳过（下 tick 重试）——不丢弃 tick 请求，
+                    // 也不阻塞其他会话的推进。先占额度再占位，避免额度耗尽时
+                    // 会话在运行态清单里闪现。
+                    let Some(permit) = self.try_reserve_poll_slot() else {
+                        tracing::debug!(
+                            phase = PHASE_ASSISTANT_POLLER,
+                            session_id,
+                            inflight = self.poll_inflight.load(Ordering::Relaxed),
+                            limit = self.poll_parallelism.load(Ordering::Relaxed),
+                            "poll dispatch paused: global quota exhausted this tick"
+                        );
+                        break;
+                    };
+                    // 占位即注册（原子「不存在才注册」）：用户轮推进中 / 上一批尚未收尾
+                    // 的会话跳过（额度随 Permit Drop 归还）；批次重叠也不会重复派发同一会话。
+                    let session_handle = match self.session_tracker.register_if_absent(&session_id) {
+                        Ok(Some(handle)) => handle,
+                        Ok(None) => continue,
+                        Err(error) => {
+                            tracing::warn!(
+                                phase = PHASE_ASSISTANT_POLLER,
+                                session_id,
+                                error = %error,
+                                "poll dispatch skipped: session tracker register failed"
+                            );
+                            continue;
+                        }
+                    };
+                    let _ = self
+                        .session_tracker
+                        .update_step(&session_id, "polling");
                     let model = model.clone();
                     let assistant = Arc::clone(&self);
-                    let semaphore = Arc::clone(&semaphore);
                     let touched = Arc::clone(&touched);
                     tasks.spawn(async move {
-                        let _permit = semaphore.acquire().await.expect("semaphore not closed");
-                        let session_handle = match assistant.session_tracker.register(&session_id) {
-                            Ok(handle) => handle,
-                            Err(_error) => return,
-                        };
-                        let _ = assistant
-                            .session_tracker
-                            .update_step(&session_id, "polling");
+                        let _permit = permit;
                         match assistant.step_poller(&session_id, &model).await {
                             Ok(_response) => {
                                 // 成功：熔断状态归零（等效 HALF_OPEN 探测成功 → CLOSED）。
@@ -1010,6 +1034,100 @@ impl AssistantSession {
                 touched
             }
         }
+    }
+
+    /// 抢占一个全局轮询额度（额度 = `poll_parallelism`，运行时可变）。
+    /// 已满返回 `None`；`PollPermit` Drop 自减，任何早退路径都不泄漏额度。
+    fn try_reserve_poll_slot(&self) -> Option<PollPermit> {
+        loop {
+            let limit = self.poll_parallelism.load(Ordering::Relaxed).max(1);
+            let current = self.poll_inflight.load(Ordering::Relaxed);
+            if current >= limit {
+                return None;
+            }
+            if self
+                .poll_inflight
+                .compare_exchange_weak(
+                    current,
+                    current + 1,
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+            {
+                return Some(PollPermit {
+                    inflight: Arc::clone(&self.poll_inflight),
+                });
+            }
+        }
+    }
+
+    /// 收集可轮询会话（会话级资格，见 spec §3.1）：
+    /// ① 可推进课题所属会话（`Todo` / `InProgress` / `WrappingUp`）；
+    /// ② 末轮以工具调用结束的 `assistant` / `system` 会话（含**无课题**会话）。
+    /// 硬闸（`Paused` / `Cancelled` / `WaitingUser`）优先于末轮标记，一律排除。
+    fn collect_poll_candidates(&self) -> Vec<String> {
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut candidates: Vec<String> = Vec::new();
+        // 来源 ①：课题可推进（list_unfinished 已排除 done/cancelled，再滤硬闸）。
+        match self.topics().and_then(|store| store.list_unfinished()) {
+            Ok(topics) => {
+                for topic in topics {
+                    let Some(session_id) = topic.session_id else {
+                        continue;
+                    };
+                    if skip_polling(&topic.status) {
+                        continue;
+                    }
+                    if seen.insert(session_id.clone()) {
+                        candidates.push(session_id);
+                    }
+                }
+            }
+            Err(error) => tracing::error!(error = %error, "PollAll topic list failed"),
+        }
+        // 来源 ②：末轮干到一半的会话（先取轻量投影，再逐条校验课题硬闸，避免两锁同持）。
+        let rows: Vec<PollCandidate> = match self.store.list_poll_candidates() {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::error!(error = %error, "PollAll conversation scan failed");
+                Vec::new()
+            }
+        };
+        let Ok(topics) = self.topics() else {
+            tracing::error!("PollAll topic store lock failed");
+            return candidates;
+        };
+        for row in rows {
+            if !row.pending_round || seen.contains(&row.id) {
+                continue;
+            }
+            if !matches!(
+                row.mode,
+                ConversationMode::Assistant | ConversationMode::System
+            ) {
+                continue;
+            }
+            let status = match topics.find_by_session_id(&row.id) {
+                Ok(topic) => topic.map(|topic| topic.status),
+                Err(error) => {
+                    tracing::warn!(
+                        phase = PHASE_ASSISTANT_POLLER,
+                        session_id = %row.id,
+                        error = %error,
+                        "poll candidate skipped: topic lookup failed"
+                    );
+                    continue;
+                }
+            };
+            if !poll_eligible(status.as_ref(), row.pending_round) {
+                continue;
+            }
+            if seen.insert(row.id.clone()) {
+                candidates.push(row.id);
+            }
+        }
+        candidates
     }
 
     pub(crate) fn topics(&self) -> AppResult<MutexGuard<'_, TopicStore>> {
@@ -1154,27 +1272,39 @@ impl AssistantHooks<'_> {
         Ok(())
     }
 
-    /// IP-5 `assistant.round.after`：轮次计数（复盘已独立注册为 `assistant.round-review`，
-    /// 注册序在本 hook 之前）。
+    /// IP-5 `assistant.round.after`：末轮待续推标记 + 轮次计数（复盘已独立注册为
+    /// `assistant.round-review`，注册序在本 hook 之前）。
     async fn round_after(&self, ctx: &RoundContext) -> AppResult<()> {
         // 与 round_before 同一模式边界：课题副作用仅 Assistant/System 模式承载。
         if !matches!(ctx.mode, ConversationMode::Assistant | ConversationMode::System) {
             return Ok(());
         }
-        if ctx.outcome.is_none() {
-            // 无已完成轮（异常路径）：无计数语义，静默跳过。
+        let Some(outcome) = ctx.outcome.as_ref() else {
+            // 无已完成轮（异常路径）：无计数语义，标记保持原值（失败恢复交给熔断/退避）。
             return Ok(());
-        }
+        };
+        // 「末轮以工具调用结束」= 干到一半 → 需要下一轮；收尾轮清零即退出轮询候选。
+        // 每轮完成即覆盖写入（无变化不落盘）。
+        let pending_round = !is_settling_round(outcome);
         match ctx.trigger {
-            RoundTriggerKind::User => self.tick_round_counters(ctx, true)?,
-            RoundTriggerKind::ManualStep => self.tick_round_counters(ctx, false)?,
-            // Poller 轮吞错（轮询推进不得被计数副作用打断）。
+            RoundTriggerKind::User => {
+                self.write_pending_round(&ctx.session_id, pending_round)?;
+                self.tick_round_counters(ctx, true)?;
+            }
+            RoundTriggerKind::ManualStep => {
+                self.write_pending_round(&ctx.session_id, pending_round)?;
+                self.tick_round_counters(ctx, false)?;
+            }
+            // Poller 轮吞错（轮询推进不得被标记/计数副作用打断）。
             RoundTriggerKind::Poller => {
-                if let Err(error) = self.tick_round_counters(ctx, false) {
+                if let Err(error) = self
+                    .write_pending_round(&ctx.session_id, pending_round)
+                    .and_then(|()| self.tick_round_counters(ctx, false))
+                {
                     tracing::error!(
                         phase = PHASE_ASSISTANT_POLLER,
                         error = %error,
-                        "assistant round counter failed; ignored"
+                        "assistant round-after side effects failed; ignored"
                     );
                 }
             }
@@ -1187,6 +1317,17 @@ impl AssistantHooks<'_> {
 }
 
 impl AssistantHooks<'_> {
+    /// 写回「末轮待续推」标记（`conversation.extra.assistant.pending_round`，保留其它 extra 键）。
+    /// 无变化不落盘，避免每轮无谓写盘。
+    fn write_pending_round(&self, session_id: &str, pending: bool) -> AppResult<()> {
+        let mut conversation = self.assistant.store.require_conversation(session_id)?;
+        if crate::stores::conversation_store::pending_round(&conversation.extra) == pending {
+            return Ok(());
+        }
+        set_pending_round(&mut conversation.extra, pending);
+        self.assistant.store.save_conversation(&conversation)
+    }
+
     /// 若当前未指定课题，则按会话解析已绑定课题（不存在保持 None）。
     fn resolve_bound_topic(&self, ctx: &mut RoundContext) -> AppResult<()> {
         if ctx.topic_id.is_some() {
@@ -1216,13 +1357,27 @@ impl AssistantHooks<'_> {
     /// 三条件任一命中即重新生成简报（写 brief_cache + last_brief_round）；
     /// 「生成一次，落库一次」——仅刷新（生成）的这一轮由 Poller 落 nudge 输入消息，
     /// 复用缓存简报的推进轮不落重复 nudge。未命中时复用缓存简报，不重喂模型。
+    ///
+    /// **无绑定课题**：仅轮询轮放行（末轮干到一半的续推，空简报靠会话历史自带工具结果
+    /// 续推，不落 nudge）；手动推进维持报错（简报无依据，见 assistant 域约定 §3）。
     fn advance_brief(&self, ctx: &mut RoundContext) -> AppResult<()> {
-        let topic_id = ctx.topic_id.as_ref().ok_or_else(|| {
-            AppError::InvalidInput(
+        let Some(topic_id) = ctx.topic_id.clone() else {
+            if ctx.trigger == RoundTriggerKind::Poller {
+                tracing::info!(
+                    phase = PHASE_ASSISTANT_POLLER,
+                    session_id = %ctx.session_id,
+                    "advance without bound topic: continuing from history"
+                );
+                ctx.model_input = String::new();
+                ctx.nudge_persist = false;
+                ctx.reselect = true;
+                return Ok(());
+            }
+            return Err(AppError::InvalidInput(
                 "Assistant step requires a topic bound to the session".into(),
-            )
-        })?;
-        let topic = self.assistant.topics()?.get(topic_id)?.ok_or_else(|| {
+            ));
+        };
+        let topic = self.assistant.topics()?.get(&topic_id)?.ok_or_else(|| {
             AppError::ConversationNotFound(topic_id.clone())
         })?;
         let state = read_assistant_state(&topic);
@@ -1257,7 +1412,7 @@ impl AssistantHooks<'_> {
             let mut next = state.clone();
             next.brief_cache = Some(fresh.clone());
             next.last_brief_round = state.poll_count;
-            write_assistant_state(&self.assistant.topic_store, topic_id, next)?;
+            write_assistant_state(&self.assistant.topic_store, &topic_id, next)?;
             ctx.model_input = fresh;
             // 「生成一次，落库一次」：仅简报刷新（生成）的这一轮落 nudge 输入消息，
             // 复用缓存简报的推进轮不落重复 nudge。
@@ -1648,6 +1803,20 @@ fn skip_polling(status: &TopicStatus) -> bool {
     )
 }
 
+/// 会话级可轮询资格（纯函数便于单测，spec §3.1）：
+/// 硬闸（`Paused` / `Cancelled` / `WaitingUser`）优先于末轮标记，一律排除；
+/// 否则课题可推进（`Todo` / `InProgress` / `WrappingUp`）即合格；
+/// `Done` 与**无课题**会话只能靠「末轮以工具调用结束」（`pending_round`）续推。
+pub(crate) fn poll_eligible(topic_status: Option<&TopicStatus>, pending_round: bool) -> bool {
+    match topic_status {
+        Some(
+            TopicStatus::Paused | TopicStatus::Cancelled | TopicStatus::WaitingUser,
+        ) => false,
+        Some(TopicStatus::Todo | TopicStatus::InProgress | TopicStatus::WrappingUp) => true,
+        Some(TopicStatus::Done) | None => pending_round,
+    }
+}
+
 /// 延迟关闭判断：scope 已 100% 完成但本轮以工具调用结束（模型尚未产出最终总结）→ 置
 /// `WrappingUp` 保持轮询；非工具轮则存储层已推导为 `Done`。纯函数便于单测。
 pub(crate) fn should_delay_close(status: &TopicStatus, last_is_tool: bool) -> bool {
@@ -1931,6 +2100,24 @@ mod tests {
         assert!(!skip_polling(&TopicStatus::Done));
         // WrappingUp 仍需轮询（等待收尾总结）
         assert!(!skip_polling(&TopicStatus::WrappingUp));
+    }
+
+    #[test]
+    fn poll_eligible_covers_session_level_qualification() {
+        // 无课题会话：只能靠「末轮以工具调用结束」入候选（spec §3.1）。
+        assert!(poll_eligible(None, true));
+        assert!(!poll_eligible(None, false));
+        // 课题可推进：直接合格（与末轮标记无关）。
+        assert!(poll_eligible(Some(&TopicStatus::Todo), false));
+        assert!(poll_eligible(Some(&TopicStatus::InProgress), false));
+        assert!(poll_eligible(Some(&TopicStatus::WrappingUp), false));
+        // 硬闸优先于末轮标记：即使干到一半也不得空转推进。
+        assert!(!poll_eligible(Some(&TopicStatus::Paused), true));
+        assert!(!poll_eligible(Some(&TopicStatus::Cancelled), true));
+        assert!(!poll_eligible(Some(&TopicStatus::WaitingUser), true));
+        // done 课题：收尾轮退出候选，工具轮仍可续推（收尾总结）。
+        assert!(!poll_eligible(Some(&TopicStatus::Done), false));
+        assert!(poll_eligible(Some(&TopicStatus::Done), true));
     }
 
     #[test]
@@ -2593,6 +2780,123 @@ mod tests {
             h.assistant
                 .structured_output_support(&judgement_model("ghost-unknown")),
             StructuredOutputSupport::None
+        );
+    }
+
+    // ── 轮询资格会话化 + 全局额度（spec 2026-09-12）──────────────────────
+
+    /// 裸 RoundContext（无课题、无真相源），供 advance_brief / round_after 直测。
+    fn bare_ctx(trigger: RoundTriggerKind) -> RoundContext {
+        RoundContext {
+            session_id: "sess-bare".into(),
+            mode: ConversationMode::Assistant,
+            seed: None,
+            state: Default::default(),
+            messages: Vec::new(),
+            model_input: String::new(),
+            model: judgement_model("gpt-4o"),
+            tool_override: None,
+            trigger,
+            topic_id: None,
+            reselect: true,
+            nudge_persist: false,
+            selected_neuron: None,
+            outcome: None,
+        }
+    }
+
+    #[test]
+    fn advance_brief_allows_topicless_poller_round_only() {
+        // 无绑定课题：轮询轮放行（空简报、不落 nudge、走默认选型）；手动推进仍报错。
+        let h = judgement_harness(r#"{}"#);
+        let hooks = AssistantHooks {
+            assistant: &h.assistant,
+        };
+
+        let mut poller_ctx = bare_ctx(RoundTriggerKind::Poller);
+        poller_ctx.nudge_persist = true; // 预置为 true：放行分支必须显式清零
+        assert!(poller_ctx.nudge_persist);
+        hooks
+            .advance_brief(&mut poller_ctx)
+            .expect("轮询轮无课题必须放行");
+        assert!(poller_ctx.model_input.is_empty(), "无课题 → 空简报");
+        assert!(!poller_ctx.nudge_persist, "无课题 → 不落 nudge");
+        assert!(poller_ctx.reselect, "无课题 → 走默认选型");
+
+        let mut manual_ctx = bare_ctx(RoundTriggerKind::ManualStep);
+        assert!(
+            hooks.advance_brief(&mut manual_ctx).is_err(),
+            "手动推进无课题必须报错（简报无依据）"
+        );
+    }
+
+    #[tokio::test]
+    async fn round_after_marks_pending_round_until_settling() {
+        let h = judgement_harness(r#"{}"#);
+        let conversation = h
+            .assistant
+            .store
+            .create_conversation(Some("sess-flag".into()), ConversationMode::Assistant)
+            .unwrap();
+        let hooks = AssistantHooks {
+            assistant: &h.assistant,
+        };
+
+        // 工具轮（有工具声明）→ 干到一半，标记置位。
+        let mut tool_ctx = bare_ctx(RoundTriggerKind::Poller);
+        tool_ctx.session_id = conversation.id.clone();
+        tool_ctx.outcome = Some(settling_outcome(Some(Vec::new()), Vec::new()));
+        hooks.round_after(&tool_ctx).await.unwrap();
+        let stored = h
+            .assistant
+            .store
+            .require_conversation(&conversation.id)
+            .unwrap();
+        assert!(
+            crate::stores::conversation_store::pending_round(&stored.extra),
+            "工具轮必须置位待续推标记"
+        );
+        assert!(
+            h.assistant.collect_poll_candidates().contains(&conversation.id),
+            "无课题 + 工具轮 → 必须进入轮询候选"
+        );
+
+        // 收尾轮（无声明、无结果）→ 标记清零，退出候选。
+        let mut settling_ctx = bare_ctx(RoundTriggerKind::Poller);
+        settling_ctx.session_id = conversation.id.clone();
+        settling_ctx.outcome = Some(settling_outcome(None, Vec::new()));
+        hooks.round_after(&settling_ctx).await.unwrap();
+        let stored = h
+            .assistant
+            .store
+            .require_conversation(&conversation.id)
+            .unwrap();
+        assert!(
+            !crate::stores::conversation_store::pending_round(&stored.extra),
+            "收尾轮必须清零标记"
+        );
+        assert!(
+            !h.assistant.collect_poll_candidates().contains(&conversation.id),
+            "无课题 + 收尾轮 → 必须退出轮询候选"
+        );
+    }
+
+    #[tokio::test]
+    async fn poll_quota_is_global_and_released_on_drop() {
+        // 额度 = poll_parallelism；占满即拒（不排队），Permit Drop 归还。
+        let h = judgement_harness(r#"{}"#);
+        let first = h
+            .assistant
+            .try_reserve_poll_slot()
+            .expect("首个额度必须可抢占");
+        assert!(
+            h.assistant.try_reserve_poll_slot().is_none(),
+            "额度 1 时第二次抢占必须失败"
+        );
+        drop(first);
+        assert!(
+            h.assistant.try_reserve_poll_slot().is_some(),
+            "Drop 后额度必须归还"
         );
     }
 }

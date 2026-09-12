@@ -176,6 +176,35 @@ impl JsonConversationStore {
         })
     }
 
+    /// 轮询候选轻量扫描：投影 `id / 模式 / 末轮待续推标记`，供助手域按模式与标记筛候选。
+    ///
+    /// 不做业务过滤（模式门控与硬闸判定属助手域）；复用 [`ConversationLight`]——
+    /// `extra` 已解析、消息体在取得首条摘要后整条跳过，巨型工具结果不产生解析开销。
+    pub fn list_poll_candidates(&self) -> AppResult<Vec<PollCandidate>> {
+        let _guard = self.lock.lock();
+        let mut candidates = Vec::new();
+        for entry in fs::read_dir(&self.sessions_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(content) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(light) = serde_json::from_str::<ConversationLight>(&content) else {
+                continue;
+            };
+            candidates.push(PollCandidate {
+                id: light.id,
+                mode: light.mode,
+                pending_round: pending_round(&light.extra),
+            });
+        }
+        candidates.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(candidates)
+    }
+
     /// 轻量统计会话数量（仅统计 `sessions/*.json` 文件数，不解析内容；`status` 等轻量场景用）。
     pub fn conversation_count(&self) -> AppResult<usize> {
         let _guard = self.lock.lock();
@@ -339,6 +368,44 @@ impl JsonConversationStore {
 }
 
 // ── 会话文件轻量反序列化（列表专用）──────────────────────────
+
+/// 轮询候选投影（`list_poll_candidates` 返回）：会话 id + 模式 + 末轮待续推标记。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PollCandidate {
+    pub id: String,
+    pub mode: ConversationMode,
+    /// 末轮以工具调用结束（"干到一半"）→ 需要下一轮；见 [`pending_round`]。
+    pub pending_round: bool,
+}
+
+/// 会话 extra 中助手域标记键：`extra.assistant.pending_round`（与 `topic.extra.assistant` 对称）。
+const EXTRA_ASSISTANT_KEY: &str = "assistant";
+const EXTRA_PENDING_ROUND_KEY: &str = "pending_round";
+
+/// 读取「末轮待续推」标记（缺失 / 非法 / 旧数据回落 `false`）。
+pub fn pending_round(extra: &Option<serde_json::Value>) -> bool {
+    extra
+        .as_ref()
+        .and_then(|extra| extra.get(EXTRA_ASSISTANT_KEY))
+        .and_then(|assistant| assistant.get(EXTRA_PENDING_ROUND_KEY))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
+/// 写回「末轮待续推」标记（保留 extra 其它键与助手域其它字段）。
+pub fn set_pending_round(extra: &mut Option<serde_json::Value>, value: bool) {
+    let mut root = extra.take().unwrap_or_else(|| serde_json::json!({}));
+    if !root.is_object() {
+        root = serde_json::json!({});
+    }
+    let mut assistant = match root.get(EXTRA_ASSISTANT_KEY) {
+        Some(value) if value.is_object() => value.clone(),
+        _ => serde_json::json!({}),
+    };
+    assistant[EXTRA_PENDING_ROUND_KEY] = serde_json::Value::Bool(value);
+    root[EXTRA_ASSISTANT_KEY] = assistant;
+    *extra = Some(root);
+}
 
 /// 会话文件的轻量结构：`messages` 只产出条数 + 首条文本摘要，不保留消息正文。
 #[derive(Debug, Deserialize)]
@@ -516,6 +583,55 @@ mod tests {
             .join("pulsar-app-tests")
             .join(name)
             .join(format!("{}", now_ms()))
+    }
+
+    #[test]
+    fn pending_round_flag_roundtrip_preserves_other_extra_keys() {
+        // 旧数据（无该键 / 无 assistant 段）→ false；置位后写入不破坏其它 extra 键。
+        let mut extra = None;
+        assert!(!pending_round(&extra));
+
+        extra = Some(serde_json::json!({"session": {"state": {"model": {"provider_id": "p", "model_id": "m"}}}}));
+        assert!(!pending_round(&extra), "旧数据无该键必须回落 false");
+        set_pending_round(&mut extra, true);
+        assert!(pending_round(&extra));
+        let root = extra.as_ref().unwrap();
+        assert_eq!(
+            root.pointer("/session/state/model/model_id").and_then(|v| v.as_str()),
+            Some("m"),
+            "写标记不得破坏 extra 其它键"
+        );
+
+        set_pending_round(&mut extra, false);
+        assert!(!pending_round(&extra));
+
+        // 非法载荷（extra 非对象）不 panic，回落空对象。
+        let mut broken = Some(serde_json::json!("not-an-object"));
+        set_pending_round(&mut broken, true);
+        assert!(pending_round(&broken));
+    }
+
+    #[test]
+    fn list_poll_candidates_projects_mode_and_pending_flag() {
+        let store = JsonConversationStore::new(test_root("poll_candidates")).unwrap();
+        let pending = store
+            .create_conversation(Some("conv-pending".into()), ConversationMode::Assistant)
+            .unwrap();
+        let settled = store
+            .create_conversation(Some("conv-settled".into()), ConversationMode::Assistant)
+            .unwrap();
+        for (id, flag) in [(&pending.id, true), (&settled.id, false)] {
+            let mut conversation = store.require_conversation(id).unwrap();
+            set_pending_round(&mut conversation.extra, flag);
+            store.save_conversation(&conversation).unwrap();
+        }
+
+        let rows = store.list_poll_candidates().unwrap();
+        assert_eq!(rows.len(), 2, "投影覆盖全部会话（业务过滤归助手域）");
+        let by_id = |id: &str| rows.iter().find(|row| row.id == id).unwrap();
+        assert!(by_id("conv-pending").pending_round);
+        assert!(!by_id("conv-settled").pending_round);
+        assert_eq!(by_id("conv-pending").mode, ConversationMode::Assistant);
     }
 
     #[test]
