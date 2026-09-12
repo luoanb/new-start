@@ -187,10 +187,20 @@ impl ConversationRunner {
         );
         // IP-1 AfterLoadContext：load_context 后、assemble 前。选型（resolve + 角色拼接）
         // 等调度由上层注册的 hook 承担（核心流程不感知）；hook 可切换会话，runner 检测到
-        // session 变化即 reload 并继续执行后续 hooks。fail 策略——最早点未落库，Err 中止本轮。
-        self.hooks
+        // session 变化即 reload 并继续执行后续 hooks。fail 策略——Err 中止本轮（不调模型）。
+        //
+        // 例外：用户输入必须落库——hook 失败时按「用户消息不因调度失败而丢失」补落一条，
+        // 再上抛原错误（fail 中止语义不变）。补落而非把 persist_input 提前到 hook 之前：
+        // 提前会破坏「wire 即落库」不变量（角色上下文未 resolve）、会话被 hook 切换后落错
+        // 会话、reload 从库重置 ctx.messages 导致重复写入。
+        if let Err(error) = self
+            .hooks
             .run_after_load_context(&mut ctx, |ctx| self.reload(ctx))
-            .await?;
+            .await
+        {
+            self.persist_user_input_on_pre_hook_failure(&ctx);
+            return Err(error);
+        }
         // ② 构造输入消息（User / Continue / Nudge → Message，kind 自明）append，构成完整 wire。
         self.append_input_message(&mut ctx);
         // 发送前落输入增量（角色上下文 / 输入 / Nudge 等未落库部分全落）：增量边界由真相源
@@ -810,6 +820,38 @@ impl ConversationRunner {
             self.store.add_message(&ctx.session_id, message.clone())?;
         }
         Ok(())
+    }
+
+    /// 落库兜底（IP-1 前置 hook 失败时）：仅落「用户输入」这一条，再让调用方上抛原错误。
+    ///
+    /// 语义：用户消息不因调度（选型 / 课题路由等前置 hook）失败而丢失——PRD「无论 hook
+    /// 成功失败都保证用户消息落库」。只落 User 触发（Continue / Nudge / Poller 等无「用户
+    /// 输入」语义，误落会凭空造消息）。
+    ///
+    /// 会话归属取 `ctx.session_id` 当前值：前置 hook 可能已切换会话（课题路由），消息跟随
+    /// 路由后的最终会话落库。落库失败仅告警——不得覆盖原始 hook 错误（错误归因优先）。
+    fn persist_user_input_on_pre_hook_failure(&self, ctx: &RoundContext) {
+        if ctx.trigger != RoundTriggerKind::User {
+            return;
+        }
+        let message = Message {
+            role: MessageRole::User,
+            body: MessageBody::Text {
+                content: ctx.model_input.clone(),
+                reasoning: None,
+                tool_calls: None,
+            },
+            timestamp: now_ms(),
+            neuron_id: None,
+        };
+        if let Err(error) = self.store.add_message(&ctx.session_id, message) {
+            tracing::error!(
+                phase = PHASE_RUN_ROUND,
+                session_id = %ctx.session_id,
+                error = %error,
+                "persist user input after pre-hook failure failed"
+            );
+        }
     }
 
     /// 落库（模型返回后、工具执行前）：模型声明的工具调用（Assistant/ToolCall）。
@@ -2503,6 +2545,85 @@ mod tests {
         assert!(
             store.require_conversation(&id).unwrap().messages.is_empty(),
             "skipped round must not persist anything"
+        );
+    }
+
+    // ── IP-1 前置 hook 失败路径：用户消息必须落库（Bug 修复回归）──
+
+    /// 构造带「恒抛错 IP-1 hook」的 runner：验证前置 hook 失败时用户输入仍落库。
+    /// `fail_id` 用于在同一测试内区分多个 hook 实例（注册表拒重复 id）。
+    fn runner_with_failing_pre_hook(
+        h: &Harness,
+        sessions_dir: &str,
+        fail_id: &'static str,
+    ) -> (JsonConversationStore, ConversationRunner) {
+        let caller: Arc<dyn ModelCaller> = Arc::new(EchoCaller {
+            calls: Arc::new(AtomicUsize::new(0)),
+            tool_call: Arc::new(Mutex::new(None)),
+            last_messages: Arc::new(Mutex::new(Vec::new())),
+            last_tools: Arc::new(Mutex::new(Vec::new())),
+        });
+        let (store, runner) =
+            contract_runner(h, sessions_dir, caller, Arc::new(SessionCoordinator::new()));
+        // 注册 IP-1 hook，handler 恒 Err（模拟课题路由 / 选型失败）。
+        let registry = Arc::new(crate::core::hook::HookRegistry::new());
+        registry
+            .register(crate::core::hook::defs::HookDef {
+                id: fail_id,
+                label: "failing pre-hook",
+                inject_point: crate::core::hook::InjectPointId::AfterLoadContext,
+                handler: crate::core::hook::HookHandler::AfterLoadContext(Box::new(|_ctx| {
+                    Box::pin(async move {
+                        Err(AppError::InvalidInput("pre-hook boom".into()))
+                    })
+                })),
+            })
+            .unwrap();
+        registry.set_enabled(fail_id, true).unwrap();
+        (store, runner.with_hooks(registry))
+    }
+
+    /// 回归（Bug 修复）：IP-1 前置 hook 报错 → 本轮以 Err 中止（fail 语义保持），
+    /// 但**用户输入已落库**（不再出现「只有错误消息、没有用户消息」）。
+    #[tokio::test]
+    async fn pre_hook_failure_still_persists_user_input() {
+        let h = harness();
+        let (store, runner) = runner_with_failing_pre_hook(&h, "svc-prehook-fail", "fail.user");
+        let conv = store.create_conversation(None, ConversationMode::Chat).unwrap();
+        let id = conv.id.clone();
+        seed_session_model(&store, &id);
+
+        let result = runner
+            .run(chat_request(&id, InputRecord::User("hello".into())))
+            .await;
+        // fail 语义保持：前置 hook 失败仍中止本轮（不调模型）。
+        assert!(result.is_err(), "pre-hook failure must abort the round");
+
+        let messages = store.require_conversation(&id).unwrap().messages;
+        let user_texts: Vec<&str> = messages.iter().map(|m| m.text()).collect();
+        assert!(
+            user_texts.contains(&"hello"),
+            "user input must be persisted even when pre-hook fails; got {user_texts:?}"
+        );
+    }
+
+    /// 回归（非 User 轮）：前置 hook 报错时**不**凭空落用户消息（Poller/ManualStep 无用户输入语义）。
+    #[tokio::test]
+    async fn pre_hook_failure_does_not_persist_for_non_user_rounds() {
+        let h = harness();
+        let (store, runner) =
+            runner_with_failing_pre_hook(&h, "svc-prehook-nonuser", "fail.poller");
+        let conv = store.create_conversation(None, ConversationMode::Chat).unwrap();
+        let id = conv.id.clone();
+        seed_session_model(&store, &id);
+
+        let result = runner
+            .run(chat_request(&id, InputRecord::Nudge))
+            .await;
+        assert!(result.is_err(), "pre-hook failure must abort the round");
+        assert!(
+            store.require_conversation(&id).unwrap().messages.is_empty(),
+            "non-user round must not fabricate a user message on pre-hook failure"
         );
     }
 }
