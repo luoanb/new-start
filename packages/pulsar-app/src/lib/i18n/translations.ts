@@ -271,6 +271,7 @@ export type Translations = {
     scopeStatusPending: string;
     scopeStatusDone: string;
     scopeStatusBlocked: string;
+    scopeBlockedReason: string;
     status: string;
     description: string;
     updated: string;
@@ -973,6 +974,7 @@ export const en: Translations = {
     scopeStatusPending: "Pending",
     scopeStatusDone: "Done",
     scopeStatusBlocked: "Waiting user",
+    scopeBlockedReason: "Needs: ",
     status: "Status",
     description: "Description",
     updated: "Updated",
@@ -1707,6 +1709,7 @@ export const zh: Translations = {
     scopeStatusPending: "待办",
     scopeStatusDone: "完成",
     scopeStatusBlocked: "等待用户",
+    scopeBlockedReason: "需要：",
     status: "状态",
     description: "描述",
     updated: "更新于",

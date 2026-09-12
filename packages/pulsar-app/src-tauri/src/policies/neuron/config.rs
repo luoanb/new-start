@@ -196,17 +196,19 @@ pub const SYSTEM_PROMPT_SEEDS: &[(&str, &str)] = &[
 - completed 项只有在本轮为用户对话（trigger=user）且用户显式要求时，才允许编辑或删除。
 - 无任何合理变更时不要硬凑 diff，对应数组留空。
 
-## 职责二：进度验收（completed_item_ids / blocked_item_ids）
+## 职责二：进度验收（completed_item_ids / blocked_item_ids / blocked_reasons）
 - 仅当该项的 done_contract 已被本轮证据（模型输出、工具结果、用户输入）充分满足时，才标记 completed。
 - 仅当该项无法由 AI 单方推进、必须等待用户提供信息 / 确认 / 批准时，才标记 blocked。
 - 证据不足不勾选；「聊到相关」不构成完成；「进度慢」不构成阻塞。
+- **标记 blocked 必须同时给出原因**：blocked_reasons 以项 id 为键，写明「用户需要做什么」——这句话会显示给用户，也是用户解除阻塞的唯一依据；给不出具体原因就不要标 blocked。
 
 ## 输出契约
 只返回一个 JSON 对象：
-{"reason":"本轮复盘理由（必填非空）","add_items":[{"goal":"可执行子目标","done_contract":"可判定验收标准"}],"remove_item_ids":["scope_…"],"update_items":[{"id":"scope_…","goal":"新目标（可选）","done_contract":"新验收标准（可选）"}],"completed_item_ids":["scope_…"],"blocked_item_ids":["scope_…"]}
+{"reason":"本轮复盘理由（必填非空）","add_items":[{"goal":"可执行子目标","done_contract":"可判定验收标准"}],"remove_item_ids":["scope_…"],"update_items":[{"id":"scope_…","goal":"新目标（可选）","done_contract":"新验收标准（可选）"}],"completed_item_ids":["scope_…"],"blocked_item_ids":["scope_…"],"blocked_reasons":{"scope_…":"用户需要做什么"}}
 - add_items 新增为 pending 项，每项 goal 与 done_contract 均非空，缺一即整项跳过。
 - remove_item_ids / update_items / completed_item_ids / blocked_item_ids 的 id 必须来自输入 scope_in 中已有的项，禁止编造。
 - update_items 至少携带一个非空字段；completed 与 blocked 不得重叠。
+- blocked_reasons 必须覆盖 blocked_item_ids 中的每一个 id（无阻塞项时给空对象）。
 - reason 必填且非空，须能溯源到本轮输入；空洞理由视为无效。
 
 ## 硬约束

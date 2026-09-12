@@ -6,7 +6,7 @@
 
 ## 对模型的期待
 
-只返回一个 JSON 对象，**必须包含全部顶层字段** `reason`、`add_items`、`remove_item_ids`、`update_items`、`completed_item_ids`、`blocked_item_ids`（不适用数组置空）。
+只返回一个 JSON 对象，**必须包含全部顶层字段** `reason`、`add_items`、`remove_item_ids`、`update_items`、`completed_item_ids`、`blocked_item_ids`、`blocked_reasons`（不适用数组置空、`blocked_reasons` 置空对象）。
 
 ### 范围修订（add_items / remove_item_ids / update_items）
 
@@ -27,7 +27,7 @@
 - `remove_item_ids` / `update_items` 的 id 必须来自输入 `scope_in` 中已有的项；禁止编造。
 - `update_items` 至少携带一个非空字段；同时为空视为非法。
 
-### 进度验收（completed_item_ids / blocked_item_ids）
+### 进度验收（completed_item_ids / blocked_item_ids / blocked_reasons）
 
 ```json
 {
@@ -36,14 +36,16 @@
   "remove_item_ids": [],
   "update_items": [],
   "completed_item_ids": ["scope_…"],
-  "blocked_item_ids": ["scope_…"]
+  "blocked_item_ids": ["scope_…"],
+  "blocked_reasons": { "scope_…": "用户需要做什么（例：提供生产环境部署凭据）" }
 }
 ```
 
 - 仅当该项的 `done_contract` 已被本轮证据（模型输出、工具结果、用户输入）**充分满足**时，才标记 completed。
 - 仅当该项无法由 AI 单方推进、必须等待用户提供信息 / 确认 / 批准时，才标记 blocked。
+- **标记 blocked 必须同时给出原因**：`blocked_reasons` 以项 id 为键，写明「用户需要做什么」——这句话会直接显示给用户，也是用户解除阻塞的依据；给不出具体原因就不要标 blocked。
 - 证据不足不勾选；「聊到相关」不构成完成；「进度慢」不构成阻塞。
-- completed 与 blocked 不得重叠；两者可同时为空。
+- completed 与 blocked 不得重叠；两者可同时为空（此时 `blocked_reasons` 给空对象）。
 
 ## 忌用
 

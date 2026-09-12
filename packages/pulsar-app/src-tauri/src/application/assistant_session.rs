@@ -1565,11 +1565,16 @@ fn build_topic_brief(topic: &Topic) -> String {
                 "blocked" => ("[⏳]", "等待用户"),
                 _ => ("[ ]", "验收"),
             };
-            let reason = item
-                .blocked_reason
-                .as_deref()
-                .map(|r| format!("\n    需要：{}", r.trim()))
-                .unwrap_or_default();
+            let reason = if item.status == "blocked" {
+                // 原因只对 blocked 项投影：store 保留离开 blocked 后的历史原因作审计痕迹
+                // （如 blocked → completed 不清字段），简报不得据此误导模型。
+                item.blocked_reason
+                    .as_deref()
+                    .map(|r| format!("\n    需要：{}", r.trim()))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
             out.push_str(&format!(
                 "- {mark} {}\n    {label}：{}{}\n",
                 item.goal.trim(),
@@ -1583,8 +1588,14 @@ fn build_topic_brief(topic: &Topic) -> String {
             "本轮任务：所有事项均已完成，请输出最终总结并复核本课题的完成情况，本轮无需调用工具。",
         );
     } else {
+        // 推进指令 + 两条规则：①[⏳] 项跳过（等用户，不是自己能推的活）；
+        // ②终止条件（仅当所有未完成项都是 [⏳] 才停），避免模型提前停工或随手把活标成等待用户。
         out.push_str(
-            "本轮任务：基于上述课题，选择一件尚未完成的事项推进；必要时调用可用工具执行，并在回复中说明本轮进展。若所有事项均已完成，输出完成总结。",
+            "本轮任务：基于上述课题，选择一件尚未完成的事项推进；必要时调用可用工具执行，并在回复中说明本轮进展。\n\
+             规则：\n\
+             - [⏳] 标记的事项正在等待用户介入，本轮不要选择、不要标记完成，直接跳过（其「需要」即用户须做的事）。\n\
+             - 只要还有 [ ] 待办事项，就继续推进下一轮；仅当所有未完成事项都是 [⏳]（全部等待用户）时，本课题才会暂停等待用户介入——因此不要把仍在推进的事项标成等待用户。\n\
+             若所有事项均已完成，输出完成总结。",
         );
     }
     out
@@ -2220,8 +2231,63 @@ mod tests {
         assert!(brief.contains("等待用户：C1"));
         assert!(brief.contains("需要：需要用户提供部署环境"));
         assert!(brief.contains("[x] G2"));
+        // 跳过规则：等待用户项本轮不可选、不可标完成。
+        assert!(brief.contains("不要选择、不要标记完成"));
+        // 终止规则：仅当所有未完成项都阻塞时才停（并警示勿随手标等待用户）。
+        assert!(brief.contains("仅当所有未完成事项都是"));
+        assert!(brief.contains("不要把仍在推进的事项标成等待用户"));
         // WaitingUser 课题仍走常规推进指令（等待用户介入后由 before hook 解除）
         assert!(!brief.contains("本轮无需调用工具"));
+    }
+
+    #[test]
+    fn topic_brief_tells_model_to_keep_going_while_pending_remains() {
+        // 尚有 pending 项 → 模型必须继续推进（终止条件未满足）；阻塞项原因照样可见。
+        let topic = brief_topic(
+            TopicStatus::InProgress,
+            vec![
+                ScopeInItem {
+                    id: "s1".into(),
+                    goal: "G1".into(),
+                    done_contract: "C1".into(),
+                    status: "blocked".into(),
+                    blocked_reason: Some("需要用户提供密钥".into()),
+                },
+                ScopeInItem {
+                    id: "s2".into(),
+                    goal: "G2".into(),
+                    done_contract: "C2".into(),
+                    status: "pending".into(),
+                    blocked_reason: None,
+                },
+            ],
+        );
+        let brief = build_topic_brief(&topic);
+        assert!(brief.contains("[ ] G2"), "待办项必须可被模型选中推进");
+        assert!(brief.contains("只要还有 [ ] 待办事项，就继续推进下一轮"));
+        assert!(brief.contains("需要：需要用户提供密钥"));
+    }
+
+    #[test]
+    fn topic_brief_hides_stale_reason_on_non_blocked_items() {
+        // 历史原因（如 blocked → completed 未清字段）只保留在存储侧作审计痕迹，
+        // 简报不得投影：已完成项带「需要：…」会误导模型。
+        let topic = brief_topic(
+            TopicStatus::InProgress,
+            vec![ScopeInItem {
+                id: "s1".into(),
+                goal: "G1".into(),
+                done_contract: "C1".into(),
+                status: "completed".into(),
+                blocked_reason: Some("用户提供部署环境".into()),
+            }],
+        );
+        let brief = build_topic_brief(&topic);
+        assert!(brief.contains("[x] G1"));
+        assert!(
+            !brief.contains("需要：用户提供部署环境"),
+            "非 blocked 项不得投影历史阻塞原因"
+        );
     }
 
     #[test]

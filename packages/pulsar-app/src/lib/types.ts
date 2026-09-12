@@ -304,6 +304,8 @@ export type ScopeInItem = {
   goal: string;
   done_contract: string;
   status: string; // "pending" | "completed" | "blocked"
+  /** blocked（等待用户介入）时记录「用户需要做什么」；解除阻塞后清空。 */
+  blocked_reason?: string | null;
 };
 
 export type Topic = {

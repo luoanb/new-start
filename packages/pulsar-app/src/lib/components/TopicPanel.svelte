@@ -373,6 +373,11 @@
                       <div class="scope-item-text">
                         <div class="scope-goal" title={item.goal}>{item.goal}</div>
                         <div class="scope-contract" title={item.done_contract}>{item.done_contract}</div>
+                        {#if item.status === "blocked" && item.blocked_reason}
+                          <div class="scope-blocked-reason" title={item.blocked_reason}>
+                            {t("topicPanel.scopeBlockedReason")}{item.blocked_reason}
+                          </div>
+                        {/if}
                       </div>
                       <div class="scope-item-actions">
                         {#if item.status === "completed"}
@@ -565,6 +570,8 @@
   .scope-item-text { flex: 1; min-width: 0; }
   .scope-goal { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .scope-contract { color: var(--color-text-muted); font-size: var(--fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* 阻塞原因（等待用户介入）：与验收标准同款单行省略，warning 色与 blocked 徽标呼应。 */
+  .scope-blocked-reason { color: var(--color-warning); font-size: var(--fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .scope-item-actions { display: flex; gap: 2px; align-items: center; }
   .delete-confirm { display: flex; gap: var(--space-1); align-items: center; font-size: var(--fs-xs); color: var(--color-error); }
 </style>
