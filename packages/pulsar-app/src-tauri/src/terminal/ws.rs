@@ -74,7 +74,14 @@ pub async fn handle_frame(
                 Ok((session, output_rx, exit_rx)) => {
                     let session_id = session.session_id().to_string();
                     manager.insert(Arc::clone(&session));
-                    pump_session_events(hub.clone(), session_id.clone(), output_rx, exit_rx);
+                    // 事件泵兼做退出回收：会话终结后从 manager 摘除（与 IPC 路径一致）。
+                    pump_session_events(
+                        hub.clone(),
+                        Arc::clone(manager),
+                        session_id.clone(),
+                        output_rx,
+                        exit_rx,
+                    );
                     json!({ "topic": TOPIC, "type": "spawned", "sessionId": session_id }).to_string()
                 }
                 Err(e) => error_frame(format!("spawn failed: {e}")),
@@ -102,12 +109,11 @@ pub async fn handle_frame(
                 None => error_frame(format!("session not found: {session_id}")),
             }
         }
-        WsRequest::Kill { session_id } => match manager.get(&session_id) {
-            Some(session) => match session.kill() {
-                Ok(()) => json!({ "topic": TOPIC, "type": "ok" }).to_string(),
-                Err(e) => error_frame(format!("kill failed: {e}")),
-            },
-            None => error_frame(format!("session not found: {session_id}")),
+        // kill 同时从注册表摘除（与 IPC terminal_kill 同语义）：避免被关闭的会话
+        // 残留在 list 帧中，浏览器端重开面板会因此恢复出死 tab。
+        WsRequest::Kill { session_id } => match manager.kill_and_remove(&session_id) {
+            Ok(()) => json!({ "topic": TOPIC, "type": "ok" }).to_string(),
+            Err(e) => error_frame(format!("kill failed: {e}")),
         },
         WsRequest::List => {
             let sessions: Vec<SessionInfo> = manager.list();

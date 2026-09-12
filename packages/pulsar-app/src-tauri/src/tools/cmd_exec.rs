@@ -333,6 +333,9 @@ pub(crate) async fn run_guarded_pty(
         Err(_elapsed) => {
             let _ = session.kill();
             let _ = forward_done_rx.await; // 让剩余输出先广播完，避免前端截断丢尾
+            // 会话已终结：从注册表摘除，避免残留于 terminal_list
+            // （agent 可见执行不经 pump_session_events，退出回收由此处负责）。
+            bridge.manager().remove(&session_id);
             tracing::warn!(
                 tool = tool_name,
                 command_len = command.len(),
@@ -349,6 +352,10 @@ pub(crate) async fn run_guarded_pty(
         }
     };
     let _ = forward_done_rx.await;
+
+    // 会话已终结：从注册表摘除（agent 可见执行不经 pump_session_events，
+    // 退出回收由此处负责），否则已退出会话会永久留在 terminal_list 里。
+    bridge.manager().remove(&session_id);
 
     let bytes = aggregate.lock().unwrap_or_else(|p| p.into_inner());
     let stdout = truncate_output(&bytes, MAX_OUTPUT_CHARS);

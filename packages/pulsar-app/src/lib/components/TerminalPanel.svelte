@@ -9,6 +9,7 @@
     ipcTransport,
     wsTransport,
     type TerminalConnStatus,
+    type TerminalSessionInfo,
     type TerminalTransport,
   } from "$lib/terminal/transport";
 
@@ -31,6 +32,37 @@
     title: string;
     exited: boolean;
   };
+
+  // ── Tab 标题 ───────────────────────────────────────────────────────────────
+  // 后端 sessionId 形如 term-0000，直接当标题不可读；统一展示为「终端 {n}」。
+  // 序号单调递增且不复用，因此：多终端并存时标题互不重复；关闭中间某个终端后
+  // 再新建不会与存活/已关闭终端重名；标题只在创建时算一次，不随列表增删而位移。
+  let titleSeq = 0;
+
+  /** 分配下一个可读标题（自增序号，永不复用已关闭终端的编号）。 */
+  function nextTitle(): string {
+    titleSeq += 1;
+    return t("terminal.tabTitle", { n: titleSeq });
+  }
+
+  /** 是否为后端原始 id（term-0000 / 空串）——不可直接作为展示名。 */
+  function isRawTitle(raw: string | null | undefined): boolean {
+    const s = (raw ?? "").trim();
+    return s === "" || /^term[-_]?\d+$/i.test(s);
+  }
+
+  /** 列表回填（重开面板恢复后端已有会话）时的标题：优先沿用 shell 名 / cwd 末段等
+   *  语义名，原始 id 或信息缺失时回退「终端 {n}」；同名追加 -2/-3 后缀去重，
+   *  保证多个终端标题唯一（used 为本次回填已占用的标题集合）。 */
+  function restoreTitle(info: TerminalSessionInfo, used: Set<string>): string {
+    const cwdName = (info.cwd ?? "").replace(/[/\\]+$/, "").split(/[/\\]/).pop() ?? "";
+    const shell = (info.shell ?? "").trim();
+    const base = !isRawTitle(shell) ? shell : !isRawTitle(cwdName) ? cwdName : nextTitle();
+    let title = base;
+    for (let n = 2; used.has(title); n += 1) title = `${base}-${n}`;
+    used.add(title);
+    return title;
+  }
 
   // VS Code 风格深色主题（跟随应用主题；light/dark 双套，动态切换）。
   const DARK_TERMINAL_THEME = {
@@ -127,14 +159,21 @@
     transport
       .list()
       .then((sessions) => {
+        const used = new Set<string>();
         tabs = sessions.map((s) => ({
           sessionId: s.sessionId,
           // 交互 shell 显示 shell 名；agent 可见执行会话后端以命令文本作 shell 字段，
-          // 直接复用为 tab 标题（超长文本由 CSS ellipsis 收敛）。
-          title: s.shell || s.sessionId,
+          // 直接复用为 tab 标题（超长文本由 CSS ellipsis 收敛）；原始 id 回退「终端 {n}」。
+          title: restoreTitle(s, used),
           exited: s.exitCode != null,
         }));
         activeId = tabs.at(-1)?.sessionId ?? null;
+        // 面板打开时没有任何「可用」终端（首次打开 / 全部关闭或已退出后重新打开）：
+        // 自动建一个可输入命令的终端，无需用户先点「+」。
+        // 判据取「无未退出会话」而非 tabs 为空：后端退出/被 kill 的会话会从注册表摘除
+        // （terminal/manager.rs::kill_and_remove + events.rs 事件泵回收），
+        // 但前端仍以「存在可输入的会话」为准，避免任何残留会话导致不再自动创建。
+        if (!tabs.some((tab) => !tab.exited)) void newTab();
       })
       .catch((e) => {
         errorMsg = t("terminal.initFailed", { error: `${e}` });
@@ -175,7 +214,8 @@
     errorMsg = "";
     try {
       const sessionId = await transport.spawn();
-      tabs = [...tabs, { sessionId, title: sessionId, exited: false }];
+      // 标题走 nextTitle()（终端 {n}），不再暴露后端原始 id（term-0000）。
+      tabs = [...tabs, { sessionId, title: nextTitle(), exited: false }];
       activeId = sessionId;
     } catch (e) {
       errorMsg = t("terminal.spawnFailed", { error: `${e}` });

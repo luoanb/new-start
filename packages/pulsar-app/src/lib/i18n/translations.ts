@@ -207,6 +207,8 @@ export type Translations = {
   terminal: {
     newTab: string;
     closeTab: string;
+    /** 终端 tab 默认展示名，{n} 为自增序号 */
+    tabTitle: string;
     exited: string;
     connecting: string;
     disconnected: string;
@@ -908,6 +910,7 @@ export const en: Translations = {
   terminal: {
     newTab: "New terminal",
     closeTab: "Close terminal",
+    tabTitle: "Terminal {n}",
     exited: "Exited",
     connecting: "Connecting to terminal server…",
     disconnected: "Terminal connection lost. Retrying…",
@@ -1641,6 +1644,7 @@ export const zh: Translations = {
   terminal: {
     newTab: "新建终端",
     closeTab: "关闭终端",
+    tabTitle: "终端 {n}",
     exited: "已退出",
     connecting: "正在连接终端服务…",
     disconnected: "终端连接已断开，正在重试…",

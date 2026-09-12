@@ -62,8 +62,15 @@ pub async fn terminal_spawn(
     let session_id = session.session_id().to_string();
     manager.insert(Arc::clone(&session));
 
-    // 事件泵：输出/退出经 hub 双路广播（桌面 IPC 事件 + WS 网关订阅者）。
-    pump_session_events(hub.inner().clone(), session_id.clone(), output_rx, exit_rx);
+    // 事件泵：输出/退出经 hub 双路广播（桌面 IPC 事件 + WS 网关订阅者），
+    // 会话退出后由事件泵从 manager 摘除。
+    pump_session_events(
+        hub.inner().clone(),
+        Arc::clone(manager.inner()),
+        session_id.clone(),
+        output_rx,
+        exit_rx,
+    );
 
     tracing::info!(session_id = %session_id, "terminal session spawned");
     Ok(TerminalSpawned { session_id })
@@ -99,10 +106,11 @@ pub async fn terminal_kill(
     manager: State<'_, Arc<TerminalManager>>,
     session_id: String,
 ) -> TauriResult<()> {
-    let session = manager
-        .get(&session_id)
-        .ok_or_else(|| session_not_found(&session_id))?;
-    session.kill().map_err(|e| e.payload())
+    // kill 与注册表摘除绑定（见 TerminalManager::kill_and_remove）：否则被关闭的会话
+    // 会永久留在 terminal_list，前端重开面板时又被恢复成死 tab。
+    manager
+        .kill_and_remove(&session_id)
+        .map_err(|e| e.payload())
 }
 
 #[tauri::command]
