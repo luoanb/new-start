@@ -124,6 +124,40 @@
     void run(() => dataStore.gitRestore(unstaged.map((x) => x.path)));
   }
 
+  // ── 更改区：移除（单个 / 批量）──
+  // 语义：tracked（M/D/R 等）→ 丢弃工作区改动；untracked（??）→ 删除新增未跟踪文件。
+  // 由后端走确认弹窗（GitConfirmHost），失败经 run() 落到 error-bar。
+  const isUntracked = (e: GitStatusEntry) => e.status.trim() === "??";
+
+  /** 把一组条目拆成 tracked / untracked 两路路径（去重，空路径剔除）。 */
+  function splitRemovable(entries: GitStatusEntry[]): { tracked: string[]; untracked: string[] } {
+    const seen = new Set<string>();
+    const tracked: string[] = [];
+    const untracked: string[] = [];
+    for (const e of entries) {
+      const p = e.path.trim();
+      if (!p || seen.has(p)) continue;
+      seen.add(p);
+      if (isUntracked(e)) untracked.push(p);
+      else tracked.push(p);
+    }
+    return { tracked, untracked };
+  }
+
+  /** 移除单个文件改动。 */
+  function removeChange(e: GitStatusEntry) {
+    const { tracked, untracked } = splitRemovable([e]);
+    if (tracked.length === 0 && untracked.length === 0) return;
+    void run(() => dataStore.gitRemove(tracked, untracked));
+  }
+
+  /** 批量：移除更改区全部文件（tracked + untracked）。 */
+  function removeAllChanges() {
+    if (allChanges.length === 0) return;
+    const { tracked, untracked } = splitRemovable(allChanges);
+    void run(() => dataStore.gitRemove(tracked, untracked));
+  }
+
   /** 条目点击：未跟踪文件无 diff 直接打开编辑器；其余打开 git-diff 面板（range 按来源分组：暂存→staged / 工作区→unstaged / 冲突→both）。 */
   function openEntry(e: GitStatusEntry, range: "staged" | "unstaged" | "both") {
     if (!activeRepo) return;
@@ -421,6 +455,13 @@
           <path d="M9 8h4M11 6v4" />
         </svg>
       </button>
+      <button
+        class="op group-act danger"
+        title={t("git.removeAllChanges")}
+        aria-label={t("git.removeAllChanges")}
+        disabled={allChanges.length === 0}
+        onclick={() => removeAllChanges()}
+      >−</button>
     </div>
     {#if coll.changes}
       {#each allChanges as e (e.path)}
@@ -432,6 +473,12 @@
             {#if dir}<span class="name-dir">{dir}</span>{/if}
           </button>
           <button class="op" title={t("git.stage")} onclick={() => stagePath(e)}>＋</button>
+          <button
+            class="op danger"
+            title={t("git.removeChange")}
+            aria-label={t("git.removeChange")}
+            onclick={() => removeChange(e)}
+          >−</button>
         </div>
       {/each}
       {#if allChanges.length === 0}

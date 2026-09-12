@@ -1309,6 +1309,31 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
             }
             value(())
         }
+        "git_remove" => {
+            let p: GitRemoveParams = from_params(params)?;
+            if p.tracked.is_empty() && p.untracked.is_empty() {
+                return Err(bad_request("git_remove requires at least one path"));
+            }
+            let svc = state.gateway.git_service();
+            let repo = svc.active_repo().await.map_err(RpcErrorBody::from)?;
+            let detail = json!({
+                "tracked": p.tracked.clone(),
+                "untracked": p.untracked.clone(),
+            });
+            let outcome = svc
+                .confirm()
+                .request_and_wait(GitOpKind::Checkout, "移除文件更改".into(), detail)
+                .await
+                .map_err(RpcErrorBody::from)?;
+            if outcome == ConfirmOutcome::Approved {
+                svc.backend()
+                    .remove_changes(&repo, &p.tracked, &p.untracked)
+                    .await
+                    .map_err(RpcErrorBody::from)?;
+                (state.state_emit)(StateChange::Git);
+            }
+            value(())
+        }
         "git_reset" => {
             let p: GitResetParams = from_params(params)?;
             let reset_mode = GitResetMode::parse(&p.mode).map_err(RpcErrorBody::from)?;
@@ -1727,6 +1752,17 @@ struct GitStashParams {
 struct GitPushParams {
     remote: Option<String>,
     branch: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitRemoveParams {
+    /// tracked 路径（去 `git restore` 丢弃工作区改动）。
+    #[serde(default)]
+    tracked: Vec<String>,
+    /// untracked 路径（去 `git clean -f -d` 删除新增文件）。
+    #[serde(default)]
+    untracked: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]

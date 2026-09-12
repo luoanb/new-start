@@ -912,6 +912,40 @@ impl GitBackend for CliGitBackend {
         Ok(())
     }
 
+    /// 移除「更改」：tracked 走 `restore --`（丢弃工作区改动），
+    /// untracked 走 `clean -f --`（删除新增未跟踪文件）。两组都为空则报错而非静默成功。
+    async fn remove_changes(
+        &self,
+        repo: &GitRepo,
+        tracked: &[String],
+        untracked: &[String],
+    ) -> AppResult<()> {
+        let root = Self::repo_root(repo)?;
+        if tracked.is_empty() && untracked.is_empty() {
+            return Err(AppError::InvalidInput(
+                "git remove requires at least one path".into(),
+            ));
+        }
+        if !tracked.is_empty() {
+            let mut args: Vec<String> = vec!["restore".into(), "--".into()];
+            for p in tracked {
+                args.push(validate_rel_path(p)?);
+            }
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            self.run_git_ok(&root, &refs).await?;
+        }
+        if !untracked.is_empty() {
+            // -d 一并删除空目录树；-- 之后全部为路径，防选项注入。
+            let mut args: Vec<String> = vec!["clean".into(), "-f".into(), "-d".into(), "--".into()];
+            for p in untracked {
+                args.push(validate_rel_path(p)?);
+            }
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            self.run_git_ok(&root, &refs).await?;
+        }
+        Ok(())
+    }
+
     async fn commit(&self, repo: &GitRepo, message: &str) -> AppResult<()> {
         let root = Self::repo_root(repo)?;
         if message.trim().is_empty() {
@@ -1558,6 +1592,163 @@ filename path/to/file.rs
         backend.commit(&repo, "feat: add x.txt").await.expect("commit");
         let logs = backend.log(&repo, 5, 0).await.expect("log");
         assert_eq!(logs[0].subject, "feat: add x.txt");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 移除单个 tracked 文件的未暂存改动：内容回退到 HEAD，文件保留。
+    #[tokio::test]
+    async fn remove_changes_restores_tracked_file() {
+        if !git_available() {
+            return;
+        }
+        let root = setup_repo("remove-tracked");
+        run_git_proc(&root, &["init", "-q", "-b", "main"]);
+        std::fs::write(root.join("a.txt"), "v1\n").unwrap();
+        run_git_proc(&root, &["add", "a.txt"]);
+        run_git_proc(
+            &root,
+            &["-c", "user.name=test", "-c", "user.email=t@t", "commit", "-q", "-m", "init"],
+        );
+        std::fs::write(root.join("a.txt"), "dirty\n").unwrap();
+        let repo = GitRepo {
+            id: "r".into(),
+            name: "r".into(),
+            root: root.clone(),
+            is_nested: false,
+        };
+        let backend = CliGitBackend::new();
+        assert_eq!(backend.status(&repo).await.expect("status").unstaged.len(), 1);
+
+        backend
+            .remove_changes(&repo, &["a.txt".into()], &[])
+            .await
+            .expect("remove_changes");
+
+        // 工作区改动已丢弃，内容回到 v1；文件本身仍在。
+        assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "v1\n");
+        assert!(backend.status(&repo).await.expect("status").unstaged.is_empty());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 移除 untracked 文件：文件被删除（而非还原），状态列表清空。
+    #[tokio::test]
+    async fn remove_changes_deletes_untracked_file() {
+        if !git_available() {
+            return;
+        }
+        let root = setup_repo("remove-untracked");
+        run_git_proc(&root, &["init", "-q", "-b", "main"]);
+        run_git_proc(
+            &root,
+            &["-c", "user.name=test", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"],
+        );
+        std::fs::write(root.join("new.txt"), "temp\n").unwrap();
+        let repo = GitRepo {
+            id: "r".into(),
+            name: "r".into(),
+            root: root.clone(),
+            is_nested: false,
+        };
+        let backend = CliGitBackend::new();
+        assert_eq!(backend.status(&repo).await.expect("status").untracked.len(), 1);
+
+        backend
+            .remove_changes(&repo, &[], &["new.txt".into()])
+            .await
+            .expect("remove_changes");
+
+        assert!(!root.join("new.txt").exists(), "untracked file should be deleted");
+        assert!(backend.status(&repo).await.expect("status").untracked.is_empty());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 批量移除：tracked 与 untracked 混用，一次调用同时生效。
+    #[tokio::test]
+    async fn remove_changes_handles_tracked_and_untracked_together() {
+        if !git_available() {
+            return;
+        }
+        let root = setup_repo("remove-mixed");
+        run_git_proc(&root, &["init", "-q", "-b", "main"]);
+        std::fs::write(root.join("a.txt"), "v1\n").unwrap();
+        run_git_proc(&root, &["add", "a.txt"]);
+        run_git_proc(
+            &root,
+            &["-c", "user.name=test", "-c", "user.email=t@t", "commit", "-q", "-m", "init"],
+        );
+        std::fs::write(root.join("a.txt"), "dirty\n").unwrap();
+        std::fs::write(root.join("new.txt"), "temp\n").unwrap();
+        let repo = GitRepo {
+            id: "r".into(),
+            name: "r".into(),
+            root: root.clone(),
+            is_nested: false,
+        };
+        let backend = CliGitBackend::new();
+
+        backend
+            .remove_changes(&repo, &["a.txt".into()], &["new.txt".into()])
+            .await
+            .expect("remove_changes");
+
+        assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "v1\n");
+        assert!(!root.join("new.txt").exists());
+        let view = backend.status(&repo).await.expect("status");
+        assert!(view.unstaged.is_empty() && view.untracked.is_empty());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 空输入必须报错（而非静默成功），避免前端误调用时无反馈。
+    #[tokio::test]
+    async fn remove_changes_rejects_empty_paths() {
+        if !git_available() {
+            return;
+        }
+        let root = setup_repo("remove-empty");
+        run_git_proc(&root, &["init", "-q", "-b", "main"]);
+        let repo = GitRepo {
+            id: "r".into(),
+            name: "r".into(),
+            root: root.clone(),
+            is_nested: false,
+        };
+        let backend = CliGitBackend::new();
+        let err = backend.remove_changes(&repo, &[], &[]).await;
+        assert!(err.is_err(), "empty paths must be rejected");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 路径逃逸与选项注入必须被拦截（`--` 之后的路径仍逐个校验）。
+    #[tokio::test]
+    async fn remove_changes_rejects_escaping_paths() {
+        if !git_available() {
+            return;
+        }
+        let root = setup_repo("remove-escape");
+        run_git_proc(&root, &["init", "-q", "-b", "main"]);
+        let repo = GitRepo {
+            id: "r".into(),
+            name: "r".into(),
+            root: root.clone(),
+            is_nested: false,
+        };
+        let backend = CliGitBackend::new();
+        for bad in ["../outside.txt", "/etc/passwd"] {
+            assert!(
+                backend
+                    .remove_changes(&repo, &[bad.into()], &[])
+                    .await
+                    .is_err(),
+                "{bad} should be rejected"
+            );
+            assert!(
+                backend
+                    .remove_changes(&repo, &[], &[bad.into()])
+                    .await
+                    .is_err(),
+                "{bad} should be rejected (untracked)"
+            );
+        }
         std::fs::remove_dir_all(&root).ok();
     }
 }
