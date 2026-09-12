@@ -70,7 +70,7 @@
   ```
 
   - 触发点（全部「失败仅 `warn`」）：
-    - IP-5 `round_after` 三支（User / ManualStep / Poller）：未收尾（`pending_round` 且课题非终态）→ `mark_user_turn_open`；收尾（`!pending_round` 或课题终态）→ `stamp_open_user_turn`。
+    - IP-5 `round_after` 三支（User / ManualStep / Poller）：**收尾判据 = 轮询不再续推**（`poll_eligible(课题状态, pending_round)`，与轮询候选同一判据）——判为「还会续推」→ `mark_user_turn_open`；判为「不再续推」→ `stamp_open_user_turn`。注意 `Todo` / `InProgress` / `WrappingUp` 课题即使本轮收尾也会继续轮询，**不得**据此收尾。
     - IP-1 `round_before`（仅 User 触发）：新输入取代上一次介入轮 → `stamp_open_user_turn` 定格旧的（此刻新消息尚未落库）。
     - `stop_session` ④：`stamp_open_user_turn` 兜底。
   - **不依赖 `runningSessions`**：`runningSessions` 只在单轮执行期间注册（gateway 一轮一注册、poller 每 tick 注册后立刻注销），轮询等待空档会漏判 → 以 `elapsed_ms = 0` 显式标记进行中，进行中标记贯穿整轮（含轮询等待）。
@@ -98,12 +98,13 @@
 - 2026-09-13: 实现完成——`Message.elapsed_ms`（含 35 处字面量补齐）；`stamp_open_user_turn`（IP-5 收尾 + `stop_session` 兜底，仅助手模式，`elapsed_ms` 非空即已收尾）；前端标签 + 运行中本地 tick + i18n。
 - 2026-09-13（修订）：验收发现「进行中只在 runningSessions 内才 tick」→ 轮询等待空档（会话未注册）标签会闪断。改为**显式进行中标记** `elapsed_ms = 0`（IP-5 未收尾时写入），并在 IP-1 User 轮定格被取代的旧轮；前端改为三态判定，`runningSessions` 仅作首轮兜底。
 - 2026-09-13（修订）：展示位置从「用户消息气泡下方」移到**轮次分组 `.message-round` 的底部**（思考指示之后）——落到 `ChatArea` 的分组渲染层，`ChatMessage` 不再承载该标签。
+- 2026-09-13（修订）：收尾判据修正为 `poll_eligible`。**实测证据**：`conv_1789234193622128355` 最后一轮 02:03:33 发出 → 02:03:46 被定格 `12284`（12s），但日志显示该会话 02:03:59→02:04:48 仍在跑 Poller 轮（真实耗时约 75s）。原因是 `InProgress` 课题 `poll_eligible` 恒为 true，而旧判据 `!pending_round` 提前收尾。新增回归测试 `round_after_keeps_user_turn_open_while_topic_keeps_polling`。
 
 ## Validation
 
 - Self-check: 已按方案实现（字段 / IP-5 状态落账 / IP-1 取代定格 / `stop_session` 兜底 / 前端三态渲染 + tick）。
 - Static checks: `cargo check --lib --tests` 无 error；`pnpm --filter pulsar-app check` → 0 errors（20 条既有 warning，非本次引入）。
-- Runtime / Test: `cargo test --lib` → **486 passed / 0 failed**（新增：`stamp_open_user_turn` 单测 2 条、`round_after` 进行中/定格集成 1 条、`round_before` 取代定格 1 条）。
+- Runtime / Test: `cargo test --lib` → **487 passed / 0 failed**（新增：`stamp_open_user_turn` 单测 2 条、`round_after` 进行中/定格集成 1 条、`round_after` 课题续推保持进行中 1 条、`round_before` 取代定格 1 条）。
 - Human confirmation: 待用户运行应用确认（消息区标签 + 进行中递增，尤其是轮询等待期间不闪断）。
 - 结果汇总：自动化证据已齐；端到端人工确认待补。
 - 核心目标是否已由证据证明完成：否（差人工运行确认）。

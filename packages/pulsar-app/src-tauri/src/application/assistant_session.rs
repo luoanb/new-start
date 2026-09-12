@@ -1366,11 +1366,13 @@ impl AssistantHooks<'_> {
 
     /// 介入轮状态落账（IP-5）：未收尾 → 标记进行中；已收尾 → 定格墙钟耗时。
     ///
-    /// 口径 = 整个介入轮：`pending_round` 转 false（不再续推）或绑定课题进入终态即收尾。
+    /// 收尾判据 = **轮询不再续推**（`poll_eligible`，与轮询候选同一判据）：
+    /// `Todo` / `InProgress` / `WrappingUp` 课题即使本轮收尾也会继续轮询 → 介入轮**未**结束；
+    /// 只有课题进入终态（`Done` / `WaitingUser` / `Paused` / `Cancelled`）才算这一轮真正停下。
     /// 进行中标记让前端在轮询等待空档也能按起点持续 tick（不依赖 `runningSessions`）。
     /// 纯观测副作用——写失败仅 `warn`，不打断主轮。
     fn finish_or_mark_user_turn(&self, ctx: &RoundContext, pending_round: bool) {
-        let still_running = pending_round && !self.bound_topic_is_terminal(ctx);
+        let still_running = poll_eligible(self.bound_topic_status(ctx).as_ref(), pending_round);
         let result = if still_running {
             mark_user_turn_open(&self.assistant.store, &ctx.session_id)
         } else {
@@ -1386,6 +1388,18 @@ impl AssistantHooks<'_> {
         }
     }
 
+    /// 绑定课题当前状态（无绑定 / 读取失败 → `None`，由 `poll_eligible` 按 `pending_round` 判定）。
+    fn bound_topic_status(&self, ctx: &RoundContext) -> Option<TopicStatus> {
+        let topic_id = ctx.topic_id.as_ref()?;
+        self.assistant
+            .topics()
+            .ok()?
+            .get(topic_id)
+            .ok()
+            .flatten()
+            .map(|topic| topic.status)
+    }
+
     /// 上一次介入轮若仍开启，被本次用户输入取代 → 定格耗时（纯观测，失败仅 `warn`）。
     fn close_superseded_user_turn(&self, ctx: &RoundContext) {
         if let Err(error) = stamp_open_user_turn(&self.assistant.store, &ctx.session_id) {
@@ -1396,23 +1410,6 @@ impl AssistantHooks<'_> {
                 "superseded user turn stamp failed; ignored"
             );
         }
-    }
-
-    /// 绑定课题是否已进入终态（完结 / 阻塞 / 暂停 / 取消）——终态即介入轮结束。
-    fn bound_topic_is_terminal(&self, ctx: &RoundContext) -> bool {
-        let Some(topic_id) = ctx.topic_id.as_ref() else {
-            return false;
-        };
-        let Ok(Some(topic)) = self.assistant.topics().and_then(|store| store.get(topic_id)) else {
-            return false;
-        };
-        matches!(
-            topic.status,
-            TopicStatus::Done
-                | TopicStatus::WaitingUser
-                | TopicStatus::Paused
-                | TopicStatus::Cancelled
-        )
     }
 
     /// 若当前未指定课题，则按会话解析已绑定课题（不存在保持 None）。
@@ -3337,6 +3334,55 @@ mod tests {
         assert!(
             stamp(&h).is_some_and(|ms| ms > 0),
             "收尾轮必须把介入轮定格为墙钟耗时"
+        );
+    }
+
+    #[tokio::test]
+    async fn round_after_keeps_user_turn_open_while_topic_keeps_polling() {
+        // 课题 InProgress 时 `poll_eligible` 恒为 true：本轮收尾也还会继续轮询，
+        // 介入轮不得定格（否则耗时提前停在某一轮，实际还在推进）。
+        let h = judgement_harness(r#"{}"#);
+        let conversation = h
+            .assistant
+            .store
+            .create_conversation(Some("sess-polling".into()), ConversationMode::Assistant)
+            .unwrap();
+        h.assistant
+            .store
+            .add_message(&conversation.id, user("do it"))
+            .unwrap();
+        let topic = h
+            .assistant
+            .topics()
+            .unwrap()
+            .create("t", "d", TopicStatus::InProgress, vec![], None)
+            .unwrap();
+        h.assistant
+            .topics()
+            .unwrap()
+            .bind_session(&topic.id, &conversation.id)
+            .unwrap();
+        let hooks = AssistantHooks {
+            assistant: &h.assistant,
+        };
+
+        // 收尾轮（无声明、无结果）+ 课题 InProgress → 仍在轮询候选 → 保持进行中。
+        let mut ctx = bare_ctx(RoundTriggerKind::Poller);
+        ctx.session_id = conversation.id.clone();
+        ctx.topic_id = Some(topic.id.clone());
+        ctx.outcome = Some(settling_outcome(None, Vec::new()));
+        hooks.round_after(&ctx).await.unwrap();
+
+        let stored = h
+            .assistant
+            .store
+            .require_conversation(&conversation.id)
+            .unwrap();
+        let index = stored.messages.iter().position(is_real_user_input).unwrap();
+        assert_eq!(
+            stored.messages[index].elapsed_ms,
+            Some(USER_TURN_IN_PROGRESS),
+            "课题仍在轮询 → 介入轮必须保持进行中"
         );
     }
 
