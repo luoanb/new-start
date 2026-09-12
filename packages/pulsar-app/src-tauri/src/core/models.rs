@@ -471,6 +471,24 @@ pub struct ProviderInfo {
     pub kind: ProviderKind,
 }
 
+/// 远端 `GET /models` 返回的单条模型（OpenAI List models 契约）。
+///
+/// 官方契约只有 `id` / `object` / `created` / `owned_by`；`display_name` 是部分兼容实现
+/// （实测网关）额外提供的非标准扩展，缺失时回落 `id`。
+/// 服务商不会返回 `capabilities` / `pricing` / `context_window` 等本地治理字段，
+/// 这些由前端在合并策略中决定保留还是回落默认。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RemoteModelInfo {
+    pub id: String,
+    /// 非标准扩展（OpenAI 规范无此字段）：可读显示名。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owned_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ModelCapabilities {
     pub chat: bool,

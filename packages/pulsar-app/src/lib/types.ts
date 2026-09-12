@@ -236,6 +236,15 @@ export type ModelCallResponse = {
   output: string;
 };
 
+/** 远端 `GET /models` 单条模型（OpenAI List models 契约）；不含本地治理字段。 */
+export type RemoteModelInfo = {
+  id: string;
+  /** 非标准扩展（OpenAI 规范无此字段）：可读显示名，缺失时用 id。 */
+  display_name?: string | null;
+  owned_by?: string | null;
+  created?: number | null;
+};
+
 // ── Provider / Model 管理视图（get_provider_config / save_provider_config 载荷）──
 
 export type ProviderKind = "open_ai" | "open_ai_compatible";

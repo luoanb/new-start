@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::core::error::{AppError, AppResult};
-use crate::core::models::{StreamChunk, ToolCallWire, Usage};
+use crate::core::models::{RemoteModelInfo, StreamChunk, ToolCallWire, Usage};
 use crate::core::log_phase::{
     PHASE_LLM_CALL_PERF, PHASE_LLM_REQUEST_OUT, PHASE_LLM_RESPONSE_IN,
 };
@@ -438,8 +438,28 @@ impl Client {
         Ok(aggregated)
     }
 
+    /// List models：`GET {base}/models`（OpenAI List models 契约）。
+    ///
+    /// 只做协议解析；「服务商是否实现该端点、字段是否扩展」由调用方（providers）消化。
+    pub async fn list_models(&self) -> AppResult<Vec<RemoteModelInfo>> {
+        let response = self
+            .http
+            .get(self.models_endpoint())
+            .bearer_auth(&self.api_key)
+            .send()
+            .await
+            .map_err(|e| AppError::LlmRequestFailed(format!("request failed: {e}")))?;
+        let bytes = self.read_body(response).await?;
+        dump_wire_response(&bytes);
+        parse_models_response(&bytes)
+    }
+
     fn endpoint(&self) -> String {
         format!("{}/chat/completions", self.base_url)
+    }
+
+    fn models_endpoint(&self) -> String {
+        format!("{}/models", self.base_url)
     }
 
     async fn read_body(&self, response: reqwest::Response) -> AppResult<Vec<u8>> {
@@ -488,6 +508,18 @@ impl Client {
             });
         AppError::LlmRequestFailed(format!("provider returned {status}: {message}"))
     }
+}
+
+/// 解析 `GET /models` 响应：官方契约为 `{ "object": "list", "data": [...] }`。
+fn parse_models_response(bytes: &[u8]) -> AppResult<Vec<RemoteModelInfo>> {
+    #[derive(Deserialize)]
+    struct ModelsEnvelope {
+        #[serde(default)]
+        data: Vec<RemoteModelInfo>,
+    }
+    let parsed: ModelsEnvelope = serde_json::from_slice(bytes)
+        .map_err(|e| AppError::LlmRequestFailed(format!("parse models response: {e}")))?;
+    Ok(parsed.data)
 }
 
 #[cfg(test)]
@@ -546,6 +578,32 @@ mod tests {
             parsed.usage.unwrap().completion_tokens_details.unwrap().reasoning_tokens,
             Some(3)
         );
+    }
+
+    #[test]
+    fn parse_models_response_extracts_ids() {
+        // 混合实测形态：标准 4 字段 + 非标准 `display_name` / `type`（type 被忽略）。
+        let json = r#"{
+            "object":"list",
+            "data":[
+                {"id":"gpt-5.6-sol","object":"model","created":1780876800,"owned_by":"openai","type":"model","display_name":"GPT-5.6 Sol"},
+                {"id":"gpt-4o-mini","object":"model"}
+            ]
+        }"#;
+        let models = parse_models_response(json.as_bytes()).unwrap();
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "gpt-5.6-sol");
+        assert_eq!(models[0].owned_by.as_deref(), Some("openai"));
+        assert_eq!(models[0].display_name.as_deref(), Some("GPT-5.6 Sol"));
+        assert_eq!(models[1].id, "gpt-4o-mini");
+        assert_eq!(models[1].created, None);
+        // 无 display_name 扩展时保持 None，由前端回落 id。
+        assert_eq!(models[1].display_name, None);
+    }
+
+    #[test]
+    fn parse_models_response_rejects_malformed_body() {
+        assert!(parse_models_response(b"not json").is_err());
     }
 
     #[test]

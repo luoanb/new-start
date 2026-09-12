@@ -30,8 +30,8 @@ pub use models::{
     MessageBody, MessagePage, MessageRole, ModelCapabilities, ModelInfo, ModelMessage,
     ModelMessageRole, ModelRequest, ModelResponse, NeighborhoodPoolPolicy, Neuron, NeuronCreate,
     NeuronKindFilter, NeuronPage, NeuronSubgraph, NeuronUpdate, ProviderInfo, ProviderKind,
-    RuntimeStatus, SamplingParams, ScopeInItem, SelectionPolicy, SessionBehavior, SkillInfo,
-    SystemPromptStatus, ThinkingCapability, ThinkingConfig, ThinkingEffort, ToolDefinition,
-    ToolInfo, ToolPolicy, ToolSource, Topic, TopicStatus, TopicUpdate,
+    RemoteModelInfo, RuntimeStatus, SamplingParams, ScopeInItem, SelectionPolicy, SessionBehavior,
+    SkillInfo, SystemPromptStatus, ThinkingCapability, ThinkingConfig, ThinkingEffort,
+    ToolDefinition, ToolInfo, ToolPolicy, ToolSource, Topic, TopicStatus, TopicUpdate,
     DEFAULT_ASSISTANT_GLOBAL_LIMIT,
 };

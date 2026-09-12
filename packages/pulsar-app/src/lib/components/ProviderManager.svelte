@@ -10,6 +10,7 @@
     ModelEditInfo,
     ProviderConfigView,
     ProviderEditInfo,
+    RemoteModelInfo,
   } from "$lib/types";
   import { useViewContext } from "$lib/layout/viewContext";
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
@@ -70,10 +71,13 @@
     if (saving) return;
     saving = true;
     error = "";
+    // 保存后面板不关闭，需按 id 复位选中：自定义服务商经 config 的 HashMap 往返后顺序不保证。
+    const savedId = selected?.id ?? "";
     try {
       const saved = await api.call(c.saveProviderConfig, { view });
       view = saved;
-      await ctx.commands.closeProviderManager();
+      const idx = saved.providers.findIndex((p) => p.id === savedId);
+      if (idx >= 0) selectedIndex = idx;
     } catch (e) {
       error = formatInvokeError(e);
     } finally {
@@ -139,6 +143,88 @@
       pricing_output: null,
     };
   }
+
+  // ── 远端模型列表（GET /models）──
+
+  let fetchingRemote = $state(false);
+  let remoteOpen = $state(false);
+  let remoteModels = $state<RemoteModelInfo[]>([]);
+
+  /** 拉取远端可用模型；结果只进弹窗，不落盘。 */
+  async function refreshRemoteModels() {
+    if (!selected || !selected.id || fetchingRemote) return;
+    fetchingRemote = true;
+    error = "";
+    try {
+      remoteModels = await api.call(c.listRemoteModels, { providerId: selected.id });
+      remoteOpen = true;
+    } catch (e) {
+      error = formatInvokeError(e);
+    } finally {
+      fetchingRemote = false;
+    }
+  }
+
+  /** 远端模型 → 本地条目（云端不返回治理字段，一律回落默认；显示名缺失时用 id）。 */
+  function remoteToModel(remote: RemoteModelInfo): ModelEditInfo {
+    return {
+      ...newModel(),
+      id: remote.id,
+      display_name: remote.display_name || remote.id,
+    };
+  }
+
+  /** 云端覆盖本地：追加语义——本地独有保留；同名条目以云端为准（元数据重置）。 */
+  function mergeCloudOverwriteLocal() {
+    if (!selected) return;
+    const cloud = new Map(remoteModels.map((m) => [m.id, m]));
+    const merged = selected.models.map((m) => {
+      const hit = cloud.get(m.id);
+      return hit ? remoteToModel(hit) : m;
+    });
+    for (const m of remoteModels) {
+      if (!merged.some((x) => x.id === m.id)) merged.push(remoteToModel(m));
+    }
+    selected.models = merged;
+    remoteOpen = false;
+  }
+
+  /** 本地优先：并集，同名条目保留本地配置，云端独有的追加为默认条目。 */
+  function mergeLocalFirst() {
+    if (!selected) return;
+    const localIds = new Set(selected.models.map((m) => m.id));
+    const merged = [...selected.models];
+    for (const m of remoteModels) {
+      if (!localIds.has(m.id)) merged.push(remoteToModel(m));
+    }
+    selected.models = merged;
+    remoteOpen = false;
+  }
+
+  /** 重置为云端：丢弃本地独有模型，完全按云端列表重建。 */
+  function mergeResetToRemote() {
+    if (!selected) return;
+    selected.models = remoteModels.map((m) => remoteToModel(m));
+    remoteOpen = false;
+  }
+
+  const mergeOptions = $derived([
+    {
+      label: t("providerManager.mergeCloudOverwrite"),
+      hint: t("providerManager.mergeCloudOverwriteHint"),
+      apply: mergeCloudOverwriteLocal,
+    },
+    {
+      label: t("providerManager.mergeLocalFirst"),
+      hint: t("providerManager.mergeLocalFirstHint"),
+      apply: mergeLocalFirst,
+    },
+    {
+      label: t("providerManager.mergeResetCloud"),
+      hint: t("providerManager.mergeResetCloudHint"),
+      apply: mergeResetToRemote,
+    },
+  ]);
 
   function removeProvider(id: string) {
     const idx = view.providers.findIndex((p) => p.id === id);
@@ -362,19 +448,36 @@
           <div class="form-section">
             <div class="form-section-title">
               <span>{t("providerManager.models")}</span>
-              <Tooltip label={t("providerManager.addModel")}>
-                <button
-                  class="icon-btn"
-                  type="button"
-                  onclick={() => selected.models.push(newModel())}
-                  aria-label={t("providerManager.addModel")}
-                >
-                  <svg class="icon" aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="12" y1="5" x2="12" y2="19" />
-                    <line x1="5" y1="12" x2="19" y2="12" />
-                  </svg>
-                </button>
-              </Tooltip>
+              <div class="section-actions">
+                <Tooltip label={t("providerManager.refreshModels")}>
+                  <button
+                    class="icon-btn"
+                    type="button"
+                    onclick={refreshRemoteModels}
+                    disabled={!selected.id || fetchingRemote}
+                    aria-label={t("providerManager.refreshModels")}
+                  >
+                    <svg class="icon" aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="23 4 23 10 17 10" />
+                      <polyline points="1 20 1 14 7 14" />
+                      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                    </svg>
+                  </button>
+                </Tooltip>
+                <Tooltip label={t("providerManager.addModel")}>
+                  <button
+                    class="icon-btn"
+                    type="button"
+                    onclick={() => selected.models.push(newModel())}
+                    aria-label={t("providerManager.addModel")}
+                  >
+                    <svg class="icon" aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="12" y1="5" x2="12" y2="19" />
+                      <line x1="5" y1="12" x2="19" y2="12" />
+                    </svg>
+                  </button>
+                </Tooltip>
+              </div>
             </div>
             {#if selected.models.length === 0}
               <p class="empty">{t("providerManager.noModels")}</p>
@@ -526,6 +629,59 @@
         {saving ? t("providerManager.saving") : t("providerManager.save")}
       </button>
     </div>
+
+    {#if remoteOpen}
+      <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+      <div class="overlay" role="presentation" onclick={() => (remoteOpen = false)}>
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="modal" onclick={(e) => e.stopPropagation()}>
+          <div class="modal-header">
+            <h2>{t("providerManager.remoteModelsTitle")}</h2>
+            <span class="modal-count">
+              {t("providerManager.remoteModelsCount", { n: remoteModels.length })}
+            </span>
+          </div>
+          <div class="modal-body">
+            {#if remoteModels.length === 0}
+              <p class="empty">{t("providerManager.remoteModelsEmpty")}</p>
+            {:else}
+              <ul class="remote-list">
+                {#each remoteModels as m (m.id)}
+                  <li class="remote-item">
+                    <span class="remote-id">{m.id}</span>
+                    {#if m.display_name && m.display_name !== m.id}
+                      <span class="remote-name">{m.display_name}</span>
+                    {/if}
+                    {#if m.owned_by}
+                      <span class="remote-owner">{m.owned_by}</span>
+                    {/if}
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+            <p class="form-hint">{t("providerManager.remoteModelsHint")}</p>
+          </div>
+          <div class="modal-footer">
+            <div class="merge-options">
+              {#each mergeOptions as opt (opt.label)}
+                <button
+                  class="merge-option"
+                  type="button"
+                  onclick={opt.apply}
+                  disabled={remoteModels.length === 0}
+                >
+                  <span class="merge-label">{opt.label}</span>
+                  <span class="merge-hint">{opt.hint}</span>
+                </button>
+              {/each}
+            </div>
+            <button class="btn" type="button" onclick={() => (remoteOpen = false)}>
+              {t("common.close")}
+            </button>
+          </div>
+        </div>
+      </div>
+    {/if}
   {/if}
 </div>
 
@@ -756,6 +912,11 @@
     font-weight: 600;
     color: var(--color-text);
   }
+  .section-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
   .form-hint {
     font-size: var(--fs-xs);
     color: var(--color-text-muted);
@@ -912,5 +1073,138 @@
   }
   .btn.danger-outline:hover {
     background: var(--color-error-bg);
+  }
+
+  /* 远端模型列表弹窗（对齐 ConfirmDialog 浮层词汇） */
+  .overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+  .modal {
+    display: flex;
+    flex-direction: column;
+    background: var(--color-surface);
+    border-radius: 16px;
+    width: 480px;
+    max-width: 90vw;
+    max-height: 80vh;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  }
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--color-border);
+    flex-shrink: 0;
+  }
+  .modal-header h2 {
+    margin: 0;
+    font-size: var(--fs-lg);
+    font-weight: 600;
+  }
+  .modal-count {
+    font-size: var(--fs-xs);
+    color: var(--color-text-muted);
+    white-space: nowrap;
+  }
+  .modal-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .remote-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    border: var(--border-width) solid var(--color-border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+  .remote-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding: 4px var(--space-2);
+    font-size: var(--fs-xs);
+  }
+  .remote-item + .remote-item {
+    border-top: var(--border-width) solid var(--color-border);
+  }
+  .remote-id {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--font-mono);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .remote-name {
+    flex-shrink: 0;
+    color: var(--color-text-muted);
+  }
+  .remote-owner {
+    flex-shrink: 0;
+    color: var(--color-text-muted);
+  }
+  .modal-footer {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+    padding: 12px 20px;
+    border-top: 1px solid var(--color-border);
+    flex-shrink: 0;
+  }
+  .merge-options {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .merge-option {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    text-align: left;
+    padding: var(--space-2) var(--space-3);
+    border: var(--border-width) solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text);
+    cursor: pointer;
+    transition: background var(--duration-fast) var(--ease-out),
+                border-color var(--duration-fast) var(--ease-out);
+  }
+  .merge-option:hover:not(:disabled) {
+    background: var(--color-hover);
+    border-color: var(--color-primary);
+  }
+  .merge-option:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+  .merge-label {
+    font-size: var(--fs-sm);
+    font-weight: 600;
+  }
+  .merge-hint {
+    font-size: var(--fs-xs);
+    color: var(--color-text-muted);
+  }
+  .modal-footer > .btn {
+    align-self: flex-end;
   }
 </style>

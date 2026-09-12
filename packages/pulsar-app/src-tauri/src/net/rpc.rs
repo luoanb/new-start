@@ -169,6 +169,12 @@ struct ProviderModelParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct RemoteModelsParams {
+    provider_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ClearConversationParams {
     conversation_id: Option<String>,
 }
@@ -464,6 +470,16 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
                 .gateway
                 .providers()
                 .list_models(p.provider_id.as_deref())
+                .map_err(RpcErrorBody::from)?;
+            value(models)
+        }
+        "list_remote_models" => {
+            let p: RemoteModelsParams = from_params(params)?;
+            let models = state
+                .gateway
+                .providers()
+                .fetch_remote_models(&p.provider_id)
+                .await
                 .map_err(RpcErrorBody::from)?;
             value(models)
         }

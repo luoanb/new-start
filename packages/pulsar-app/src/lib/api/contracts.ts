@@ -42,6 +42,7 @@ import type {
   PollerStatus,
   ProviderConfigView,
   ProviderInfo,
+  RemoteModelInfo,
   RunningSession,
   RuntimeStatus,
   SamplingParams,
@@ -156,6 +157,9 @@ export const c = {
   // ── 服务商 / 模型 ──
   listProviders: def<undefined, ProviderInfo[]>("list_providers"),
   listModels: def<undefined, ModelInfo[]>("list_models"),
+  listRemoteModels: def<{ providerId: string }, RemoteModelInfo[]>(
+    "list_remote_models",
+  ),
   getProviderConfig: def<undefined, ProviderConfigView>("get_provider_config"),
   saveProviderConfig: def<{ view: ProviderConfigView }, ProviderConfigView>(
     "save_provider_config",

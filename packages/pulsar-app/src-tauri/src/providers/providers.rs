@@ -3,8 +3,9 @@ use crate::core::{
     error::{AppError, AppResult},
     models::{
         ChatModelSelection, FunctionCallWire, ModelRequest, ModelResponse, ModelCapabilities,
-        ModelInfo, ModelMessage, ModelMessageRole, ProviderInfo, ProviderKind, ResponseFormatSpec,
-        SamplingParams, StreamChunk, ThinkingCapability, ThinkingConfig, ThinkingEffort, ToolCallWire,
+        ModelInfo, ModelMessage, ModelMessageRole, ProviderInfo, ProviderKind, RemoteModelInfo,
+        ResponseFormatSpec, SamplingParams, StreamChunk, ThinkingCapability, ThinkingConfig,
+        ThinkingEffort, ToolCallWire,
     },
 };
 use crate::infra::config::{AppConfigFile, ConfigStore};
@@ -265,6 +266,21 @@ impl ProviderRegistry {
             }
             Ok(models)
         }
+    }
+
+    /// 拉取服务商远端可用模型（OpenAI `GET /models` 契约）。
+    ///
+    /// api_base / api_key 解析与 `call_model` 同源（env 优先 → config → 内置默认）；
+    /// 只读远端、不写本地——保留谁由前端在草稿上按合并策略决定。
+    pub async fn fetch_remote_models(&self, provider_id: &str) -> AppResult<Vec<RemoteModelInfo>> {
+        let provider = self.require_provider(provider_id)?;
+        let config = self.resolve_provider_config(&provider)?;
+        let base = config
+            .api_base
+            .as_deref()
+            .unwrap_or("https://api.openai.com/v1");
+        let client = openai_compat::Client::new(base, config.api_key);
+        client.list_models().await
     }
 
     pub fn default_model_selection(&self) -> AppResult<Option<ChatModelSelection>> {
@@ -1398,6 +1414,18 @@ mod tests {
         let error = registry
             .list_models(Some("missing"))
             .expect_err("provider should be rejected");
+
+        assert_eq!(error.code(), "provider_not_found");
+    }
+
+    #[tokio::test]
+    async fn fetch_remote_models_rejects_unknown_provider_before_network() {
+        let registry = ProviderRegistry::new(std::env::temp_dir());
+
+        let error = registry
+            .fetch_remote_models("missing")
+            .await
+            .expect_err("unknown provider should be rejected");
 
         assert_eq!(error.code(), "provider_not_found");
     }

@@ -15,6 +15,7 @@ export type Translations = {
     newPane: string;
     confirm: string;
     cancel: string;
+    close: string;
   };
   editorTabs: {
     close: string;
@@ -660,6 +661,18 @@ export type Translations = {
     models: string;
     addModel: string;
     noModels: string;
+    refreshModels: string;
+    refreshingModels: string;
+    remoteModelsTitle: string;
+    remoteModelsCount: string;
+    remoteModelsEmpty: string;
+    remoteModelsHint: string;
+    mergeCloudOverwrite: string;
+    mergeCloudOverwriteHint: string;
+    mergeLocalFirst: string;
+    mergeLocalFirstHint: string;
+    mergeResetCloud: string;
+    mergeResetCloudHint: string;
     contextWindow: string;
     maxOutput: string;
     priceIn: string;
@@ -697,6 +710,7 @@ export const en: Translations = {
     newPane: "New Pane",
     confirm: "Confirm",
     cancel: "Cancel",
+    close: "Close",
   },
   editorTabs: {
     close: "Close",
@@ -1381,6 +1395,18 @@ export const en: Translations = {
     models: "Models",
     addModel: "Add model",
     noModels: "No models configured",
+    refreshModels: "Refresh models",
+    refreshingModels: "Fetching…",
+    remoteModelsTitle: "Available models from provider",
+    remoteModelsCount: "{n} models",
+    remoteModelsEmpty: "The provider returned no models.",
+    remoteModelsHint: "Pulled via GET /models. A strategy only rewrites the draft — click Save to persist.",
+    mergeCloudOverwrite: "Cloud overrides local",
+    mergeCloudOverwriteHint: "Append cloud models; same-id entries follow the cloud value (local metadata reset).",
+    mergeLocalFirst: "Local first",
+    mergeLocalFirstHint: "Merge cloud models; same-id entries keep their local config.",
+    mergeResetCloud: "Reset to cloud",
+    mergeResetCloudHint: "Drop local models and rebuild the list entirely from the cloud result.",
     contextWindow: "Context (tokens)",
     maxOutput: "Max output",
     priceIn: "Price in ($/M)",
@@ -1418,6 +1444,7 @@ export const zh: Translations = {
     newPane: "新建分栏",
     confirm: "确认",
     cancel: "取消",
+    close: "关闭",
   },
   editorTabs: {
     close: "关闭",
@@ -2101,6 +2128,18 @@ export const zh: Translations = {
     models: "模型",
     addModel: "添加模型",
     noModels: "未配置模型",
+    refreshModels: "刷新模型列表",
+    refreshingModels: "获取中…",
+    remoteModelsTitle: "服务商可用模型",
+    remoteModelsCount: "{n} 个模型",
+    remoteModelsEmpty: "服务商未返回任何模型。",
+    remoteModelsHint: "经 GET /models 拉取。选择策略只改写当前草稿，需点击「保存」才会写盘。",
+    mergeCloudOverwrite: "云端覆盖本地",
+    mergeCloudOverwriteHint: "追加云端模型；同名条目以云端为准（本地元数据重置）。",
+    mergeLocalFirst: "本地优先",
+    mergeLocalFirstHint: "合并云端模型；同名条目保留本地配置。",
+    mergeResetCloud: "重置为云端",
+    mergeResetCloudHint: "丢弃本地模型，完全按云端列表重建。",
     contextWindow: "上下文（tokens）",
     maxOutput: "最大输出",
     priceIn: "输入价格（$/M）",

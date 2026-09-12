@@ -30,8 +30,9 @@ use crate::core::{
     ConversationSummaryPage, Message, MessagePage, ModelRequest,
     ModelResponse, ModelInfo, Neuron,
     NeuronCreate, NeuronKindFilter, NeuronPage, NeuronSubgraph, NeuronUpdate, PollerStatus,
-    ProviderInfo, RuntimeStatus, SamplingParams, SessionBehavior, SessionSeed, SkillInfo, StateChange,
-    StateEmitter, ThinkingConfig, ToolInfo, Topic, TopicStatus, TopicUpdate, STATE_CHANGED_EVENT,
+    ProviderInfo, RemoteModelInfo, RuntimeStatus, SamplingParams, SessionBehavior, SessionSeed,
+    SkillInfo, StateChange, StateEmitter, ThinkingConfig, ToolInfo, Topic, TopicStatus, TopicUpdate,
+    STATE_CHANGED_EVENT,
 };
 use crate::policies::neuron::manager::NeuronManager;
 use crate::stores::{conversation_store::JsonConversationStore, storage, topic_store::TopicStore};
@@ -283,6 +284,20 @@ async fn call_model(
     providers
         .inner()
         .call_model(request)
+        .await
+        .map_err(|error| error.payload())
+}
+
+/// 拉取服务商远端可用模型（OpenAI `GET /models` 契约，只读）。
+/// 供编辑器「刷新模型列表」使用；结果不落盘，合并策略由前端在草稿上决定。
+#[tauri::command]
+async fn list_remote_models(
+    providers: State<'_, ProviderRegistry>,
+    provider_id: String,
+) -> TauriResult<Vec<RemoteModelInfo>> {
+    providers
+        .inner()
+        .fetch_remote_models(&provider_id)
         .await
         .map_err(|error| error.payload())
 }
@@ -1914,6 +1929,7 @@ pub fn run() {
             reassemble_tools,
             list_providers,
             list_models,
+            list_remote_models,
             call_model,
             get_provider_config,
             save_provider_config,
