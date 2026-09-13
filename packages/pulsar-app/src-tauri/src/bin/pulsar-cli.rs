@@ -24,7 +24,9 @@ async fn run() -> AppResult<()> {
     };
     args.remove(0);
 
-    let storage_root = storage::default_root().unwrap_or_else(|_| ".".into());
+    let storage_root = storage::StorageBase::Cwd
+        .resolve()
+        .unwrap_or_else(|_| ".".into());
     if let Err(error) = app_log::init(&storage_root, None, true) {
         eprintln!("warning: failed to init logging: {error}");
     }

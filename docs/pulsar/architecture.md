@@ -289,7 +289,8 @@ git 只读 6 个（status / diff / log / branch / blame / stash_list）。
   poller{status} / sessions / neurons / providers / tools / workspaces / git / git_confirm），
   避免事件爆炸。
 - **启动装配**（`run()`）：
-  1. 解析 storage_root；挂 opener / dialog 插件；
+  1. 按目录契约解析 storage_root（`StorageBase::for_gui`：开发态=项目目录，发布态=app data 目录）；
+     挂 opener / dialog 插件；
   2. 初始化日志（LogEntry 经桌面事件回传）、panic hook 落盘；
   3. 建窗前清理 WebKit 缓存目录；
   4. 解析 config `server` 节 + env 覆盖 → 远程模式配置；
@@ -371,7 +372,8 @@ src/
 
 ## 存储布局
 
-数据根目录 `storage::resolve` → `.pulsar/`（旧 `.agent-app` 首次启动自动整体迁移）。
+数据根目录由 `storage::StorageBase` 按入口解析（基座：GUI 开发态=项目目录 / GUI 发布态=系统 app data 目录 /
+CLI·TUI·headless server=当前工作目录）→ `.pulsar/`（旧 `.agent-app` 首次启动自动整体迁移）。
 
 ```text
 .pulsar/

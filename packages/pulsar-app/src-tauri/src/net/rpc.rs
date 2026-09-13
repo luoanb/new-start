@@ -9,7 +9,6 @@
 use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::PathBuf;
 
 use crate::application::{
     hook::hook_defs_meta,
@@ -396,10 +395,8 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
         "debug_storage_path" => Ok(Value::String(format!(
             "cwd={:?} storage={:?}",
             std::env::current_dir(),
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap()
-                .join(crate::stores::storage::STORAGE_DIR_NAME)
+            // 读运行期会话存储根（数据目录选择的唯一事实源），与桌面 IPC 同源。
+            state.gateway.conversation_store().root()
         ))),
 
         // ── Chat ──

@@ -27,8 +27,9 @@ pub struct JsonConversationStore {
 }
 
 impl JsonConversationStore {
+    /// 默认数据根：当前工作目录下的 `.pulsar`（CLI / TUI 入口；GUI 显式传入 storage_root）。
     pub fn default() -> AppResult<Self> {
-        let root = storage::default_root()?;
+        let root = storage::StorageBase::Cwd.resolve()?;
         Self::new(root)
     }
 

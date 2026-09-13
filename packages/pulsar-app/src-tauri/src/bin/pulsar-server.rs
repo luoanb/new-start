@@ -58,7 +58,9 @@ async fn main() {
         }
     }
 
-    let storage_root = storage::default_root().unwrap_or_else(|_| PathBuf::from("."));
+    let storage_root = storage::StorageBase::Cwd
+        .resolve()
+        .unwrap_or_else(|_| PathBuf::from("."));
     if let Err(error) = app_log::init(&storage_root, None, true) {
         eprintln!("warning: failed to init logging: {error}");
     }

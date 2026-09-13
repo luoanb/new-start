@@ -4,7 +4,9 @@ use pulsar_app_lib::sinks::app_log;
 
 #[tokio::main]
 async fn main() {
-    let storage_root = storage::default_root().unwrap_or_else(|_| ".".into());
+    let storage_root = storage::StorageBase::Cwd
+        .resolve()
+        .unwrap_or_else(|_| ".".into());
     // File-only logging: avoid corrupting the TUI with stderr fmt after terminal init.
     if let Err(error) = app_log::init(&storage_root, None, false) {
         eprintln!("warning: failed to init logging: {error}");

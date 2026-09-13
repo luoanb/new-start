@@ -2,13 +2,26 @@
 
 ## Storage Root
 
-The default storage root is:
+The storage root holds all Pulsar data. Every entry point resolves it through the same policy
+(`stores::storage::StorageBase`), so the location depends only on how the process was started:
 
-```text
-./.pulsar
-```
+| Entry point | Base directory | Storage root |
+|---|---|---|
+| GUI, development build (`debug_assertions`) | project directory | `<repo>/packages/pulsar-app/.pulsar` |
+| GUI, released build | OS app data directory | `<app_data_dir>/.pulsar` |
+| CLI / TUI / headless server | current working directory | `./.pulsar` |
 
-The path is relative to the current working directory so development runs remain inspectable. A later release may move the default to an OS-specific app data directory, but that must be specified before changing behavior.
+- Development runs keep data inside the project, so the data remains inspectable.
+- Released builds must not reuse the project directory: the install location is not writable, and
+  `CARGO_MANIFEST_DIR` is a compile-time constant that only records the build machine path (on CI
+  it is `/home/runner/work/...`), so writing there fails with a permission error.
+- CLI / TUI / headless server stay relative to the current working directory: choosing a working
+  directory chooses the data directory, which keeps deployments self-contained.
+- `app_data_dir` examples: `~/.local/share/com.pulsar.app` (Linux),
+  `~/Library/Application Support/com.pulsar.app` (macOS), `%APPDATA%\com.pulsar.app` (Windows).
+- A legacy `.agent-app` directory is renamed to `.pulsar` on first start. Migration is per base
+  directory: no data moves across base directories, so switching entry points (or dev ↔ released
+  GUI) starts from a fresh data directory.
 
 ## Layout
 

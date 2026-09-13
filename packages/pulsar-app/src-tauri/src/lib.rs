@@ -68,14 +68,12 @@ type TauriResult<T> = Result<T, AppErrorPayload>;
 // ── Debug ──
 
 #[tauri::command]
-fn debug_storage_path() -> String {
+fn debug_storage_path(gateway: State<'_, Gateway>) -> String {
+    // 直接读运行期会话存储的根目录（数据目录选择的唯一事实源），不重复推导路径。
     format!(
         "cwd={:?} storage={:?}",
         std::env::current_dir(),
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join(storage::STORAGE_DIR_NAME)
+        gateway.inner().conversation_store().root()
     )
 }
 
@@ -1800,16 +1798,20 @@ fn with_poller<T>(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let storage_root = storage::resolve(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("src-tauri has a parent"),
-    );
-
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
+            // 数据目录契约（见 docs/pulsar/storage.md）：开发态用项目目录（数据可检查），
+            // 发布态用系统应用数据目录——发布包写项目目录会落到构建机路径而失败。
+            let app_data_dir = app
+                .path()
+                .app_data_dir()
+                .map_err(|error| error.to_string())?;
+            let storage_root = storage::StorageBase::for_gui(app_data_dir)
+                .resolve()
+                .map_err(|error| error.to_string())?;
+
             let handle = app.handle().clone();
             let emit_handle = handle.clone();
             let emit = Arc::new(move |entry: LogEntry| {
