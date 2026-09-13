@@ -246,7 +246,7 @@ export const c = {
   gitSetDangerousWrites: def<{ enabled: boolean }, void>("git_set_dangerous_writes"),
 
   // ── 文件系统 ──
-  fsList: def<{ path?: string }, FsEntry[]>("fs_list"),
+  fsList: def<{ path?: string; ignore?: string[] }, FsEntry[]>("fs_list"),
   fsSuggestAbs: def<{ path: string }, FsEntry[]>("fs_suggest_abs"),
   fsRead: def<{ path: string; offset?: number; limit?: number }, FsReadResult>("fs_read"),
   fsWrite: def<

@@ -788,6 +788,25 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
+    /// 「仅用户视图过滤」开关**关闭**时的契约：前端显式传**空规则集** ⇒ 不过滤。
+    /// 前端 `listArgs()` 依赖本语义（关闭 → `ignore: []`），故钉成回归测试。
+    /// 约定见 `docs/micro_specs/2026-09-13_22-05_file-explorer-ignore-toggle-ui-only.md`。
+    #[test]
+    fn list_with_empty_ignore_shows_ignored_entries() {
+        let (root, ws) = setup("list_empty_ignore");
+        let fs = FileSystem::new();
+        let empty: Vec<String> = Vec::new();
+        let entries = fs.list(&ws, None, Some(&empty)).unwrap();
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"src"));
+        assert!(names.contains(&"a.txt"));
+        assert!(
+            names.contains(&"node_modules"),
+            "empty rule set must not filter anything, got: {names:?}"
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
     #[test]
     fn read_and_write_roundtrip_with_read_guard() {
         let (root, ws) = setup("read_write");

@@ -113,6 +113,22 @@
   let dirs = $state<Record<string, DirState>>({});
   let expanded = $state<Record<string, boolean>>({});
 
+  // ── 忽略过滤开关（仅影响本页展示；默认关闭 = 不过滤）──
+  // 边界见 docs/micro_specs/2026-09-13_22-05_file-explorer-ignore-toggle-ui-only.md：
+  // 只作用于用户侧文件树；AI 工具 / 搜索索引 / git 仓库发现的过滤行为不变。
+  const APPLY_IGNORE_KEY = "pulsar.fileExplorer.applyIgnore";
+
+  function readApplyIgnore(): boolean {
+    if (typeof localStorage === "undefined") return false;
+    try {
+      return localStorage.getItem(APPLY_IGNORE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  let applyIgnore = $state(readApplyIgnore());
+
   // ── 选中 / 编辑 ──
   let selectedPath = $state<string | null>(null);
   let selectedKind = $state<"file" | "dir" | null>(null);
@@ -145,12 +161,29 @@
     );
   }
 
+  /** `fs_list` 参数：关闭（默认）→ 传空规则集 = 后端不过滤；开启 → 省略 `ignore`，由后端套用工作区规则。 */
+  function listArgs(path: string): { path?: string; ignore?: string[] } {
+    const base: { path?: string; ignore?: string[] } = { path: path || undefined };
+    return applyIgnore ? base : { ...base, ignore: [] };
+  }
+
+  /** 切换开关：持久化偏好 + 重载已加载目录（保留展开态）。 */
+  function setApplyIgnore(next: boolean) {
+    applyIgnore = next;
+    try {
+      localStorage.setItem(APPLY_IGNORE_KEY, next ? "1" : "0");
+    } catch {
+      /* 持久化失败（隐私模式等）不影响本次切换生效 */
+    }
+    for (const key of Object.keys(dirs)) void loadDir(key, true);
+  }
+
   async function loadDir(path: string, force = false): Promise<void> {
     const cur = dirs[path];
     if (!force && cur?.status === "loaded") return;
     dirs[path] = { status: "loading", entries: [] };
     try {
-      const list = await api.call(c.fsList, { path: path || undefined });
+      const list = await api.call(c.fsList, listArgs(path));
       console.log("[FileExplorer] fs_list ok", { path, count: list.length });
       dirs[path] = { status: "loaded", entries: sortEntries(list) };
     } catch (e) {
@@ -654,7 +687,7 @@
     moveError = "";
     movePath = dirPath;
     try {
-      const list = await api.call(c.fsList, { path: dirPath || undefined });
+      const list = await api.call(c.fsList, listArgs(dirPath));
       moveDirs = sortEntries(list).filter((e) => e.is_dir);
     } catch (e) {
       moveError = formatInvokeError(e);
@@ -851,6 +884,15 @@
         <div class="modal-body">
           <p class="modal-hint">{t("fileExplorer.ignoreHint")}</p>
           <textarea class="ignore-text" rows="8" bind:value={ignoreEdit.text}></textarea>
+          <label class="ignore-scope">
+            <input
+              type="checkbox"
+              checked={applyIgnore}
+              onchange={(e) => setApplyIgnore(e.currentTarget.checked)}
+            />
+            <span>{t("fileExplorer.applyFilterInTree")}</span>
+          </label>
+          <p class="modal-hint">{t("fileExplorer.applyFilterInTreeHint")}</p>
         </div>
         <div class="modal-footer">
           <button class="btn" onclick={() => (ignoreEdit = null)}>{t("fileExplorer.ignoreCancel")}</button>
@@ -999,6 +1041,20 @@
     padding: 2px var(--space-2);
     border-bottom: var(--border-width) solid var(--color-border);
     flex-shrink: 0;
+  }
+  .ignore-scope {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: var(--space-3);
+    font-size: var(--fs-sm);
+    color: var(--color-text);
+    cursor: pointer;
+    user-select: none;
+  }
+  .ignore-scope input {
+    margin: 0;
+    cursor: pointer;
   }
   .tool-btn {
     display: inline-flex;

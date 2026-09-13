@@ -580,6 +580,8 @@ export type Translations = {
     ignoreHint: string;
     ignoreSave: string;
     ignoreCancel: string;
+    applyFilterInTree: string;
+    applyFilterInTreeHint: string;
     refresh: string;
     newFile: string;
     newFolder: string;
@@ -1363,6 +1365,9 @@ export const en: Translations = {
     ignoreHint: "One per line (glob or name, e.g. node_modules, *.log). Defaults hide .git / node_modules / target / dist / .pulsar",
     ignoreSave: "Save",
     ignoreCancel: "Cancel",
+    applyFilterInTree: "Apply filtering in the file tree",
+    applyFilterInTreeHint:
+      "When on, the file tree hides the entries matched by the rules above; when off, it shows everything (default off). This toggle affects the UI only: the files the AI sees, the search index and repo discovery always follow these rules. The setting is saved and applies immediately.",
     refresh: "Refresh",
     newFile: "New file",
     newFolder: "New folder",
@@ -2163,6 +2168,9 @@ export const zh: Translations = {
     ignoreHint: "每行一条（glob 或名称，如 node_modules、*.log）；默认过滤 .git / node_modules / target / dist / .pulsar",
     ignoreSave: "保存",
     ignoreCancel: "取消",
+    applyFilterInTree: "在文件树中应用过滤",
+    applyFilterInTreeHint:
+      "开启后，文件树隐藏命中上面规则的目录和文件；关闭时显示全部（默认关闭）。此项只影响界面：AI 看到的文件、搜索索引与 git 仓库发现始终按这些规则处理。设置会保存，切换立即生效。",
     refresh: "刷新",
     newFile: "新建文件",
     newFolder: "新建文件夹",
