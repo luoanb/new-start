@@ -1,5 +1,6 @@
 <script lang="ts">
   import { t } from "$lib/i18n";
+  import { SESSION_MODES } from "$lib/sessionModes";
 
   let { open, onCreate, onClose }: {
     open: boolean;
@@ -7,12 +8,8 @@
     onClose: () => void;
   } = $props();
 
-  const modes = [
-    { id: "chat", label: () => t("createModal.chatLabel"), desc: () => t("createModal.chatDesc") },
-    { id: "assistant", label: () => t("createModal.assistantLabel"), desc: () => t("createModal.assistantDesc") },
-    // Agent 模式暂不提供新建入口（隐藏，后端与历史会话保留）。
-    { id: "system", label: () => t("createModal.systemLabel"), desc: () => t("createModal.systemDesc") },
-  ];
+  // 模式清单来自 $lib/sessionModes：与会话面板组合按钮/顶栏新建入口共用同一份定义。
+  const modes = SESSION_MODES;
 </script>
 
 {#if open}
@@ -27,10 +24,10 @@
       <div class="modal-body">
         <p class="hint">{t("createModal.hint")}</p>
         <div class="mode-options">
-          {#each modes as mode}
+          {#each modes as mode (mode.id)}
             <button class="mode-card" onclick={() => onCreate(mode.id)}>
-              <strong>{mode.label()}</strong>
-              <span class="mode-desc">{mode.desc()}</span>
+              <strong>{t(mode.labelKey)}</strong>
+              <span class="mode-desc">{t(mode.descKey)}</span>
             </button>
           {/each}
         </div>

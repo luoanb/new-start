@@ -17,8 +17,11 @@
 
       /* 最外层包裹层用 fixed + inset:0 绝对贴合窗口，不随内容撑高，
          彻底避免 WebKitGTK 下 100% / 100vh 换算缝隙导致的最外层滚动条。
-         注意：不能用 height:100vh（WebKitGTK 会把滚动条宽度计入视口）。 */
-      html > body > div {
+         注意：不能用 height:100vh（WebKitGTK 会把滚动条宽度计入视口）。
+         选择器刻意收窄到 #app-shell（而非 `html > body > div`）：后者会命中所有
+         portal 到 body 的浮层（Tooltip / Select / MultiSelect / 视图 tab 菜单等），
+         把它们也强行拉伸为满视口（bottom/right=0），是「忘了写 inset:auto 就静默出错」的陷阱。 */
+      #app-shell {
         position: fixed;
         inset: 0;
         overflow: hidden;
@@ -234,6 +237,6 @@
       it can break caret client rects, so IME candidate windows offset (~400px) or
       disappear near the bottom of the window. Block wrapper preserves layout via 100vh app shell.
     -->
-    <div>%sveltekit.body%</div>
+    <div id="app-shell">%sveltekit.body%</div>
   </body>
 </html>

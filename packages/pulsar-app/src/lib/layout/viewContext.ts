@@ -47,6 +47,9 @@ export type ViewUiState = {
   /** 会话级思考模式（可选）。 */
   activeThinking?: ThinkingConfig;
   sendingIds: Set<string>;
+  /** 当前选中的会话模式（新建会话类型）：会话面板下拉与顶栏新建入口共享同一份状态，
+   *  任一处改动另一处即时同步（取值来自 $lib/sessionModes 的 SESSION_MODES）。 */
+  sessionMode: string;
 };
 
 export type ViewContext = {

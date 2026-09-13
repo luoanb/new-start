@@ -117,9 +117,6 @@
   .tooltip-wrap { display: inline-flex; }
   .tooltip {
     position: fixed;
-    /* 覆盖 app.html 全局 `html > body > div { inset: 0 }`：tooltip portal 到 body 后是
-       body 直系 div，会被拉满视口。恢复 inset:auto 让宽高内容自适应 */
-    inset: auto;
     z-index: 902;
     max-width: min(480px, calc(100vw - 16px));
     padding: 4px 8px;

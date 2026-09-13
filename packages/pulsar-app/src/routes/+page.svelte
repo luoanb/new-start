@@ -20,6 +20,7 @@
   import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
   import GitConfirmHost from "$lib/components/GitConfirmHost.svelte";
   import { t } from "$lib/i18n";
+  import { DEFAULT_SESSION_MODE, SESSION_MODES, findSessionMode } from "$lib/sessionModes";
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
   import { hotkeyService } from "$lib/hotkey/hotkeyService";
   import { dataStore } from "$lib/stores/dataStore.svelte";
@@ -44,6 +45,15 @@
     return value ?? "";
   }
 
+  /** 会话模式（新建会话类型）的持久化键。 */
+  const SESSION_MODE_KEY = "pulsar:sessionMode";
+
+  /** 读取上次选择的会话模式；非法/缺失值回落缺省模式。 */
+  function persistedSessionMode(): string {
+    const saved = localStorage.getItem(SESSION_MODE_KEY);
+    return SESSION_MODES.some((mode) => mode.id === saved) ? (saved as string) : DEFAULT_SESSION_MODE;
+  }
+
   // ── ViewContext：视图共享的会话级 UI 状态（$state 保证响应式传播）──
   // 运行状态由 dataStore.runningSessions 权威驱动（后端多会话并行）；
   // sendingIds 仅做本会话发送请求的瞬时防连点，互不阻塞其他会话。
@@ -53,6 +63,13 @@
     activeParams: undefined as SamplingParams | undefined,
     activeThinking: undefined as ThinkingConfig | undefined,
     sendingIds: new Set<string>(),
+    // 当前选中的会话模式（新建会话类型）：会话面板下拉与顶栏新建入口共享，刷新后保持上次选择。
+    sessionMode: persistedSessionMode(),
+  });
+
+  // 记忆上次选择的会话模式（下拉/顶栏任一处改动都会写回 localStorage）。
+  $effect(() => {
+    localStorage.setItem(SESSION_MODE_KEY, ui.sessionMode);
   });
 
   // ── UI state ──
@@ -108,6 +125,12 @@
 
   // ── Derived ──
   let hasModel = $derived(!!ui.activeProviderId && !!ui.activeModelId);
+
+  // 顶栏「新建会话」按钮的 hover 浮层文案：动作 + 当前选中的会话模式
+  // （ui.sessionMode 与会话面板组合按钮同源，面板切换类型后此处即时同步）。
+  let newSessionHint = $derived(
+    `${t("sessionList.newButton")} · ${t(findSessionMode(ui.sessionMode)?.labelKey ?? ui.sessionMode)}`,
+  );
 
   // 非 Tauri 环境（纯远程访问）：一旦出现连接错误即自动弹出连接弹窗并锁定，
   // 直到用户在弹窗内成功保存并切换到可用连接（save 成功后触发 onClose 解锁）。
@@ -218,12 +241,19 @@
 
   async function handleCreateSession(mode: string) {
     showCreateModal = false;
+    // 记忆本次使用的模式（下拉/顶栏/弹窗三条入口统一），刷新后保持。
+    ui.sessionMode = mode;
     try {
       const id = await dataStore.createConversation(mode);
       echoSessionModel(id);
     } catch (e) {
       error = `Failed to create session: ${formatInvokeError(e)}`;
     }
+  }
+
+  /** 顶栏新建会话：按当前选中模式直建（与会话面板组合按钮「+」同一语义）。 */
+  function handleCreateCurrentMode() {
+    void handleCreateSession(ui.sessionMode);
   }
 
   async function handleCloseSession(sessionId: string) {
@@ -638,6 +668,8 @@
       drawerInfo={drawerInfo}
       drawerPanel={drawerPanel}
       activityOpen={activityOpen}
+      newSessionLabel={newSessionHint}
+      onCreateSession={handleCreateCurrentMode}
       onToggleActivity={() => (activityOpen = !activityOpen)}
       onToggleSidebar={() => {
         if (window.innerWidth <= 800) drawerSidebar = !drawerSidebar;

@@ -3,6 +3,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { t } from "$lib/i18n";
   import { isTauriEnv } from "$lib/api";
+  import Tooltip from "./Tooltip.svelte";
 
   let {
     appName,
@@ -15,6 +16,9 @@
     drawerPanel = false,
     // 小屏导航栏（ActivityBar）显隐态与切换回调：点击顶栏 logo 触发
     activityOpen = false,
+    // 新建会话入口：不显示模式下拉，hover 浮层展示当前选中模式；点击按当前模式新建。
+    newSessionLabel = "",
+    onCreateSession,
     onToggleActivity,
     onToggleSidebar,
     onToggleInfo,
@@ -28,6 +32,10 @@
     drawerInfo?: boolean;
     drawerPanel?: boolean;
     activityOpen?: boolean;
+    /** 新建会话按钮的 hover 浮层文案（含当前选中的会话模式）。 */
+    newSessionLabel?: string;
+    /** 新建会话回调（按当前选中模式创建）；未传则不渲染该按钮。 */
+    onCreateSession?: () => void;
     onToggleActivity?: () => void;
     onToggleSidebar?: () => void;
     onToggleInfo?: () => void;
@@ -139,6 +147,24 @@
         <line class="frame" x1="6" y1="2.5" x2="6" y2="13.5" />
       </svg>
     </button>
+
+    <!-- 新建会话（顶栏，无模式下拉）：点击按当前选中模式直建；
+         hover / 键盘聚焦时浮层展示当前模式（与会话面板选择同源，双向同步）。 -->
+    {#if onCreateSession}
+      <Tooltip label={newSessionLabel} position="bottom">
+        <button
+          class="layout-btn"
+          onclick={onCreateSession}
+          aria-label={newSessionLabel}
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            <path d="M12 7v6" />
+            <path d="M9 10h6" />
+          </svg>
+        </button>
+      </Tooltip>
+    {/if}
 
     <button
       class="layout-btn mobile-only"

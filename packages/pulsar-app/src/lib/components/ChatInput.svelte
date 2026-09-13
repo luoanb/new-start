@@ -13,6 +13,7 @@
     selectedModelId = "",
     params,
     thinking,
+    turnElapsed = null,
     onModelChange,
   }: {
     onSend: (text: string) => void;
@@ -26,6 +27,8 @@
     selectedModelId?: string;
     params?: SamplingParams;
     thinking?: ThinkingConfig;
+    /** 末尾轮耗时（已格式化，如 `1.2s`）：固定在发送按钮左侧展示；null = 无轮次 / 该轮进行中。 */
+    turnElapsed?: string | null;
     onModelChange?: (providerId: string, modelId: string, params?: SamplingParams, thinking?: ThinkingConfig) => void;
   } = $props();
 
@@ -106,6 +109,9 @@
         />
       </div>
       <div class="footer-actions">
+        {#if turnElapsed}
+          <span class="turn-elapsed">{t("chatMessage.turnElapsed", { duration: turnElapsed })}</span>
+        {/if}
         {#if running}
           {#if text.trim()}
             <button
@@ -176,6 +182,8 @@
   .input-footer { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-2); }
   .footer-left { display: flex; align-items: center; min-width: 0; }
   .footer-actions { display: flex; align-items: center; gap: var(--space-2); }
+  /* 末尾轮耗时：固定在发送按钮左侧（弱化展示、不参与交互） */
+  .turn-elapsed { font-size: var(--fs-xs); color: var(--color-text-muted); opacity: 0.75; white-space: nowrap; user-select: none; }
   .send-btn { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border: none; border-radius: var(--radius-full); background: var(--color-primary); color: var(--color-on-primary); cursor: pointer; transition: background var(--duration-fast) var(--ease-out), opacity var(--duration-fast) var(--ease-out); }
   .send-btn:not(:disabled):hover { background: var(--color-primary-dim); }
   .send-btn:disabled { background: var(--color-border); color: var(--color-text-muted); cursor: not-allowed; }
