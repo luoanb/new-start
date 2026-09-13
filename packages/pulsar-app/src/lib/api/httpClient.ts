@@ -10,7 +10,16 @@
  * 超时：fetch 无默认超时，本期失败即抛错，不做流式进度。
  */
 import type { Contract } from "./contracts";
-import { RpcError, STATE_CHANGED_EVENT, type ApiClient, type ConnConfig, type ServerInfo, type StateChangePayload } from "./types";
+import {
+  RpcError,
+  STATE_CHANGED_EVENT,
+  type ApiClient,
+  type ConnConfig,
+  type ServerAction,
+  type ServerConfigPatch,
+  type ServerInfo,
+  type StateChangePayload,
+} from "./types";
 
 interface RpcResponse {
   ok: boolean;
@@ -81,6 +90,15 @@ export function httpClient(baseUrl: string, token?: string): ApiClient {
       const res = await fetch(`${base}/api/config`);
       if (!res.ok) throw new RpcError("http_error", `GET /api/config 失败: HTTP ${res.status}`);
       return (await res.json()) as ServerInfo;
+    },
+
+    async serverConfig(_patch: ServerConfigPatch): Promise<ServerInfo> {
+      // 配置/控制的是「本机后端」的内嵌服务，远程模式没有可控的本机后端。
+      throw new RpcError("unsupported", "后端服务配置仅桌面端可用");
+    },
+
+    async serverControl(_action: ServerAction): Promise<ServerInfo> {
+      throw new RpcError("unsupported", "后端服务启停仅桌面端可用");
     },
   };
 }

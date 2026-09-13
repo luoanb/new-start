@@ -134,6 +134,22 @@ export type Translations = {
     cancel: string;
     switchFailed: string;
     lockedHint: string;
+    serverService: string;
+    serverServiceHint: string;
+    serverRunning: string;
+    serverStopped: string;
+    serverToggleError: string;
+    lanAccess: string;
+    lanAccessHint: string;
+    autoStart: string;
+    serverStart: string;
+    serverStop: string;
+    serverRestart: string;
+    serverBusy: string;
+    restartHint: string;
+    addrLocal: string;
+    addrNetwork: string;
+    addrToken: string;
   };
   neuronListPanel: {
     title: string;
@@ -889,6 +905,22 @@ export const en: Translations = {
     cancel: "Cancel",
     switchFailed: "Switch failed: {error}",
     lockedHint: "Connection failed. Enter a valid server address to continue.",
+    serverService: "Backend server",
+    serverServiceHint: "When enabled, other devices or browsers can reach this backend over the network.",
+    serverRunning: "Running · {addr}",
+    serverStopped: "Stopped",
+    serverToggleError: "Switch failed: {error}",
+    lanAccess: "LAN access",
+    lanAccessHint: "When enabled, devices on the same LAN can reach this backend (an access token is required).",
+    autoStart: "Start with app",
+    serverStart: "Start",
+    serverStop: "Stop",
+    serverRestart: "Restart",
+    serverBusy: "Working...",
+    restartHint: "Config changed — restart the service to apply.",
+    addrLocal: "Local",
+    addrNetwork: "Network",
+    addrToken: "Token",
   },
   neuronListPanel: {
     title: "Neurons",
@@ -1674,6 +1706,22 @@ export const zh: Translations = {
     cancel: "取消",
     switchFailed: "切换失败：{error}",
     lockedHint: "连接失败，请填写正确的服务地址后保存以继续。",
+    serverService: "后端连接服务",
+    serverServiceHint: "开启后，其他设备或浏览器可通过网络接入本机后端。",
+    serverRunning: "运行中 · {addr}",
+    serverStopped: "已停止",
+    serverToggleError: "切换失败：{error}",
+    lanAccess: "局域网访问",
+    lanAccessHint: "开启后同一局域网的设备可访问本机后端（自动要求访问令牌）。",
+    autoStart: "随应用启动自动开启",
+    serverStart: "启动",
+    serverStop: "停止",
+    serverRestart: "重启",
+    serverBusy: "处理中…",
+    restartHint: "配置已修改，重启服务后生效。",
+    addrLocal: "本机",
+    addrNetwork: "局域网",
+    addrToken: "访问令牌",
   },
   neuronListPanel: {
     title: "神经元",

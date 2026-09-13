@@ -104,10 +104,13 @@ pub struct GitSection {
 /// 内嵌 HTTP server 配置（顶层 `server` 键）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ServerSection {
-    /// 是否启动内嵌 HTTP server；缺省 / false = 不启动。
+    /// 是否随应用启动自动开启（≈ systemd enable）；缺省 false。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
-    /// 监听地址；默认 127.0.0.1（仅本机）。跨机访问需显式改绑非 loopback。
+    /// 是否允许局域网访问：true 绑 `0.0.0.0`，false 绑 `127.0.0.1`。缺省 false。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lan: Option<bool>,
+    /// 监听地址（高级手动覆盖 / headless 使用）；桌面端由 `lan` 派生，通常不必填。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
     /// 监听端口；默认 9999。

@@ -22,7 +22,6 @@ use crate::application::{
     poller::Poller,
     session_tracker::{RunningSession, SessionTracker},
 };
-use crate::infra::config::{server_env_overrides, ConfigStore, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT};
 use crate::core::{
     error::AppErrorPayload,
     hook::{CycleValue, HookEntry},
@@ -49,7 +48,7 @@ use crate::fileops::gitops::{
 use crate::fileops::search::chunk::SemanticSearchResult;
 use crate::fileops::search::retriever::Retriever;
 use crate::fileops::workspace::{WorkspaceEntry, WorkspaceView};
-use crate::net::{NetState, ServerConfig, ServerInfo};
+use crate::net::{ServerAction, ServerConfigPatch, ServerController, ServerInfo};
 use crate::sinks::app_log::{self, LogEntry};
 use crate::terminal::commands::{
     terminal_kill, terminal_list, terminal_resize, terminal_spawn, terminal_write,
@@ -82,39 +81,30 @@ fn debug_storage_path() -> String {
 
 // ── Server ──
 
-/// 服务器运行信息（桌面 IPC 版 `GET /config`）：读 config.json `server` 节 + env 覆盖，
-/// 与远程 `/config` 端点同构，供前端统一展示 / 预判认证（GUI 无 CLI 层，优先级 env > config > 默认）。
+/// 服务器状态：运行态（`enabled` = 是否在跑）+ 配置（`auto_start`/`lan`）+ 网卡地址 + 令牌。
+/// 令牌仅经桌面 IPC 下发，公开端点 `GET /api/config` 恒为 `None`。
 #[tauri::command]
-fn server_info() -> ServerInfo {
-    let (env_host, env_port, env_token) = server_env_overrides();
-    let section = ConfigStore::new(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join(storage::STORAGE_DIR_NAME),
-    )
-    .read()
-    .ok()
-    .and_then(|config| config.server);
-    let enabled = section.as_ref().and_then(|s| s.enabled).unwrap_or(false);
-    let host = env_host
-        .or_else(|| section.as_ref().and_then(|s| s.host.clone()))
-        .unwrap_or_else(|| DEFAULT_SERVER_HOST.into());
-    let port = env_port
-        .or_else(|| section.as_ref().and_then(|s| s.port))
-        .unwrap_or(DEFAULT_SERVER_PORT);
-    let tokens = env_token
-        .map(|t| vec![t])
-        .or_else(|| section.as_ref().and_then(|s| s.tokens.clone()))
-        .unwrap_or_default();
-    ServerInfo {
-        version: env!("CARGO_PKG_VERSION"),
-        enabled,
-        host,
-        port,
-        static_enabled: cfg!(feature = "embed-static"),
-        auth_required: !tokens.is_empty(),
-    }
+fn server_info(controller: State<'_, Arc<ServerController>>) -> ServerInfo {
+    controller.info()
+}
+
+/// 配置调整（≈ systemd enable/disable）：只写 `config.json` 的 `server` 节，不影响运行态；
+/// 新配置在下次 `server_control(start)` 生效。
+#[tauri::command]
+fn server_config(
+    controller: State<'_, Arc<ServerController>>,
+    patch: ServerConfigPatch,
+) -> Result<ServerInfo, String> {
+    controller.set_config(patch)
+}
+
+/// 服务启停（≈ systemctl start/stop）：只改运行态，不改配置。
+#[tauri::command]
+async fn server_control(
+    controller: State<'_, Arc<ServerController>>,
+    action: ServerAction,
+) -> Result<ServerInfo, String> {
+    controller.inner().clone().control(action).await
 }
 
 // ── Chat ──
@@ -1857,41 +1847,15 @@ pub fn run() {
                 }
             }
 
-            // 远程模式：内嵌 server 配置（config.json `server` 节）。缺省 / enabled=false 不启动，
-            // 等价现状（本机 Tauri IPC 路径零改动）。
-            // 覆盖链：env(PULSAR_HOST/PORT/TOKEN) > config.json `server` 节 > 内置默认（GUI 无 CLI 层）。
-            let (env_host, env_port, env_token) = server_env_overrides();
-            let server_cfg = ConfigStore::new(storage_root.clone())
-                .read()
-                .ok()
-                .and_then(|config| config.server)
-                .filter(|section| section.enabled.unwrap_or(false))
-                .map(|section| ServerConfig {
-                    host: env_host
-                        .clone()
-                        .or_else(|| section.host.clone())
-                        .unwrap_or_else(|| DEFAULT_SERVER_HOST.into()),
-                    port: env_port
-                        .or_else(|| section.port)
-                        .unwrap_or(DEFAULT_SERVER_PORT),
-                    tokens: env_token
-                        .clone()
-                        .map(|t| vec![t])
-                        .or(section.tokens)
-                        .unwrap_or_default(),
-                });
-            let server_enabled = server_cfg.is_some();
-
             // 统一状态事件发射器：command 层写操作与后台推进完成后广播，
             // 前端 dataStore 监听 STATE_CHANGED_EVENT 并按 kind 重新拉取。
-            // 远程模式启用时同时注入 broadcast 通道，供 SSE 转发。
+            // 同时注入 broadcast 通道供 SSE 转发（内嵌 server 未启用时无订阅者，
+            // send 静默失败，成本可忽略；启用开关后新订阅者即可收到后续事件）。
             let state_emit_handle = handle.clone();
             let (events_tx, _events_rx) = broadcast::channel::<StateChange>(256);
             let events_tx_for_emit = events_tx.clone();
             let state_emit: StateEmitter = Arc::new(move |change: StateChange| {
-                if server_enabled {
-                    let _ = events_tx_for_emit.send(change.clone());
-                }
+                let _ = events_tx_for_emit.send(change.clone());
                 let _ = state_emit_handle.emit(STATE_CHANGED_EVENT, change);
             });
 
@@ -1922,24 +1886,25 @@ pub fn run() {
             let state_emit_for_server = state_emit.clone();
             app.manage(state_emit);
 
-            // 远程模式：条件启动内嵌 server（持有 Gateway / StateEmitter 克隆、SSE 广播
-            // 通道与终端会话；`/ws` 终端业务随 server 一并启用）。
-            if let Some(cfg) = server_cfg {
-                let net_state = NetState {
-                    gateway: gateway_for_server,
-                    state_emit: state_emit_for_server,
-                    events_tx: events_tx.clone(),
-                    tokens: cfg.tokens.clone(),
-                    terminal: ws_manager,
-                    terminal_hub: runtime.terminal_hub.clone(),
-                    host: cfg.host.clone(),
-                    port: cfg.port,
-                };
+            // 远程模式：构造内嵌 server 运行时控制器（持有 Gateway / StateEmitter 克隆、
+            // SSE 广播通道与终端会话），支持启动期按配置自启与运行期 `server_control` 启停。
+            let server_controller = Arc::new(ServerController::new(
+                storage_root.clone(),
+                gateway_for_server,
+                state_emit_for_server,
+                events_tx.clone(),
+                ws_manager,
+                runtime.terminal_hub.clone(),
+            ));
+            let boot_auto_start = server_controller.auto_start();
+            app.manage(Arc::clone(&server_controller));
+            if boot_auto_start {
+                let controller = Arc::clone(&server_controller);
                 tauri::async_runtime::spawn(async move {
-                    if let Err(error) = net::run_server(cfg, net_state).await {
+                    if let Err(error) = controller.control(ServerAction::Start).await {
                         tracing::error!(
                             error = %error,
-                            "network server exited; remote mode unavailable"
+                            "failed to start embedded server at boot; remote mode unavailable"
                         );
                     }
                 });
@@ -1989,6 +1954,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             debug_storage_path,
             server_info,
+            server_config,
+            server_control,
             send_chat_message,
             set_session_model,
             create_conversation,

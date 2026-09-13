@@ -8,7 +8,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 import type { Contract } from "./contracts";
-import { STATE_CHANGED_EVENT, type ApiClient, type ServerInfo, type StateChangePayload } from "./types";
+import {
+  STATE_CHANGED_EVENT,
+  type ApiClient,
+  type ServerAction,
+  type ServerConfigPatch,
+  type ServerInfo,
+  type StateChangePayload,
+} from "./types";
 
 export const tauriClient: ApiClient = {
   async invoke<T>(cmd: string, params?: Record<string, unknown>): Promise<T> {
@@ -35,5 +42,13 @@ export const tauriClient: ApiClient = {
 
   async serverInfo(): Promise<ServerInfo> {
     return invoke<ServerInfo>("server_info");
+  },
+
+  async serverConfig(patch: ServerConfigPatch): Promise<ServerInfo> {
+    return invoke<ServerInfo>("server_config", { patch });
+  },
+
+  async serverControl(action: ServerAction): Promise<ServerInfo> {
+    return invoke<ServerInfo>("server_control", { action });
   },
 };

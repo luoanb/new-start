@@ -75,16 +75,26 @@ async fn main() {
         .read()
         .ok()
         .and_then(|config| config.server)
-        .map(|section| ServerConfig {
-            host: host
-                .clone()
-                .unwrap_or_else(|| section.host.unwrap_or_else(|| DEFAULT_SERVER_HOST.into())),
-            port: port.unwrap_or_else(|| section.port.unwrap_or(DEFAULT_SERVER_PORT)),
-            tokens: token
-                .clone()
-                .map(|t| vec![t])
-                .or(section.tokens)
-                .unwrap_or_default(),
+        .map(|section| {
+            // 绑定地址：CLI/env > config `server.host` > config `server.lan` 派生 > 默认。
+            let lan = section.lan.unwrap_or(false);
+            ServerConfig {
+                host: host.clone().unwrap_or_else(|| {
+                    section.host.unwrap_or_else(|| {
+                        if lan {
+                            "0.0.0.0".to_string()
+                        } else {
+                            DEFAULT_SERVER_HOST.into()
+                        }
+                    })
+                }),
+                port: port.unwrap_or_else(|| section.port.unwrap_or(DEFAULT_SERVER_PORT)),
+                tokens: token
+                    .clone()
+                    .map(|t| vec![t])
+                    .or(section.tokens)
+                    .unwrap_or_default(),
+            }
         })
         .unwrap_or_else(|| ServerConfig {
             host: host.unwrap_or_else(|| DEFAULT_SERVER_HOST.into()),

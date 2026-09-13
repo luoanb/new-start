@@ -67,10 +67,12 @@ export type StateChangePayload =
       status: string;
     };
 
-/** 服务器运行信息：桌面 IPC `server_info` 与远程 `GET /config` 共用（后端 net::ServerInfo 同构）。 */
+/** 服务器状态：桌面 IPC `server_info` 与远程 `GET /config` 共用（后端 net::ServerInfo 同构）。 */
 export interface ServerInfo {
   version: string;
-  /** server 是否启用（桌面场景反映 config.json server.enabled）。 */
+  /** 服务是否正在运行（≈ systemd is-active）。 */
+  running: boolean;
+  /** 配置项：是否随应用启动自动开启（≈ systemd is-enabled）。 */
   enabled: boolean;
   host: string;
   port: number;
@@ -78,7 +80,32 @@ export interface ServerInfo {
   static_enabled: boolean;
   /** 是否已配置 token（true 时远程访问需要认证）。 */
   auth_required: boolean;
+  /** 配置项：是否允许局域网访问。 */
+  lan: boolean;
+  /** 本机局域网网卡地址（名称 + IPv4），供展示 Network 访问地址。 */
+  lan_addresses: LanAddress[];
+  /** 当前访问令牌；仅桌面 IPC 下发，公开端点恒为 null。 */
+  token: string | null;
 }
+
+/** 本机局域网网卡地址。 */
+export interface LanAddress {
+  /** 网卡名称（如 eth0 / wlan0 / 以太网）。 */
+  name: string;
+  /** 该网卡上的 IPv4 地址。 */
+  ip: string;
+}
+
+/** `server` 节配置局部更新：仅提供的字段被写入。 */
+export interface ServerConfigPatch {
+  enabled?: boolean;
+  lan?: boolean;
+  port?: number;
+  tokens?: string[];
+}
+
+/** 服务控制动作（≈ systemctl start/stop/restart）。 */
+export type ServerAction = "start" | "stop" | "restart";
 
 export interface ApiClient {
   /** 调用后端命令：本机走 Tauri invoke，远程走 POST /api/rpc。 */
@@ -92,8 +119,18 @@ export interface ApiClient {
   subscribe(handler: (payload: StateChangePayload) => void): () => void;
   /** 后端可达性检查（本机恒 true）。 */
   health(): Promise<boolean>;
-  /** 服务器运行信息：本机走 IPC server_info，远程走 GET /config。 */
+  /** 服务器状态：本机走 IPC server_info，远程走 GET /config。 */
   serverInfo(): Promise<ServerInfo>;
+  /**
+   * 配置调整（≈ systemd enable/disable）：只写后端 config，不影响运行态。
+   * 仅桌面端（Tauri）可用，远程模式调用应抛出错误。
+   */
+  serverConfig(patch: ServerConfigPatch): Promise<ServerInfo>;
+  /**
+   * 服务启停（≈ systemctl start/stop）：只改运行态，不改配置。
+   * 仅桌面端（Tauri）可用，远程模式调用应抛出错误。
+   */
+  serverControl(action: ServerAction): Promise<ServerInfo>;
 }
 
 /** 连接配置（存 localStorage：pulsar:connMode / pulsar:remoteUrl / pulsar:remoteToken）。 */

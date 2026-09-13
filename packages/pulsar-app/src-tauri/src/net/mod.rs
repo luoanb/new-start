@@ -5,11 +5,14 @@
 //! 并把 `StateChange` 通过 SSE 推送给远程前端。本机 Tauri IPC 路径不受影响。
 
 pub mod auth;
+pub mod control;
 pub mod rpc;
 pub mod sse;
 #[cfg(feature = "embed-static")]
 pub mod static_assets;
 pub mod ws;
+
+pub use control::{ServerAction, ServerConfigPatch, ServerController};
 
 use std::sync::Arc;
 
@@ -36,12 +39,23 @@ pub struct ServerConfig {
     pub tokens: Vec<String>,
 }
 
+/// 本机局域网网卡地址（名称 + IPv4），供 UI 展示 Network 访问地址。
+#[derive(Debug, Clone, Serialize)]
+pub struct LanAddress {
+    /// 网卡名称（如 eth0 / wlan0 / 以太网）。
+    pub name: String,
+    /// 该网卡上的 IPv4 地址。
+    pub ip: String,
+}
+
 /// 服务器运行信息（`GET /api/config` 公开端点 + 桌面 IPC `server_info` 共用同一结构）。
-/// 只含非敏感运行信息，不含 token 本身。
+/// `token` 仅经桌面 IPC 下发（公开端点恒为 `None`），避免令牌外泄。
 #[derive(Debug, Clone, Serialize)]
 pub struct ServerInfo {
     pub version: &'static str,
-    /// server 是否启用（桌面场景反映 config.json `server.enabled`）。
+    /// 服务是否正在运行（≈ systemd is-active）。
+    pub running: bool,
+    /// 配置项：是否随应用启动自动开启（≈ systemd is-enabled）。
     pub enabled: bool,
     pub host: String,
     pub port: u16,
@@ -49,6 +63,40 @@ pub struct ServerInfo {
     pub static_enabled: bool,
     /// 是否已配置 token（true 时远程访问需要认证）。
     pub auth_required: bool,
+    /// 配置项：是否允许局域网访问。
+    pub lan: bool,
+    /// 本机可用于局域网访问的网卡地址（名称 + IPv4）；无则为空。
+    pub lan_addresses: Vec<LanAddress>,
+    /// 当前访问令牌（白名单首项）；公开端点恒为 `None`。
+    pub token: Option<String>,
+}
+
+/// 监听地址是否对外开放（非 loopback）：`0.0.0.0` / 具体非环回 IP / 非 localhost。
+pub fn is_lan_host(host: &str) -> bool {
+    match host.trim().parse::<std::net::IpAddr>() {
+        Ok(ip) => !ip.is_loopback(),
+        Err(_) => !host.trim().eq_ignore_ascii_case("localhost"),
+    }
+}
+
+/// 枚举本机可用于局域网访问的 IPv4（排除 loopback 与 link-local）。
+pub fn lan_addresses() -> Vec<LanAddress> {
+    let Ok(interfaces) = if_addrs::get_if_addrs() else {
+        return Vec::new();
+    };
+    interfaces
+        .into_iter()
+        .filter_map(|iface| match iface.addr {
+            if_addrs::IfAddr::V4(v4) => {
+                let ip = v4.ip;
+                (!ip.is_loopback() && !ip.is_link_local()).then(|| LanAddress {
+                    name: iface.name.clone(),
+                    ip: ip.to_string(),
+                })
+            }
+            if_addrs::IfAddr::V6(_) => None,
+        })
+        .collect()
 }
 
 /// axum managed state：可 Clone 的 `Gateway` + 状态发射器 + SSE 广播通道 + token 白名单 +
@@ -66,14 +114,19 @@ pub struct NetState {
 }
 
 /// `/api/config` 公开端点（免鉴权）：供远程前端同源自动发现与能力探测。
+/// 能访问到即说明服务在跑（`running: true`）；不含令牌（`token: None`）。
 async fn handle_config(State(state): State<NetState>) -> Json<ServerInfo> {
     Json(ServerInfo {
         version: env!("CARGO_PKG_VERSION"),
-        enabled: true, // 能访问到本端点即 server 在运行
+        running: true, // 能访问到本端点即 server 在运行
+        enabled: true,
+        lan: is_lan_host(&state.host),
+        lan_addresses: lan_addresses(),
         host: state.host.clone(),
         port: state.port,
         static_enabled: cfg!(feature = "embed-static"),
         auth_required: !state.tokens.is_empty(),
+        token: None, // 公开端点不下发令牌
     })
 }
 
@@ -135,21 +188,36 @@ pub fn router(state: NetState) -> Router {
     }
 }
 
+/// 绑定监听地址（供运行时启停控制器复用）。bind 失败直接返回错误，不启动服务。
+pub async fn bind_listener(host: &str, port: u16) -> Result<tokio::net::TcpListener, String> {
+    let addr = format!("{host}:{port}");
+    tokio::net::TcpListener::bind(&addr)
+        .await
+        .map_err(|e| format!("bind {addr} failed: {e}"))
+}
+
+/// 在已绑定监听器上运行 server；`shutdown` 完成即优雅退出（供运行时停用）。
+pub async fn serve_with_shutdown(
+    listener: tokio::net::TcpListener,
+    state: NetState,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<(), String> {
+    axum::serve(listener, router(state))
+        .with_graceful_shutdown(shutdown)
+        .await
+        .map_err(|e| format!("network server error: {e}"))
+}
+
 /// 绑定并启动内嵌 server（错误记录后由调用方决定是否回退）。
 pub async fn run_server(cfg: ServerConfig, state: NetState) -> Result<(), String> {
-    let addr = format!("{}:{}", cfg.host, cfg.port);
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .map_err(|e| format!("bind {addr} failed: {e}"))?;
+    let listener = bind_listener(&cfg.host, cfg.port).await?;
     tracing::info!(
-        addr = %addr,
+        addr = %format!("{}:{}", cfg.host, cfg.port),
         token_count = cfg.tokens.len(),
         event = STATE_CHANGED_EVENT,
         "network server listening (remote mode)"
     );
-    axum::serve(listener, router(state))
-        .await
-        .map_err(|e| format!("network server error: {e}"))
+    serve_with_shutdown(listener, state, std::future::pending::<()>()).await
 }
 
 #[cfg(test)]
@@ -214,6 +282,48 @@ mod tests {
         builder
             .body(Body::from(r#"{"cmd":"debug_storage_path"}"#))
             .expect("valid rpc request")
+    }
+
+    /// 前端静态资源托管（feature `embed-static`）：`/` 返回 index.html（SPA 首页）。
+    #[cfg(feature = "embed-static")]
+    #[tokio::test]
+    async fn spa_root_serves_index_html() {
+        let app = router(test_state(vec![]));
+        let res = request(
+            &app,
+            Request::builder()
+                .uri("/")
+                .body(Body::empty())
+                .expect("valid request"),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let content_type = res
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            content_type.starts_with("text/html"),
+            "expected text/html, got {content_type}"
+        );
+    }
+
+    /// `/api/*` 未命中不得回退 index.html（避免把 HTML 当 API 响应）。
+    #[cfg(feature = "embed-static")]
+    #[tokio::test]
+    async fn spa_fallback_does_not_hijack_api() {
+        let app = router(test_state(vec![]));
+        let res = request(
+            &app,
+            Request::builder()
+                .uri("/api/unknown")
+                .body(Body::empty())
+                .expect("valid request"),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

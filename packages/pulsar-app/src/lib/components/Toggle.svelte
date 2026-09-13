@@ -3,10 +3,12 @@
     checked = $bindable(),
     label = "",
     disabled = false,
+    onchange,
   }: {
     checked?: boolean;
     label?: string;
     disabled?: boolean;
+    onchange?: (checked: boolean) => void;
   } = $props();
 </script>
 
@@ -18,6 +20,7 @@
     aria-checked={checked}
     bind:checked
     {disabled}
+    onchange={(e) => onchange?.(e.currentTarget.checked)}
   />
   <span class="track" aria-hidden="true"><span class="thumb"></span></span>
   {#if label}<span class="label">{label}</span>{/if}

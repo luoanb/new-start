@@ -95,7 +95,7 @@ export async function discoverRemote(): Promise<string | null> {
     const res = await fetch(`${location.origin}/api/config`, { cache: "no-store" });
     if (!res.ok) return null;
     const info = (await res.json()) as ServerInfo;
-    return info.enabled ? location.origin : null;
+    return info.running ? location.origin : null;
   } catch {
     return null;
   }

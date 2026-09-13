@@ -64,9 +64,10 @@ const child = spawn("pnpm", args, {
     ...process.env,
     // 供 beforeDevCommand 内启动的 vite 读取，保证与 tauri 注入的端口一致
     DEV_FRONT_PORT: String(frontPort),
-    // 后端：Rust core::config 读 PULSAR_PORT；vite 代理默认也指向同一端口
+    // 后端：Rust core::config 读 PULSAR_PORT；vite 代理默认也指向同一端口。
+    // 注意：不要注入 PULSAR_HOST——env 优先级高于 config.json，注入会覆盖「局域网访问」
+    // 开关导致其失效；绑定地址交由 config `server.lan` 决定（缺省仍为 127.0.0.1）。
     PULSAR_PORT: String(backPort),
-    PULSAR_HOST: process.env.PULSAR_HOST || "127.0.0.1",
   },
 });
 child.on("error", (err) => {

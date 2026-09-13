@@ -7,7 +7,11 @@ edition = "2021"
 default-run = "pulsar-app"
 
 [features]
-# 内嵌 server 托管前端静态资源：rust-embed 编译期嵌入 build/（构建前需先 `pnpm build`）。
+# 内嵌 server 托管前端静态资源：rust-embed 编译期嵌入 build/。
+# 默认启用——桌面版的内嵌服务也要能托管前端（否则远程浏览器打开服务地址只会 404）。
+# 注意：rust-embed 在编译期要求 `../build/` 存在，因此首次 `tauri dev` / `cargo build` 前
+# 需先 `pnpm build`（`tauri build` 会由 beforeBuildCommand 自动完成）。
+default = ["embed-static"]
 embed-static = []
 
 # 服务器版（headless）固定启用静态托管：单端口全功能（RPC/SSE/WS + 前端页面）。
@@ -69,6 +73,10 @@ tree-sitter-python = "0.25.0"
 tree-sitter-java = "0.23.5"
 tree-sitter-c = "0.24.2"
 tree-sitter-cpp = "0.23.4"
+# 局域网监听：枚举本机网卡（名称 + IPv4），用于展示 Network 访问地址。
+if-addrs = "0.15"
+# 局域网访问令牌自动生成（随机字节 → hex）。
+getrandom = "0.3"
 
 [dev-dependencies]
 # 仅测试用：本地 mock MCP server（stdio 走 in-memory duplex；http 走 axum 暴露的 streamable-http server）。
