@@ -24,6 +24,11 @@ pub const TERMINAL_EXIT_EVENT: &str = "app://terminal-exit";
 pub const DEFAULT_COLS: u16 = 80;
 pub const DEFAULT_ROWS: u16 = 24;
 
+/// 终端能力兜底值：父进程未给出可用 `TERM` 时，写给子 PTY。
+///
+/// 前端为 xterm.js（支持 256 色），取 `xterm-256color` 与真实能力一致。
+const FALLBACK_TERM: &str = "xterm-256color";
+
 static SESSION_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// 会话元信息（`terminal_list` 返回）。
@@ -91,10 +96,14 @@ impl TerminalSession {
     fn spawn_impl(
         cwd: Option<String>,
         label: String,
-        builder: CommandBuilder,
+        mut builder: CommandBuilder,
         cols: Option<u16>,
         rows: Option<u16>,
     ) -> AppResult<(Arc<TerminalSession>, mpsc::Receiver<Vec<u8>>, mpsc::Receiver<i32>)> {
+        // 终端能力兜底：宿主（prod 启动器）没给可用 TERM 时补上，否则子进程里的
+        // 分页器会把 PTY 当成「非全功能终端」而报警告并停在 Press RETURN。
+        apply_term_default(&mut builder);
+
         let pty = native_pty_system();
         let pair = pty
             .openpty(PtySize {
@@ -237,6 +246,44 @@ impl TerminalSession {
     }
 }
 
+/// `TERM` 是否可用：缺失 / 空串 / `dumb` / `unknown` 均视为「非全功能终端」——
+/// 分页器（`less`）与 `git` 会因此报 `WARNING: terminal is not fully functional`
+/// 并停在 `Press RETURN to continue`。
+fn term_is_usable(term: Option<&str>) -> bool {
+    let Some(value) = term else {
+        return false;
+    };
+    let value = value.trim();
+    !value.is_empty() && !matches!(value.to_ascii_lowercase().as_str(), "dumb" | "unknown")
+}
+
+/// 纯决策：给定从父进程继承来的 `TERM`，返回需要写进子进程的兜底值。
+///
+/// `None` = 继承值可用，不覆盖（宿主意愿优先）。
+fn term_fallback(inherited: Option<&str>) -> Option<&'static str> {
+    if term_is_usable(inherited) {
+        None
+    } else {
+        Some(FALLBACK_TERM)
+    }
+}
+
+/// 给即将 spawn 的 PTY 子进程补 `TERM` 兜底。
+///
+/// 子 PTY 默认**全量继承**父进程环境（`portable-pty` 的 `CommandBuilder` 基线即
+/// `std::env::vars_os()`），而本仓不做任何 env 覆盖。于是 dev 态（Pulsar 由终端
+/// 启动，继承 `xterm-256color`）正常；prod 态（由 GUI 启动器 / 宿主启动，`TERM`
+/// 缺失或被设为 `dumb`）内置终端里跑 `git branch` 就会撞上分页器告警。
+///
+/// 此处只做「缺失即补」，不 `env_clear` / `env_remove`，也不注入 `GIT_PAGER` /
+/// `PAGER` 之类 git 语义变量（见 `docs/pulsar/fileops/index.md` §5：不发明 git 语义）。
+fn apply_term_default(builder: &mut CommandBuilder) {
+    let inherited = std::env::var("TERM").ok();
+    if let Some(term) = term_fallback(inherited.as_deref()) {
+        builder.env("TERM", term);
+    }
+}
+
 /// 默认 shell：Unix 优先 `$SHELL`（取不到退回 `sh`）；Windows `cmd.exe`。
 fn default_shell() -> String {
     #[cfg(windows)]
@@ -319,5 +366,61 @@ mod tests {
         // 写命令应成功（PTY 双向）；会话随后清理。
         session.write(b"echo ok\n").expect("write should succeed");
         let _ = session.kill();
+    }
+
+    #[test]
+    fn term_is_usable_rejects_incapable_values() {
+        assert!(!term_is_usable(None));
+        assert!(!term_is_usable(Some("")));
+        assert!(!term_is_usable(Some("   ")));
+        assert!(!term_is_usable(Some("dumb")));
+        assert!(!term_is_usable(Some("DUMB")));
+        assert!(!term_is_usable(Some("unknown")));
+        assert!(term_is_usable(Some("xterm-256color")));
+        assert!(term_is_usable(Some(" linux ")));
+    }
+
+    #[test]
+    fn term_fallback_only_fills_incapable_values() {
+        assert_eq!(term_fallback(None), Some(FALLBACK_TERM));
+        assert_eq!(term_fallback(Some("")), Some(FALLBACK_TERM));
+        assert_eq!(term_fallback(Some("dumb")), Some(FALLBACK_TERM));
+        // 宿主已给出可用值 ⇒ 不覆盖（`None`）。
+        assert_eq!(term_fallback(Some("xterm-256color")), None);
+        assert_eq!(term_fallback(Some("screen-256color")), None);
+    }
+
+    /// 端到端：父进程缺可用 `TERM` 时，子 PTY 内应看到兜底值。
+    ///
+    /// 父进程已有可用 `TERM`（如开发机交互终端）时跳过——那种情形的契约是
+    /// 「不覆盖」，由 `term_fallback` 单测覆盖。
+    #[tokio::test]
+    async fn spawn_command_applies_term_fallback_when_parent_lacks_term() {
+        if term_is_usable(std::env::var("TERM").ok().as_deref()) {
+            return;
+        }
+        let (_session, mut output_rx, mut exit_rx) = TerminalSession::spawn_command(
+            None,
+            "echo TERM=$TERM".to_string(),
+            None,
+            None,
+        )
+        .unwrap();
+        let mut all = Vec::new();
+        while let Ok(Some(chunk)) =
+            tokio::time::timeout(Duration::from_secs(5), output_rx.recv()).await
+        {
+            all.extend_from_slice(&chunk);
+        }
+        let text = String::from_utf8_lossy(&all);
+        assert!(
+            text.contains(&format!("TERM={FALLBACK_TERM}")),
+            "expected fallback TERM in PTY output, got: {text:?}"
+        );
+        let code = tokio::time::timeout(Duration::from_secs(5), exit_rx.recv())
+            .await
+            .expect("exit within 5s")
+            .expect("exit channel alive");
+        assert_eq!(code, 0);
     }
 }
