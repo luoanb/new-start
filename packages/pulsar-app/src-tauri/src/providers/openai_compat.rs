@@ -15,7 +15,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::core::error::{AppError, AppResult};
-use crate::core::models::{RemoteModelInfo, StreamChunk, ToolCallWire, Usage};
+use crate::core::models::{
+    FunctionCallWire, RemoteModelInfo, StreamChunk, StreamToolCallDelta, ToolCallWire, Usage,
+};
 use crate::core::log_phase::{
     PHASE_LLM_CALL_PERF, PHASE_LLM_REQUEST_OUT, PHASE_LLM_RESPONSE_IN,
 };
@@ -263,6 +265,55 @@ fn log_call_perf(
     );
 }
 
+/// 流式工具调用分片归并（OpenAI 契约：仅首个分片带 `id` / `name`，后续分片只带
+/// `function.arguments` 片段）。
+///
+/// 归位规则：先按 `id` 命中已有调用续片（兼容「每个分片都重复携带 id」的实现），否则占用
+/// `index` 槽位；槽位已被其他具名调用占用时追加新条目。`arguments` 片段按到达顺序拼接。
+fn merge_tool_call_deltas(calls: &mut Vec<ToolCallWire>, deltas: &[StreamToolCallDelta]) {
+    for delta in deltas {
+        let named_id = delta.id.as_deref().filter(|id| !id.is_empty());
+        let slot = match named_id {
+            Some(id) => match calls.iter().position(|c| c.id == id) {
+                Some(pos) => pos,
+                None => {
+                    let occupied = calls.len() > delta.index && !calls[delta.index].id.is_empty();
+                    if occupied {
+                        calls.len()
+                    } else {
+                        delta.index
+                    }
+                }
+            },
+            None => delta.index,
+        };
+        // 补齐缺口：index 跳号时中间槽位先占空条目，保证下标即 index。
+        while calls.len() <= slot {
+            calls.push(ToolCallWire {
+                id: String::new(),
+                r#type: "function".into(),
+                function: FunctionCallWire {
+                    name: String::new(),
+                    arguments: String::new(),
+                },
+            });
+        }
+        let entry = &mut calls[slot];
+        if let Some(id) = named_id {
+            entry.id = id.to_string();
+        }
+        if let Some(kind) = delta.r#type.as_deref().filter(|t| !t.is_empty()) {
+            entry.r#type = kind.to_string();
+        }
+        if let Some(name) = delta.function.name.as_deref().filter(|n| !n.is_empty()) {
+            entry.function.name = name.to_string();
+        }
+        if let Some(fragment) = &delta.function.arguments {
+            entry.function.arguments.push_str(fragment);
+        }
+    }
+}
+
 /// 轻量 OpenAI 兼容客户端：仅负责 HTTP 发送与错误归一。
 #[derive(Debug, Clone)]
 pub struct Client {
@@ -402,17 +453,7 @@ impl Client {
                             .tool_calls
                             .get_or_insert_with(Vec::new);
                         // OpenAI 流式工具调用按 index 分片，逐片拼接 arguments。
-                        for tc in tool_calls {
-                            match calls.iter_mut().find(|c| c.id == tc.id) {
-                                Some(existing) if !tc.function.arguments.is_empty() => {
-                                    existing.function.arguments.push_str(&tc.function.arguments);
-                                }
-                                Some(_) => {}
-                                None => {
-                                    calls.push(tc.clone());
-                                }
-                            }
-                        }
+                        merge_tool_call_deltas(calls, tool_calls);
                     }
                     if let Some(fr) = &choice.finish_reason {
                         acc.finish_reason = Some(fr.clone());
@@ -614,5 +655,70 @@ mod tests {
         let parsed: StreamChunk = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.choices[0].delta.reasoning_content.as_deref(), Some("think"));
         assert_eq!(parsed.choices[0].delta.content.as_deref(), Some("hi"));
+    }
+
+    /// 后续分片只带 index + arguments 片段（无 id / name），必须能解析而不是被整块丢弃。
+    #[test]
+    fn parse_stream_tool_call_fragment_without_id() {
+        let json = r#"{"id":"c","object":"chat.completion.chunk","created":1,"model":"m",
+            "choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"query\":"}}]},
+            "finish_reason":null}]}"#;
+        let parsed: StreamChunk = serde_json::from_str(json).unwrap();
+        let deltas = parsed.choices[0].delta.tool_calls.as_ref().unwrap();
+        assert_eq!(deltas[0].index, 0);
+        assert_eq!(deltas[0].id, None);
+        assert_eq!(deltas[0].function.name, None);
+        assert_eq!(deltas[0].function.arguments.as_deref(), Some(r#"{"query":"#));
+    }
+
+    /// 首片（带 id/name）+ 后续参数片段 → 按 index 拼接出完整 arguments；
+    /// 并行调用（index 0/1）各自归位不串片。
+    #[test]
+    fn merge_tool_call_deltas_by_index() {
+        let deltas = |json: &str| -> Vec<StreamToolCallDelta> { serde_json::from_str(json).unwrap() };
+        let mut calls: Vec<ToolCallWire> = Vec::new();
+
+        merge_tool_call_deltas(
+            &mut calls,
+            &deltas(r#"[{"index":0,"id":"call_a","type":"function","function":{"name":"search","arguments":""}}]"#),
+        );
+        merge_tool_call_deltas(&mut calls, &deltas(r#"[{"index":0,"function":{"arguments":"{\"query\":"}}]"#));
+        merge_tool_call_deltas(&mut calls, &deltas(r#"[{"index":0,"function":{"arguments":"\"rust\"}"}}]"#));
+        merge_tool_call_deltas(
+            &mut calls,
+            &deltas(r#"[{"index":1,"id":"call_b","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a\"}"}}]"#),
+        );
+
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].id, "call_a");
+        assert_eq!(calls[0].function.name, "search");
+        assert_eq!(calls[0].function.arguments, r#"{"query":"rust"}"#);
+        assert_eq!(calls[1].id, "call_b");
+        assert_eq!(calls[1].function.name, "read_file");
+        assert_eq!(calls[1].function.arguments, r#"{"path":"a"}"#);
+        // 拼接结果必须是可解析的 JSON（原缺陷即此处退化为 Null）。
+        assert!(serde_json::from_str::<serde_json::Value>(&calls[0].function.arguments).is_ok());
+    }
+
+    /// 兼容「每个分片都重复携带 id」的非标准实现：按 id 续片而非重复建条目。
+    #[test]
+    fn merge_tool_call_deltas_repeated_id() {
+        let deltas = |json: &str| -> Vec<StreamToolCallDelta> { serde_json::from_str(json).unwrap() };
+        let mut calls: Vec<ToolCallWire> = Vec::new();
+
+        merge_tool_call_deltas(
+            &mut calls,
+            &deltas(r#"[{"index":0,"id":"call_a","function":{"name":"search","arguments":"{\"q\":"}}]"#),
+        );
+        merge_tool_call_deltas(&mut calls, &deltas(r#"[{"index":0,"id":"call_a","function":{"arguments":"1}"}}]"#));
+        merge_tool_call_deltas(
+            &mut calls,
+            &deltas(r#"[{"index":0,"id":"call_b","function":{"name":"search","arguments":"{\"q\":2}"}}]"#),
+        );
+
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].function.arguments, r#"{"q":1}"#);
+        assert_eq!(calls[1].id, "call_b");
+        assert_eq!(calls[1].function.arguments, r#"{"q":2}"#);
     }
 }

@@ -731,8 +731,39 @@ pub struct SseDelta {
     pub content: Option<String>,
     #[serde(default)]
     pub reasoning_content: Option<String>,
+    /// 工具调用分片（非完整 `ToolCallWire`：分片字段可缺省，见 `StreamToolCallDelta`）。
     #[serde(default)]
-    pub tool_calls: Option<Vec<ToolCallWire>>,
+    pub tool_calls: Option<Vec<StreamToolCallDelta>>,
+}
+
+/// 流式工具调用分片（SSE `choices[].delta.tool_calls[]`）。
+///
+/// OpenAI 契约：同一 tool_call 只有**首个分片**携带 `id` / `type` / `function.name`，
+/// 后续分片只带 `index` + `function.arguments` 片段。若按完整 `ToolCallWire`（id / name
+/// 必填）反序列化，后续分片会整块解析失败被丢弃，导致聚合出的 `arguments` 恒为空串。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub struct StreamToolCallDelta {
+    /// 分片所属调用在 `tool_calls` 数组中的位置（同一次调用的分片共享同一 index）。
+    #[serde(default)]
+    pub index: usize,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub r#type: Option<String>,
+    #[serde(default)]
+    pub function: StreamFunctionDelta,
+}
+
+/// 流式工具调用分片内的 function 增量（name / arguments 均可缺省）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub struct StreamFunctionDelta {
+    #[serde(default)]
+    pub name: Option<String>,
+    /// 参数片段：多次分片的片段按到达顺序拼接后才是完整 JSON 字符串。
+    #[serde(default)]
+    pub arguments: Option<String>,
 }
 
 // ── token 用量 ────────────────────────────────────────────────────
