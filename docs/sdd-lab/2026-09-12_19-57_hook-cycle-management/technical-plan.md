@@ -31,8 +31,10 @@
 | 触发来源窗口 | `user_round_judgement::run` L111 `matches!(ctx.trigger, User)` | 仅用户轮 |
 | 裁决节奏 | `need_user_round_judgement(topic_bound, user_rounds)`（`assistant_session.rs` L1613-L1615） | 未绑定必跑；已绑定 `user_rounds % 3 == 0` |
 | 复盘收尾轮门控 | `is_settling_round(outcome)`（L1620-L1622）+ `round_review.rs` L189 | 无 tool_calls 且无 tool_results |
-| 简报刷新节奏 | `BRIEF_EVERY_N_ROUNDS = 3`（L1604）+ `should_refresh_brief(...)`（L1393-L1399） | 每 3 个推进轮（或内容变化 / 上轮非工具） |
+| 简​报刷新节奏 | `BRIEF_EVERY_N_ROUNDS = 3`（L1604）+ `should_refresh_brief(...)`（L1393-L1399） | 每 3 个推进轮（或内容变化 / 上轮非工具） |
 | 选型节奏 | `SELECTION_EVERY_N_ROUNDS = 5`（L1626）+ `ctx.reselect = poll_count % 5 == 0`（L1427） | 每 5 个推进轮 |
+
+> 上表是**方案编写时（迁移前）的硬编码快照**，用于论证「默认声明 ≡ 原行为」。这三个默认值随后已按用户指定调整（`review_every_n` 1 / `brief_every_n` 7 / `selection_every_n` 7），见 §API-4 注 2。
 
 ### 周期字段的可用原料
 
@@ -240,12 +242,14 @@ fn gate_match(params: &[CycleParamSpec], values: &BTreeMap<..>, facts: &CycleFac
 
 | 动作 | 调用判定项（默认） | 动作内部项（默认） |
 |---|---|---|
-| `assistant.user-round-judgement` | `mode ∈ {assistant, system}`；`round_origin == user_round` | `review_every_n` 每 **3** 条用户消息（**注**：见下方落地偏差说明） |
+| `assistant.user-round-judgement` | `mode ∈ {assistant, system}`；`round_origin == user_round` | `review_every_n` 每 **1** 条用户消息（**注 1 / 注 2**：见下方落地偏差说明与默认值调整） |
 | `assistant.round-review` | `mode ∈ {assistant, system}`；`round_shape(Current) == 收尾轮` | — |
-| `assistant.round.before` | `mode ∈ {assistant, system}`（**可调**） | `brief_every_n` 每 **3** 个推进轮（简报刷新）；`brief_on_prev_settling` 开关（默认开） |
-| `assistant.select-neuron` | — | `selection_every_n` 每 **5** 个推进轮（选型节流） |
+| `assistant.round.before` | `mode ∈ {assistant, system}`（**可调**） | `brief_every_n` 每 **7** 个推进轮（简报刷新）；`brief_on_prev_settling` 开关（默认开） |
+| `assistant.select-neuron` | — | `selection_every_n` 每 **7** 个推进轮（选型节流） |
 | `assistant.round.after` | `mode ∈ {assistant, system}`（**可调**） | — |
 | `core.compaction` | —（`All[]` 恒真，每轮调用） | —（是否压由内部按阈值检测，**不属周期**；仅暴露启停） |
+
+- **注 2（默认值调整，2026-09-15）**：上表 `review_every_n` / `brief_every_n` / `selection_every_n` 的默认值已按用户指定由 3 / 3 / 5 改为 **1 / 7 / 7**（DECISION 见 requirements §Requirement Decisions 末条）。因此「默认值 = 原硬编码值」的等价性只在迁移当期成立，不再是长期约束；等价性单测与回写口径以调整后的值为准。
 
 - **全部动作均可调**（Q3）：第 3、6 项各暴露「模式窗口」一项；`core.compaction` 无周期可调项。
 - `user-round-judgement` 的「**未绑定课题必跑**」是业务状态 → **不在此表**，留在 handler 内。
@@ -383,7 +387,7 @@ export type HookEntry = {
 - 风险：IP-1/IP-2 本轮产物未知 → 误判「收尾轮」
   - 缓解：`round_shape_current` 在 IP-1/IP-2 为 `None`，判定按不匹配处理；需要判产物形态的动作使用 `RoundRef::Previous`。
 - 风险：简报刷新 / 选型节奏改为读注册表后与既有 `poll_count` 语义错位
-  - 缓解：默认值与原常量一致（3 / 5）并单测比对；`Internal` 参数只读不改业务计数。
+  - 缓解：默认值与原常量一致（迁移当期 3 / 5；现已按 §API-4 注 2 调整为 1 / 7 / 7）并单测比对；`Internal` 参数只读不改业务计数。
 - 风险：误关高风险动作（如 `round.before` / `round.after` / `compaction`）导致功能残缺
   - 缓解：声明 `disable_hint`，面板在关停时给风险提示；不做硬拦截（用户已裁定统一可启停）。
 - 风险：`disable_hint` 被误当作硬保护实现（在服务端拒绝关停）
@@ -412,9 +416,13 @@ export type HookEntry = {
 - **Step 6** 前端：`types.ts` 增 `HookEntry` / `HookParamView` / `HookParamKind` / `CycleValue`；`contracts.ts` 增三条契约；`HookJudgementPanel.svelte` 改「周期管理」（分区 tab「动作 / 执行记录」），动作区**完全由 `hooks_list` 驱动渲染**（`enum && multi` → chips / `enum` → Select / `bool` → Toggle / `number` → 数值框）；i18n `views.flowDecisions` → `views.cycleManagement`（类型 / en / zh + `views.ts`），新增 `cycle.*` 文案；视图 id `hook-judgements` 保留。
   - **UI 迭代（用户反馈「太丑」后收敛）**：动作行改**两行结构**（名称 / 分组·注入点）＋ **hairline 行分隔**（不用卡片）＋ 状态仅在停用时显示；**启停开关移入展开面板**（折叠行无控件），风险提示随之移入展开面板；参数按 `usage` 分组（「触发」/「参数」）且宽控件（chips / Select）转上下布局。**i18n key 全部改为扁平命名**（`cycle.paramMode` / `cycle.groupShell` / `cycle.hintRoundBefore` / `cycle.hookRoundBefore` 等），与 `translations.ts` 的 `cycle.*` 扁平键一一对应（此前 Rust 侧误用点号命名导致显示原始 key）。
 
-**落地偏差（Reverse Sync，已回写本表）**：
+**注 1 / 落地偏差（Reverse Sync，已回写本表）**：
 
-- `assistant.user-round-judgement` 的节奏项**未按原计划放入 `CallGate`**，而是作为 `Internal`（`review_every_n`）+ 在 handler 内与「未绑定课题必跑」取 OR。原因：该频率与**业务状态**（课题是否绑定）是 OR 关系，而按边界「业务状态不进周期条件」，`CallGate` 是严格 AND，无法表达该组合。行为与原实现等价（默认 3）。
+- `assistant.user-round-judgement` 的节奏项**未按原计划放入 `CallGate`**，而是作为 `Internal`（`review_every_n`）+ 在 handler 内与「未绑定课题必跑」取 OR。原因：该频率与**业务状态**（课题是否绑定）是 OR 关系，而按边界「业务状态不进周期条件」，`CallGate` 是严格 AND，无法表达该组合。行为与原实现等价（默认值见注 2）。
+
+**注 2 / 默认值调整（2026-09-15，用户指定）**：
+
+- `review_every_n` **3 → 1**、`brief_every_n` **3 → 7**、`selection_every_n` **5 → 7**（常量 `USER_ROUND_JUDGEMENT_EVERY_N_ROUNDS` / `BRIEF_EVERY_N_ROUNDS` / `SELECTION_EVERY_N_ROUNDS` 为声明默认值来源，同步调整）。仅默认值变化，可调范围与判定机制不动；`config.json hooks.values` 已有覆盖时不受影响。
 
 **验证**：
 

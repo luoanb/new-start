@@ -157,7 +157,7 @@ tools = ToolRegistry.definitions_for(authorized_tool_ids) 或 None
 | 项 | 内容 |
 |----|------|
 | 时机 | `converse` 第一个 beforehook（IP-1，AfterLoadContext） |
-| 门控 | 未绑定课题（含首轮）必跑；已绑定课题每 3 条用户消息（`user_rounds % 3 == 0`）复核一次，否则 skip |
+| 门控 | 未绑定课题（含首轮）必跑；已绑定课题每 N 条用户消息（`user_rounds % N == 0`，周期可调项 `review_every_n`，当前默认 N=1 → 每条用户消息都复核）复核一次，否则 skip |
 | 通道 | `call_judgement`（`call_system_prompt_json` + `Manual`），JSON Schema 强约束 + 中性降级兜底 |
 | role_system | `assistant_user_round_judgement` neuron.content |
 | content | `assistant.user_round_judgement` insert 全文 |
