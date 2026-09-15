@@ -194,7 +194,19 @@ export type SamplingParams = {
   seed?: number;
 };
 
-export type ThinkingEffort = "low" | "high" | "max";
+/**
+ * 思考强度（对齐后端 ThinkingEffort，取值对齐 OpenAI 官方 reasoning_effort 7 档）。
+ * 注：`unknown` 为后端前向兼容哨兵，正常 UI 不应产生该值。
+ */
+export type ThinkingEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+  | "unknown";
 
 /** 思考模式（深度思考）配置（对齐后端 ThinkingConfig）。 */
 export type ThinkingConfig = {
@@ -207,6 +219,8 @@ export type ThinkingCapability = {
   supported: boolean;
   default_enabled?: boolean;
   default_effort?: ThinkingEffort;
+  /** 支持档位白名单；缺省 = 不限制。 */
+  allowed_efforts?: ThinkingEffort[];
 };
 
 /** 会话级 / 调用级统一模型选择（对齐后端 ChatModelSelection）。 */

@@ -375,7 +375,7 @@ impl ProviderRegistry {
         let mut chat_request = ChatRequest::new(&request.model_id, to_chat_messages(&request.messages)?);
         apply_sampling(&mut chat_request, &sampling);
         apply_tools(&mut chat_request, &request.tools);
-        // 思考模式：`reasoning_effort`（OpenAI 标准）+ DeepSeek `thinking` 开关 → extra 透传。
+        // 思考模式：`reasoning_effort` 写协议层标准字段；DeepSeek `thinking` 开关走 extra 透传。
         apply_thinking(&mut chat_request, thinking.as_ref());
         // 结构化输出契约：`response_format` 经 `#[serde(flatten)]` 展平为请求体顶层字段。
         apply_response_format(&mut chat_request, request.response_format.as_ref());
@@ -1044,6 +1044,15 @@ fn resolve_thinking(
             if out.effort.is_none() {
                 out.effort = model_cap.and_then(|m| m.default_effort);
             }
+            // 白名单钳制：越权档位回落模型默认；默认仍非法则丢弃（providers 抹平）。
+            if let Some(allowed) = model_cap.and_then(|m| m.allowed_efforts.as_ref()) {
+                let legal = out.effort.map(|e| allowed.contains(&e)).unwrap_or(true);
+                if !legal {
+                    out.effort = model_cap
+                        .and_then(|m| m.default_effort)
+                        .filter(|e| allowed.contains(e));
+                }
+            }
             // 未开启思考则无需携带 effort。
             if out.enabled == Some(false) {
                 out.effort = None;
@@ -1064,11 +1073,17 @@ fn resolve_thinking(
 }
 
 /// 思考模式强度 → wire 字符串（providers 抹平：OpenAI/DeepSeek 均接受 lowercase 值）。
-fn thinking_effort_wire(effort: ThinkingEffort) -> &'static str {
+/// 返回 `None` 表示该档位无可映射的 wire 值（`Unknown` 前向兼容哨兵），调用方应跳过下发。
+fn thinking_effort_wire(effort: ThinkingEffort) -> Option<&'static str> {
     match effort {
-        ThinkingEffort::Low => "low",
-        ThinkingEffort::High => "high",
-        ThinkingEffort::Max => "max",
+        ThinkingEffort::None => Some("none"),
+        ThinkingEffort::Minimal => Some("minimal"),
+        ThinkingEffort::Low => Some("low"),
+        ThinkingEffort::Medium => Some("medium"),
+        ThinkingEffort::High => Some("high"),
+        ThinkingEffort::Xhigh => Some("xhigh"),
+        ThinkingEffort::Max => Some("max"),
+        ThinkingEffort::Unknown => None,
     }
 }
 
@@ -1147,17 +1162,19 @@ fn apply_tools(req: &mut ChatRequest, tools: &Option<Vec<crate::core::models::To
     }
 }
 
-/// 思考模式 → extra 透传：`reasoning_effort`（OpenAI 标准）+ DeepSeek `thinking` 开关。
+/// 应用思考配置：`reasoning_effort` 写**协议层标准字段**（OpenAI 官方标准，非 extra 透传）；
+/// DeepSeek `thinking` 开关仍走 `extra` 展平（真正的服务商扩展）。
 /// providers 抹平：互斥（思考开启时采样参数失效）由服务商自行消化，本层不主动删采样。
 fn apply_thinking(req: &mut ChatRequest, thinking: Option<&ThinkingConfig>) {
     let Some(th) = thinking else { return };
     if let Some(effort) = th.effort {
-        req.extra.insert(
-            "reasoning_effort".to_string(),
-            serde_json::json!(thinking_effort_wire(effort)),
-        );
+        // Unknown 为前向兼容哨兵（官方新增档位）：无可映射 wire 值时不下发。
+        if let Some(wire) = thinking_effort_wire(effort) {
+            req.reasoning_effort = Some(wire.to_string());
+        }
     }
     if let Some(enabled) = th.enabled {
+        // 服务商特异扩展（DeepSeek）仍走 extra 透传，协议层不感知其语义。
         req.extra.insert(
             "thinking".to_string(),
             serde_json::json!({ "type": if enabled { "enabled" } else { "disabled" } }),
@@ -1652,6 +1669,119 @@ mod tests {
         );
         apply_response_format(&mut req, None);
         assert!(!req.extra.contains_key("response_format"));
+    }
+
+    // ── 思考模式强度（P0/P1）────────────────────────────────
+
+    #[test]
+    fn apply_thinking_writes_standard_field_not_extra() {
+        let mut req = ChatRequest::new("gpt-5", vec![]);
+        let th = ThinkingConfig {
+            enabled: Some(true),
+            effort: Some(ThinkingEffort::High),
+        };
+        apply_thinking(&mut req, Some(&th));
+        // 标准字段落位；extra 中不得残留同名键。
+        assert_eq!(req.reasoning_effort.as_deref(), Some("high"));
+        assert!(!req.extra.contains_key("reasoning_effort"));
+    }
+
+    #[test]
+    fn apply_thinking_deepseek_switch_stays_in_extra() {
+        let mut req = ChatRequest::new("deepseek-chat", vec![]);
+        let th = ThinkingConfig {
+            enabled: Some(true),
+            effort: None,
+        };
+        apply_thinking(&mut req, Some(&th));
+        // 服务商扩展仍走 extra 展平。
+        assert_eq!(req.extra["thinking"]["type"], "enabled");
+    }
+
+    #[test]
+    fn apply_thinking_unknown_effort_is_not_sent() {
+        let mut req = ChatRequest::new("gpt-5", vec![]);
+        let th = ThinkingConfig {
+            enabled: None,
+            effort: Some(ThinkingEffort::Unknown),
+        };
+        apply_thinking(&mut req, Some(&th));
+        assert!(req.reasoning_effort.is_none());
+    }
+
+    #[test]
+    fn thinking_effort_wire_covers_official_seven() {
+        assert_eq!(thinking_effort_wire(ThinkingEffort::None), Some("none"));
+        assert_eq!(thinking_effort_wire(ThinkingEffort::Minimal), Some("minimal"));
+        assert_eq!(thinking_effort_wire(ThinkingEffort::Low), Some("low"));
+        assert_eq!(thinking_effort_wire(ThinkingEffort::Medium), Some("medium"));
+        assert_eq!(thinking_effort_wire(ThinkingEffort::High), Some("high"));
+        assert_eq!(thinking_effort_wire(ThinkingEffort::Xhigh), Some("xhigh"));
+        assert_eq!(thinking_effort_wire(ThinkingEffort::Max), Some("max"));
+        assert_eq!(thinking_effort_wire(ThinkingEffort::Unknown), None);
+    }
+
+    #[test]
+    fn resolve_thinking_clamps_effort_outside_allowlist() {
+        let cap = ThinkingCapability {
+            supported: true,
+            default_enabled: Some(true),
+            default_effort: Some(ThinkingEffort::Low),
+            allowed_efforts: Some(vec![ThinkingEffort::Low, ThinkingEffort::High]),
+        };
+        let call = ThinkingConfig {
+            enabled: Some(true),
+            effort: Some(ThinkingEffort::Max), // 越权
+        };
+        let out = resolve_thinking(Some(&cap), Some(&call)).expect("thinking resolved");
+        assert_eq!(out.effort, Some(ThinkingEffort::Low)); // 回落模型默认
+    }
+
+    #[test]
+    fn resolve_thinking_without_allowlist_passes_through() {
+        let cap = ThinkingCapability {
+            supported: true,
+            default_enabled: Some(true),
+            default_effort: None,
+            allowed_efforts: None, // 不限制
+        };
+        let call = ThinkingConfig {
+            enabled: Some(true),
+            effort: Some(ThinkingEffort::Xhigh),
+        };
+        let out = resolve_thinking(Some(&cap), Some(&call)).expect("thinking resolved");
+        assert_eq!(out.effort, Some(ThinkingEffort::Xhigh));
+    }
+
+    #[test]
+    fn resolve_thinking_disabled_clears_effort() {
+        let cap = ThinkingCapability {
+            supported: true,
+            default_enabled: Some(true),
+            default_effort: Some(ThinkingEffort::High),
+            allowed_efforts: None,
+        };
+        let call = ThinkingConfig {
+            enabled: Some(false),
+            effort: Some(ThinkingEffort::Max),
+        };
+        let out = resolve_thinking(Some(&cap), Some(&call)).expect("thinking resolved");
+        assert_eq!(out.effort, None);
+    }
+
+    #[test]
+    fn resolve_thinking_unsupported_model_returns_none() {
+        let cap = ThinkingCapability {
+            supported: false,
+            default_enabled: Some(true),
+            default_effort: Some(ThinkingEffort::High),
+            allowed_efforts: None,
+        };
+        let call = ThinkingConfig {
+            enabled: Some(true),
+            effort: Some(ThinkingEffort::High),
+        };
+        assert!(resolve_thinking(Some(&cap), Some(&call)).is_none());
     }
 
     fn test_root(name: &str) -> PathBuf {
