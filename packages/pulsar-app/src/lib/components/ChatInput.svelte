@@ -27,7 +27,8 @@
     selectedModelId?: string;
     params?: SamplingParams;
     thinking?: ThinkingConfig;
-    /** 末尾轮耗时（已格式化，如 `1.2s`）：固定在发送按钮左侧展示；null = 无轮次 / 该轮进行中。 */
+    /** 末轮进行中耗时（已格式化，如 `1.2s`，实时递增）：固定在发送按钮左侧展示；
+     *  null = 无轮次 / 该轮已收尾，不展示。 */
     turnElapsed?: string | null;
     onModelChange?: (providerId: string, modelId: string, params?: SamplingParams, thinking?: ThinkingConfig) => void;
   } = $props();

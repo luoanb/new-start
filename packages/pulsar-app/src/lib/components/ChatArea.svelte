@@ -249,15 +249,12 @@
     return null;
   }
 
-  /** 末尾轮耗时（仅已收尾的最后一轮）：透传给输入框，固定在发送按钮左侧展示；
-   *  无轮次 / 末轮仍在进行（elapsed_ms 未收尾）时为 null，不展示。 */
+  /** 末尾轮耗时（仅末轮仍在进行中）：透传给输入框，固定在发送按钮左侧实时递增展示；
+   *  无轮次 / 末轮已收尾时为 null，不展示（收尾耗时已在消息区轮次分组底部定格展示）。 */
   const lastRoundElapsed = $derived.by<string | null>(() => {
     const last = rounds[rounds.length - 1];
-    const anchor = last?.messages[0];
-    if (!anchor || anchor.role !== "user" || anchor.body.kind !== "text") return null;
-    const settled = anchor.elapsed_ms;
-    if (typeof settled === "number" && settled > 0) return formatDuration(settled);
-    return null;
+    if (!last || !roundTurnOpen(last)) return null;
+    return formatDuration(Math.max(0, nowMs - last.messages[0].timestamp));
   });
 
   async function handleCopy(msg: Message): Promise<boolean> {

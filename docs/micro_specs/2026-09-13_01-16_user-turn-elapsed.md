@@ -99,6 +99,7 @@
 - 2026-09-13（修订）：验收发现「进行中只在 runningSessions 内才 tick」→ 轮询等待空档（会话未注册）标签会闪断。改为**显式进行中标记** `elapsed_ms = 0`（IP-5 未收尾时写入），并在 IP-1 User 轮定格被取代的旧轮；前端改为三态判定，`runningSessions` 仅作首轮兜底。
 - 2026-09-13（修订）：展示位置从「用户消息气泡下方」移到**轮次分组 `.message-round` 的底部**（思考指示之后）——落到 `ChatArea` 的分组渲染层，`ChatMessage` 不再承载该标签。
 - 2026-09-13（修订）：收尾判据修正为 `poll_eligible`。**实测证据**：`conv_1789234193622128355` 最后一轮 02:03:33 发出 → 02:03:46 被定格 `12284`（12s），但日志显示该会话 02:03:59→02:04:48 仍在跑 Poller 轮（真实耗时约 75s）。原因是 `InProgress` 课题 `poll_eligible` 恒为 true，而旧判据 `!pending_round` 提前收尾。新增回归测试 `round_after_keeps_user_turn_open_while_topic_keeps_polling`。
+- 2026-09-15（修订）：输入框发送按钮左侧的耗时改为**仅末轮进行中展示**（本地 tick 实时递增）；末轮收尾后隐藏（`elapsed_ms > 0` 不再透传），收尾耗时统一由消息区轮次分组底部定格展示。
 
 ## Validation
 
