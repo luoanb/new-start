@@ -103,7 +103,10 @@
 
   function handleScroll() {
     const el = containerEl;
-    if (!el || autoScrolling) return;
+    if (!el) return;
+    // 目录 scrollspy 与滚动同为实时需求，先于分页判定更新（程序化滚动也应反映真实位置）。
+    updateActiveRound();
+    if (autoScrolling) return;
     // 上滑近顶部：追加加载更早消息（滚动位置由 loadOlderMessages 按高度差恢复）。
     if (el.scrollTop <= 40) {
       void loadOlderMessages();
@@ -257,6 +260,78 @@
     return formatDuration(Math.max(0, nowMs - last.messages[0].timestamp));
   });
 
+  // ── 用户轮目录（展示层导航）──
+  // 轮次口径与消息区同源（`rounds`）；只覆盖**已加载消息窗口**，上滑加载更早消息后自动补齐。
+  type OutlineItem = {
+    /** 该轮首条消息的绝对下标（窗口偏移补偿后），供 `locateToMessage` 使用。 */
+    absIndex: number;
+    /** `rounds` 内下标：与 DOM 轮序一一对应（scrollspy 用）。 */
+    roundIndex: number;
+    /** 用户输入首行（单行截断展示）。 */
+    text: string;
+  };
+  const outlineItems = $derived.by<OutlineItem[]>(() => {
+    const items: OutlineItem[] = [];
+    rounds.forEach((round, roundIndex) => {
+      const anchor = round.messages[0];
+      // 跳过无用户输入的前导分组（历史开头被分页截断时可能出现）。
+      if (!anchor || anchor.role !== "user" || anchor.body.kind !== "text") return;
+      const firstLine = anchor.body.content
+        .split("\n")
+        .map((line) => line.trim())
+        .find((line) => line.length > 0);
+      items.push({
+        absIndex: messagesOffset + round.startIndex,
+        roundIndex,
+        text: firstLine ?? t("chatArea.outlineUntitled"),
+      });
+    });
+    return items;
+  });
+
+  /** 当前视口顶部所在轮（`rounds` 下标）；-1 = 无可判定轮。 */
+  let activeRoundIndex = $state(-1);
+  /** 覆盖层避让滚动条：`offsetWidth - clientWidth` = 竖向滚动条占宽。 */
+  let scrollbarW = $state(0);
+
+  /** scrollspy：取「顶部已越过容器顶部」的最后一轮为当前轮（DOM 轮序与 `rounds` 一致）。 */
+  function updateActiveRound() {
+    const el = containerEl;
+    if (!el) return;
+    scrollbarW = Math.max(0, el.offsetWidth - el.clientWidth);
+    const nodes = el.querySelectorAll<HTMLElement>(".message-round");
+    if (nodes.length === 0) {
+      activeRoundIndex = -1;
+      return;
+    }
+    const containerTop = el.getBoundingClientRect().top;
+    let index = 0;
+    nodes.forEach((node, i) => {
+      if (node.getBoundingClientRect().top - containerTop <= 8) index = i;
+    });
+    activeRoundIndex = index;
+  }
+
+  // 轮次数量 / 视口高度变化（首屏、前插更早页、新轮、末轮 min-height 重算）后重算当前轮：
+  // 布局要在下一帧才落地。
+  $effect(() => {
+    void rounds.length;
+    void viewportH;
+    requestAnimationFrame(() => updateActiveRound());
+  });
+
+  /** 目录点击：定位与高亮复用既有 `locateToMessage`（含高亮闪烁与续拉更早页）。 */
+  function goToRound(item: OutlineItem) {
+    void locateToMessage(item.absIndex);
+  }
+
+  /** 滚动到末尾（最新消息）。走 CSS 的 `scroll-behavior: smooth`，无需额外动画状态。 */
+  function scrollToLatest() {
+    const el = containerEl;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }
+
   async function handleCopy(msg: Message): Promise<boolean> {
     return CopyToClipboard.copyText(msg.body.content);
   }
@@ -361,64 +436,133 @@
   {#if ratingError}
     <div class="rating-error">{ratingError}</div>
   {/if}
-  <div class="messages" bind:this={containerEl} onscroll={handleScroll}>
-    {#if messages.length === 0}
-      <div class="empty">
-        <div class="empty-content">
-          <h3>{t("chatArea.emptyTitle")}</h3>
-          <p>{t("chatArea.emptyDesc")}</p>
+  <div class="messages-wrap">
+    <div class="messages" bind:this={containerEl} onscroll={handleScroll}>
+      {#if messages.length === 0}
+        <div class="empty">
+          <div class="empty-content">
+            <h3>{t("chatArea.emptyTitle")}</h3>
+            <p>{t("chatArea.emptyDesc")}</p>
+          </div>
         </div>
-      </div>
-    {:else}
-      {#each rounds as round, i}
-        {@const turnElapsed = formatRoundElapsed(round)}
-        <div
-          class="message-round"
-          class:last={i === rounds.length - 1}
-          style={i === rounds.length - 1 ? `min-height: ${viewportH}px` : undefined}
-        >
-          {#each round.messages as msg, mi}
-            {@const absIndex = messagesOffset + round.startIndex + mi}
-            <ChatMessage
-              message={msg}
-              // 紧邻上一条工具回复时压缩纵向间距，让一轮内的多条工具结果更像连续列表
-              compactTool={mi > 0 && round.messages[mi - 1].body.kind === "tool_result"}
-              streaming={(view?.streamingIndex ?? null) === round.startIndex + mi}
-              canRate={rateable}
-              anchorIndex={absIndex}
-              onCopy={handleCopy}
-              onRate={(score) => handleRate(absIndex, score)}
-            />
-            {#each judgementsFor(absIndex) as record (record.id)}
-              <!-- 裁决卡：锚点消息附属渲染块（旁路列表，不插入消息数组、不影响 message_index） -->
-              <JudgementCard {record} hookLabel={hookLabelFor(record)} />
+      {:else}
+        {#each rounds as round, i}
+          {@const turnElapsed = formatRoundElapsed(round)}
+          <div
+            class="message-round"
+            class:last={i === rounds.length - 1}
+            style={i === rounds.length - 1 ? `min-height: ${viewportH}px` : undefined}
+          >
+            {#each round.messages as msg, mi}
+              {@const absIndex = messagesOffset + round.startIndex + mi}
+              <ChatMessage
+                message={msg}
+                // 紧邻上一条工具回复时压缩纵向间距，让一轮内的多条工具结果更像连续列表
+                compactTool={mi > 0 && round.messages[mi - 1].body.kind === "tool_result"}
+                streaming={(view?.streamingIndex ?? null) === round.startIndex + mi}
+                canRate={rateable}
+                anchorIndex={absIndex}
+                onCopy={handleCopy}
+                onRate={(score) => handleRate(absIndex, score)}
+              />
+              {#each judgementsFor(absIndex) as record (record.id)}
+                <!-- 裁决卡：锚点消息附属渲染块（旁路列表，不插入消息数组、不影响 message_index） -->
+                <JudgementCard {record} hookLabel={hookLabelFor(record)} />
+              {/each}
             {/each}
-          {/each}
-          {#if isRunning && i === rounds.length - 1}
-            <div class="loading-indicator">
-              <span class="dot-pulse"></span>
-              <span>{t("common.thinking")}</span>
-              {#if runningSession?.current_step}
-                <span class="running-step">{runningSession.current_step}</span>
-              {/if}
-            </div>
-          {/if}
-          {#if turnElapsed !== null}
-            <div class="turn-elapsed">{t("chatMessage.turnElapsed", { duration: turnElapsed })}</div>
+            {#if isRunning && i === rounds.length - 1}
+              <div class="loading-indicator">
+                <span class="dot-pulse"></span>
+                <span>{t("common.thinking")}</span>
+                {#if runningSession?.current_step}
+                  <span class="running-step">{runningSession.current_step}</span>
+                {/if}
+              </div>
+            {/if}
+            {#if turnElapsed !== null}
+              <div class="turn-elapsed">{t("chatMessage.turnElapsed", { duration: turnElapsed })}</div>
+            {/if}
+          </div>
+        {/each}
+      {/if}
+
+      {#if isRunning && rounds.length === 0}
+        <div class="loading-indicator">
+          <span class="dot-pulse"></span>
+          <span>{t("common.thinking")}</span>
+          {#if runningSession?.current_step}
+            <span class="running-step">{runningSession.current_step}</span>
           {/if}
         </div>
-      {/each}
-    {/if}
+      {/if}
+    </div>
 
-    {#if isRunning && rounds.length === 0}
-      <div class="loading-indicator">
-        <span class="dot-pulse"></span>
-        <span>{t("common.thinking")}</span>
-        {#if runningSession?.current_step}
-          <span class="running-step">{runningSession.current_step}</span>
-        {/if}
-      </div>
-    {/if}
+    <!-- 用户轮目录 + 「滚动到末尾」：常驻细刻度条（每轮一个刻度、当前轮高亮）+ hover / 键盘聚焦
+         展开轮列表；无用户轮时只保留「滚动到末尾」按钮。浮层绝对定位在消息区右缘并避让滚动条；
+         不参与滚动、不占布局宽度。 -->
+    <nav
+      class="turn-outline"
+      style={`right: ${scrollbarW}px`}
+      aria-label={outlineItems.length > 0
+        ? t("chatArea.outlineTitle")
+        : t("chatArea.outlineJumpEnd")}
+    >
+      {#if outlineItems.length > 0}
+        <div class="outline-rail">
+          {#each outlineItems as item (item.absIndex)}
+            <button
+              type="button"
+              class="rail-tick"
+              class:active={item.roundIndex === activeRoundIndex}
+              title={item.text}
+              aria-label={item.text}
+              onclick={() => goToRound(item)}
+            ></button>
+          {/each}
+        </div>
+      {/if}
+      <button
+        type="button"
+        class="outline-jump-end"
+        title={t("chatArea.outlineJumpEnd")}
+        aria-label={t("chatArea.outlineJumpEnd")}
+        onclick={scrollToLatest}
+      >
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          width="14"
+          height="14"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="7 6 12 11 17 6" />
+          <polyline points="7 13 12 18 17 13" />
+        </svg>
+      </button>
+      {#if outlineItems.length > 0}
+        <div class="outline-panel">
+          <div class="outline-panel-title">{t("chatArea.outlineTitle")}</div>
+          <div class="outline-list">
+            {#each outlineItems as item, i (item.absIndex)}
+              <button
+                type="button"
+                class="outline-item"
+                class:active={item.roundIndex === activeRoundIndex}
+                title={item.text}
+                onclick={() => goToRound(item)}
+              >
+                <span class="outline-order">{i + 1}</span>
+                <span class="outline-text">{item.text}</span>
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/if}
+    </nav>
   </div>
 
   <ChatInput
@@ -440,6 +584,8 @@
   .chat-area { display: flex; flex-direction: column; height: 100%; overflow: hidden; min-height: 0; background: var(--color-bg); }
   .rating-error { margin: var(--space-1) var(--space-4); padding: var(--space-1) var(--space-2); font-size: var(--fs-xs); color: var(--color-error); background: var(--color-error-bg); border-radius: var(--radius-sm); }
   .messages { flex: 1; overflow-y: auto; min-height: 0; padding: var(--space-3) 0; scroll-behavior: smooth; }
+  /* 消息区定位上下文：用户轮目录浮层以此为锚（不参与滚动、不占布局宽度）。 */
+  .messages-wrap { position: relative; flex: 1; min-height: 0; display: flex; }
   /* 一轮对话的小容器：仅最后一轮（最新）注入 min-height = 对话容器可视高度
      （由 viewportH 内联注入，避免滚动容器内百分比高度无法解析），使最新一轮
      至少占满一屏、天然吸顶（问题在上、回答在下）；历史轮按内容自然高度展示。 */
@@ -455,6 +601,31 @@
   .running-step { font-family: var(--font-mono, monospace); font-size: var(--fs-xs); color: var(--color-primary); opacity: 0.85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .dot-pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--color-primary); animation: pulse 1.2s ease-in-out infinite; }
   @keyframes pulse { 0%, 100% { opacity: 0.3; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.2); } }
+  /* ── 用户轮目录 ── */
+  /* 刻度条：贴在消息区右缘（内联 right 由 JS 按滚动条占宽避让）；容器自身不吃指针事件，
+     只有刻度与浮层可交互，避免遮挡正文选择与滚动条拖拽。
+     列 = 刻度条 + 「滚动到末尾」按钮；刻度过多时由刻度条自身收缩裁切，按钮始终可见。 */
+  .turn-outline { position: absolute; top: 0; bottom: 0; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-2); pointer-events: none; }
+  .outline-rail { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; overflow: hidden; padding: var(--space-2) 8px; pointer-events: auto; }
+  .rail-tick { width: 12px; height: 2px; padding: 0; border: none; border-radius: var(--radius-full); background: var(--color-text-muted); opacity: 0.35; cursor: pointer; transition: opacity var(--duration-fast) var(--ease-out), width var(--duration-fast) var(--ease-out); }
+  .rail-tick:hover { opacity: 0.8; }
+  .rail-tick.active { width: 18px; opacity: 1; background: var(--color-primary); }
+  .outline-jump-end { flex: none; display: flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; border: none; border-radius: var(--radius-full); background: transparent; color: var(--color-text-muted); opacity: 0.6; cursor: pointer; pointer-events: auto; transition: opacity var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out); }
+  .outline-jump-end:hover { opacity: 1; background: var(--color-hover); }
+  /* 浮层：hover 刻度条 / 键盘聚焦刻度时展开（悬停「滚动到末尾」按钮不展开），置于刻度条左侧。
+     `right: 100%` 与刻度条紧贴（中间不留缝），保证指针从刻度条移入浮层时 hover 不断。 */
+  .outline-panel { position: absolute; right: 100%; top: 50%; transform: translateY(-50%); display: none; flex-direction: column; width: 260px; max-height: 70%; padding: var(--space-1); background: var(--color-elevated); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-md); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18); pointer-events: auto; }
+  .outline-rail:hover ~ .outline-panel,
+  .outline-rail:focus-within ~ .outline-panel,
+  .outline-panel:hover { display: flex; }
+  .outline-panel-title { flex: none; padding: var(--space-1) var(--space-2); font-size: var(--fs-xs); color: var(--color-text-muted); }
+  .outline-list { display: flex; flex-direction: column; gap: 1px; min-height: 0; overflow-y: auto; }
+  .outline-item { display: flex; align-items: center; gap: var(--space-2); padding: 6px var(--space-2); border: none; background: transparent; border-radius: var(--radius-sm); cursor: pointer; text-align: left; }
+  .outline-item:hover { background: var(--color-hover); }
+  .outline-order { flex: none; min-width: 16px; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--color-text-muted); text-align: right; }
+  .outline-text { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--fs-sm); color: var(--color-text); }
+  .outline-item.active .outline-order,
+  .outline-item.active .outline-text { color: var(--color-primary); }
   /* 锚点定位高亮：面板「在会话中定位」滚动后给目标消息短暂描边（ChatArea JS 增删类）。
      keyframes 在组件作用域内定义，Svelte 编译时统一哈希并替换 :global 内的 animation 引用。 */
   :global(.message.locate-flash) {
