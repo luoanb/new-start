@@ -10,6 +10,8 @@
 
 use crate::core::AppResult;
 use crate::fileops::workspace::WorkspaceStore;
+use crate::infra::platform::native_path;
+use std::path::Path;
 
 pub mod bridge;
 pub mod commands;
@@ -23,19 +25,22 @@ pub use events::TerminalEventHub;
 pub use manager::TerminalManager;
 pub use session::{SessionInfo, TerminalSession, TERMINAL_EXIT_EVENT, TERMINAL_OUTPUT_EVENT};
 
-/// 解析终端启动目录：客户端显式传 `cwd` 则原样使用；否则回退到后端管理的
+/// 解析终端启动目录：客户端显式传 `cwd` 则用它；否则回退到后端管理的
 /// active 工作区根（工作区路径由后端管理，前端不负责拼接）。无 active 工作区
 /// 时返回 None（沿用进程 cwd），不报错。
+///
+/// 返回值经 [`native_path`] 归一化：工作区根由 `canonicalize` 而来，Windows 上是
+/// verbatim 形态 `\\?\E:\...`，交给 `cmd.exe` 会被判为 UNC 路径直接报错。
 pub fn resolve_spawn_cwd(
     cwd: Option<String>,
     workspace_store: &WorkspaceStore,
 ) -> AppResult<Option<String>> {
     if let Some(cwd) = cwd {
-        return Ok(Some(cwd));
+        return Ok(Some(native_path(Path::new(&cwd)).display().to_string()));
     }
     Ok(workspace_store
         .active()?
-        .map(|ws| ws.root.display().to_string()))
+        .map(|ws| native_path(&ws.root).display().to_string()))
 }
 
 #[cfg(test)]
@@ -60,6 +65,14 @@ mod tests {
         assert_eq!(cwd.as_deref(), Some("/tmp"));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn explicit_verbatim_cwd_is_normalized() {
+        let store = test_store("verbatim");
+        let cwd = resolve_spawn_cwd(Some(r"\\?\E:\workspace\new-start".into()), &store).unwrap();
+        assert_eq!(cwd.as_deref(), Some(r"E:\workspace\new-start"));
+    }
+
     #[test]
     fn no_workspace_falls_back_to_none() {
         let store = test_store("none");
@@ -76,8 +89,13 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let store = test_store("fallback");
         store.add(root.to_str().unwrap()).unwrap();
-        let canonical = std::fs::canonicalize(&root).unwrap();
+        // 工作区根存 canonicalize 结果；解析出的 cwd 应是其 native（非 verbatim）形态
+        // ——Windows 上 `\\?\E:\...` 交给 cmd.exe 会被判为 UNC 路径。
+        let expected = native_path(&std::fs::canonicalize(&root).unwrap())
+            .display()
+            .to_string();
         let cwd = resolve_spawn_cwd(None, &store).unwrap();
-        assert_eq!(cwd.as_deref(), canonical.to_str());
+        assert_eq!(cwd.as_deref(), Some(expected.as_str()));
+        assert!(!expected.starts_with(r"\\?\"));
     }
 }

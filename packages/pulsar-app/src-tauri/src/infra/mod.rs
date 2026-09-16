@@ -5,4 +5,5 @@
 //! 核心与各扩展目录均可引用本目录。
 
 pub mod config;
+pub mod platform;
 pub mod time;

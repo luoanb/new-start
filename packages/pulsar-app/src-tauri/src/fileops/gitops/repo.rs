@@ -22,6 +22,7 @@ use super::{
     GitResetPreview, GitShowFile, GitStashAction, GitStashEntry, GitStatusEntry, GitStatusView,
 };
 use crate::core::error::{AppError, AppResult};
+use crate::infra::platform::hide_console_window;
 use crate::tools::cmd_exec::{truncate_output, MAX_CONCURRENT, MAX_OUTPUT_CHARS};
 
 /// repo 发现上限。
@@ -69,6 +70,8 @@ impl CliGitBackend {
         let mut cmd = Command::new("git");
         cmd.arg("-C").arg(repo_root);
         cmd.args(args);
+        // GUI 子系统进程（release）无控制台：不隐藏则每个 git 子进程都会闪出一个窗口。
+        hide_console_window(&mut cmd);
         cmd.stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 

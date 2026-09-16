@@ -243,6 +243,8 @@ async fn connect_stdio(
     let mut cmd = tokio::process::Command::new(command);
     cmd.args(&cfg.args);
     cmd.envs(&cfg.env);
+    // GUI 子系统进程（release）无控制台：不隐藏则 stdio server 启动时会闪出窗口。
+    crate::infra::platform::hide_console_window(&mut cmd);
     let (transport, _stderr) = TokioChildProcess::builder(cmd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

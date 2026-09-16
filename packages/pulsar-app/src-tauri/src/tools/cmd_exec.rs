@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use serde_json::json;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
@@ -7,6 +8,7 @@ use tokio::process::Command;
 use tokio::sync::Semaphore;
 
 use crate::fileops::workspace::WorkspaceStore;
+use crate::infra::platform::{hide_console_window, native_path};
 use crate::terminal::{resolve_spawn_cwd, AgentTerminalBridge, TerminalSession};
 
 use crate::core::error::{AppError, AppResult};
@@ -87,17 +89,20 @@ impl ExecuteCommandTool {
     }
 
     /// 解析实际工作目录：显式 `cwd` 优先；否则回退 active 工作区根；无工作区沿用进程 cwd。
+    ///
+    /// 结果经 [`native_path`] 归一化（Windows verbatim 前缀交给 `cmd.exe` 会被判为 UNC）。
     fn resolve_cwd(&self, explicit: Option<String>) -> AppResult<Option<String>> {
         match self.workspace.as_ref() {
             Some(store) => resolve_spawn_cwd(explicit, store),
-            None => Ok(explicit),
+            None => Ok(explicit.map(|cwd| native_path(Path::new(&cwd)).display().to_string())),
         }
     }
 
     /// `cwd` 参数说明：把 active 工作区根的**具体路径**写进工具 schema。
     ///
     /// 模型看不到进程环境，不给实际路径就只能猜（典型表现是硬编码 `cd <猜的路径>`）。
-    /// 每次组装工具 schema 时现取，切换工作区后即刻生效。
+    /// 每次组装工具 schema 时现取，切换工作区后即刻生效；同样按 [`native_path`]
+    /// 归一化，避免模型照抄 `\\?\` 形态。
     fn cwd_description(&self) -> String {
         match self
             .workspace
@@ -106,7 +111,7 @@ impl ExecuteCommandTool {
         {
             Some(workspace) => format!(
                 "Optional working directory; defaults to the active workspace root: {}. Omit it unless you need a subdirectory.",
-                workspace.root.display()
+                native_path(&workspace.root).display()
             ),
             None => "Optional working directory; defaults to the process's current directory (no active workspace)".to_string(),
         }
@@ -421,6 +426,7 @@ pub(crate) async fn run_guarded_pty(
 fn build_command(command: &str) -> Command {
     let mut cmd = Command::new("cmd");
     cmd.arg("/C").arg(command);
+    hide_console_window(&mut cmd);
     cmd
 }
 
@@ -428,6 +434,7 @@ fn build_command(command: &str) -> Command {
 fn build_command(command: &str) -> Command {
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg(command);
+    hide_console_window(&mut cmd); // 非 Windows 空操作，保持两侧对称
     cmd
 }
 
