@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ProviderInfo, ModelInfo, SamplingParams, ThinkingConfig, ThinkingEffort } from "$lib/types";
   import { t } from "$lib/i18n";
+  import Select from "./Select.svelte";
 
   let {
     providers = [],
@@ -51,6 +52,26 @@
   let effort = $derived(
     thinking?.effort ?? selectedModel?.thinking?.default_effort
   );
+
+  /** 官方 reasoning_effort 7 档（模型未声明白名单时的兜底）。 */
+  const OFFICIAL_EFFORTS: ThinkingEffort[] = [
+    "none", "minimal", "low", "medium", "high", "xhigh", "max",
+  ];
+
+  /** 可选档位：优先模型声明的 allowed_efforts，缺省回退官方 7 档（排除内部哨兵）。
+   *  依据官方「Not all reasoning models support every value」。 */
+  let availableEfforts: ThinkingEffort[] = $derived(
+    ((selectedModel?.thinking?.allowed_efforts?.length
+      ? selectedModel.thinking.allowed_efforts
+      : OFFICIAL_EFFORTS
+    ) as ThinkingEffort[]).filter((e) => e !== "unknown")
+  );
+
+  /** 公共 Select 组件的选项：空值项 = 跟随默认，其余按白名单动态生成。 */
+  let effortOptions = $derived([
+    { value: "", label: "默认" },
+    ...availableEfforts.map((e) => ({ value: e, label: e })),
+  ]);
 
   let temperature = $state<string>(params?.temperature?.toString() ?? "");
   let topP = $state<string>(params?.top_p?.toString() ?? "");
@@ -179,20 +200,22 @@
         </div>
         {#if thinkingSupported}
           <div class="params-row">
-            <label>思考强度</label>
-            <select
+            <!-- 公共 Select 组件内部为 <button>，非 labelable 控件，
+                 故用 span 标注（避免 a11y label_has_associated_control 告警）。 -->
+            <span class="params-label">思考强度</span>
+            <Select
+              class="effortSelect"
               value={effort ?? ""}
-              onchange={(e) => {
-                const v = e.currentTarget.value;
-                effort = (v === "low" || v === "high" || v === "max") ? v : undefined;
+              options={effortOptions}
+              onchange={(v) => {
+                // 仅接受白名单内的合法档位；空串 = 跟随默认。
+                const s = String(v);
+                effort = availableEfforts.includes(s as ThinkingEffort)
+                  ? (s as ThinkingEffort)
+                  : undefined;
                 emitParams();
               }}
-            >
-              <option value="">默认</option>
-              <option value="low">low</option>
-              <option value="high">high</option>
-              <option value="max">max</option>
-            </select>
+            />
           </div>
         {:else}
           <div class="params-hint">该模型不支持思考模式</div>
@@ -299,6 +322,11 @@
 
   .params-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-1); }
   .params-row label { font-size: var(--fs-xs); color: var(--color-text); flex-shrink: 0; }
+  /* 思考强度标签：Select 内部为 button（非 labelable），用 span 以对齐既有 label 视觉。 */
+  .params-label { font-size: var(--fs-xs); color: var(--color-text); flex-shrink: 0; }
+  /* 公共 Select 组件在参数面板内的宽度对齐既有原生 select（110px）。 */
+  .params-row :global(.effortSelect) { width: 110px; }
+  .params-row :global(.effortSelect .trigger) { min-width: 0; }
   .params-row input[type="number"], .params-row select {
     width: 110px; padding: 2px var(--space-1);
     border: var(--border-width) solid var(--color-border); border-radius: var(--radius-sm);

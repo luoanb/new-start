@@ -1700,11 +1700,11 @@ fn build_topic_brief(topic: &Topic) -> String {
 }
 
 /// 课题简报刷新频率默认值：每 N 个推进轮至少刷新一次（可经周期可调项覆盖）。
-const BRIEF_EVERY_N_ROUNDS: u64 = 3;
+const BRIEF_EVERY_N_ROUNDS: u64 = 7;
 
 /// IP-1 合并裁决复核频率默认值：已绑定课题时每 N 条用户消息复核一次（未绑定课题必跑）。
 /// 可经周期可调项 `assistant.user-round-judgement.review_every_n` 覆盖。
-pub(crate) const USER_ROUND_JUDGEMENT_EVERY_N_ROUNDS: u64 = 3;
+pub(crate) const USER_ROUND_JUDGEMENT_EVERY_N_ROUNDS: u64 = 1;
 
 /// 裁决复核门控（纯函数便于单测）：未绑定课题（含首轮 `user_rounds == 0`）必跑；
 /// 已绑定课题按 `user_rounds` 低频复核。IP-1 时刻读到的是上一轮完成后的累计值
@@ -1873,12 +1873,12 @@ pub(crate) fn stamp_open_user_turn(
 
 /// 主对话选型频率：每 N 个推进轮做一次 LLM 选型，中间轮沿用 `last_selected` 锚点
 /// （业务层算好 `poll_count % N == 0` 后传 `reselect`，引擎不持有频率概念）。
-const SELECTION_EVERY_N_ROUNDS: u64 = 5;
+const SELECTION_EVERY_N_ROUNDS: u64 = 7;
 
 /// topic 侧助手状态：轮次计数 + 简报缓存（会话运行态已迁至 conversation.extra.session.state）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct AssistantTopicState {
-    /// 距上次用户接入的推进轮次（User 轮归零）；简报 3 轮 / 选型 5 轮频率的基准。
+    /// 距上次用户接入的推进轮次（User 轮归零）；简报 7 轮 / 选型 7 轮频率的基准。
     #[serde(default)]
     poll_count: u64,
     /// 总轮次（User + ManualStep + Poller，成功跑完即计）。

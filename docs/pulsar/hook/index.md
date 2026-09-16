@@ -167,7 +167,7 @@ application/hook/store.rs ──（独立账本，仅依赖 error / events）
 | `key` / `label` | 标识 / 展示名 i18n key |
 | `field` + `round_ref` | 绑定的周期字段与轮次（仅 `CallGate` 需要） |
 | `kind` | `Enum { values, multi }` / `Bool` / `Number { min, max }` |
-| `default` | 默认值（= 原硬编码行为值） |
+| `default` | 默认值（由动作声明，可经面板 / `config.json hooks.values` 覆盖） |
 | `usage` | `CallGate` = 框架调用前判定；`Internal` = 动作内部读取 |
 
 ### 判定与分发（`core/hook/defs.rs`）

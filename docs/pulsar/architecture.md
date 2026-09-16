@@ -453,7 +453,7 @@ flowchart TB
   subgraph runner["run_round 内部顺序"]
     LC["load_context<br/>读会话 seed / state / messages"]
     subgraph ip1["IP-1 AfterLoadContext（User 触发）"]
-      RBT["assistant.round.before：<br/>解析已绑定课题 + user_round_judgement<br/>合并裁决（打分+课题路由）<br/>门控：未绑定必跑；已绑定每 3 条用户消息复核<br/>禁工具 · mode=None · JSON 解析失败 → 中性降级<br/>action: switch / create / none"]
+      RBT["assistant.round.before：<br/>解析已绑定课题 + user_round_judgement<br/>合并裁决（打分+课题路由）<br/>门控：未绑定必跑；已绑定每 N 条用户消息复核（默认 N=1）<br/>禁工具 · mode=None · JSON 解析失败 → 中性降级<br/>action: switch / create / none"]
     end
     PI["persist_input 输入落库"]
     subgraph ip2["IP-2 AfterPersistInput"]

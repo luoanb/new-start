@@ -3,8 +3,9 @@
 //! 职责边界：
 //! - 本模块只做「OpenAI Chat Completions 协议」的序列化 / 反序列化 / HTTP 发送 / SSE 流式解析。
 //! - **不含**任何服务商策略、参数抹平、模型能力判断——那些属于 `providers`（整合层）。
-//! - 服务商 / 模型治理字段（reasoning_effort、thinking 等特异性参数）通过 `extra` 透传，
-//!   由 `providers` 按需填充，本层不感知。
+//! - 服务商 / 模型治理字段（thinking、response_format 等特异性参数）通过 `extra` 透传，
+//!   由 `providers` 按需填充，本层不感知其语义。
+//! - **例外**：`reasoning_effort` 为 OpenAI 官方标准字段（非服务商扩展），故在上层显式建模。
 //!
 //! 依赖：`serde` + `serde_json` + `reqwest`（`json`、`rustls-tls`），**不依赖 async-openai**。
 
@@ -113,8 +114,9 @@ pub struct FunctionDef {
 
 /// Chat Completions 请求（标准 OpenAI 契约）。
 ///
-/// 特异性 / 未来扩展字段（reasoning_effort、thinking、response_format 等）通过 `extra` 扁平透传，
+/// 特异性 / 未来扩展字段（thinking、response_format 等）通过 `extra` 扁平透传，
 /// 由 `providers` 按服务商填充——本层不感知其语义。
+/// （`reasoning_effort` 例外：官方标准字段，已在上方显式建模。）
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ChatRequest {
@@ -136,10 +138,16 @@ pub struct ChatRequest {
     pub frequency_penalty: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seed: Option<i64>,
+    // ── 思考（OpenAI 官方标准字段）──
+    /// 思考强度：OpenAI Chat Completions 的**官方标准顶层字段**（非服务商扩展）。
+    /// 取值 `none/minimal/low/medium/high/xhigh/max`；由 `providers` 层抹平后写入。
+    /// 注：Responses 接口为嵌套形态 `reasoning.effort`，接入时由整合层决定展平/嵌套。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
     // ── 工具 ──
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<ToolDef>>,
-    /// 特异性 / 未来扩展字段扁平透传（reasoning_effort、thinking、response_format…）。
+    /// 特异性 / 未来扩展字段扁平透传（thinking、response_format 等服务商扩展）。
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -156,6 +164,7 @@ impl ChatRequest {
             presence_penalty: None,
             frequency_penalty: None,
             seed: None,
+            reasoning_effort: None,
             tools: None,
             extra: BTreeMap::new(),
         }
@@ -587,15 +596,27 @@ mod tests {
         assert_eq!(v["tool_calls"][0]["function"]["arguments"], r#"{"city":"beijing"}"#);
     }
 
+    /// `reasoning_effort` 为官方标准字段：序列化后位于 JSON **顶层**（非 `extra` 透传路径）；
+    /// 而 DeepSeek `thinking` 等真正的服务商扩展仍走 `extra` 展平。
     #[test]
-    fn request_extra_flatten() {
+    fn request_reasoning_effort_is_top_level_not_extra() {
         let mut req = ChatRequest::new("deepseek-chat", vec![ChatMessage::user("hello")]);
+        req.reasoning_effort = Some("high".into());
         req.extra.insert("thinking".into(), serde_json::json!({"type": "enabled"}));
-        req.extra.insert("reasoning_effort".into(), serde_json::json!("high"));
         let v = serde_json::to_value(&req).unwrap();
-        assert_eq!(v["thinking"]["type"], "enabled");
+        // 标准字段在顶层。
         assert_eq!(v["reasoning_effort"], "high");
+        // 服务商扩展仍展平在顶层（extra flatten 语义未变）。
+        assert_eq!(v["thinking"]["type"], "enabled");
         assert_eq!(v["model"], "deepseek-chat");
+    }
+
+    /// 未设置思考强度时，不应出现 `reasoning_effort` 键（skip_serializing_if 生效）。
+    #[test]
+    fn request_omits_reasoning_effort_when_none() {
+        let req = ChatRequest::new("gpt-5", vec![ChatMessage::user("hi")]);
+        let v = serde_json::to_value(&req).unwrap();
+        assert!(v.get("reasoning_effort").is_none());
     }
 
     #[test]

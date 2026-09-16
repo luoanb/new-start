@@ -4,7 +4,7 @@
 status: done
 result: completed
 created_at: 2026-09-12 19:57
-updated_at: 2026-09-12 23:40
+updated_at: 2026-09-15 21:15
 owner: user
 ```
 
@@ -42,6 +42,11 @@ owner: user
   - **i18n 修复**：Rust 侧 key 由点号命名（`cycle.param.mode` / `cycle.group.shell` / `cycle.hint.roundBefore`）统一改为**扁平命名**（`cycle.paramMode` / `cycle.groupShell` / `cycle.hintRoundBefore`），与 `translations.ts` 的 `cycle.*` 扁平键对齐；4 个业务动作的 `label` 由中文硬编码改为 i18n key（新增 `cycle.hookRoundBefore` / `hookRoundAfter` / `hookSelectNeuron` / `hookCompaction`，en + zh）。
   - **开关位置**：启停 Toggle 从折叠行移入**展开面板**（折叠行只留名称 / 分组·注入点 / 停用标记 / chevron，整行可点展开）；风险提示随开关移入展开面板；新增 i18n `cycle.enabled`。
   - 验证：`cargo check --all-targets` 0 错 0 警告；`cargo test --lib` 482 passed；`pnpm --filter pulsar-app check` 0 errors。
+- 17. 2026-09-15（周期默认值调整，用户指定）: 用户给出三项新节奏值——轮前准备 **7** / 神经元选型 **7** / 用户裁决轮 **1**，要求改周期默认参数。
+  - 改动：三处常量同步为声明默认值来源——`USER_ROUND_JUDGEMENT_EVERY_N_ROUNDS` **3 → 1**（`review_every_n`）、`BRIEF_EVERY_N_ROUNDS` **3 → 7**（`brief_every_n`）、`SELECTION_EVERY_N_ROUNDS` **5 → 7**（`selection_every_n`）；`AssistantTopicState.poll_count` 注释同步。可调范围（`Number { min: 1, max: 50 }`）与判定机制不变。
+  - 影响：仅默认值。已通过面板或 `config.json hooks.values` 覆盖过的值不受影响（覆盖优先于声明默认）。原「默认值 = 原硬编码值」的等价性只成立于迁移当期，此后以本决策为准。
+  - 回写：`requirements.md`（业务诉求 #1/#4/#5 效果值 + 顶部说明 + Requirement Decisions 末条 + 验收标准措辞）、`technical-plan.md`（§API-4 默认值表 + 注 2 + §当前项目事实快照附注 + 风险缓解措辞）。
+  - 验证：`cargo check --all-targets` 0 错 0 警告；`cargo test --lib` **519 passed / 0 failed**（既有节奏相关单测均以显式入参断言，不依赖常量取值，故不受影响）。
 
 ## Transition Log / 状态变化
 

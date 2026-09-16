@@ -344,12 +344,25 @@ pub struct SamplingParams {
 }
 
 /// 思考模式强度档位（统一规范；服务商差异由 providers 抹平）。
+///
+/// 取值对齐 OpenAI 官方 `reasoning_effort` 现行 7 档
+/// （`none/minimal/low/medium/high/xhigh/max`，见 openai-python `ReasoningEffort`）。
+/// `None` 语义 = 关闭思考（与 `ThinkingConfig.enabled = false` 重叠，由 providers 定优先级）。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ThinkingEffort {
+    None,
+    Minimal,
     Low,
+    Medium,
     High,
+    Xhigh,
     Max,
+    /// 前向兼容哨兵：官方新增档位时不 panic（反序列化兜底）。
+    /// 注意：序列化会产出 `"unknown"`，因此**不得**直接下发 wire——
+    /// 由 `thinking_effort_wire` 返回 `None` 拦截（见 providers 层）。
+    #[serde(other)]
+    Unknown,
 }
 
 /// 思考模式（深度思考）配置（统一规范，对外契约）。
@@ -374,6 +387,11 @@ pub struct ThinkingCapability {
     /// 模型默认思考强度（用户未指定时）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_effort: Option<ThinkingEffort>,
+    /// 模型支持的档位白名单；`None` = 不限制（按全局 7 档处理）。
+    /// 依据官方说明「Not all reasoning models support every value」——由能力声明承担，
+    /// `resolve_thinking` 据此钳制越权档位。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_efforts: Option<Vec<ThinkingEffort>>,
 }
 
 /// 会话级 / 调用级统一模型选择（对外契约）。
@@ -1064,4 +1082,67 @@ pub struct GeneratedNeuronDraft {
     pub weight: f64,
     #[serde(default)]
     pub tool_ids: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 官方 7 档取值均可反序列化（lowercase）。
+    #[test]
+    fn thinking_effort_deserializes_official_seven() {
+        let cases = [
+            ("\"none\"", ThinkingEffort::None),
+            ("\"minimal\"", ThinkingEffort::Minimal),
+            ("\"low\"", ThinkingEffort::Low),
+            ("\"medium\"", ThinkingEffort::Medium),
+            ("\"high\"", ThinkingEffort::High),
+            ("\"xhigh\"", ThinkingEffort::Xhigh),
+            ("\"max\"", ThinkingEffort::Max),
+        ];
+        for (json, expected) in cases {
+            let got: ThinkingEffort = serde_json::from_str(json).unwrap();
+            assert_eq!(got, expected, "failed for {json}");
+        }
+    }
+
+    /// 未知档位 → Unknown（前向兼容兜底），不 panic。
+    #[test]
+    fn thinking_effort_unknown_falls_back() {
+        let got: ThinkingEffort = serde_json::from_str("\"turbo\"").unwrap();
+        assert_eq!(got, ThinkingEffort::Unknown);
+    }
+
+    /// 序列化往返：已知档位以 lowercase 输出。
+    /// 注：`Unknown` 无 `#[serde(skip)]`，序列化会产出 `"unknown"`——
+    /// 该哨兵仅用于内部反序列化兜底；对外下发由 `thinking_effort_wire` 返回 `None` 拦截，
+    /// 故本条只断言已知档位的 wire 形态。
+    #[test]
+    fn thinking_effort_serializes_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&ThinkingEffort::Xhigh).unwrap(),
+            "\"xhigh\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ThinkingEffort::Medium).unwrap(),
+            "\"medium\""
+        );
+    }
+
+    /// 旧配置（仅 low/high/max）与缺省 allowed_efforts 仍可解析（向后兼容）。
+    #[test]
+    fn thinking_capability_backward_compatible() {
+        let old = r#"{"supported":true,"default_effort":"high"}"#;
+        let cap: ThinkingCapability = serde_json::from_str(old).unwrap();
+        assert!(cap.supported);
+        assert_eq!(cap.default_effort, Some(ThinkingEffort::High));
+        assert_eq!(cap.allowed_efforts, None);
+
+        let new = r#"{"supported":true,"allowed_efforts":["low","high"]}"#;
+        let cap2: ThinkingCapability = serde_json::from_str(new).unwrap();
+        assert_eq!(
+            cap2.allowed_efforts,
+            Some(vec![ThinkingEffort::Low, ThinkingEffort::High])
+        );
+    }
 }

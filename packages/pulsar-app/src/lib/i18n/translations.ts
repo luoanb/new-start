@@ -69,6 +69,12 @@ export type Translations = {
     emptyDesc: string;
     chatInputPlaceholder: string;
     stop: string;
+    /** 用户轮目录浮层标题。 */
+    outlineTitle: string;
+    /** 目录项文本兜底（该轮用户输入为空时）。 */
+    outlineUntitled: string;
+    /** 目录「滚动到末尾」按钮提示。 */
+    outlineJumpEnd: string;
   };
   chatMessage: {
     you: string;
@@ -837,6 +843,9 @@ export const en: Translations = {
     emptyDesc: "Send a message below to begin",
     chatInputPlaceholder: "Type a message... (Enter to send, Shift+Enter for new line)",
     stop: "Stop",
+    outlineTitle: "Turn outline",
+    outlineUntitled: "(empty input)",
+    outlineJumpEnd: "Scroll to latest",
   },
   chatMessage: {
     you: "You",
@@ -1641,6 +1650,9 @@ export const zh: Translations = {
     emptyDesc: "在下方输入消息开始对话",
     chatInputPlaceholder: "输入消息... (Enter 发送, Shift+Enter 换行)",
     stop: "终止",
+    outlineTitle: "用户轮目录",
+    outlineUntitled: "（空输入）",
+    outlineJumpEnd: "滚动到末尾",
   },
   chatMessage: {
     you: "你",
