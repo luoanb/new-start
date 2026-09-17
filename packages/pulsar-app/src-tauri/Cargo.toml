@@ -9,8 +9,9 @@ default-run = "pulsar-app"
 [features]
 # 内嵌 server 托管前端静态资源：rust-embed 编译期嵌入 build/。
 # 默认启用——桌面版的内嵌服务也要能托管前端（否则远程浏览器打开服务地址只会 404）。
-# 注意：rust-embed 在编译期要求 `../build/` 存在，因此首次 `tauri dev` / `cargo build` 前
-# 需先 `pnpm build`（`tauri build` 会由 beforeBuildCommand 自动完成）。
+# 注意：rust-embed 在编译期要求 `../build/` 存在。`pnpm tauri:dev` 已自动按需构建兜底；
+# 绕过它的裸 `pnpm tauri dev` / `cargo build` / `cargo check` 前仍需先 `pnpm build`
+# （`tauri build` 会由 beforeBuildCommand 自动完成）。
 default = ["embed-static"]
 embed-static = []
 

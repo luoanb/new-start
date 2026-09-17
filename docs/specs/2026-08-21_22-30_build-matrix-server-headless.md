@@ -63,7 +63,8 @@ struct FrontendAssets;   // 编译期嵌入 build/
 
 - 不改前端代码、不改 RPC/SSE/WS 协议。
 - 不改 `net::run_server` 的 API 行为；静态托管是叠加项。
-- 编译期要求 `build/` 存在（Tauri `beforeBuildCommand` 已保证 GUI 路径；headless 单独构建需先 `pnpm build`）。
+- 编译期要求 `build/` 存在（`beforeBuildCommand` 保证 GUI **build** 路径；`pnpm tauri:dev` 由 `scripts/dev-tauri.mjs` 在缺少 `build/index.html` 时自动补一次前端构建；裸 `pnpm tauri dev` / `cargo build` 与 headless 单独构建仍需先 `pnpm build`）。
+  - 反写（2026-09-17）：原方案只覆盖 build 路径，dev 路径在 `default = ["embed-static"]` 后变成「首次 `pnpm tauri:dev` 编译必挂」；已在 dev 脚本补兜底，见 [micro-spec](../micro_specs/2026-09-17_09-15_dev-tauri-ensure-frontend-build.md)。
 
 ## 风险
 
