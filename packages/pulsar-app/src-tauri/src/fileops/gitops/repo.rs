@@ -666,8 +666,12 @@ fn id_for_root(root: &Path) -> String {
 #[async_trait::async_trait]
 impl GitBackend for CliGitBackend {
     async fn discover_repos(&self, ws_root: &Path, ignore: &[String]) -> AppResult<Vec<GitRepo>> {
+        // 报错带上具体工作区根：失效条目（目录被删/换机器遗留的旧路径）需要能直接认出来。
         let root_c = ws_root.canonicalize().map_err(|e| {
-            AppError::InvalidInput(format!("workspace root not accessible: {e}"))
+            AppError::InvalidInput(format!(
+                "workspace root not accessible: {} ({e})",
+                ws_root.display()
+            ))
         })?;
         let mut repos: Vec<GitRepo> = Vec::new();
         let mut seen: HashSet<PathBuf> = HashSet::new();

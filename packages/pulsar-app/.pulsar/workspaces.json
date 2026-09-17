@@ -33,6 +33,40 @@
         "coverage"
       ],
       "created_at": 1789192036871
+    },
+    {
+      "id": "ws-defd61a8b5f5ae35",
+      "name": "physalis-work1",
+      "root": "\\\\?\\C:\\workspace\\physalis-work1",
+      "ignore": [
+        ".git",
+        "node_modules",
+        "target",
+        "dist",
+        ".pulsar",
+        ".DS_Store",
+        "build",
+        "out",
+        "coverage"
+      ],
+      "created_at": 1789609874234
+    },
+    {
+      "id": "ws-1734a4b8ce2432af",
+      "name": "physalis",
+      "root": "\\\\?\\C:\\workspace\\physalis",
+      "ignore": [
+        ".git",
+        "node_modules",
+        "target",
+        "dist",
+        ".pulsar",
+        ".DS_Store",
+        "build",
+        "out",
+        "coverage"
+      ],
+      "created_at": 1789609887831
     }
   ],
   "active_id": "ws-13703389a02e2b97"

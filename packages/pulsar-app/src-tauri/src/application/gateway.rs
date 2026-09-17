@@ -1864,8 +1864,8 @@ mod tests {
 
     fn chat_options(conversation_id: Option<String>) -> ChatOptions {
         ChatOptions {
-            // custom 内置 provider 允许未登记模型，测试无需写 config 定义。
-            provider_id: "custom".into(),
+            // ollama 内置 provider 允许未登记模型且不要求 api key，测试无需写 config 定义。
+            provider_id: "ollama".into(),
             model_id: "test-model".into(),
             conversation_id,
             params: None,

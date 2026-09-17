@@ -262,6 +262,11 @@ function emptyGitView(): GitView {
  * branches/log/stash 对 active repo 并行拉取，单个失败不影响其余（无仓库时整组跳过）。
  */
 async function refreshGit(): Promise<void> {
+  // git 以 active 工作区为根：无工作区时直接回落空视图，避免后端「no active workspace」噪音。
+  if (!state.workspaces?.active_id) {
+    state.git = emptyGitView();
+    return;
+  }
   try {
     const repos = await api.call(c.gitRepos, undefined);
     const previousActive = state.git?.activeRepoId ?? null;
@@ -413,6 +418,8 @@ async function handleStateChanged(payload: StateChangePayload): Promise<void> {
       state.toolsVersion++;
     } else if (payload.kind === "workspaces") {
       await refreshWorkspaces();
+      // git 仓库与状态均以 active 工作区为根：工作区变更需同步重拉，否则 git 面板停留在旧工作区。
+      await refreshGit();
     } else if (payload.kind === "git") {
       await refreshGit();
     } else if (payload.kind === "git_confirm") {
