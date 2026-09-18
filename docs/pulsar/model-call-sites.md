@@ -18,7 +18,7 @@ pulsar-app（Rust / Tauri）的模型调用采用**单一下游出口** + 多层
 
 - 所有模型请求最终都汇聚到这里出网。
 - 非流式 `client.chat().create()`，返回 `ModelCallResponse`。
-- 内置 provider：`openai` / `deepseek` / `ollama` / `custom`（全部 OpenAI 兼容协议）。
+- 内置 provider：`openai` / `deepseek` / `ollama`（全部 OpenAI 兼容协议）。
 - 本地校验：请求非空、消息非空、provider/model 存在性。
 - API key 解析：环境变量 → `.pulsar/config.json`。
 

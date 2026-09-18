@@ -147,7 +147,7 @@ impl WorkspaceStore {
         Ok(view.workspaces.iter().find(|w| w.id == id).cloned())
     }
 
-    /// 添加工作区：校验目录存在、canonicalize、去重；返回新视图。
+    /// 添加工作区：校验目录存在、canonicalize、去重；新工作区置为 active 并返回新视图。
     pub fn add(&self, root: &str) -> AppResult<WorkspaceView> {
         let raw = PathBuf::from(root.trim());
         if raw.as_os_str().is_empty() {
@@ -188,9 +188,9 @@ impl WorkspaceStore {
             ignore: default_ignore(),
             created_at: now_ms(),
         });
-        if guard.active_id.is_none() {
-            guard.active_id = Some(id);
-        }
+        // 新加的工作区直接置为 active：用户「添加」的意图就是切到该目录；同时避免残留的
+        // 失效 active（目录已不存在，例如换机器后遗留的旧路径）继续污染文件树 / git / 终端 cwd。
+        guard.active_id = Some(id);
         self.persist(&guard)?;
         Ok(WorkspaceView {
             workspaces: guard.workspaces.clone(),
@@ -262,9 +262,13 @@ impl WorkspaceStore {
     /// - 对存在的路径 canonicalize 后做前缀校验（符号链接逃逸 → 拒绝）；
     /// - 对不存在的目标（写操作），解析最近存在的祖先再拼接剩余段并校验前缀。
     pub fn resolve_in_workspace(root: &Path, rel: &str) -> AppResult<PathBuf> {
-        let root = root
-            .canonicalize()
-            .map_err(|e| AppError::InvalidInput(format!("workspace root not accessible: {e}")))?;
+        // 报错带上具体工作区根：失效条目（目录被删/换机器遗留的旧路径）需要能直接认出来。
+        let root = root.canonicalize().map_err(|e| {
+            AppError::InvalidInput(format!(
+                "workspace root not accessible: {} ({e})",
+                root.display()
+            ))
+        })?;
         let rel = rel.trim();
         if rel.is_empty() {
             return Ok(root);
@@ -356,6 +360,24 @@ mod tests {
         assert_eq!(view2.workspaces.len(), 1);
         assert_eq!(view2.workspaces[0].root, ws.canonicalize().unwrap());
         assert!(view2.workspaces[0].ignore.len() >= 5, "default ignore");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn add_switches_active() {
+        let (root, ws) = setup("add_switches_active");
+        let other = root.join("proj2");
+        fs::create_dir_all(&other).unwrap();
+        let store = WorkspaceStore::new(&root).unwrap();
+        let first = store.add(ws.to_str().unwrap()).unwrap();
+        let first_id = first.active_id.clone().expect("first add activates");
+
+        let view = store.add(other.to_str().unwrap()).unwrap();
+        assert_ne!(view.active_id, Some(first_id), "new add takes over active");
+        assert_eq!(
+            view.active_id.as_deref(),
+            Some(view.workspaces[1].id.as_str())
+        );
         fs::remove_dir_all(&root).ok();
     }
 

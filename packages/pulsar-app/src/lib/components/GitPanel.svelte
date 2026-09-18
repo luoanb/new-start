@@ -340,13 +340,16 @@
   {:else}
     <!-- 作用域工具条 -->
     <div class="toolbar">
-      <Select
-        value={activeRepo?.id ?? ""}
-        options={repoOptions}
-        placeholder={t("git.repoPlaceholder")}
-        class="toolbar-select"
-        onchange={(v) => setRepo(String(v))}
-      />
+      <!-- 仓库下拉仅在「一个工作区内发现多个仓库」时出现：单仓时 git 天然跟随工作区，无需选择器 -->
+      {#if repoOptions.length > 1}
+        <Select
+          value={activeRepo?.id ?? ""}
+          options={repoOptions}
+          placeholder={t("git.repoPlaceholder")}
+          class="toolbar-select"
+          onchange={(v) => setRepo(String(v))}
+        />
+      {/if}
       <Select
         value={currentBranch ?? ""}
         options={branchOptions}

@@ -48,8 +48,10 @@ function readVersion() {
   const tauri = readJson(FILES.tauriConf);
   const toml = readFileSync(FILES.cargoToml, "utf8").match(/^version = "([^"]+)"/m);
   const lock = readFileSync(FILES.cargoLock, "utf8");
-  const pkgBlock = lock.split("\n\n").find((b) => b.startsWith(`[[package]]\nname = "${CARGO_PKG}"\n`));
-  const lockV = pkgBlock?.match(/^version = "([^"]+)"/m)?.[1];
+  // 行尾容忍 CRLF：Windows 下 core.autocrlf=true 会把 Cargo.lock 检出为 CRLF。
+  const lockV = lock.match(
+    new RegExp(`^\\[\\[package\\]\\]\\r?\\nname = "${CARGO_PKG}"\\r?\\nversion = "([^"]+)"`, "m")
+  )?.[1];
   if (!toml || !lockV) {
     console.error("无法从 Cargo.toml / Cargo.lock 读取版本号");
     process.exit(1);
@@ -100,7 +102,7 @@ function writeVersions(version) {
   writeFileSync(
     FILES.cargoLock,
     lock.replace(
-      /^(\[\[package\]\]\nname = "pulsar-app"\n)version = "[^"]+"/m,
+      new RegExp(`^(\\[\\[package\\]\\]\\r?\\nname = "${CARGO_PKG}"\\r?\\n)version = "[^"]+"`, "m"),
       `$1version = "${version}"`
     )
   );

@@ -526,7 +526,8 @@
   async function initWsInput() {
     try {
       const home = await api.call(c.getHomeDir, undefined);
-      wsInput = home.endsWith("/") ? home : home + "/";
+      // 分隔符跟随返回值本身（Windows 反斜杠 / POSIX 斜杠），不硬编码 `/`
+      wsInput = /[\\/]$/.test(home) ? home : home + sepOf(home);
     } catch {
       wsInput = "";
     }
@@ -557,49 +558,88 @@
   }
 
   // ── 路径补全（注入给 SuggestInput 的建议拉取）：列当前目录直接子项 + 前缀过滤（含 `.` / `..`）──
+  // 输入是**文件系统绝对路径**，须同时兼容 Windows（`C:\` / `C:/` / UNC）与 POSIX（`/`）：
+  // 分隔符、根判定、父目录回溯一律按输入自身形态推导，不硬编码 `/`。
 
-  /** 拆分输入为「待列出目录 + 过滤前缀」（输入以 / 结尾视为纯目录）。 */
+  /** 该路径所用的分隔符：含反斜杠或盘符形态 → Windows，否则 POSIX。 */
+  function sepOf(p: string): string {
+    return p.includes("\\") || /^[a-zA-Z]:/.test(p) ? "\\" : "/";
+  }
+
+  /** 最后一个分隔符下标（两种分隔符取最大）；无则 -1。 */
+  function lastSep(p: string): number {
+    return Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+  }
+
+  /** 是否绝对路径：POSIX `/x`、Windows `C:\x` / `C:/x` / 裸盘符 `C:`、UNC `\\host\share`。 */
+  function isAbsPath(p: string): boolean {
+    return p.startsWith("/") || p.startsWith("\\\\") || /^[a-zA-Z]:([\\/]|$)/.test(p);
+  }
+
+  /** 是否所在盘的根（`/`、`C:\`、`C:`、`\\host\share`）：根再向上取父目录仍是自身。 */
+  function isRootPath(p: string): boolean {
+    return p === "/" || /^[a-zA-Z]:[\\/]?$/.test(p) || /^\\\\[^\\]+\\[^\\]+$/.test(p);
+  }
+
+  /** 父目录：`C:\a\b` → `C:\a`；`/a` → `/`；根自返（避免回溯死循环）。 */
+  function parentPath(p: string): string {
+    if (isRootPath(p)) return p;
+    const i = lastSep(p);
+    if (i < 0) return p;
+    const head = p.slice(0, i);
+    const sep = sepOf(p);
+    if (head === "") return sep;
+    // 裸盘符不可直接 list，补回分隔符
+    return /^[a-zA-Z]:$/.test(head) ? head + sep : head;
+  }
+
+  /** 拆分输入为「待列出目录 + 过滤前缀」（输入以分隔符结尾视为纯目录）。 */
   function splitPathInput(input: string): { parent: string; prefix: string } {
-    const hasTrailing = input.endsWith("/");
-    const lastSlash = input.lastIndexOf("/");
-    const parent = hasTrailing
-      ? input.slice(0, -1)
-      : lastSlash <= 0
-        ? "/"
-        : input.slice(0, lastSlash);
-    const prefix = hasTrailing ? "" : input.slice(lastSlash + 1);
-    return { parent: parent || "/", prefix };
+    const sep = sepOf(input);
+    const trailing = /[\\/]$/.test(input);
+    const i = lastSep(input);
+    let parent = trailing ? input.slice(0, -1) : i < 0 ? input : input.slice(0, i);
+    if (/^[a-zA-Z]:$/.test(parent)) parent += sep;
+    return {
+      parent: parent === "" && sep === "/" ? "/" : parent,
+      prefix: trailing || i < 0 ? "" : input.slice(i + 1),
+    };
   }
 
   async function fetchWsSuggest(input: string): Promise<SuggestItem[]> {
     const text = input.trim();
-    if (!text.startsWith("/")) return [];
+    if (!isAbsPath(text)) return [];
     const { parent } = splitPathInput(text);
-    // 目标目录不存在/无权限时逐级向父目录回退，回退后过滤前缀变宽
+    if (!parent) return [];
+    // 目标目录不存在/无权限时逐级向父目录回退（到根为止），回退后过滤前缀变宽
     let entries: FsEntry[] | null = null;
     let dir = parent;
-    while (dir) {
+    for (;;) {
       try {
         entries = await api.call(c.fsSuggestAbs, { path: dir });
         break;
       } catch {
-        if (dir === "/") break;
-        dir = dir.slice(0, dir.lastIndexOf("/")) || "/";
+        const up = parentPath(dir);
+        if (up === dir) break;
+        dir = up;
       }
     }
     if (!entries) return [];
     // 过滤 key：text 中 dir 之后的部分，取第一段（跨层输入回退后仍能匹配）
-    const rest = dir === "/" ? text.slice(1) : text.slice(dir.length + 1);
-    const key = rest.split("/")[0].toLowerCase();
+    const key = text
+      .slice(dir.length)
+      .replace(/^[\\/]+/, "")
+      .split(/[\\/]/)[0]
+      .toLowerCase();
     const dirs = entries.filter(
       (e) => e.is_dir && e.name.toLowerCase().startsWith(key),
     );
     const files = entries.filter(
       (e) => !e.is_dir && e.name.toLowerCase().startsWith(key),
     );
-    const upPath = dir === "/" ? "/" : dir.slice(0, dir.lastIndexOf("/")) || "/";
-    // 工作区根须为目录：目录候选以 / 结尾（展示 + 填入），文件候选原样
-    const dirLabel = (p: string) => (p.endsWith("/") ? p : p + "/");
+    // 工作区根须为目录：目录候选以本形态分隔符结尾（展示 + 填入），文件候选原样
+    const dirLabel = (p: string) => (/[\\/]$/.test(p) ? p : p + sepOf(p));
+    const upPath = parentPath(dir);
     return [
       { label: dirLabel(upPath), value: dirLabel(upPath), expand: true },
       { label: dirLabel(dir), value: dirLabel(dir), expand: true },

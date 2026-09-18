@@ -12,14 +12,31 @@
 //   pnpm tauri:dev                          # 默认端口（1432 / 8899）
 //   pnpm tauri:dev --frontend-port 1450 --backend-port 9000
 //   DEV_FRONT_PORT=1450 PULSAR_PORT=9000 pnpm tauri:dev
-import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const confPath = new URL("../src-tauri/tauri.conf.json", import.meta.url);
 const conf = JSON.parse(readFileSync(fileURLToPath(confPath), "utf8"));
+const pkgRoot = fileURLToPath(new URL("..", import.meta.url));
 const baseFrontPort = Number(new URL(conf.build.devUrl).port);
 const defaultBackPort = 8899;
+
+// Rust 侧 default feature `embed-static` 使 net/static_assets.rs 的
+// `#[folder = "../build/"]` 在**编译期**就要求 build/ 存在；而 dev 路径只跑
+// beforeDevCommand（vite dev server），不产出该目录，新克隆/清理产物后编译必挂。
+// 故启动前按需补一次生产构建（dev 下内嵌副本不被使用，仅需存在）。
+const buildIndex = fileURLToPath(new URL("../build/index.html", import.meta.url));
+
+function ensureFrontendBuild() {
+  if (existsSync(buildIndex)) return;
+  console.log("[dev-tauri] 缺少前端产物 build/，先执行 pnpm build ...");
+  const built = spawnSync("pnpm", ["build"], { cwd: pkgRoot, stdio: "inherit" });
+  if (built.status !== 0 || !existsSync(buildIndex)) {
+    console.error("[dev-tauri] 前端构建未产出 build/index.html，终止启动");
+    process.exit(1);
+  }
+}
 
 // 解析 --<name>=<n> 或 --<name> <n> 形式的端口参数
 function parsePort(argv, name) {
@@ -57,6 +74,8 @@ if (frontPort !== baseFrontPort) {
 // 透传其它 CLI 参数（如 --release、--features 等），剔除自定义端口参数
 const passthrough = argv.filter((a) => a.startsWith("-") && !a.startsWith("--frontend-port") && !a.startsWith("--backend-port"));
 args.push(...passthrough);
+
+ensureFrontendBuild();
 
 const child = spawn("pnpm", args, {
   stdio: "inherit",

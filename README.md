@@ -119,7 +119,7 @@ cp packages/pulsar-app/.env.example packages/pulsar-app/.env
 ### 3. 运行
 
 ```bash
-# 桌面应用开发（推荐）
+# 桌面应用开发（推荐）；首次会自动补一次前端构建，无需手工 pnpm build
 cd packages/pulsar-app && pnpm tauri:dev
 
 # 仅前端开发
@@ -133,7 +133,7 @@ cd packages/pulsar-app && pnpm dev
 | 命令 | 说明 |
 |------|------|
 | `pnpm dev` | 仅前端 dev server（vite，端口 1432） |
-| `pnpm tauri:dev` | 完整桌面开发（Tauri + 前端热更新，可用 `--frontend-port`/`--backend-port` 自定义端口） |
+| `pnpm tauri:dev` | 完整桌面开发（Tauri + 前端热更新，可用 `--frontend-port`/`--backend-port` 自定义端口；缺少 `build/` 时自动先构建前端） |
 | `pnpm build` | 构建前端产物 |
 | `pnpm check` | Svelte 类型检查（svelte-check） |
 | `pnpm cli` | 运行 `pulsar-cli` |

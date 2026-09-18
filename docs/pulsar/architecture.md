@@ -72,7 +72,7 @@ flowchart TB
   end
 
   subgraph ext["外部"]
-    llm["LLM Providers<br/>OpenAI / DeepSeek / Ollama / Custom"]
+    llm["LLM Providers<br/>OpenAI / DeepSeek / Ollama"]
     mcp["MCP Servers"]
     shell["本机命令 + PTY 终端"]
     git["git CLI"]
