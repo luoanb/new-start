@@ -345,7 +345,7 @@
     return mainViews.find((v) => v.id === type)!;
   }
 
-  // 工具配置编辑面板：插入/激活 tool-editor 面板（默认第 0 栏，同一类型全局唯一）
+  // 工具配置编辑面板：插入/激活 tool-editor 面板（默认第 2 栏，同一类型全局唯一）
   function openToolEditor() {
     layoutStore.insertPanel("tool-editor");
   }
@@ -390,7 +390,7 @@
   function toggleNeuronPanel() {
     const panel = mainPanes.flatMap((p) => p.panels).find((x) => x.type === "neurons");
     if (panel) layoutStore.closePanel(panel.id);
-    else layoutStore.insertPanel("neurons", 2);
+    else layoutStore.insertPanel("neurons");
   }
 
   function handleActivitySelect(id: string) {
@@ -967,7 +967,9 @@
     font-size: var(--fs-sm);
   }
 
-  /* main 区分栏：flex 并排，分栏间由 Splitter 分隔；激活栏边框高亮 */
+  /* main 区分栏：flex 并排，分栏间由 Splitter 分隔。
+     分隔线由分栏自己的 1px 右边线承担（分割条不再画常驻线）；
+     末尾分栏不画，其右缘紧邻 info 栏的 border-left，画了会并排成双线。 */
   .main-panes {
     flex: 1;
     min-width: 0;
@@ -982,7 +984,7 @@
     flex-direction: column;
     border-right: var(--border-width) solid transparent;
   }
-  .main-pane.active {
+  .main-pane:not(:last-child) {
     border-right-color: var(--color-border);
   }
   /* 唯一分栏强制撑满：历史持久化可能残留非 1 的 grow（如 0.95），

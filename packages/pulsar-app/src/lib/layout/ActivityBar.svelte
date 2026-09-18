@@ -43,7 +43,7 @@
     flex-direction: column;
     align-items: center;
     gap: var(--space-1);
-    width: 48px;
+    width: 40px;
     height: 100%;
     padding-top: var(--space-2);
     background: var(--color-surface);
@@ -52,8 +52,8 @@
 
   :global(.activity-item) {
     position: relative;
-    width: 48px;
-    height: 44px;
+    width: 40px;
+    height: 40px;
     display: flex;
     align-items: center;
     justify-content: center;

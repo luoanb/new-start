@@ -133,12 +133,12 @@
     font-size: var(--fs-sm);
   }
 
+  /* 顶部横线由容器 .container-header 提供，此处不再重复 */
   .search-bar {
     display: flex;
     align-items: center;
     gap: var(--space-1);
     padding: var(--space-1) var(--space-2);
-    border-bottom: var(--border-width) solid var(--color-border);
     flex-shrink: 0;
   }
   .query-input {

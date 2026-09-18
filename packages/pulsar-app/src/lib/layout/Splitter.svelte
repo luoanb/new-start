@@ -58,12 +58,13 @@
   .splitter.vertical { width: 4px; margin: 0 -2px; cursor: col-resize; }
   .splitter.horizontal { height: 4px; margin: -2px 0; cursor: row-resize; }
 
+  /* 常驻线交给相邻容器的 1px border（分割条自身 4px 盒画出来会是 2px，与别处细线不齐）；
+     分割条只保留热区与 hover / 拖拽高亮。 */
   .splitter::after {
     content: "";
     position: absolute;
     inset: 0;
-    background: var(--color-border);
-    opacity: 0.9;
+    background: transparent;
   }
 
   .splitter.vertical::after { left: 1px; right: 1px; }

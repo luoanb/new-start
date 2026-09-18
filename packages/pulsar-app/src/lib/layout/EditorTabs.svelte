@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { ViewMeta } from "./views";
   import { t } from "$lib/i18n";
-  import ContextMenu, { type ContextMenuItem } from "$lib/components/ContextMenu.svelte";
+  import ContextMenu, { type ContextMenuEntry } from "$lib/components/ContextMenu.svelte";
   import { CopyToClipboard } from "$lib/utils";
   import { layoutStore } from "./LayoutStore.svelte";
 
@@ -102,7 +102,7 @@
 
   // ── 右键菜单 ──
   let menu = $state<{
-    items: ContextMenuItem[];
+    items: ContextMenuEntry[];
     x: number;
     y: number;
   } | null>(null);
@@ -146,7 +146,7 @@
     const rightOf = closableIds.filter((_, i) => i > idx);
     const allClosable = closableIds;
 
-    const items: ContextMenuItem[] = [];
+    const items: ContextMenuEntry[] = [];
     // ── 关闭类 ──
     if (single) {
       items.push({
@@ -177,12 +177,8 @@
         onSelect: () => requestClose(chooseTargets),
       });
     }
-    // ── 分隔线 ──
-    items.push({
-      label: "—",
-      icon: "",
-      onSelect: () => {},
-    });
+    // ── 分隔线（非交互） ──
+    items.push({ divider: true });
     // ── 复制路径 ──
     items.push({
       label: t("editorTabs.copyPath"),

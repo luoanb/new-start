@@ -342,9 +342,11 @@
 </aside>
 
 <style>
-  .sidebar { display: flex; flex-direction: column; background: var(--color-surface); border-right: var(--border-width) solid var(--color-border); width: 100%; height: 100%; overflow: hidden; z-index: 1; box-shadow: 2px 0 8px rgba(0,0,0,0.05); }
+  /* 分隔线/底色由外层容器（.sidebar-area）提供，自身不再重复 border-right 与阴影 */
+  .sidebar { display: flex; flex-direction: column; background: var(--color-surface); width: 100%; height: 100%; overflow: hidden; }
   .sidebar.collapsed { width: 48px; }
-  .sidebar-header { display: flex; align-items: center; justify-content: space-between; padding: var(--space-2) var(--space-3); border-bottom: var(--border-width) solid var(--color-border); min-height: 48px; }
+  /* 顶部横线由容器 .container-header 提供，此处不再重复 */
+  .sidebar-header { display: flex; align-items: center; justify-content: space-between; padding: var(--space-2) var(--space-3); min-height: 48px; }
   .sidebar.collapsed .sidebar-header { flex-direction: column; gap: var(--space-2); padding: var(--space-2); }
   .sidebar-header h2 { margin: 0; font-size: var(--fs-sm); font-weight: 600; }
   .header-actions { display: flex; gap: var(--space-1); }

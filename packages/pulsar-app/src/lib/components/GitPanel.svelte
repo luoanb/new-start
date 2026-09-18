@@ -721,13 +721,12 @@
     color: var(--color-text-muted);
   }
 
-  /* 作用域工具条 */
+  /* 作用域工具条（顶部横线由容器 .container-header 提供，此处不再重复） */
   .toolbar {
     display: flex;
     align-items: center;
     gap: var(--space-1);
     padding: var(--space-1) var(--space-2);
-    border-bottom: var(--border-width) solid var(--color-border);
     min-height: 36px;
   }
   .toolbar-select {

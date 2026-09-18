@@ -168,7 +168,9 @@ export const layoutStore = {
    *   已存在同 instanceId 的面板则激活；否则新建面板并以其为 id。
    *   chat 绑定窗口实例 id = `chat:${conversationId}`；无 instanceId 的 insertPanel("chat")
    *   只匹配**非绑定**主 chat 面板（绑定窗口必须经 instanceId 精确匹配，防止误激活）。
-   * - target：目标分栏索引（0 基）；"new" 或 >= 当前栏数 → 新增一栏；默认 0；非法值收敛。
+   * - target：目标分栏索引（0 基）；"new" 或 >= 当前栏数 → 新增一栏；
+   *   省略时按类型取默认：对话面板落第 1 栏（索引 0），其余面板落第 2 栏（索引 1）起；
+   *   非法值收敛。
    * - 插入到既有栏时追加到该栏 panels[] 并激活（同一分栏可 tab 切换多个面板）。
    * @returns 面板实例 id（供 closePanel 关闭）。
    */
@@ -188,7 +190,10 @@ export const layoutStore = {
       persist();
       return existing.panel.id;
     }
-    const idx = normalizePaneTarget(target, state.main.panes.length);
+    // 默认落栏：对话面板锚定第 1 栏（索引 0），其余面板从第 2 栏（索引 1）起，
+    // 避免新开面板挤进对话所在分栏；显式传 target 的调用方不受影响。
+    const fallbackTarget = type === "chat" ? 0 : 1;
+    const idx = normalizePaneTarget(target ?? fallbackTarget, state.main.panes.length);
     const panel: MainPanel = { id: instanceId ?? uuid(), type };
     let paneId: string;
     if (idx >= state.main.panes.length) {

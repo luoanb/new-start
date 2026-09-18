@@ -11,13 +11,21 @@
     onSelect?: () => void;
   };
 
+  /** 分隔符条目：仅作视觉分组，不可 hover / 点击 / 聚焦。 */
+  export type ContextMenuDivider = {
+    divider: true;
+  };
+
+  /** 菜单条目：命令项或分隔符。 */
+  export type ContextMenuEntry = ContextMenuItem | ContextMenuDivider;
+
   let {
     items,
     x,
     y,
     onClose,
   }: {
-    items: ContextMenuItem[];
+    items: ContextMenuEntry[];
     /** 触发坐标（clientX/clientY）。 */
     x: number;
     y: number;
@@ -40,23 +48,27 @@
 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 <div class="menu-backdrop" role="presentation" onclick={onClose}></div>
 <div class="ctx-menu" role="menu" style={style}>
-  {#each items as item (item.label)}
-    <button
-      class="ctx-item"
-      class:danger={item.danger}
-      class:disabled={item.disabled}
-      role="menuitem"
-      disabled={item.disabled}
-      onclick={(e) => {
-        e.stopPropagation();
-        if (item.disabled) return;
-        item.onSelect?.();
-        onClose();
-      }}
-    >
-      {#if item.icon}<span class="ctx-icon">{@html item.icon}</span>{/if}
-      <span class="ctx-label">{item.label}</span>
-    </button>
+  {#each items as entry, i (i)}
+    {#if "divider" in entry}
+      <div class="ctx-divider" role="separator"></div>
+    {:else}
+      <button
+        class="ctx-item"
+        class:danger={entry.danger}
+        class:disabled={entry.disabled}
+        role="menuitem"
+        disabled={entry.disabled}
+        onclick={(e) => {
+          e.stopPropagation();
+          if (entry.disabled) return;
+          entry.onSelect?.();
+          onClose();
+        }}
+      >
+        {#if entry.icon}<span class="ctx-icon">{@html entry.icon}</span>{/if}
+        <span class="ctx-label">{entry.label}</span>
+      </button>
+    {/if}
   {/each}
 </div>
 
@@ -80,6 +92,12 @@
     display: flex;
     flex-direction: column;
     gap: 1px;
+  }
+  .ctx-divider {
+    flex: none;
+    height: var(--border-width);
+    margin: var(--space-1) var(--space-2);
+    background: var(--color-border);
   }
   .ctx-item {
     display: flex;
