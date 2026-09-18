@@ -291,14 +291,11 @@
 
   /** 当前视口顶部所在轮（`rounds` 下标）；-1 = 无可判定轮。 */
   let activeRoundIndex = $state(-1);
-  /** 覆盖层避让滚动条：`offsetWidth - clientWidth` = 竖向滚动条占宽。 */
-  let scrollbarW = $state(0);
 
   /** scrollspy：取「顶部已越过容器顶部」的最后一轮为当前轮（DOM 轮序与 `rounds` 一致）。 */
   function updateActiveRound() {
     const el = containerEl;
     if (!el) return;
-    scrollbarW = Math.max(0, el.offsetWidth - el.clientWidth);
     const nodes = el.querySelectorAll<HTMLElement>(".message-round");
     if (nodes.length === 0) {
       activeRoundIndex = -1;
@@ -498,11 +495,10 @@
     </div>
 
     <!-- 用户轮目录 + 「滚动到末尾」：常驻细刻度条（每轮一个刻度、当前轮高亮）+ hover / 键盘聚焦
-         展开轮列表；无用户轮时只保留「滚动到末尾」按钮。浮层绝对定位在消息区右缘并避让滚动条；
-         不参与滚动、不占布局宽度。 -->
+         展开轮列表；无用户轮时只保留「滚动到末尾」按钮。浮层绝对定位在消息区右缘（滚动条已隐藏，
+         不再需要动态避让）；不参与滚动、不占布局宽度。 -->
     <nav
       class="turn-outline"
-      style={`right: ${scrollbarW}px`}
       aria-label={outlineItems.length > 0
         ? t("chatArea.outlineTitle")
         : t("chatArea.outlineJumpEnd")}
@@ -583,7 +579,12 @@
 <style>
   .chat-area { display: flex; flex-direction: column; height: 100%; overflow: hidden; min-height: 0; background: var(--color-bg); }
   .rating-error { margin: var(--space-1) var(--space-4); padding: var(--space-1) var(--space-2); font-size: var(--fs-xs); color: var(--color-error); background: var(--color-error-bg); border-radius: var(--radius-sm); }
-  .messages { flex: 1; overflow-y: auto; min-height: 0; padding: var(--space-3) 0; scroll-behavior: smooth; }
+  /* 右侧留白给「用户轮目录」刻度条：轮次条贴右缘、列宽 = 最宽刻度 14px（见 .outline-rail），
+     正文让出 --space-4(16px) 后右缘落在刻度墨迹左侧，间隙 2px、不重叠；
+     消息自身另有 var(--space-4) 内边距，两者合计即正文的右边距。 */
+  .messages { flex: 1; overflow-y: auto; min-height: 0; padding: var(--space-3) 0; padding-right: var(--space-1); scroll-behavior: smooth; scrollbar-width: none; }
+  /* 隐藏滚动条但不影响滚动能力（滚轮 / 触摸板 / 键盘 / 目录「滚动到末尾」均照常） */
+  .messages::-webkit-scrollbar { display: none; }
   /* 消息区定位上下文：用户轮目录浮层以此为锚（不参与滚动、不占布局宽度）。 */
   .messages-wrap { position: relative; flex: 1; min-height: 0; display: flex; }
   /* 一轮对话的小容器：仅最后一轮（最新）注入 min-height = 对话容器可视高度
@@ -602,15 +603,18 @@
   .dot-pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--color-primary); animation: pulse 1.2s ease-in-out infinite; }
   @keyframes pulse { 0%, 100% { opacity: 0.3; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.2); } }
   /* ── 用户轮目录 ── */
-  /* 刻度条：贴在消息区右缘（内联 right 由 JS 按滚动条占宽避让）；容器自身不吃指针事件，
-     只有刻度与浮层可交互，避免遮挡正文选择与滚动条拖拽。
+  /* 刻度条：贴消息区右缘（滚动条已隐藏，无需避让）；容器自身不吃指针事件，
+     只有刻度与浮层可交互，避免遮挡正文选择。
      列 = 刻度条 + 「滚动到末尾」按钮；刻度过多时由刻度条自身收缩裁切，按钮始终可见。 */
-  .turn-outline { position: absolute; top: 0; bottom: 0; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-2); pointer-events: none; }
-  .outline-rail { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; overflow: hidden; padding: var(--space-2) 8px; pointer-events: auto; }
+  .turn-outline { position: absolute; right: 2px; top: 0; bottom: 0; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-2); pointer-events: none; }
+  /* 横向 padding 取 0：列宽 = 最宽刻度（14px）本身，不再额外占宽。
+     列越窄正文可用的右边距越小，故把宽度全让给正文；刻度之间的 6px 间隙仍属列内，
+     hover 展开浮层的触发面积不受影响。 */
+  .outline-rail { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; overflow: hidden; padding: var(--space-2) 0; pointer-events: auto; }
   .rail-tick { width: 12px; height: 2px; padding: 0; border: none; border-radius: var(--radius-full); background: var(--color-text-muted); opacity: 0.35; cursor: pointer; transition: opacity var(--duration-fast) var(--ease-out), width var(--duration-fast) var(--ease-out); }
   .rail-tick:hover { opacity: 0.8; }
-  .rail-tick.active { width: 18px; opacity: 1; background: var(--color-primary); }
-  .outline-jump-end { flex: none; display: flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; border: none; border-radius: var(--radius-full); background: transparent; color: var(--color-text-muted); opacity: 0.6; cursor: pointer; pointer-events: auto; transition: opacity var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out); }
+  .rail-tick.active { width: 14px; opacity: 1; background: var(--color-primary); }
+  .outline-jump-end { flex: none; display: flex; align-items: center; justify-content: center; width: 14px; height: 14px; padding: 0; border: none; border-radius: var(--radius-full); background: transparent; color: var(--color-text-muted); opacity: 0.6; cursor: pointer; pointer-events: auto; transition: opacity var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out); }
   .outline-jump-end:hover { opacity: 1; background: var(--color-hover); }
   /* 浮层：hover 刻度条 / 键盘聚焦刻度时展开（悬停「滚动到末尾」按钮不展开），置于刻度条左侧。
      `right: 100%` 与刻度条紧贴（中间不留缝），保证指针从刻度条移入浮层时 hover 不断。 */

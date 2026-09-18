@@ -62,7 +62,7 @@
   - 展开态：默认细刻度条（每轮一个刻度 + 当前轮高亮）；展开由 CSS 驱动——`.outline-rail:hover ~ .outline-panel`、`.outline-rail:focus-within ~ .outline-panel`、`.outline-panel:hover`，浮层 `right: 100%` 与刻度条紧贴以免指针移入时 hover 断链；悬停「滚动到末尾」按钮不展开。触屏点刻度即直接跳转。浮层内列表可滚动，条目为单行截断。
   - 渲染条件：刻度条与浮层在 `outlineItems.length > 0` 时渲染（仅 1 轮也展示）；「滚动到末尾」按钮**无条件渲染**——`0` 轮 / 空会话时容器只剩该按钮（`aria-label` 随之切换为末尾按钮文案）。
   - 「滚动到末尾」：目录列底部独立图标按钮，点击 `el.scrollTo({ top: scrollHeight, behavior: "smooth" })` 落到最新消息；不判断「是否已在底部」（保持简单，不做按压态以外的状态机）。
-  - 布局：新增 `.messages-wrap`（`position: relative`）作为定位上下文，刻度条贴消息区右缘，`right` 由 JS 按滚动条占宽（`offsetWidth - clientWidth`）内联避让；指针事件仅作用于刻度与浮层，不遮挡正文与滚动条拖拽。刻度条与末尾按钮构成垂直居中列，刻度多时由刻度条自身收缩裁切，按钮始终可见。
+  - 布局：新增 `.messages-wrap`（`position: relative`）作为定位上下文，刻度条**固定贴消息区右缘**（`.turn-outline` 的 CSS `right: 0`，滚动条已隐藏故无动态避让量）；指针事件仅作用于刻度与浮层，不遮挡正文选择。刻度条与末尾按钮构成垂直居中列，刻度多时由刻度条自身收缩裁切，按钮始终可见。`.messages` 右侧留 `var(--space-6)`(24px) 内边距作为刻度条 gutter，与刻度墨迹（列宽 26px、最宽刻度 18px ⇒ 墨迹止于距右缘 22px）留 2px 间隙（见 Change Log 2026-09-18）。
 
 - i18n：`chatArea` 段新增 `outlineTitle` / `outlineUntitled` / `outlineJumpEnd`（en / zh 同步）。
 
@@ -87,10 +87,15 @@
 - 2026-09-15（需求变更，用户指令）：① 渲染阈值从 `>= 2` 放宽为 `> 0`（**仅 1 轮也展示目录**）；② 目录列尾新增「滚动到末尾」图标按钮（`scrollToLatest`，`chatArea.outlineJumpEnd` 文案）。
   与之相关的实现细节：`.turn-outline` 由横排改竖排（刻度条 + 按钮）；刻度条 `padding` 左右加宽到 8px 使浮层 `right: 100%` 与之紧贴；展开选择器由 `.turn-outline:hover` 收窄为「刻度条 hover / 聚焦 + 浮层自身 hover」，避免悬停末尾按钮时弹开轮列表。
 - 2026-09-15（需求变更，用户指令）：③ 容器 `nav` 改为**无条件渲染**，刻度条与浮层各自按 `outlineItems.length > 0` 条件渲染——**0 条（含空会话）时只保留「滚动到末尾」按钮**；此时 `nav` 的 `aria-label` 切换为末尾按钮文案。
+- 2026-09-18（需求变更，用户指令）：④ 刻度条与正文互相遮盖——原 `right = scrollbarW` 在 overlay 滚动条下实测为 0，刻度压在滚动条上；正文右侧仅 16px 内边距，刻度墨迹（距右缘约 14~32px）会盖住气泡。改为：① 避让量取 `Math.max(scrollbarW, OUTLINE_MIN_GUTTER)`，下限 12px；② `.messages` 增加 `padding-right: var(--space-10)`（40px）作为 gutter。二者成对使用：刻度条列宽约 34px、距右缘 12px，正文（含气泡与用户消息底色）右缘落在 40px 处，与刻度墨迹留 2px 间隙。
+- 2026-09-18（需求变更，用户指令）：⑤ 对话框滚动条**隐藏但保留滚动能力**（`.messages` 加 `scrollbar-width: none` + `::-webkit-scrollbar { display: none }`）——滚动仍可经滚轮 / 触摸板 / 键盘 / 目录「滚动到末尾」。
+- 2026-09-18（需求变更，用户指令）：⑥ 「空间用满、不重叠」——滚动条已隐藏，避让滚动条的动态量失去意义，全部移除：删掉 `scrollbarW` 状态与 `OUTLINE_MIN_GUTTER`、去掉 nav 的内联 `right`，改为 CSS 固定 `right: 0`；同时 `.outline-rail` 横向内边距 8px→4px（列宽 34px→26px），`.messages` 的 `padding-right` `var(--space-10)`(40px)→`var(--space-6)`(24px)。净效果：刻度条右移 12px 贴住右缘、正文右边距收窄 16px（正文更宽），两者间隙仍 2px。
+- 2026-09-18（需求变更，用户指令）：⑦ 正文再右移，压到几何下限——轮次条列宽 = 最宽刻度宽（`.outline-rail` 横向内边距 4px→**0**，`.rail-tick.active` 与 `.outline-jump-end` 18px→**14px**，后者为 jump 图标自身宽度），`.messages` 的 `padding-right` `var(--space-6)`(24px)→`var(--space-4)`(16px)。刻度条列 `[0,14]`、正文右缘落在 16px，间隙仍 2px。
+  由此得出本布局的硬下限：正文右边距 ≥ 最宽刻度宽(14px) + 间隙(2px) = 16px。若还要更宽，只能动「当前轮刻度加宽」这个反馈（把 active 也压到 12px、jump 按钮换更小图标），属信息设计变更。
 
 ## Validation
 
-- Self-check: 已按方案实现（`outlineItems` / scrollspy / `locateToMessage` 复用 / 刻度条 + 浮层 / 滚动条避让 / 「滚动到末尾」按钮无条件渲染 / i18n）。
+- Self-check: 已按方案实现（`outlineItems` / scrollspy / `locateToMessage` 复用 / 刻度条 + 浮层 / 滚动条隐藏 + 固定贴右缘 / 「滚动到末尾」按钮无条件渲染 / i18n）。
 - Static checks: `pnpm --filter pulsar-app check` → 0 errors（20 条既有 warning，`ChatArea.svelte` 无新增问题）。
 - Runtime / Test: 未跑自动化（纯前端展示层，无单测覆盖点）。
 - Human confirmation: 待用户 App 内确认。
