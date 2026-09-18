@@ -169,6 +169,8 @@ src-tauri/src/terminal/
 - 2026-08-20：初稿。基于方案讨论落盘，用户已确认形态 / Agent 接入（v1 即接入）/ 范围（仅 GUI）/ 独立目录四项决策；待批准后进入实现。
 - 2026-08-20：用户确认 Q1（portable-pty）/ Q3（新专用 tab）/ Q4（版本不锁死）；完成方案 B 深度研究（业界参照：VS Code OSC 633 shell integration、terminal-mcp、tmux 共享审计、Prode、telepty）。结论：v1 走方案 A + B1（tab 用户可接管，≈0 成本）；B2 二期独立 spec。待用户定夺最后一项 Open Question 后进入实现。
 - 2026-08-20：用户批准「v1 = 方案 A + B1，B2 二期独立 spec」，状态置 Approved，进入实现。
+- 2026-09-18：修复「切换底部面板视图 tab 后切回终端一片空白」。根因：`ViewContainer.container-body` 条件渲染导致 `TerminalPanel` 被卸载、xterm 实例销毁且无输出回放（后端 PTY 未受影响）。方案：`ViewRegistration` 新增 `keepAlive`，terminal 标记保活，容器改为「激活过即常驻、切走仅隐藏」。见 `docs/micro_specs/2026-09-18_21-13_view-container-keep-alive.md`。
+- 2026-09-18：同上 spec，一并修复终端面板**内部**多 tab 切换空白：`{#key activeId}` 改为每 tab 一个常驻 xterm 实例，切 tab 仅切换显隐。
 
 ## Validation
 

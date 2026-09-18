@@ -199,6 +199,14 @@
     transport?.dispose?.();
   });
 
+  // 切 tab：实例常驻、仅切换显隐，焦点需交还当前激活实例。
+  $effect(() => {
+    const id = activeId;
+    if (!id) return;
+    // 实例可能仍在等 fonts.ready 完成 open（尚未登记进 terms），下一帧再试。
+    requestAnimationFrame(() => terms.get(id)?.focus());
+  });
+
   function routeOutput(sessionId: string, data: Uint8Array) {
     terms.get(sessionId)?.write(data);
   }
@@ -233,7 +241,8 @@
   }
 
   /** xterm action：节点挂载时创建终端并绑定输入/尺寸同步，销毁时释放。
-   * 配合 {#key activeId}，切换 tab 时整块销毁重建（xterm 实例不能复用节点）。
+   * 每个 tab 一个常驻实例（一个节点对应一个实例），切 tab 只切换显隐、不销毁重建，
+   * 切回时滚动缓冲与当前屏幕内容仍在。
    *
    * 字体时序：WebKitGTK 字体异步加载，若在字体就绪前 open，xterm 会用默认宽度
    * 测量 cell，导致字符间距异常变宽。因此先等 document.fonts.ready（带 1s 兜底）
@@ -308,7 +317,8 @@
         () => termEl.removeEventListener("touchend", onTouchEnd),
       ];
 
-      term.focus();
+      // 多实例同时挂载时，只有当前激活 tab 抢焦点（否则会落到最后完成 open 的实例上）。
+      if (sessionId === activeId) term.focus();
     };
     const fontsReady = document.fonts
       ? Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 1000))])
@@ -405,10 +415,14 @@
   <div class="term-host-wrap">
     {#if tabs.length === 0}
       <p class="empty">{t("terminal.empty")}</p>
-    {:else if activeId}
-      {#key activeId}
-        <div class="term-host" use:mountTerminal={activeId}></div>
-      {/key}
+    {:else}
+      {#each tabs as tab (tab.sessionId)}
+        <div
+          class="term-host"
+          class:inactive={tab.sessionId !== activeId}
+          use:mountTerminal={tab.sessionId}
+        ></div>
+      {/each}
     {/if}
   </div>
 </div>
@@ -474,6 +488,8 @@
   .tab-new:hover { color: var(--color-text); background: var(--color-hover); }
   .tab-new svg { display: block; }
   .term-host-wrap {
+    /* 每个 tab 一个绝对定位实例叠放，需相对定位基准 */
+    position: relative;
     flex: 1;
     min-height: 0;
     background: var(--color-bg);
@@ -483,11 +499,17 @@
   /* 移动端手势策略：垂直拖动由 JS（scrollLines）接管，水平 pan 与双指缩放放行浏览器
      （touch-action 取交集作用于整个手势区域）；overscroll-behavior 阻止滚动到头时
      触发浏览器下拉刷新/橡皮筋滚动链。 */
+  /* 实例常驻：inset:0 叠满 wrap 的 padding box（正好落在 6px 内边距内）；
+     非激活用 visibility 隐藏而非 display:none，保留尺寸让 xterm 不必重算 cols/rows。 */
   .term-host {
-    width: 100%;
-    height: 100%;
+    position: absolute;
+    inset: 0;
     touch-action: pan-x pinch-zoom;
     overscroll-behavior: contain;
+  }
+  .term-host.inactive {
+    visibility: hidden;
+    pointer-events: none;
   }
   .empty {
     padding: var(--space-3);

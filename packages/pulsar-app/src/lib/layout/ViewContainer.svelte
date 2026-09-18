@@ -4,6 +4,7 @@
   import { useViewContext } from "./viewContext";
   import ViewHost from "./ViewHost.svelte";
   import { t } from "$lib/i18n";
+  import { untrack } from "svelte";
 
   let {
     containerId,
@@ -26,6 +27,29 @@
     registrations.find((r) => r.id === layout.state.containers[containerId].activeView) ??
       registrations[0],
   );
+
+  /** 已激活过、需要常驻挂载的保活视图 id（keepAlive 注册项）。 */
+  let mountedKeepAlive = $state<string[]>([]);
+
+  /** 参与渲染的视图：当前激活视图 + 已激活过的保活视图。
+   * 两类视图共用同一 each 分支（key = id），保证「首次激活 → 进入保活集合」不改变节点结构，
+   * 避免多出一次卸载重建。 */
+  const renderedViews = $derived(
+    registrations.filter(
+      (r) => r.id === activeView?.id || mountedKeepAlive.includes(r.id),
+    ),
+  );
+
+  $effect(() => {
+    const liveKeepAlive = registrations.filter((r) => r.keepAlive).map((r) => r.id);
+    const active = activeView?.id;
+    // untrack：集合本身不作为依赖，避免 effect 自触发循环
+    const prev = untrack(() => mountedKeepAlive);
+    // 视图被 hide / 移出容器 → 同步从保活集合清除并卸载
+    const next = prev.filter((id) => liveKeepAlive.includes(id));
+    if (active && liveKeepAlive.includes(active) && !next.includes(active)) next.push(active);
+    if (next.length !== prev.length) mountedKeepAlive = next;
+  });
 
   /** 可被拖入本容器的全部视图（⋯ 菜单用）。 */
   const movableViews = $derived(
@@ -246,9 +270,16 @@
   </header>
 
   <div class="container-body">
-    {#if activeView}
-      <ViewHost registration={activeView} />
-    {:else}
+    {#each renderedViews as reg (reg.id)}
+      <div
+        class="view-slot"
+        class:keep-alive={reg.keepAlive}
+        class:inactive={reg.id !== activeView?.id}
+      >
+        <ViewHost registration={reg} />
+      </div>
+    {/each}
+    {#if !activeView}
       <p class="empty">No view</p>
     {/if}
   </div>
@@ -395,11 +426,33 @@
   .icon-btn:hover, .icon-btn.active { background: var(--color-hover); color: var(--color-text); }
 
   .container-body {
+    /* 保活槽位用绝对定位叠放，需相对定位基准 */
+    position: relative;
     flex: 1;
     min-height: 0;
     overflow: hidden;
     display: flex;
     flex-direction: column;
+  }
+
+  /* 视图槽：包裹 ViewHost，承担视图根元素在 body 内的撑满职责。 */
+  .view-slot {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  /* 保活槽位：脱离文档流叠满容器；非激活用 visibility 隐藏而非 display:none，
+     让 xterm 等仍能量到真实尺寸（避免被 fit 成 0 列）。 */
+  .view-slot.keep-alive {
+    position: absolute;
+    inset: 0;
+  }
+  .view-slot.keep-alive.inactive {
+    visibility: hidden;
+    pointer-events: none;
   }
 
   .empty {

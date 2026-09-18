@@ -53,6 +53,9 @@ export type ViewRegistration = {
   component: Component;
   /** 允许被拖拽到的容器；"*" = 任意视图容器。缺省 = 不可移动（仅主区内部视图）。 */
   movableTo?: ViewContainerId[] | "*";
+  /** 容器内保活：在视图容器里一旦激活过就常驻挂载，切走仅隐藏不卸载。
+   * 有状态视图（如终端 xterm 实例）需要，否则切 tab 回来实例已被销毁、缓冲丢失。 */
+  keepAlive?: boolean;
 };
 
 /** 视图容器注册表（sidebar / info / panel 共享）。title/label 存 i18n key（views.*），渲染处以 t() 解析。 */
@@ -123,6 +126,8 @@ export const viewRegistry: Record<string, ViewRegistration> = {
     icon: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.05" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
     component: TerminalPanel,
     movableTo: "*",
+    // xterm 实例与后端 PTY 会话都不该因切 tab 被销毁：卸载会丢滚动缓冲（切回一片空白）。
+    keepAlive: true,
   },
   // 文件管理：文件树（sidebar 默认挂载，VSCode 资源管理器语义）
   files: {
