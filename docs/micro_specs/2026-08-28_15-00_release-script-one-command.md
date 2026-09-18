@@ -12,6 +12,7 @@
 
 - 用法：`pnpm release [patch|minor|major]`（在 `packages/pulsar-app` 下；默认 patch；支持中文别名 小/中/大）。
 - 版本号同步四处：`package.json` / `tauri.conf.json` / `Cargo.toml` / `Cargo.lock`（仅 `[[package]] name = "pulsar-app"` 块，避免误改同版本号依赖）。
+- Cargo.toml / Cargo.lock 的读取与替换正则容忍 CRLF（`\r?\n`）：Windows 下 `core.autocrlf=true` 会将这两个文件检出为 CRLF，硬编码 LF 会导致读不到版本号、且替换静默失效。
 - 以 `package.json` 版本为基准，启动前校验四处一致，不一致则中止并提示。
 - 前置校验：当前分支必须是 `main`，工作区无未提交改动。
 - 流程：
