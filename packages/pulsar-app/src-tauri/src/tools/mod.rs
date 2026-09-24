@@ -5,5 +5,6 @@ pub mod cmd_exec;
 pub mod current_time;
 pub mod dynamic_tool;
 pub mod mcp;
+pub mod root_auth;
 pub mod tool_config;
 pub mod tool_registry;

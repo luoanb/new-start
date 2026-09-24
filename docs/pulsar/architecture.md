@@ -286,8 +286,8 @@ git 只读 6 个（status / diff / log / branch / blame / stash_list）。
   Terminal(5)。
 - **状态事件**：写操作完成后 `StateEmitter` 广播 `StateChange` → 前端 `app://state-changed`；
   `kind` 区分数据域（topics / conversations{affected} / message_delta（流式增量）/
-  poller{status} / sessions / neurons / providers / tools / workspaces / git / git_confirm），
-  避免事件爆炸。
+  poller{status} / sessions / neurons / providers / tools / workspaces / git / git_confirm /
+  root_auth），避免事件爆炸。
 - **启动装配**（`run()`）：
   1. 按目录契约解析 storage_root（`StorageBase::for_gui`：开发态=项目目录，发布态=app data 目录）；
      挂 opener / dialog 插件；

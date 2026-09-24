@@ -41,6 +41,7 @@ import type {
   GitFileDiff,
   GitStashEntry,
   GitConfirmRequest,
+  RootAuthRequest,
   GitResetMode,
   GitStashAction,
   ConflictTake,
@@ -111,6 +112,8 @@ const state = $state({
   git: null as GitView | null,
   /** 后端写操作确认请求队列（ConfirmDialog 消费后 resolve）。 */
   gitConfirmQueue: [] as GitConfirmRequest[],
+  /** 后端 root 授权请求队列（RootAuthHost 全屏弹窗消费后 resolve）。 */
+  rootAuthQueue: [] as RootAuthRequest[],
   // ── 神经元统一管理：列表 ←→ 画布共享状态 ──
   /** 画布核心（单选=1 项，多选=数组；列表行点击驱动）。 */
   neuronSelection: [] as string[],
@@ -427,6 +430,17 @@ async function handleStateChanged(payload: StateChangePayload): Promise<void> {
       state.gitConfirmQueue = [
         ...state.gitConfirmQueue,
         { op_id: payload.op_id, kind: payload.op_kind, title: payload.title, detail: payload.detail },
+      ];
+    } else if (payload.kind === "root_auth") {
+      // root 授权请求：入队由 RootAuthHost 全屏弹窗消费（resolve 后弹出下一个）。
+      state.rootAuthQueue = [
+        ...state.rootAuthQueue,
+        {
+          request_id: payload.request_id,
+          command: payload.command,
+          cwd: payload.cwd,
+          stderr_excerpt: payload.stderr_excerpt,
+        },
       ];
     }
   } catch (e) {
@@ -868,6 +882,19 @@ async function gitConfirm(opId: string, approved: boolean): Promise<void> {
   state.gitConfirmQueue = state.gitConfirmQueue.filter((r) => r.op_id !== opId);
 }
 
+/** root 授权唯一入口：投递用户决定并出队（授权 = 允许以 root 重跑）。 */
+async function rootAuthResolve(requestId: string, approved: boolean): Promise<void> {
+  try {
+    await api.call(c.rootAuthResolve, { requestId, approved });
+  } catch (e) {
+    // 请求可能已因超时/会话停止作废：静默记录即可，不打断 UI。
+    console.warn("rootAuthResolve failed:", e);
+  } finally {
+    // 无论后端返回如何都必须出队，避免弹窗卡死。
+    state.rootAuthQueue = state.rootAuthQueue.filter((r) => r.request_id !== requestId);
+  }
+}
+
 /** 持久化并热更新危险写开关（config.json git 节）。 */
 async function setDangerousWrites(enabled: boolean): Promise<void> {
   await api.call(c.gitSetDangerousWrites, { enabled });
@@ -957,6 +984,7 @@ export const dataStore = {
   gitPull,
   gitResolveConflict,
   gitConfirm,
+  rootAuthResolve,
   setDangerousWrites,
   gitShowFiles,
   gitShowDiff,

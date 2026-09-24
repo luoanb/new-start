@@ -751,6 +751,16 @@ export type GitConfirmRequest = {
   detail: unknown;
 };
 
+/** root 授权请求：命令因权限不足失败后，等待用户决定是否以 root 重跑。 */
+export type RootAuthRequest = {
+  request_id: string;
+  /** 待提权重跑的原始命令。 */
+  command: string;
+  cwd: string | null;
+  /** 触发授权的失败原因摘要。 */
+  stderr_excerpt: string;
+};
+
 /** git 面板聚合视图（dataStore 单一数据源）。 */
 export type GitView = {
   repos: GitRepo[];

@@ -78,6 +78,17 @@ pub enum StateChange {
         title: String,
         detail: serde_json::Value,
     },
+    /// root 授权请求：命令因权限不足失败后，请用户决定是否以 root 重跑。
+    /// `root_auth_resolve` 处理后事件收敛；round 内阻塞等待，无消费方时后端
+    /// 直接按「拒绝」处理（不发起、不等待）。
+    RootAuth {
+        request_id: String,
+        /// 待提权重跑的原始命令（前端展示，供用户判断风险）。
+        command: String,
+        cwd: Option<String>,
+        /// 触发授权的失败原因摘要（已截断）。
+        stderr_excerpt: String,
+    },
     /// 裁决记录两阶段事件（锚点驱动）：开始 = status "pending"（前端就地渲染「裁决中」卡），
     /// 结束 = status 收敛为终态（ok / retried_ok / downgraded）。事件源收敛于
     /// `HookJudgementStore::emit_change`，前端原地收敛，不重拉全量。
@@ -126,6 +137,30 @@ mod tests {
             json,
             r#"{"kind":"message_delta","conversation_id":"c1","message_index":3,"content":"hello","reasoning":"think","done":false}"#
         );
+    }
+
+    #[test]
+    fn root_auth_serializes_snake_case() {
+        let json = serde_json::to_string(&StateChange::RootAuth {
+            request_id: "root-auth-1-0".into(),
+            command: "mkdir /opt/x".into(),
+            cwd: Some("/tmp".into()),
+            stderr_excerpt: "Permission denied".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            r#"{"kind":"root_auth","request_id":"root-auth-1-0","command":"mkdir /opt/x","cwd":"/tmp","stderr_excerpt":"Permission denied"}"#
+        );
+
+        let no_cwd = serde_json::to_string(&StateChange::RootAuth {
+            request_id: "root-auth-1-1".into(),
+            command: "ls".into(),
+            cwd: None,
+            stderr_excerpt: String::new(),
+        })
+        .unwrap();
+        assert!(no_cwd.contains(r#""cwd":null"#));
     }
 
     #[test]

@@ -8,10 +8,12 @@ use tokio::process::Command;
 use tokio::sync::Semaphore;
 
 use crate::fileops::workspace::WorkspaceStore;
+use crate::infra::elevate::{escalated_command, escalation_available};
 use crate::infra::platform::{hide_console_window, native_path};
 use crate::terminal::{resolve_spawn_cwd, AgentTerminalBridge, TerminalSession};
 
 use crate::core::error::{AppError, AppResult};
+use super::root_auth::{RootAuthOutcome, RootAuthService};
 use super::tool_registry::Tool;
 
 /// v1 保守安全策略：命中以下前缀（trim 后）的命令直接拒绝。
@@ -50,6 +52,77 @@ pub(crate) fn is_denied(command: &str) -> bool {
         })
 }
 
+/// 权限不足的失败标记（小写比对）：命中即认为「命令本身合法，只是权限不够」。
+pub(crate) const PERMISSION_DENIED_MARKERS: &[&str] = &[
+    "permission denied",
+    "operation not permitted",
+    "must be root",
+    "are you root",
+    "requires root",
+    "access is denied",
+    "eacces",
+    "eperm",
+    "权限不够",
+    "权限不足",
+    "拒绝访问",
+    "需要 root",
+];
+
+/// 事件中回传的失败原因摘要上限（与 root 授权服务保持一致）。
+const DENIED_EXCERPT_CHARS: usize = 480;
+
+/// 是否属于「因权限不足而失败」：必须是失败退出（排除超时的 124），
+/// 且 stdout/stderr 命中权限标记。仅在失败时判定，避免误触发授权询问。
+pub(crate) fn looks_like_permission_denied(exit_code: i32, stdout: &str, stderr: &str) -> bool {
+    if exit_code == 0 || exit_code == TIMEOUT_EXIT_CODE {
+        return false;
+    }
+    let haystack = format!("{stdout}\n{stderr}").to_lowercase();
+    PERMISSION_DENIED_MARKERS
+        .iter()
+        .any(|marker| haystack.contains(marker))
+}
+
+/// 摘出触发授权的失败原因：优先命中权限标记的那一行，否则退回首个非空行。
+fn permission_excerpt(stdout: &str, stderr: &str) -> String {
+    let hit = |text: &str| {
+        text.lines()
+            .find(|line| {
+                let lower = line.to_lowercase();
+                PERMISSION_DENIED_MARKERS
+                    .iter()
+                    .any(|marker| lower.contains(marker))
+            })
+            .map(str::to_string)
+    };
+    let fallback = |text: &str| {
+        text.lines()
+            .find(|line| !line.trim().is_empty())
+            .map(str::to_string)
+    };
+    let line = hit(stderr)
+        .or_else(|| hit(stdout))
+        .or_else(|| fallback(stderr))
+        .or_else(|| fallback(stdout))
+        .unwrap_or_default();
+    line.chars().take(DENIED_EXCERPT_CHARS).collect()
+}
+
+/// 在结果 JSON 上标注 root 授权状态（`approved` / `denied` / `unavailable`），
+/// 让模型知道失败已走到授权环节、不必原样重试。
+fn with_root_authorization(result: String, state: &str) -> String {
+    match serde_json::from_str::<serde_json::Value>(&result) {
+        Ok(serde_json::Value::Object(mut map)) => {
+            map.insert(
+                "root_authorization".to_string(),
+                serde_json::Value::String(state.to_string()),
+            );
+            serde_json::Value::Object(map).to_string()
+        }
+        _ => result,
+    }
+}
+
 pub(crate) const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 pub(crate) const MIN_TIMEOUT_MS: u64 = 1_000;
 pub(crate) const MAX_TIMEOUT_MS: u64 = 120_000;
@@ -65,6 +138,9 @@ pub struct ExecuteCommandTool {
     terminal: Option<Arc<AgentTerminalBridge>>,
     /// 工作区存储：未显式指定 `cwd` 时回退到 active 工作区根（与终端面板同口径）。
     workspace: Option<Arc<WorkspaceStore>>,
+    /// root 授权服务：命令因权限不足失败后，经此向用户请求授权并以 root 重跑。
+    /// 未注入（如单元测试）时不做任何授权询问，失败结果原样返回。
+    root_auth: Option<Arc<RootAuthService>>,
 }
 
 impl ExecuteCommandTool {
@@ -73,6 +149,7 @@ impl ExecuteCommandTool {
             semaphore: Semaphore::new(MAX_CONCURRENT),
             terminal: None,
             workspace: None,
+            root_auth: None,
         }
     }
 
@@ -85,6 +162,12 @@ impl ExecuteCommandTool {
     /// 注入工作区存储（构建时调用）：默认工作目录跟随用户选中的工作区。
     pub fn with_workspace(mut self, workspace: Arc<WorkspaceStore>) -> Self {
         self.workspace = Some(workspace);
+        self
+    }
+
+    /// 注入 root 授权服务（构建时调用）：启用「权限不足 → 询问用户 → 提权重跑」。
+    pub fn with_root_auth(mut self, service: Arc<RootAuthService>) -> Self {
+        self.root_auth = Some(service);
         self
     }
 
@@ -153,7 +236,7 @@ impl Tool for ExecuteCommandTool {
     }
 
     fn description(&self) -> &str {
-        "Execute a shell command on the user's system (sh -c on Unix, cmd /C on Windows) and return its exit code, stdout, and stderr. Use for file inspection, running scripts, or querying system state."
+        "Execute a shell command on the user's system (sh -c on Unix, cmd /C on Windows) and return its exit code, stdout, and stderr. Use for file inspection, running scripts, or querying system state. If the command fails because of insufficient privileges, the platform asks the user to authorize re-running it with root (the result then carries a root_authorization field); do not retry such commands with sudo."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -219,13 +302,31 @@ impl Tool for ExecuteCommandTool {
             AppError::RuntimeError(format!("execute_command: semaphore acquire failed: {e}"))
         })?;
 
+        let first = self
+            .run_once(&command, cwd.as_deref(), timeout_ms, visible)
+            .await?;
+        self.escalate_if_denied(&command, cwd.as_deref(), visible, first)
+            .await
+    }
+}
+
+/// 执行与 root 授权的内部步骤（`Tool::execute` 的分解）。
+impl ExecuteCommandTool {
+    /// 按可见性执行一次（PTY 可见 / 隐藏），返回结果 JSON 字符串。
+    async fn run_once(
+        &self,
+        command: &str,
+        cwd: Option<&str>,
+        timeout_ms: u64,
+        visible: bool,
+    ) -> AppResult<String> {
         // 方案 A：可见执行走 PTY 会话并实时广播；桥接未注入时降级为隐藏执行。
         if visible {
             if let Some(bridge) = &self.terminal {
                 return run_guarded_pty(
                     "execute_command",
-                    &command,
-                    cwd.as_deref(),
+                    command,
+                    cwd,
                     Some(timeout_ms),
                     bridge,
                 )
@@ -236,14 +337,58 @@ impl Tool for ExecuteCommandTool {
                 "visible_terminal requested but terminal bridge not injected; falling back to hidden execution"
             );
         }
+        run_guarded_shell("execute_command", command, cwd, Some(timeout_ms)).await
+    }
 
-        run_guarded_shell(
-            "execute_command",
-            &command,
-            cwd.as_deref(),
-            Some(timeout_ms),
-        )
-        .await
+    /// 权限不足的兜底路径：向用户请求 root 授权，授权则提权重跑。
+    ///
+    /// 授权询问的准入条件是「服务已注入 + 本平台原生提权可用」；任一不满足都
+    /// 维持原失败结果（无弹窗、不静默提权）。denylist 已在 `execute` 前置校验，
+    /// 本路径只处理「已成功 spawn、仅因权限不足失败」的命令。
+    async fn escalate_if_denied(
+        &self,
+        command: &str,
+        cwd: Option<&str>,
+        visible: bool,
+        first: String,
+    ) -> AppResult<String> {
+        let Some(service) = self.root_auth.as_ref() else {
+            return Ok(first);
+        };
+        if !escalation_available() {
+            return Ok(first);
+        }
+        let parsed: serde_json::Value =
+            serde_json::from_str(&first).unwrap_or(serde_json::Value::Null);
+        if parsed["timed_out"].as_bool().unwrap_or(false) {
+            return Ok(first);
+        }
+        let exit_code = parsed["exit_code"].as_i64().unwrap_or(0) as i32;
+        let stdout = parsed["stdout"].as_str().unwrap_or("");
+        let stderr = parsed["stderr"].as_str().unwrap_or("");
+        if !looks_like_permission_denied(exit_code, stdout, stderr) {
+            return Ok(first);
+        }
+        let Some(escalated) = escalated_command(command, cwd) else {
+            return Ok(first);
+        };
+
+        let excerpt = permission_excerpt(stdout, stderr);
+        match service.request_and_wait(command, cwd, &excerpt).await? {
+            RootAuthOutcome::Approved => {
+                tracing::info!(tool = "execute_command", "root authorization granted");
+                // 提权执行统一放宽到上限：系统密码框的等待时间也计入本次运行。
+                let escalated_result = self
+                    .run_once(&escalated, cwd, MAX_TIMEOUT_MS, visible)
+                    .await?;
+                Ok(with_root_authorization(escalated_result, "approved"))
+            }
+            RootAuthOutcome::Rejected => {
+                tracing::info!(tool = "execute_command", "root authorization not granted");
+                Ok(with_root_authorization(first, "denied"))
+            }
+            RootAuthOutcome::Unavailable => Ok(with_root_authorization(first, "unavailable")),
+        }
     }
 }
 
@@ -441,6 +586,79 @@ fn build_command(command: &str) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn permission_denied_detection() {
+        assert!(looks_like_permission_denied(
+            1,
+            "",
+            "mkdir: cannot create directory '/opt/x': Permission denied"
+        ));
+        assert!(looks_like_permission_denied(1, "Operation not permitted", ""));
+        assert!(looks_like_permission_denied(2, "", "拒绝访问"));
+        assert!(looks_like_permission_denied(126, "", "EACCES: permission denied"));
+        // 成功退出不算权限失败（即使输出里出现同名词）。
+        assert!(!looks_like_permission_denied(0, "Permission denied is a file name", ""));
+        // 超时（124）不触发授权询问。
+        assert!(!looks_like_permission_denied(TIMEOUT_EXIT_CODE, "", "Permission denied"));
+        assert!(!looks_like_permission_denied(1, "", "No such file or directory"));
+    }
+
+    #[test]
+    fn permission_excerpt_picks_marker_line() {
+        assert_eq!(
+            permission_excerpt("noise\n", "warning: x\nPermission denied\n"),
+            "Permission denied"
+        );
+        // 无标记时退回首个非空行，并截断到上限。
+        assert_eq!(permission_excerpt("only line", ""), "only line");
+        let long = "y".repeat(DENIED_EXCERPT_CHARS + 10);
+        assert_eq!(permission_excerpt(&long, "").chars().count(), DENIED_EXCERPT_CHARS);
+    }
+
+    #[test]
+    fn root_authorization_annotation() {
+        let raw = r#"{"exit_code":1,"stdout":"","stderr":"","timed_out":false}"#.to_string();
+        let value: serde_json::Value =
+            serde_json::from_str(&with_root_authorization(raw, "denied")).unwrap();
+        assert_eq!(value["exit_code"], 1);
+        assert_eq!(value["root_authorization"], "denied");
+        // 非 JSON 结果原样返回，不破坏既有契约。
+        assert_eq!(with_root_authorization("not json".into(), "denied"), "not json");
+    }
+
+    /// 未注入授权服务（如单测/无 UI 场景）：失败结果原样返回，不询问、不标注。
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn permission_denied_without_service_returns_raw_failure() {
+        let tool = ExecuteCommandTool::new();
+        let out = tool
+            .execute(json!({"command": "echo 'mkdir: Permission denied' >&2; exit 1"}))
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(value["exit_code"], 1);
+        assert!(value.get("root_authorization").is_none());
+    }
+
+    /// 注入了服务但无前端消费方（emit 为 None）：不等待，标注 unavailable。
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn permission_denied_without_consumer_marks_unavailable() {
+        if !escalation_available() {
+            // 本机无 pkexec：该分支在 infra::elevate 已有单测覆盖，此处跳过。
+            return;
+        }
+        let tool = ExecuteCommandTool::new()
+            .with_root_auth(Arc::new(RootAuthService::new(None)));
+        let out = tool
+            .execute(json!({"command": "echo 'Permission denied' >&2; exit 1"}))
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(value["exit_code"], 1);
+        assert_eq!(value["root_authorization"], "unavailable");
+    }
 
     #[test]
     fn denylist_rejects_dangerous_prefixes() {

@@ -710,6 +710,16 @@ export type Translations = {
     binaryDiff: string;
     missingFile: string;
   };
+  rootAuth: {
+    title: string;
+    body: string;
+    commandLabel: string;
+    cwdLabel: string;
+    reasonLabel: string;
+    mechanismNote: string;
+    deny: string;
+    authorize: string;
+  };
   providersModelsPanel: {
     create: string;
     expand: string;
@@ -1517,6 +1527,17 @@ export const en: Translations = {
     binaryDiff: "Binary file, diff not available",
     missingFile: "File not found",
   },
+  rootAuth: {
+    title: "Root permission required",
+    body: "This command failed because of insufficient privileges. Authorize re-running it as root?",
+    commandLabel: "Command",
+    cwdLabel: "Working directory",
+    reasonLabel: "Failure",
+    mechanismNote:
+      "Your system will then ask for confirmation (pkexec / macOS administrator prompt). Your password is never handled by this app.",
+    deny: "Deny",
+    authorize: "Authorize",
+  },
   providersModelsPanel: {
     create: "New provider",
     expand: "Expand",
@@ -2321,6 +2342,17 @@ export const zh: Translations = {
     untrackedHint: "未跟踪文件",
     binaryDiff: "二进制文件，无法显示差异",
     missingFile: "文件不存在",
+  },
+  rootAuth: {
+    title: "需要 root 权限",
+    body: "该命令因权限不足而失败。是否授权以 root 重新执行？",
+    commandLabel: "命令",
+    cwdLabel: "工作目录",
+    reasonLabel: "失败原因",
+    mechanismNote:
+      "授权后系统会再弹出确认框（pkexec / macOS 管理员提示），密码不会进入本应用。",
+    deny: "拒绝",
+    authorize: "授权",
   },
   providersModelsPanel: {
     create: "新增服务商",

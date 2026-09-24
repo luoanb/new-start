@@ -25,6 +25,7 @@ export type StateEventKind =
   | "workspaces"
   | "git"
   | "git_confirm"
+  | "root_auth"
   | "hook_judgements";
 
 export type StateChangePayload =
@@ -56,6 +57,15 @@ export type StateChangePayload =
       op_kind: string;
       title: string;
       detail: unknown;
+    }
+  | {
+      kind: "root_auth";
+      request_id: string;
+      /** 待提权重跑的原始命令（展示给用户判断风险）。 */
+      command: string;
+      cwd: string | null;
+      /** 触发授权的失败原因摘要（后端已截断）。 */
+      stderr_excerpt: string;
     }
   | {
       kind: "hook_judgements";

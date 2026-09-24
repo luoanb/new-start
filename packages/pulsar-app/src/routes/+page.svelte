@@ -19,6 +19,7 @@
   import { fileEditorStore } from "$lib/stores/fileEditorStore.svelte";
   import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
   import GitConfirmHost from "$lib/components/GitConfirmHost.svelte";
+  import RootAuthHost from "$lib/components/RootAuthHost.svelte";
   import { t } from "$lib/i18n";
   import { DEFAULT_SESSION_MODE, SESSION_MODES, findSessionMode } from "$lib/sessionModes";
   import { formatInvokeError } from "$lib/utils/formatInvokeError";
@@ -865,6 +866,9 @@
 
 <!-- 全局 git 写操作确认消费器（后端确认服务入队 → 跨面板常驻弹窗） -->
 <GitConfirmHost />
+
+<!-- 全局 root 授权消费器（命令权限不足时全屏提示，用户授权后由系统原生提权重跑） -->
+<RootAuthHost />
 
 {#if isTauriEnv}
   <!-- 无边框窗口边缘 resize 光标提示（Linux/WebKitGTK 下系统不渲染，见 spec window-edge-resize-cursor） -->

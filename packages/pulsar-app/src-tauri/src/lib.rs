@@ -1531,6 +1531,17 @@ fn git_confirm(gateway: State<'_, Gateway>, op_id: String, approved: bool) -> Ta
         .map_err(|error| error.payload())
 }
 
+/// root 授权唯一入口：向等待中的 `execute_command` 投递用户决定
+/// （授权 = 允许以 root 重跑；root 本身由平台原生提权程序提供）。
+#[tauri::command]
+fn root_auth_resolve(gateway: State<'_, Gateway>, request_id: String, approved: bool) -> TauriResult<()> {
+    gateway
+        .inner()
+        .root_auth()
+        .resolve(&request_id, approved)
+        .map_err(|error| error.payload())
+}
+
 /// 危险写开关回显（前端弹窗/设置读取）。
 #[tauri::command]
 fn git_get_confirm_config(gateway: State<'_, Gateway>) -> TauriResult<serde_json::Value> {
@@ -2077,6 +2088,7 @@ pub fn run() {
             git_pull,
             git_resolve_conflict,
             git_confirm,
+            root_auth_resolve,
             git_get_confirm_config,
             git_set_dangerous_writes,
         ])

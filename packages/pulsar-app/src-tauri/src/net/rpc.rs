@@ -1529,6 +1529,15 @@ async fn dispatch(state: &NetState, cmd: &str, params: Value) -> Result<Value, R
                 .map_err(RpcErrorBody::from)?;
             value(())
         }
+        "root_auth_resolve" => {
+            let p: RootAuthResolveParams = from_params(params)?;
+            state
+                .gateway
+                .root_auth()
+                .resolve(&p.request_id, p.approved)
+                .map_err(RpcErrorBody::from)?;
+            value(())
+        }
         "git_get_confirm_config" => {
             value(json!({
                 "dangerous_writes": state.gateway.git_service().dangerous_writes(),
@@ -1774,6 +1783,13 @@ struct GitResolveConflictParams {
 #[serde(rename_all = "camelCase")]
 struct GitConfirmParams {
     op_id: String,
+    approved: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RootAuthResolveParams {
+    request_id: String,
     approved: bool,
 }
 

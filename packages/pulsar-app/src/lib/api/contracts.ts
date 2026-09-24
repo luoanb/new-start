@@ -243,6 +243,7 @@ export const c = {
     "git_resolve_conflict",
   ),
   gitConfirm: def<{ opId: string; approved: boolean }, void>("git_confirm"),
+  rootAuthResolve: def<{ requestId: string; approved: boolean }, void>("root_auth_resolve"),
   gitSetDangerousWrites: def<{ enabled: boolean }, void>("git_set_dangerous_writes"),
 
   // ── 文件系统 ──

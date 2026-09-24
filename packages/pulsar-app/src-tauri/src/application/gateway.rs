@@ -52,6 +52,7 @@ use crate::tools::{
     current_time::GetCurrentTimeTool,
     dynamic_tool::{CommandTool, HttpTool},
     mcp::{McpServerClient, McpServerStatus, McpServerStatusKind},
+    root_auth::RootAuthService,
     tool_config::{
         validate_tool_config, DynamicToolsFile, McpServersFile, ToolConfigReader, ToolConfigView,
     },
@@ -103,6 +104,9 @@ pub struct Gateway {
     /// git 能力组合服务（CliGitBackend + 确认服务 + active repo + 危险写开关）。
     /// Tauri commands、AI 原生 git 工具、RPC 共用同一实例。
     git_service: Arc<GitService>,
+    /// root 授权服务：命令因权限不足失败后向用户请求授权，授权后由平台原生提权
+    /// （pkexec / osascript）重跑。Tauri commands、execute_command、RPC 共用同一实例。
+    root_auth: Arc<RootAuthService>,
     /// 装配互斥：串行化启动期后台装配与运行期手动重装配，保证「以最后一次为准」。
     assemble_lock: Arc<tokio::sync::Mutex<()>>,
     /// 状态事件发射器：流式入口（`send_model_message_stream`）内部广播
@@ -239,6 +243,10 @@ impl Gateway {
         );
         let git_ctx = Arc::new(GitToolContext::new(Arc::clone(&git_service)));
 
+        // root 授权：无发射器（测试/无 UI）时服务直接在请求时返回 Unavailable，
+        // 即「无前端消费方保持拒绝」，不静默提权。
+        let root_auth = Arc::new(RootAuthService::new(state_emit.clone()));
+
         // 工具装配：本地通道（native + config）同步就绪、启动即可用；MCP 通道
         // 改为后台异步装配（不阻塞应用启动，连接完成自动登记并广播 Tools）。
         // 测试注入注册表时直接使用注入值（跳过本地/MCP 装配）。
@@ -250,6 +258,7 @@ impl Gateway {
                     Arc::clone(&file_ctx),
                     Arc::clone(&git_ctx),
                     terminal.clone(),
+                    Some(Arc::clone(&root_auth)),
                 )?;
                 Arc::new(RwLock::new(local_registry))
             }
@@ -287,6 +296,7 @@ impl Gateway {
             let git_ctx_for_assembly = Arc::clone(&git_ctx);
             let neuron_manager_for_assembly = Arc::clone(&neuron_manager);
             let terminal_for_assembly = terminal.clone();
+            let root_auth_for_assembly = Arc::clone(&root_auth);
             tauri::async_runtime::spawn(async move {
                 let _guard = assemble_lock.lock().await;
                 let mut base_registry = match assemble_local_tools(
@@ -294,6 +304,7 @@ impl Gateway {
                     Arc::clone(&file_ctx_for_assembly),
                     Arc::clone(&git_ctx_for_assembly),
                     terminal_for_assembly,
+                    Some(root_auth_for_assembly),
                 ) {
                     Ok(registry) => registry,
                     Err(error) => {
@@ -529,6 +540,7 @@ impl Gateway {
             assemble_lock,
             state_emit,
             terminal,
+            root_auth,
         })
     }
 
@@ -690,6 +702,7 @@ impl Gateway {
             &self.store.root(),
             file_ctx, git_ctx,
             self.terminal.clone(),
+            Some(Arc::clone(&self.root_auth)),
         )?;
         // base 装配统一含神经元 System 工具，保证保存配置后的重装配与启动装配一致。
         register_system_tools(&mut base_registry, Arc::clone(&self.neuron_manager));
@@ -1235,6 +1248,11 @@ impl Gateway {
         Arc::clone(&self.git_service)
     }
 
+    /// root 授权服务：`root_auth_resolve` 命令与 execute_command 共用同一实例。
+    pub fn root_auth(&self) -> Arc<RootAuthService> {
+        Arc::clone(&self.root_auth)
+    }
+
     /// 持久化 git 危险写开关到 config.json `git` 节并热更新内存开关。
     /// 沿用统一 ConfigStore 读改写 + 原子写回流程；失败不触碰内存状态。
     pub fn set_git_dangerous_writes(&self, enabled: bool) -> AppResult<()> {
@@ -1540,18 +1558,24 @@ fn git_dangerous_writes_config(storage_root: &std::path::Path) -> bool {
 /// `GitToolContext`（GitService：backend + 确认 + active repo + 危险写开关）。
 /// 配置驱动通道：dynamic_tools.json（HttpTool / CommandTool）。声明即 schema，
 /// 豁免 insert 门禁；命令模板复用 cmd_exec 安全护栏。
+/// root 授权服务注入 `execute_command`：权限不足失败时经用户授权以 root 重跑。
 fn assemble_local_tools(
     storage_root: &std::path::Path,
     file_ctx: Arc<FileToolContext>,
     git_ctx: Arc<GitToolContext>,
     terminal: Option<Arc<crate::terminal::AgentTerminalBridge>>,
+    root_auth: Option<Arc<RootAuthService>>,
 ) -> AppResult<ToolRegistry> {
     let mut registry = ToolRegistry::new();
     // 内置工具全部打标 Core（用户决策）：任何对话都得带上。
     // 方案 A：注入终端桥接后 execute_command 支持 visible_terminal 可见执行。
+    // root 授权：注入服务后，权限不足的失败会先询问用户是否以 root 重跑。
     let mut exec_tool = ExecuteCommandTool::new().with_workspace(file_ctx.workspace_store());
     if let Some(bridge) = terminal {
         exec_tool = exec_tool.with_terminal(bridge);
+    }
+    if let Some(service) = root_auth {
+        exec_tool = exec_tool.with_root_auth(service);
     }
     registry.register_core(exec_tool);
     registry.register_core(GetCurrentTimeTool::new());
