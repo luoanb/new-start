@@ -3,10 +3,14 @@ dist
 .env
 !packages/pulsar-app/.env
 !packages/pulsar-app/.env.example
+!packages/pulsar-harness/.env
+!packages/pulsar-harness/.env.example
 .mini-claw
 .DS_Store
 *.log
 packages/pulsar-app/.pulsar/*
 packages/pulsar-app/src-tauri/.pulsar/app.db
 packages/pulsar-app/.pulsar.bak*
+packages/pulsar-harness/.pulsar-harness/*
+packages/pulsar-harness/.pulsar-harness.bak*
 .tmp_perf/*

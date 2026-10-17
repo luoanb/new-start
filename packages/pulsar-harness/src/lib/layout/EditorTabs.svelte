@@ -1,0 +1,598 @@
+<script lang="ts">
+  import type { ViewMeta } from "./views";
+  import { t } from "$lib/i18n";
+  import ContextMenu, { type ContextMenuEntry } from "$lib/components/ContextMenu.svelte";
+  import { CopyToClipboard } from "$lib/utils";
+  import { layoutStore } from "./LayoutStore.svelte";
+
+  let {
+    tabs,
+    activeId,
+    paneId,
+    onSelect,
+    onClose,
+    onDrop,
+    onDropToNewPane,
+    onBatchClose,
+    pinned,
+  }: {
+    tabs: ViewMeta[];
+    activeId: string | null;
+    paneId: string;
+    onSelect: (id: string) => void;
+    onClose: (id: string) => void;
+    onDrop: (panelId: string, targetPaneId: string, targetIndex: number) => void;
+    onDropToNewPane: (panelId: string) => void;
+    /** 批量关闭 tab id 列表（由外部编排 dirty 确认与焦点迁移）。 */
+    onBatchClose?: (ids: string[]) => void;
+    /** 判定某 tab 是否固定不可关（如主 chat 面板）。缺省 = 都可关。 */
+    pinned?: (id: string) => boolean;
+  } = $props();
+
+  // 激活视图回退：activeId 不在 tabs 中（如侧栏活动）时高亮首个主视图。
+  const resolvedActive = $derived(
+    tabs.some((t) => t.id === activeId) ? activeId : tabs[0]?.id,
+  );
+
+  /** 当前分栏可关闭的 tab 集合（排除固定 tab）。 */
+  const closableIds = $derived(
+    tabs.filter((t) => !pinned?.(t.id)).map((t) => t.id),
+  );
+
+  // ── 批量选中态 ──
+  let selected = $state<Set<string>>(new Set());
+  /** Shift 范围选中的锚点 tab id。 */
+  let anchorId = $state<string | null>(null);
+
+  function toggleSelected(id: string) {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    selected = next;
+    anchorId = id;
+  }
+
+  function selectRange(targetId: string) {
+    const from = anchorId ?? resolvedActive ?? tabs[0]?.id;
+    const a = tabs.findIndex((t) => t.id === from);
+    const b = tabs.findIndex((t) => t.id === targetId);
+    if (a < 0 || b < 0) return;
+    const lo = Math.min(a, b);
+    const hi = Math.max(a, b);
+    const next = new Set<string>();
+    for (let i = lo; i <= hi; i++) next.add(tabs[i].id);
+    selected = next;
+  }
+
+  function clearSelection() {
+    selected = new Set();
+    anchorId = null;
+  }
+
+  /** 状态同步：tabs 变化（Tab 被关闭/移动/分栏收缩）时收敛选中集合，
+   * 剔除已不存在的 id，避免残留失效选中项导致后续批量操作错乱。 */
+  $effect(() => {
+    const valid = new Set(tabs.map((t) => t.id));
+    let changed = false;
+    for (const id of selected) {
+      if (!valid.has(id)) { changed = true; break; }
+    }
+    if (anchorId && !valid.has(anchorId)) changed = true;
+    if (changed) {
+      selected = new Set([...selected].filter((id) => valid.has(id)));
+      if (anchorId && !valid.has(anchorId)) anchorId = null;
+    }
+  });
+
+  /** tab 单击：普通点击切换激活；Ctrl/Cmd 多选切换；Shift 范围多选。 */
+  function handleTabClick(e: MouseEvent, id: string) {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      toggleSelected(id);
+      return;
+    }
+    if (e.shiftKey) {
+      e.preventDefault();
+      selectRange(id);
+      return;
+    }
+    clearSelection();
+    onSelect(id);
+  }
+
+  // ── 右键菜单 ──
+  let menu = $state<{
+    items: ContextMenuEntry[];
+    x: number;
+    y: number;
+  } | null>(null);
+
+  /** 从 panel.type 判断 tab 是否可复制路径（file-editor / git-diff / commit-diff 有路径）。 */
+  function hasPath(id: string): boolean {
+    const tab = tabs.find((t) => t.id === id);
+    return !!tab?.tooltip;
+  }
+
+  function requestClose(ids: string[]) {
+    if (ids.length === 0) return;
+    onBatchClose ? onBatchClose(ids) : ids.forEach((id) => onClose(id));
+    clearSelection();
+  }
+
+  async function copyPaths(ids: string[]) {
+    const paths = ids
+      .map((id) => tabs.find((t) => t.id === id)?.tooltip)
+      .filter((p): p is string => !!p);
+    if (paths.length > 0) {
+      await CopyToClipboard.copyText(paths.join("\n"));
+    }
+    clearSelection();
+  }
+
+  function openTabContextMenu(e: MouseEvent, id: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    // 右键已选中 tab：保留多选集合；否则单选该 tab。
+    if (!selected.has(id)) {
+      selected = new Set([id]);
+      anchorId = id;
+    }
+    const isPinned = pinned?.(id) ?? false;
+    const single = selected.size <= 1;
+    const chooseTargets = selected.size > 1 ? [...selected] : [id];
+
+    const idx = tabs.findIndex((t) => t.id === id);
+    const others = closableIds.filter((i) => i !== id);
+    const rightOf = closableIds.filter((_, i) => i > idx);
+    const allClosable = closableIds;
+
+    const items: ContextMenuEntry[] = [];
+    // ── 关闭类 ──
+    if (single) {
+      items.push({
+        label: t("editorTabs.close"),
+        danger: true,
+        disabled: isPinned,
+        onSelect: () => requestClose([id]),
+      });
+      items.push({
+        label: t("editorTabs.closeOthers"),
+        disabled: others.length === 0,
+        onSelect: () => requestClose(others),
+      });
+      items.push({
+        label: t("editorTabs.closeRight"),
+        disabled: rightOf.length === 0,
+        onSelect: () => requestClose(rightOf),
+      });
+      items.push({
+        label: t("editorTabs.closeAll"),
+        disabled: allClosable.length === 0,
+        onSelect: () => requestClose(allClosable),
+      });
+    } else {
+      items.push({
+        label: t("editorTabs.closeSelected", { count: chooseTargets.length }),
+        danger: true,
+        onSelect: () => requestClose(chooseTargets),
+      });
+    }
+    // ── 分隔线（非交互） ──
+    items.push({ divider: true });
+    // ── 复制路径 ──
+    items.push({
+      label: t("editorTabs.copyPath"),
+      disabled: !hasPath(id),
+      onSelect: () => void copyPaths(chooseTargets),
+    });
+    items.push({
+      label: t("editorTabs.moveNewPane"),
+      onSelect: () => {
+        chooseTargets.forEach((tid) => onDropToNewPane(tid));
+        clearSelection();
+      },
+    });
+    // ── 选择类 ──
+    items.push({
+      label: t("editorTabs.selectSameType"),
+      onSelect: () => {
+        const same = tabs.filter((t) => typeOf(t.id) === typeOf(id) && t.id !== id);
+        const next = new Set(same.map((t) => t.id));
+        if (next.size > 0) selected = next;
+      },
+    });
+    items.push({
+      label: t("editorTabs.selectAll"),
+      onSelect: () => {
+        selected = new Set(tabs.map((t) => t.id));
+      },
+    });
+    if (!single) {
+      items.push({
+        label: t("editorTabs.deselect"),
+        onSelect: clearSelection,
+      });
+    }
+
+    menu = { items, x: e.clientX, y: e.clientY };
+  }
+
+  /** 由 layoutStore 当前分栏查询 tab 的 panel.type（「选择同类」用）。 */
+  function typeOf(id: string): string | null {
+    const pane = layoutStore.state.main.panes.find((p) => p.id === paneId);
+    return pane?.panels.find((x) => x.id === id)?.type ?? null;
+  }
+
+  // ── 拖拽：分栏内重排 / 跨分栏移动（HTML5 DnD）──
+  // 幽灵图使用系统默认快照（WebKitGTK HiDPI 下会被放大 dpr 倍，属引擎行为，暂不处理）。
+  let barEl = $state<HTMLElement | null>(null);
+  let dragId = $state<string | null>(null);
+  type DropState =
+    | { kind: "tab"; tabId: string; before: boolean }
+    | { kind: "append" };
+  let dropState = $state<DropState | null>(null);
+  /** 拖拽中是否悬停在「新建分栏」目标上 */
+  let overNewPane = $state(false);
+
+  function handleDragStart(e: DragEvent, id: string) {
+    dragId = id;
+    if (e.dataTransfer) {
+      e.dataTransfer.setData("text/plain", id);
+      e.dataTransfer.effectAllowed = "move";
+    }
+  }
+
+  function handleDragEnd() {
+    dragId = null;
+    dropState = null;
+    overNewPane = false;
+  }
+
+  /** 拖拽悬停「新建分栏」目标：允许放置并高亮。 */
+  function handleNewPaneDragOver(e: DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    overNewPane = true;
+  }
+
+  function handleNewPaneDragLeave(e: DragEvent) {
+    const related = e.relatedTarget as Node | null;
+    const el = e.currentTarget as HTMLElement | null;
+    if (!el || !related || !el.contains(related)) overNewPane = false;
+  }
+
+  /** 拖放到「新建分栏」目标：把被拖面板移入新分栏（stopPropagation 防止冒泡到分栏追加）。 */
+  function handleNewPaneDrop(e: DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    overNewPane = false;
+    const panelId = e.dataTransfer?.getData("text/plain") || dragId;
+    if (panelId) onDropToNewPane(panelId);
+  }
+
+  /** 解析悬停目标：命中 tab 按鼠标在 tab 左/右半区给插入方向，否则视为追加到栏尾。 */
+  function resolveDropTarget(e: DragEvent): DropState {
+    const tabEl = (e.target as HTMLElement | null)?.closest?.(".tab");
+    if (tabEl) {
+      const rect = tabEl.getBoundingClientRect();
+      return {
+        kind: "tab",
+        tabId: tabEl.getAttribute("data-id")!,
+        before: e.clientX < rect.left + rect.width / 2,
+      };
+    }
+    return { kind: "append" };
+  }
+
+  function handleBarDragOver(e: DragEvent) {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    dropState = resolveDropTarget(e);
+  }
+
+  function handleBarDragLeave(e: DragEvent) {
+    const related = e.relatedTarget as Node | null;
+    if (!barEl || !related || !barEl.contains(related)) dropState = null;
+  }
+
+  function handleBarDrop(e: DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    const panelId = e.dataTransfer?.getData("text/plain") || dragId;
+    const st = resolveDropTarget(e);
+    if (panelId) {
+      const idx =
+        st.kind === "tab" ? tabs.findIndex((t) => t.id === st.tabId) : tabs.length;
+      const targetIndex =
+        st.kind === "tab" ? (st.before ? idx : idx + 1) : tabs.length;
+      onDrop(panelId, paneId, Math.max(0, targetIndex));
+    }
+    dropState = null;
+  }
+</script>
+
+<div class="tabs-wrap">
+  <div
+    class="editor-tabs"
+    role="tablist"
+    tabindex="0"
+    bind:this={barEl}
+    ondragover={handleBarDragOver}
+    ondragleave={handleBarDragLeave}
+    ondrop={handleBarDrop}
+    onwheel={(e) => {
+      // hover 时滚轮 → 左右滚动 tab 栏（阻止页面纵向滚动）
+      e.preventDefault();
+      e.currentTarget.scrollLeft += e.deltaY + e.deltaX;
+    }}
+  >
+    {#each tabs as tab}
+      <button
+        class="tab"
+        class:active={tab.id === resolvedActive}
+        class:selected={selected.has(tab.id)}
+        class:pinned={pinned?.(tab.id)}
+        class:drop-before={dropState?.kind === "tab" && dropState.tabId === tab.id && dropState.before}
+        class:drop-after={dropState?.kind === "tab" && dropState.tabId === tab.id && !dropState.before}
+        draggable="true"
+        data-id={tab.id}
+        ondragstart={(e) => handleDragStart(e, tab.id)}
+        ondragend={handleDragEnd}
+        onclick={(e) => handleTabClick(e, tab.id)}
+        oncontextmenu={(e) => openTabContextMenu(e, tab.id)}
+      >
+        {#if tab.icon}
+          {@const Icon = tab.icon}
+          <span
+            class="icon"
+            class:tone-chat={tab.iconTone === "chat"}
+            class:tone-agent={tab.iconTone === "agent"}
+            class:tone-assistant={tab.iconTone === "assistant"}
+            class:tone-system={tab.iconTone === "system"}
+          >
+            <Icon />
+          </span>
+        {/if}
+        {#if tab.dirty}
+          <span class="dirty-dot" aria-label="unsaved"></span>
+        {/if}
+        {#if pinned?.(tab.id)}
+          <span class="pin-dot" title={t("editorTabs.pinned")}>📌</span>
+        {/if}
+        <span
+          class="label"
+          class:truncate={tab.truncate}
+          title={tab.tooltip ?? tab.title ?? t(tab.label)}
+        >{tab.title ?? t(tab.label)}</span>
+        <span
+          class="close"
+          role="button"
+          tabindex="-1"
+          title="Close"
+          class:disabled={pinned?.(tab.id)}
+          onclick={(e) => { e.stopPropagation(); if (!pinned?.(tab.id)) onClose(tab.id); }}
+          onkeydown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              e.stopPropagation();
+              if (!pinned?.(tab.id)) onClose(tab.id);
+            }
+          }}
+        >✕</span>
+      </button>
+    {/each}
+    <div class="tabs-spacer" class:drop-append={dropState?.kind === "append"}></div>
+  </div>
+
+  {#if dragId}
+    <!-- 拖拽中右侧悬浮的「新建分栏」目标：拖入即把面板移入新分栏 -->
+    <div
+      class="new-pane-drop"
+      class:over={overNewPane}
+      role="presentation"
+      ondragover={handleNewPaneDragOver}
+      ondragleave={handleNewPaneDragLeave}
+      ondrop={handleNewPaneDrop}
+    >
+      <span class="new-pane-icon">＋</span>
+      <span>{t("common.newPane")}</span>
+    </div>
+  {/if}
+
+  {#if menu}
+    <ContextMenu
+      items={menu.items}
+      x={menu.x}
+      y={menu.y}
+      onClose={() => (menu = null)}
+    />
+  {/if}
+</div>
+
+<style>
+  .tabs-wrap {
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  .editor-tabs {
+    display: flex;
+    align-items: flex-end;
+    flex-shrink: 0;
+    height: 32px;
+    background: var(--color-bg);
+    border-bottom: var(--border-width) solid var(--color-border);
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+
+  .editor-tabs::-webkit-scrollbar { display: none; }
+
+  .tab {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    width: 120px;
+    flex: none;
+    height: 32px;
+    padding: 0 var(--space-2);
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: var(--fs-sm);
+    color: var(--color-text-muted);
+    border-right: var(--border-width) solid var(--color-border);
+    border-top: 2px solid transparent;
+    transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+    white-space: nowrap;
+  }
+
+  .tab:hover { background: var(--color-hover); color: var(--color-text); }
+
+  .tab.active {
+    background: var(--color-surface);
+    color: var(--color-text);
+    border-top-color: var(--color-primary);
+  }
+
+  /* 批量选中态：主色淡底高亮，与激活态（顶部色条）区分 */
+  .tab.selected {
+    background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+    color: var(--color-primary);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary) 35%, transparent);
+  }
+
+  /* 固定 tab：文字弱化，提示不可关 */
+  .tab.pinned .close { visibility: hidden; opacity: 0; }
+
+  /* 视图图标：以图标组件渲染（`unplugin-icons` 构建期产出），尺寸 12px，与 tab 高度对齐 */
+  .icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--color-primary) 15%, transparent);
+    color: var(--color-primary);
+  }
+  .icon :global(svg) {
+    width: 12px;
+    height: 12px;
+    display: block;
+  }
+  /* 模式色调：对齐会话列表 mode-badge 色板（chat 主色 / agent 成功 / assistant 警告 / system 危险） */
+  .icon.tone-chat { background: color-mix(in srgb, var(--color-primary) 15%, transparent); color: var(--color-primary); }
+  .icon.tone-agent { background: color-mix(in srgb, var(--color-success) 15%, transparent); color: var(--color-success); }
+  .icon.tone-assistant { background: color-mix(in srgb, var(--color-warning) 15%, transparent); color: var(--color-warning); }
+  .icon.tone-system { background: color-mix(in srgb, var(--color-error) 15%, transparent); color: var(--color-error); }
+  /* 标题在固定宽度内省略；truncate 类不再需要额外限制 */
+  .label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--fs-xs);
+    font-weight: 500;
+  }
+  /* 未保存 ● 标记：warning 色（对齐 visual-design 状态表） */
+  .dirty-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--color-warning);
+    flex: none;
+  }
+  /* 固定 tab 的 pin 标记 */
+  .pin-dot {
+    font-size: 9px;
+    line-height: 1;
+    flex: none;
+    opacity: 0.7;
+  }
+  /* 动态标题（对话标题）截断：限制宽度，最多展示约 5 个字 */
+  .close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    font-size: 10px;
+    border-radius: var(--radius-sm);
+    color: inherit;
+    transition: opacity var(--duration-fast) var(--ease-out);
+  }
+
+  .close:hover { opacity: 1 !important; background: var(--color-hover); }
+  .close.disabled { cursor: not-allowed; }
+
+  /* 仅支持 hover 的设备隐藏关闭按钮（hover/键盘聚焦时显示）；
+     触屏（hover: none）始终可见，保证可发现性。见 .cursor/rules/ui-hover-reveal.mdc */
+  @media (hover: hover) {
+    .tab .close {
+      opacity: 0;
+      visibility: hidden;
+    }
+    .tab:hover .close,
+    .tab:focus-within .close {
+      opacity: 0.7;
+      visibility: visible;
+    }
+    /* 激活 tab 的关闭按钮常显（不依赖 hover） */
+    .tab.active .close {
+      opacity: 0.6;
+      visibility: visible;
+    }
+  }
+
+  .tabs-spacer { flex: 1; height: 100%; position: relative; }
+
+  /* 拖拽中右侧悬浮的「新建分栏」目标 */
+  .new-pane-drop {
+    position: absolute;
+    right: var(--space-2);
+    top: 3px;
+    bottom: 3px;
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 0 var(--space-2);
+    font-size: var(--fs-xs);
+    font-weight: 500;
+    color: var(--color-text-muted);
+    border: 1px dashed var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface);
+    cursor: copy;
+    user-select: none;
+    pointer-events: auto;
+    z-index: 5;
+  }
+  .new-pane-icon { font-size: var(--fs-xs); line-height: 1; }
+  .new-pane-drop.over {
+    color: var(--color-on-primary);
+    background: var(--color-primary);
+    border-color: transparent;
+  }
+
+  /* 拖拽落点指示：目标 tab 左/右侧或栏尾竖线 */
+  .tab.drop-before::before,
+  .tab.drop-after::after,
+  .tabs-spacer.drop-append::before {
+    content: "";
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    width: 2px;
+    border-radius: 1px;
+    background: var(--color-primary);
+    pointer-events: none;
+  }
+  .tab.drop-before::before { left: 0; }
+  .tab.drop-after::after { right: 0; }
+  .tabs-spacer.drop-append::before { left: 0; }
+</style>

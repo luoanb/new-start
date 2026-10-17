@@ -1,0 +1,78 @@
+<script lang="ts">
+  import { useResizable } from "./useResizable.svelte";
+  import type { ActionReturn } from "svelte/action";
+
+  let {
+    orientation = "vertical",
+    onResize,
+    onResizeEnd,
+    extraClass,
+  }: {
+    orientation?: "vertical" | "horizontal";
+    onResize: (deltaPx: number) => void;
+    onResizeEnd?: () => void;
+    extraClass?: string;
+  } = $props();
+
+  // 分割方向与回调在挂载后不变化；useResizable 在内部闭包捕获 options，仅初始化读取一次
+  // svelte-ignore state_referenced_locally
+  const resizable = useResizable({
+    axis: orientation === "vertical" ? "x" : "y",
+    onResize,
+    onEnd: onResizeEnd,
+  });
+
+  // svelte:action —— attach/detach 随元素生命周期
+  function splitterAction(node: HTMLElement): ActionReturn {
+    resizable.attach(node);
+    return { destroy: () => resizable.detach(node) };
+  }
+</script>
+
+<div
+  class="splitter {orientation === 'horizontal' ? 'horizontal' : 'vertical'} {extraClass}"
+  use:splitterAction
+  role="separator"
+  aria-orientation={orientation}
+  aria-label="Resize"
+></div>
+
+<style>
+  :global(body.resizing) {
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: grabbing;
+  }
+
+  .splitter {
+    position: relative;
+    z-index: 2;
+    flex-shrink: 0;
+    touch-action: none;
+    cursor: col-resize;
+    user-select: none;
+    -webkit-user-select: none;
+    transition: background var(--duration-fast) var(--ease-out);
+  }
+
+  .splitter.vertical { width: 4px; margin: 0 -2px; cursor: col-resize; }
+  .splitter.horizontal { height: 4px; margin: -2px 0; cursor: row-resize; }
+
+  /* 常驻线交给相邻容器的 1px border（分割条自身 4px 盒画出来会是 2px，与别处细线不齐）；
+     分割条只保留热区与 hover / 拖拽高亮。 */
+  .splitter::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: transparent;
+  }
+
+  .splitter.vertical::after { left: 1px; right: 1px; }
+  .splitter.horizontal::after { top: 1px; bottom: 1px; }
+
+  .splitter:hover::after,
+  .splitter:active::after {
+    background: var(--color-primary);
+    opacity: 0.6;
+  }
+</style>

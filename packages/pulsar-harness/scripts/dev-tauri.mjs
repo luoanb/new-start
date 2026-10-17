@@ -1,0 +1,69 @@
+#!/usr/bin/env node
+// 带自定义前端端口的 tauri 启动器（pnpm tauri:dev 使用本脚本）。
+//
+// 端口单一来源：
+//  - 前端：DEV_FRONT_PORT 环境变量；未设置回退 tauri.conf.json 的 build.devUrl。
+// vite 侧读同一环境变量（vite.config.js 的 DEV_FRONT_PORT），tauri 侧用 `tauri dev --config`
+// 把前端端口注入 devUrl，两端读同一个值，任何情况下都不会端口错位。
+//
+// 用法（在 packages/pulsar-harness 下）：
+//   pnpm tauri:dev                          # 默认端口（1442）
+//   pnpm tauri:dev --frontend-port 1450
+//   DEV_FRONT_PORT=1450 pnpm tauri:dev
+import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+const confPath = new URL("../src-tauri/tauri.conf.json", import.meta.url);
+const conf = JSON.parse(readFileSync(fileURLToPath(confPath), "utf8"));
+const baseFrontPort = Number(new URL(conf.build.devUrl).port);
+
+// 解析 --<name>=<n> 或 --<name> <n> 形式的端口参数
+function parsePort(argv, name) {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === `--${name}`) {
+      const v = Number(argv[i + 1]);
+      if (Number.isFinite(v)) return v;
+    }
+    if (a.startsWith(`--${name}=`)) {
+      const v = Number(a.split("=")[1]);
+      if (Number.isFinite(v)) return v;
+    }
+  }
+  return null;
+}
+
+// 将任意输入解析为合法端口；undefined/空串/NaN 等一律视为未设置（返回 null）
+function toPort(value) {
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+const argv = process.argv.slice(2);
+// 优先级：命令行参数 > 环境变量 > 默认值
+// 注意：Number(undefined) === NaN，而 ?? 只回退 null/undefined，必须用 toPort 归一化
+const frontPort = parsePort(argv, "frontend-port") ?? toPort(process.env.DEV_FRONT_PORT) ?? baseFrontPort;
+
+const args = ["exec", "tauri", "dev"];
+// 仅当覆盖默认前端端口时才注入配置合并，默认路径保持最小
+if (frontPort !== baseFrontPort) {
+  args.push("--config", JSON.stringify({ build: { devUrl: `http://localhost:${frontPort}` } }));
+}
+// 透传其它 CLI 参数（如 --release、--features 等），剔除自定义端口参数
+const passthrough = argv.filter((a) => a.startsWith("-") && !a.startsWith("--frontend-port"));
+args.push(...passthrough);
+
+const child = spawn("pnpm", args, {
+  stdio: "inherit",
+  env: {
+    ...process.env,
+    // 供 beforeDevCommand 内启动的 vite 读取，保证与 tauri 注入的端口一致
+    DEV_FRONT_PORT: String(frontPort),
+  },
+});
+child.on("error", (err) => {
+  console.error("[dev-tauri] 启动 tauri 失败:", err);
+  process.exit(1);
+});
+child.on("exit", (code) => process.exit(code ?? 0));
