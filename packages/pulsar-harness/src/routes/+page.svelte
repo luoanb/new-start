@@ -2,7 +2,8 @@
   /**
    * 组合根：外壳（header + 四区布局）+ 依赖注入（ViewContext）。
    *
-   * 布局区域：ActivityBar | sidebar | main（分栏 + EditorTabs）| info，底部 panel。
+   * 布局区域：ActivityBar | sidebar | 中间列（main 分栏 + EditorTabs / 底部 panel）| info。
+   * 底部 panel 归中间列，只占 main 宽度，左右栏整高不被截断。
    * 所有区域内容由 `layout/views.ts` 注册表驱动，本文件不承载任何业务逻辑；
    * 视图需要的数据/命令经 ViewContext 自取（见 ExampleView.svelte）。
    */
@@ -254,40 +255,54 @@
       />
     {/if}
 
-    <main class="main">
-      {#if layout.state.main.panes.length === 0}
-        <p class="main-empty">{t("common.newExamplePanel")}</p>
-      {:else}
-        {#each layout.state.main.panes as pane, i (pane.id)}
-          <section class="pane" style="flex-grow: {pane.grow}" use:trackPane={pane.id}>
-            <EditorTabs
-              tabs={paneTabs(pane)}
-              activeId={pane.activePanelId}
-              paneId={pane.id}
-              onSelect={(id) => layout.setActivePanel(id)}
-              onClose={(id) => layout.closePanel(id)}
-              onDrop={(panelId, targetPaneId, targetIndex) =>
-                layout.movePanel(panelId, targetPaneId, targetIndex)}
-              onDropToNewPane={(panelId) => layout.movePanelToNewPane(panelId)}
-            />
-            <div class="pane-body">
-              {#each pane.panels as panel (panel.id)}
-                <div class="panel-slot" class:inactive={panel.id !== pane.activePanelId}>
-                  <ViewHost registration={mainRegistrations[panel.type]} {panel} />
-                </div>
-              {/each}
-            </div>
-          </section>
-          {#if i < layout.state.main.panes.length - 1}
-            <Splitter
-              orientation="vertical"
-              onResize={(d) => resizePane(i, d)}
-              onResizeEnd={() => layout.persistNow()}
-            />
-          {/if}
-        {/each}
+    <!-- 中间列：main（分栏 + EditorTabs）+ 底部 panel（panel 只占 main 宽度，左右栏整高不被截断） -->
+    <div class="center-column">
+      <main class="main">
+        {#if layout.state.main.panes.length === 0}
+          <p class="main-empty">{t("common.newExamplePanel")}</p>
+        {:else}
+          {#each layout.state.main.panes as pane, i (pane.id)}
+            <section class="pane" style="flex-grow: {pane.grow}" use:trackPane={pane.id}>
+              <EditorTabs
+                tabs={paneTabs(pane)}
+                activeId={pane.activePanelId}
+                paneId={pane.id}
+                onSelect={(id) => layout.setActivePanel(id)}
+                onClose={(id) => layout.closePanel(id)}
+                onDrop={(panelId, targetPaneId, targetIndex) =>
+                  layout.movePanel(panelId, targetPaneId, targetIndex)}
+                onDropToNewPane={(panelId) => layout.movePanelToNewPane(panelId)}
+              />
+              <div class="pane-body">
+                {#each pane.panels as panel (panel.id)}
+                  <div class="panel-slot" class:inactive={panel.id !== pane.activePanelId}>
+                    <ViewHost registration={mainRegistrations[panel.type]} {panel} />
+                  </div>
+                {/each}
+              </div>
+            </section>
+            {#if i < layout.state.main.panes.length - 1}
+              <Splitter
+                orientation="vertical"
+                onResize={(d) => resizePane(i, d)}
+                onResizeEnd={() => layout.persistNow()}
+              />
+            {/if}
+          {/each}
+        {/if}
+      </main>
+
+      {#if layout.state.panel.visible}
+        <Splitter
+          orientation="horizontal"
+          onResize={(d) => layout.setPanelHeight(layout.state.panel.height - d, false)}
+          onResizeEnd={() => layout.persistNow()}
+        />
+        <section class="panel-region" style="height: {layout.state.panel.height}px">
+          <ViewContainer containerId="panel" />
+        </section>
       {/if}
-    </main>
+    </div>
 
     {#if layout.state.info.visible}
       <Splitter
@@ -300,17 +315,6 @@
       </aside>
     {/if}
   </div>
-
-  {#if layout.state.panel.visible}
-    <Splitter
-      orientation="horizontal"
-      onResize={(d) => layout.setPanelHeight(layout.state.panel.height - d, false)}
-      onResizeEnd={() => layout.persistNow()}
-    />
-    <section class="panel-region" style="height: {layout.state.panel.height}px">
-      <ViewContainer containerId="panel" />
-    </section>
-  {/if}
 </div>
 
 <style>
@@ -451,6 +455,15 @@
     min-width: 0;
     display: flex;
     border-right: var(--border-width) solid var(--color-border);
+  }
+
+  /* 中间列：main 与底部 panel 纵向排列；panel 宽度随本列，左右栏保持整高 */
+  .center-column {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
   }
 
   .main {
