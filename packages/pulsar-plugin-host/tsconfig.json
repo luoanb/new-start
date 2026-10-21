@@ -1,0 +1,39 @@
+{
+  // 单工程类型检查：paths 直接指向 pulsar-kernel 的 vendor 源码。
+  // 框架层只有这一份，因此这里不做任何复制。
+  "compilerOptions": {
+    "target": "es2024",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["es2024", "dom"],
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "esModuleInterop": true,
+    "verbatimModuleSyntax": false,
+    // 与 vendor 各包自身 tsconfig 保持一致，避免框架源码被过度约束。
+    "noImplicitAny": false,
+    "noImplicitThis": false,
+    "strictFunctionTypes": false,
+    "noUncheckedIndexedAccess": false,
+    "exactOptionalPropertyTypes": false,
+    "noImplicitOverride": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "baseUrl": ".",
+    "paths": {
+      "@deepseek-ai/cordis": ["../pulsar-kernel/vendor/cordis/src/index.ts"],
+      "@deepseek-ai/cosmokit": ["../pulsar-kernel/vendor/cosmokit/src/index.ts"],
+      "@deepseek-ai/schemastery": ["../pulsar-kernel/vendor/schemastery/src/index.ts"],
+      "@deepseek-ai/cordis-plugin-loader": ["../pulsar-kernel/vendor/loader/src/index.ts"],
+      "@deepseek-ai/cordis-plugin-include": ["../pulsar-kernel/vendor/include/src/index.ts"],
+      "@deepseek-ai/cordis-plugin-group": ["../pulsar-kernel/vendor/group/src/index.ts"],
+      "@deepseek-ai/cordis-plugin-timer": ["../pulsar-kernel/vendor/timer/src/index.ts"],
+      "@deepseek-ai/cordis-plugin-hmr": ["../pulsar-kernel/vendor/hmr/src/index.ts"],
+      "@deepseek-ai/cordis-plugin-logger-console": ["../pulsar-kernel/vendor/logger-console/src/index.ts"]
+    }
+  },
+  "include": ["src", "examples"]
+}

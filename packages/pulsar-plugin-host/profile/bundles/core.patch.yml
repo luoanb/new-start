@@ -1,0 +1,5 @@
+# core bundle：只装配机制示例，不含任何业务插件。
+# 路径相对于本文件。
+- id: hello
+  module: ../../examples/hello-plugin/index.ts
+  client: ../../examples/hello-plugin/client.ts

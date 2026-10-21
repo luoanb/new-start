@@ -1,0 +1,12 @@
+packages:
+  # 框架层唯一来源：直接引用 pulsar-kernel 的 vendor 包，不复制源码。
+  - ../pulsar-kernel/vendor/*
+
+overrides:
+  '@deepseek-ai/cosmokit': 'link:../pulsar-kernel/vendor/cosmokit'
+  '@deepseek-ai/schemastery': 'link:../pulsar-kernel/vendor/schemastery'
+
+allowBuilds:
+  # hmr 的构建期依赖，需要原生二进制安装脚本。
+  esbuild: true
+  node-addon-require-builtin: false

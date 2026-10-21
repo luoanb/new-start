@@ -1,0 +1,12 @@
+# skeleton profile：bundles 按顺序叠加，本文件的 plugins 最后应用。
+# 同一 id 后出现的层整条替换前面的层（与 dsh 的 patch 语义一致）。
+bundles:
+  - ./bundles/core.patch.yml
+
+plugins:
+  # 覆盖 bundle 中的 hello 行，演示 profile 层优先级。
+  - id: hello
+    module: ../examples/hello-plugin/index.ts
+    client: ../examples/hello-plugin/client.ts
+    config:
+      greeting: hello
