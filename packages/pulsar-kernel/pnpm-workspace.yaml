@@ -1,0 +1,11 @@
+packages:
+  - vendor/*
+
+overrides:
+  '@deepseek-ai/cosmokit': 'link:vendor/cosmokit'
+  '@deepseek-ai/schemastery': 'link:vendor/schemastery'
+
+allowBuilds:
+  # hmr 的构建期依赖，需要原生二进制安装脚本。
+  esbuild: true
+  node-addon-require-builtin: false

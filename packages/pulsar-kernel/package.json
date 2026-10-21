@@ -1,0 +1,20 @@
+{
+  "name": "pulsar-kernel",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cordis 框架层最小工程：仅含插件框架，不含任何 harness 业务插件",
+  "type": "module",
+  "packageManager": "pnpm@11.5.1",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "start": "tsx src/index.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}
