@@ -42,15 +42,27 @@ const slots = (() => {
 
     for (const entry of cells) {
       const api = {
-        renderSlot: (child, node, childOwner) => {
-          render(child, node, childOwner ?? {}, scopeId, entry)
+        renderSlot: (child, node, childOwner, options) => {
+          const nextScope = options && 'scopeId' in options ? options.scopeId : scopeId
+          render(child, node, childOwner ?? {}, nextScope, entry)
         },
       }
       entry.component(container, { owner: owner ?? {}, scopeId, ...api })
     }
   }
 
-  return { register, render }
+  /** 返回注册到了无人声明槽位的 id；用于启动后的可见告警。 */
+  function validate() {
+    const declared = new Set(['root'])
+    for (const entry of registry.values()) {
+      for (const child of entry.spec.children ?? []) declared.add(child)
+    }
+    return [...registry.values()]
+      .filter((entry) => !declared.has(entry.spec.name))
+      .map((entry) => entry.spec.id)
+  }
+
+  return { register, render, validate }
 })()
 
 const api = {
@@ -141,6 +153,11 @@ async function boot() {
   }
 
   slots.render('root', app, {}, undefined, undefined)
+
+  const orphans = slots.validate()
+  if (orphans.length) {
+    report(new Error(`注册到了无人声明的槽: ${orphans.join(', ')}`))
+  }
 }
 
 boot().catch(report)

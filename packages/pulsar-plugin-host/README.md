@@ -79,6 +79,10 @@ export function apply(ctx: {
 - Client 注册：`ctx.slots.register({ name, id, scope?, children? }, component)`
 - 禁用插件：Host fiber 销毁，路由/RPC/面板同时回滚；`/api/boot` 不再下发 Client 面
 
+## 文档
+
+- 插件开发 / 安装 / 运行攻略（消费者视角）：`docs/pulsar-plugin-host/plugin-guide.md`
+
 ## 阶段
 
 - Phase 1：Host 薄层 + hello 插件 + 装卸验收（完成）

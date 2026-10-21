@@ -7,7 +7,7 @@ export interface PluginEntry {
   /** 依赖的 Cordis 服务；缺失时插件保持 PENDING，不会执行 apply。 */
   inject?: string[]
   /** 插件主体；所有贡献必须走 ctx.effect，以便卸载时回滚。 */
-  apply: (ctx: Context) => void | Promise<void>
+  apply: (ctx: Context, config?: any) => void | Promise<void>
   /** 传给 Cordis 的插件配置。 */
   config?: any
   /** Client 面入口的绝对路径；由 profile 解析后注入。 */

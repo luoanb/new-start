@@ -11,7 +11,12 @@ interface ClientEvents {
 
 interface SlotView {
   scopeId?: string
-  renderSlot(name: string, container: HTMLElement, owner?: unknown): void
+  renderSlot(
+    name: string,
+    container: HTMLElement,
+    owner?: unknown,
+    options?: { scopeId?: string },
+  ): void
 }
 
 interface SlotSpec {
