@@ -103,7 +103,7 @@ importers:
         specifier: ^6.0.3
         version: 6.4.3(@types/node@22.20.1)(tsx@4.23.0)
 
-  packages/pulsar-harness:
+  packages/pulsar-tauri-template:
     dependencies:
       '@tauri-apps/api':
         specifier: ^2
