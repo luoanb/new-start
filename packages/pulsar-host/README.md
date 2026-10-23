@@ -1,4 +1,4 @@
-# pulsar-plugin-host
+# pulsar-host
 
 插件宿主平台：**只有机制，没有业务**。Host 与 Browser 各一棵插件树，
 由 profile/bundle/patch 装配、通过 RPC 与事件流连接。
@@ -22,7 +22,7 @@
 ## 结构
 
 ```text
-pulsar-plugin-host/
+pulsar-host/
 ├── src/
 │   ├── host.ts        # PluginHost：Cordis 树 + HTTP + 装配 + 浏览器启动图
 │   ├── profile.ts     # profile / bundle / patch 分层装配
@@ -81,7 +81,7 @@ export function apply(ctx: {
 
 ## 文档
 
-- 插件开发 / 安装 / 运行攻略（消费者视角）：`docs/pulsar-plugin-host/plugin-guide.md`
+- 插件开发 / 安装 / 运行攻略（消费者视角）：`docs/pulsar-host/plugin-guide.md`
 
 ## 阶段
 

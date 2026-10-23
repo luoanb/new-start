@@ -1,4 +1,4 @@
-# pulsar-plugin-host 插件开发与运行攻略
+# pulsar-host 插件开发与运行攻略
 
 面向**插件消费者**：你只想写一个 Host/Client 插件、装进宿主、跑起来，不需要了解宿主内部实现。
 
@@ -48,7 +48,7 @@ export const myPlugin = {
 
 ### 1.3 装进 profile
 
-编辑 `packages/pulsar-plugin-host/profile/profile.yml`：
+编辑 `packages/pulsar-host/profile/profile.yml`：
 
 ```yaml
 plugins:
@@ -56,12 +56,12 @@ plugins:
     module: ../plugins/my-plugin/index.ts
 ```
 
-`module` 路径**相对于写它的 YAML 文件**。宿主默认读 `packages/pulsar-plugin-host/profile/`。
+`module` 路径**相对于写它的 YAML 文件**。宿主默认读 `packages/pulsar-host/profile/`。
 
 ### 1.4 运行
 
 ```bash
-cd packages/pulsar-plugin-host
+cd packages/pulsar-host
 pnpm install     # 首次
 pnpm start
 ```
@@ -294,7 +294,7 @@ export const myPlugin = {
 
 当前版本没有注册表安装，步骤是：
 
-1. 把插件目录放到你想放的位置（推荐 `packages/pulsar-plugin-host/plugins/<name>/`）。
+1. 把插件目录放到你想放的位置（推荐 `packages/pulsar-host/plugins/<name>/`）。
 2. 在 profile 或 bundle 补丁里加一行。
 3. 重启宿主。
 
@@ -372,7 +372,7 @@ await host.setEnabled('my-plugin', true)
 最快路径：
 
 ```bash
-cp -r packages/pulsar-plugin-host/examples/hello-plugin packages/pulsar-plugin-host/plugins/my-plugin
+cp -r packages/pulsar-host/examples/hello-plugin packages/pulsar-host/plugins/my-plugin
 ```
 
 然后：

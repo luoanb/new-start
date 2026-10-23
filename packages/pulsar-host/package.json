@@ -1,5 +1,5 @@
 {
-  "name": "@pulsar/plugin-host",
+  "name": "@pulsar/host",
   "version": "0.1.0",
   "private": true,
   "description": "插件宿主平台：Cordis 运行时 + 插件装卸 + HTTP 扩展点，不含任何业务代码",

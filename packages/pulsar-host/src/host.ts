@@ -423,7 +423,7 @@ export class PluginHost {
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>pulsar-plugin-host</title>
+<title>pulsar-host</title>
 <script type="importmap">${importMap}</script>
 <style>
   :root { color-scheme: light dark; }

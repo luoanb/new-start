@@ -117,7 +117,7 @@ function registerShell() {
   slots.register({ name: 'root', id: 'shell', children: ['main'] }, (container, view) => {
     container.replaceChildren()
     const header = document.createElement('header')
-    header.textContent = 'pulsar-plugin-host'
+    header.textContent = 'pulsar-host'
     const main = document.createElement('main')
     container.append(header, main)
     view.renderSlot('main', main, {})

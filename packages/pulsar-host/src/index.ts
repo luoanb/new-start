@@ -39,6 +39,6 @@ if (isDirectRun) {
     : fileURLToPath(new URL('../profile', import.meta.url))
 
   await host.loadProfile(profileDir)
-  console.log(`pulsar-plugin-host listening at ${url}`)
+  console.log(`pulsar-host listening at ${url}`)
   console.log(`profile: ${profileDir}`)
 }

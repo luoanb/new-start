@@ -3,5 +3,5 @@ lib/
 dist/
 *.log
 .DS_Store
-.pulsar-plugin-host/
+.pulsar-host/
 .pulsar/

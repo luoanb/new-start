@@ -13,7 +13,7 @@ export const helloPlugin: PluginEntry = {
   apply(ctx: Context) {
     ctx.effect(() => ctx.router.get('/hello', (_req, res) => {
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
-      res.end(JSON.stringify({ message: 'hello from pulsar-plugin-host' }))
+      res.end(JSON.stringify({ message: 'hello from pulsar-host' }))
     }), 'hello route')
 
     ctx.effect(() => ctx.panels.add({
