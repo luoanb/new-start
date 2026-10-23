@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { load as parseYaml } from 'js-yaml'
-import type { PatchEntry, ResolvedEntry } from './types.ts'
+import type { ClientSource, PatchEntry, ResolvedEntry } from './types.ts'
 
 interface ProfileFile {
   /** 依次叠加的 bundle 补丁文件，路径相对于 profile 目录。 */
@@ -9,6 +9,9 @@ interface ProfileFile {
   /** profile 自己的补丁层，优先级高于全部 bundle。 */
   plugins?: PatchEntry[]
 }
+
+/** Client 面缺省使用 dom 适配器，保持旧写法零改动。 */
+const DEFAULT_CLIENT_RUNTIME = 'dom'
 
 /**
  * 读取一个 profile 并合成插件条目。
@@ -34,10 +37,12 @@ export async function loadProfile(dir: string): Promise<ResolvedEntry[]> {
         throw new Error(`patch entry "${entry.id}" is missing module in ${file}`)
       }
       const base = dirname(file)
+      const client = normalizeClient(entry.client, entry.runtime)
       merged.set(entry.id, {
         ...entry,
         modulePath: resolve(base, entry.module),
-        clientPath: entry.client ? resolve(base, entry.client) : undefined,
+        clientPath: client ? resolve(base, client.entry) : undefined,
+        clientRuntime: client?.runtime,
       })
     }
   }
@@ -49,6 +54,21 @@ export async function loadProfile(dir: string): Promise<ResolvedEntry[]> {
   applyLayer(profileFile, profile.plugins ?? [])
 
   return [...merged.values()].filter((entry) => !entry.disabled)
+}
+
+/** 归一化 client 的两种书写形态；对象形态优先于条目级 runtime。 */
+function normalizeClient(
+  client: PatchEntry['client'],
+  runtime: string | undefined,
+): ClientSource | undefined {
+  if (client === undefined) return undefined
+  if (typeof client === 'string') {
+    return { entry: client, runtime: runtime ?? DEFAULT_CLIENT_RUNTIME }
+  }
+  if (typeof client !== 'object' || typeof client.entry !== 'string') {
+    throw new Error('invalid client entry: expected string or { entry, runtime }')
+  }
+  return { entry: client.entry, runtime: client.runtime ?? runtime ?? DEFAULT_CLIENT_RUNTIME }
 }
 
 async function parseFile<T>(file: string): Promise<T> {

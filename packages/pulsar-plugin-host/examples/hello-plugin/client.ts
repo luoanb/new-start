@@ -1,5 +1,5 @@
 // hello-plugin 的浏览器侧：注册一个 main 槽组件，并通过 RPC 调用 Host。
-// 该文件由 Host 用 esbuild 打成单文件 ESM 后提供给浏览器。
+// 该文件由执行环境适配器（缺省 dom）编译成文件组产物并静态投递，浏览器直接 import。
 
 interface ClientApi {
   call(method: string, args?: unknown): Promise<unknown>

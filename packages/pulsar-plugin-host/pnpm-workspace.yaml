@@ -1,6 +1,8 @@
 packages:
   # 框架层唯一来源：直接引用 pulsar-kernel 的 vendor 包，不复制源码。
   - ../pulsar-kernel/vendor/*
+  # 插件前端契约包：源码归属根 packages/，但安装与宿主同属一个 workspace。
+  - ../pulsar-plugin-client
 
 overrides:
   '@deepseek-ai/cosmokit': 'link:../pulsar-kernel/vendor/cosmokit'

@@ -1,5 +1,5 @@
-// 浏览器侧插件运行时：加载 boot graph、提供泛化 Slots、RPC 与事件订阅。
-// 这个文件由 Host 直接以静态资源提供，不参与 TypeScript 编译。
+// 浏览器侧薄 bootstrap：拉 boot graph、加载插件产物、注册槽位、处理开发期热替换。
+// Slots / RPC / Events / Locale 的完整契约实现见 @pulsar/plugin-client。
 
 const app = document.querySelector('#app')
 
@@ -47,7 +47,10 @@ const slots = (() => {
           render(child, node, childOwner ?? {}, nextScope, entry)
         },
       }
-      entry.component(container, { owner: owner ?? {}, scopeId, ...api })
+      const produced = entry.component(container, { owner: owner ?? {}, scopeId, ...api })
+      // 组件可以自己 append，也可以把节点交回来（框架适配器多为后者）。
+      if (produced instanceof Node) container.append(produced)
+      else if (Array.isArray(produced)) container.append(...produced.filter((item) => item instanceof Node))
     }
   }
 
@@ -132,25 +135,71 @@ function report(error) {
   app.append(box)
 }
 
+/** 产物自带的 CSS 必须在插件模块执行前挂上，避免首帧无样式。 */
+function loadAssets(assets, owned) {
+  for (const asset of assets ?? []) {
+    if (!asset.endsWith('.css')) continue
+    const link = document.createElement('link')
+    link.rel = 'stylesheet'
+    link.href = asset
+    document.head.append(link)
+    owned.push(() => link.remove())
+  }
+}
+
+/** 已加载插件的清理项；热替换时按 id 整体回滚。 */
+const loadedPlugins = new Map()
+
+async function loadPlugin(plugin) {
+  const disposers = []
+  const owned = []
+  const scopedSlots = {
+    register(spec, component) {
+      const off = slots.register(spec, component)
+      disposers.push(off)
+      return off
+    },
+    render: slots.render,
+    validate: slots.validate,
+  }
+
+  try {
+    loadAssets(plugin.client.assets, owned)
+    const module = await import(new URL(plugin.client.url, location.href).href)
+    const apply = module.apply ?? module.default
+    if (typeof apply !== 'function') {
+      throw new Error(`client plugin ${plugin.id} has no apply export`)
+    }
+    const cleanup = await apply({
+      id: plugin.id,
+      slots: scopedSlots,
+      api,
+      events,
+      locale,
+    })
+    if (typeof cleanup === 'function') disposers.push(cleanup)
+    loadedPlugins.set(plugin.id, { disposers, owned })
+  } catch (error) {
+    for (const dispose of disposers.reverse()) dispose()
+    for (const dispose of owned.reverse()) dispose()
+    console.error(`client plugin ${plugin.id} failed`, error)
+    report(error)
+  }
+}
+
+function disposePlugin(id) {
+  const record = loadedPlugins.get(id)
+  if (!record) return
+  loadedPlugins.delete(id)
+  for (const dispose of record.disposers.reverse()) dispose()
+  for (const dispose of record.owned.reverse()) dispose()
+}
+
 async function boot() {
   registerShell()
 
   const graph = await (await fetch('/api/boot')).json()
-  for (const plugin of graph.plugins) {
-    try {
-      const url = new URL(plugin.clientUrl, location.href)
-      url.searchParams.set('rev', graph.rev)
-      const module = await import(url.href)
-      const apply = module.apply ?? module.default
-      if (typeof apply !== 'function') {
-        throw new Error(`client plugin ${plugin.id} has no apply export`)
-      }
-      await apply({ id: plugin.id, slots, api, events, locale })
-    } catch (error) {
-      console.error(`client plugin ${plugin.id} failed`, error)
-      report(error)
-    }
-  }
+  for (const plugin of graph.plugins) await loadPlugin(plugin)
 
   slots.render('root', app, {}, undefined, undefined)
 
@@ -158,6 +207,16 @@ async function boot() {
   if (orphans.length) {
     report(new Error(`注册到了无人声明的槽: ${orphans.join(', ')}`))
   }
+
+  // 开发期热替换：宿主只告知「哪个插件变了」，具体原因由适配器内部处理。
+  events.on('plugin/changed', async (payload) => {
+    if (!payload || typeof payload.id !== 'string') return
+    disposePlugin(payload.id)
+    const plugin = (await (await fetch('/api/boot')).json()).plugins.find((item) => item.id === payload.id)
+    if (!plugin) return
+    await loadPlugin(plugin)
+    slots.render('root', app, {}, undefined, undefined)
+  })
 }
 
 boot().catch(report)

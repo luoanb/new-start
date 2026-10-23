@@ -1,10 +1,19 @@
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { Context, type Fiber } from '@deepseek-ai/cordis'
 import ConsoleLogger from '@deepseek-ai/cordis-plugin-logger-console'
 import Timer from '@deepseek-ai/cordis-plugin-timer'
-import { build } from 'esbuild'
+import type {
+  Activation,
+  ClientDescriptor,
+  Logger,
+  PluginObject,
+  PluginRuntime,
+  RuntimeChange,
+  RuntimeContext,
+} from '@pulsar/plugin-client/runtime'
 import { ClientEvents } from './events.ts'
 import { PanelService } from './panels.ts'
 import { loadProfile } from './profile.ts'
@@ -17,33 +26,59 @@ export interface HostOptions {
   host?: string
   /** 监听端口，0 表示由系统分配 */
   port?: number
+  /** 编译产物根目录，默认 `<cwd>/.pulsar/artifacts` */
+  artifactsDir?: string
+  /** 开发模式：启用适配器热替换；默认 `NODE_ENV !== 'production'` */
+  dev?: boolean
 }
 
 const RUNTIME_PATH = fileURLToPath(new URL('../client/runtime.js', import.meta.url))
 
+/** 一次装载后保留的状态；重新启用时复用同一份描述。 */
+interface LoadedEntry {
+  source: PluginEntry
+  client?: ClientDescriptor
+  /** 适配器注册的路由与监听，随插件 fiber 回滚。 */
+  cleanups: Array<() => void>
+}
+
 /**
  * 插件宿主：一棵 Cordis 插件树 + 一个 HTTP 服务 + 浏览器侧的插件装载图。
  *
- * Host 面负责装配、生命周期与 RPC/事件；Client 面由 `/api/boot` 描述的
- * 插件列表驱动，浏览器运行时逐个加载 ES module 并注册 Slots。
+ * Host 只负责装配、生命周期与 RPC/事件；编译、存放与投递交给
+ * `PluginRuntime`（执行环境适配器），宿主不 import 任何打包器。
  */
 export class PluginHost {
   readonly root = new Context()
 
   private readonly entries = new Map<string, PluginEntry>()
+  private readonly loaded = new Map<string, LoadedEntry>()
   private readonly fibers = new Map<string, Fiber>()
-  private readonly clientPaths = new Map<string, string>()
-  private readonly clientBundles = new Map<string, string>()
+  private readonly runtimes = new Map<string, PluginRuntime>()
   private readonly pluginRpc = new Map<string, string[]>()
 
+  private artifactsDir = resolve(process.cwd(), '.pulsar/artifacts')
+  private dev = true
   private server: Server | undefined
   private url: string | undefined
   private booted = false
   private bootRev = 0
 
+  /** 注册一个执行环境适配器；同名覆盖视为错误。 */
+  registerRuntime(runtime: PluginRuntime): void {
+    if (this.runtimes.has(runtime.name)) {
+      throw new Error(`runtime already registered: ${runtime.name}`)
+    }
+    this.runtimes.set(runtime.name, runtime)
+  }
+
   /** 启动宿主并注册内建端点；重复调用返回同一地址。 */
   async start(options: HostOptions = {}): Promise<{ url: string }> {
     if (this.url) return { url: this.url }
+
+    this.artifactsDir = options.artifactsDir ?? resolve(process.cwd(), '.pulsar/artifacts')
+    this.dev = options.dev ?? process.env.NODE_ENV !== 'production'
+    await mkdir(this.artifactsDir, { recursive: true })
 
     await this.root.plugin(ConsoleLogger)
     await this.root.plugin(Timer)
@@ -74,16 +109,13 @@ export class PluginHost {
   /** 按 profile 的 bundle/patch 层装配插件。 */
   async loadProfile(dir: string): Promise<void> {
     for (const entry of await loadProfile(dir)) {
-      const module = await import(pathToFileURL(entry.modulePath).href)
-      const plugin = resolvePluginExport(module)
-      if (!plugin) {
-        throw new Error(`no plugin export found in ${entry.modulePath}`)
-      }
       await this.load({
-        ...plugin,
         name: entry.id,
+        module: entry.modulePath,
         config: entry.config,
-        client: entry.clientPath,
+        client: entry.clientPath
+          ? { entry: entry.clientPath, runtime: entry.clientRuntime }
+          : undefined,
       })
     }
   }
@@ -96,19 +128,14 @@ export class PluginHost {
     }
 
     this.entries.set(entry.name, entry)
-    const before = new Set(this.root.rpc.names())
     try {
-      const fiber = await this.root.plugin(entry, entry.config)
-      this.fibers.set(entry.name, fiber)
-      this.pluginRpc.set(
-        entry.name,
-        this.root.rpc.names().filter((name) => !before.has(name)),
-      )
-      if (entry.client) this.clientPaths.set(entry.name, entry.client)
+      const loaded = await this.activate(entry)
+      this.loaded.set(entry.name, loaded)
+      await this.mountFiber(entry, loaded)
       this.bump()
     } catch (error) {
       this.entries.delete(entry.name)
-      this.clientPaths.delete(entry.name)
+      this.loaded.delete(entry.name)
       this.pluginRpc.delete(entry.name)
       throw error
     }
@@ -120,7 +147,7 @@ export class PluginHost {
     if (!fiber) return
     this.fibers.delete(name)
     this.pluginRpc.delete(name)
-    this.clientBundles.delete(name)
+    this.loaded.delete(name)
     await fiber.dispose()
     this.bump()
   }
@@ -132,13 +159,9 @@ export class PluginHost {
     if (enabled === this.fibers.has(name)) return
 
     if (enabled) {
-      const before = new Set(this.root.rpc.names())
-      const fiber = await this.root.plugin(entry, entry.config)
-      this.fibers.set(name, fiber)
-      this.pluginRpc.set(
-        name,
-        this.root.rpc.names().filter((method) => !before.has(method)),
-      )
+      const loaded = await this.activate(entry)
+      this.loaded.set(name, loaded)
+      await this.mountFiber(entry, loaded)
       this.bump()
     } else {
       await this.unload(name)
@@ -151,7 +174,7 @@ export class PluginHost {
       plugins: [...this.entries.keys()].map((name) => ({
         name,
         enabled: this.fibers.has(name),
-        client: this.clientPaths.has(name),
+        client: this.loaded.get(name)?.client !== undefined,
         rpc: this.pluginRpc.get(name) ?? [],
       })),
       panels: this.root.panels.list(),
@@ -161,11 +184,20 @@ export class PluginHost {
   /** 浏览器启动图：只包含当前已启用且声明了 Client 面的插件。 */
   bootGraph(): BootGraph {
     const plugins: BootPlugin[] = []
-    for (const id of this.clientPaths.keys()) {
-      if (!this.fibers.has(id)) continue
-      plugins.push({ id, clientUrl: `/plugins/${encodeURIComponent(id)}/client.js` })
+    const runtimes: Record<string, string> = {}
+    const imports: Record<string, string> = {}
+
+    for (const [id, loaded] of this.loaded) {
+      if (!this.fibers.has(id) || !loaded.client) continue
+      plugins.push({ id, client: loaded.client })
+
+      const runtimeName = loaded.source.client?.runtime ?? 'dom'
+      const runtime = this.runtimes.get(runtimeName)
+      if (runtime?.clientEntry) runtimes[runtimeName] = runtime.clientEntry
+      this.mergeImports(imports, runtime?.imports)
     }
-    return { rev: String(this.bootRev), plugins }
+
+    return { rev: String(this.bootRev), plugins, runtimes, imports }
   }
 
   /** 关闭 HTTP 服务并销毁整棵插件树。 */
@@ -184,10 +216,119 @@ export class PluginHost {
     }
     this.fibers.clear()
     this.entries.clear()
-    this.clientPaths.clear()
+    this.loaded.clear()
     this.pluginRpc.clear()
-    this.clientBundles.clear()
     this.url = undefined
+  }
+
+  /** 调用适配器完成「编译 → 存放 → 投递」，收集需随 fiber 回滚的清理项。 */
+  private async activate(entry: PluginEntry): Promise<LoadedEntry> {
+    const cleanups: Array<() => void> = []
+    const ctx = this.runtimeContext(entry.name, cleanups)
+    try {
+      return await this.activateWith(entry, ctx, cleanups)
+    } catch (error) {
+      // 激活失败时适配器可能已注册路由，必须立即回滚。
+      for (let index = cleanups.length - 1; index >= 0; index -= 1) cleanups[index]!()
+      throw error
+    }
+  }
+
+  private async activateWith(
+    entry: PluginEntry,
+    ctx: RuntimeContext,
+    cleanups: Array<() => void>,
+  ): Promise<LoadedEntry> {
+    if (entry.module) {
+      const runtime = this.runtimes.get('node')
+      if (!runtime) throw new Error('runtime not registered: node')
+      const activation = await runtime.activate(
+        { id: entry.name, entry: entry.module, options: entry.config },
+        ctx,
+      )
+      if (activation.server) adoptServer(entry, activation.server)
+      collect(cleanups, activation)
+    }
+
+    if (entry.client) {
+      const runtimeName = entry.client.runtime ?? 'dom'
+      const runtime = this.runtimes.get(runtimeName)
+      if (!runtime) throw new Error(`runtime not registered: ${runtimeName}`)
+      const activation = await runtime.activate(
+        { id: entry.name, entry: entry.client.entry, options: entry.config },
+        ctx,
+      )
+      collect(cleanups, activation)
+      return { source: entry, client: activation.client, cleanups }
+    }
+
+    return { source: entry, cleanups }
+  }
+
+  /** 把适配器注册的清理项交给插件 fiber，并装载后端插件。 */
+  private async mountFiber(entry: PluginEntry, loaded: LoadedEntry): Promise<void> {
+    if (!entry.apply) throw new Error(`plugin ${entry.name} has no apply export`)
+
+    const before = new Set(this.root.rpc.names())
+    const plugin = {
+      ...entry,
+      apply: async (ctx: Context, config?: any) => {
+        for (const cleanup of loaded.cleanups) ctx.effect(() => cleanup)
+        await entry.apply!(ctx, config)
+      },
+    }
+    const fiber = await this.root.plugin(plugin, entry.config)
+    this.fibers.set(entry.name, fiber)
+    this.pluginRpc.set(
+      entry.name,
+      this.root.rpc.names().filter((name) => !before.has(name)),
+    )
+  }
+
+  /** 适配器看到的受限上下文：路由与监听先收集，等进入 fiber 后统一挂载。 */
+  private runtimeContext(entryName: string, cleanups: Array<() => void>): RuntimeContext {
+    return {
+      artifactsDir: this.artifactsDir,
+      logger: createLogger(),
+      effect: (execute) => {
+        const dispose = execute()
+        if (typeof dispose === 'function') cleanups.push(dispose)
+        return () => {}
+      },
+      route: (pattern, handler) => this.root.router.prefix(prefixOf(pattern), handler),
+      // 开发期热替换：宿主只更新描述并转发事件，不解释变更原因。
+      ...(this.dev
+        ? {
+          notify: (change: RuntimeChange) => {
+            if (change.type === 'plugin/changed') this.applyClientChange(entryName, change.payload)
+            this.root.clientEvents.emit(change.type, change.payload)
+          },
+        }
+        : {}),
+    }
+  }
+
+  /** 用适配器上报的新 URL 刷新 boot graph，让页面刷新也能拿到最新产物。 */
+  private applyClientChange(id: string, payload: unknown): void {
+    const loaded = this.loaded.get(id)
+    const next = payload as { url?: unknown; assets?: unknown } | undefined
+    if (!loaded?.client || typeof next?.url !== 'string') return
+    loaded.client = {
+      url: next.url,
+      assets: Array.isArray(next.assets) ? next.assets as string[] : loaded.client.assets,
+    }
+    this.bump()
+  }
+
+  /** 合并适配器声明的共享依赖；同键不同 URL 直接失败。 */
+  private mergeImports(target: Record<string, string>, source?: Record<string, string>): void {
+    for (const [name, url] of Object.entries(source ?? {})) {
+      const existing = target[name]
+      if (existing && existing !== url) {
+        throw new Error(`import map conflict for "${name}": ${existing} vs ${url}`)
+      }
+      target[name] = url
+    }
   }
 
   private bump(): void {
@@ -227,10 +368,6 @@ export class PluginHost {
       res.end(source)
     })
 
-    this.root.router.prefix('/plugins/', async (req, res) => {
-      await this.handleClientBundle(req, res)
-    })
-
     this.root.router.get('/api/rpc', async (req, res) => {
       if (req.method !== 'POST') {
         this.sendJson(res, { error: 'method not allowed' }, 405)
@@ -249,35 +386,6 @@ export class PluginHost {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
       res.end(this.renderPage())
     })
-  }
-
-  /** `GET /plugins/<id>/client.js`：按需打包并缓存 Client 面。 */
-  private async handleClientBundle(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const path = new URL(req.url ?? '/', 'http://localhost').pathname
-    const match = /^\/plugins\/([^/]+)\/client\.js$/.exec(path)
-    if (!match) {
-      this.sendJson(res, { error: 'not found' }, 404)
-      return
-    }
-
-    const id = decodeURIComponent(match[1]!)
-    const file = this.clientPaths.get(id)
-    if (!file || !this.fibers.has(id)) {
-      this.sendJson(res, { error: `unknown client plugin: ${id}` }, 404)
-      return
-    }
-
-    let code = this.clientBundles.get(id)
-    if (!code) {
-      code = await bundleClient(file)
-      this.clientBundles.set(id, code)
-    }
-
-    res.writeHead(200, {
-      'content-type': 'application/javascript; charset=utf-8',
-      'cache-control': 'no-store',
-    })
-    res.end(code)
   }
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -308,12 +416,15 @@ export class PluginHost {
     res.end(JSON.stringify(body))
   }
 
+  /** 页面只做一件事：先输出唯一 import map，再加载薄 bootstrap。 */
   private renderPage(): string {
+    const importMap = JSON.stringify({ imports: this.bootGraph().imports })
     return `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <title>pulsar-plugin-host</title>
+<script type="importmap">${importMap}</script>
 <style>
   :root { color-scheme: light dark; }
   body { font: 14px/1.6 system-ui, sans-serif; margin: 0; }
@@ -333,30 +444,29 @@ export class PluginHost {
   }
 }
 
-/** 从模块导出中选出插件对象：默认导出优先，其次任一具名导出。 */
-function resolvePluginExport(module: Record<string, unknown>): PluginEntry | undefined {
-  for (const candidate of [module.default, ...Object.values(module)]) {
-    if (
-      candidate
-      && typeof candidate === 'object'
-      && typeof (candidate as { apply?: unknown }).apply === 'function'
-    ) {
-      return candidate as PluginEntry
-    }
-  }
-  return undefined
+/** 把适配器返回的 `server` 上的插件声明合并进条目，交给 Cordis 装载。 */
+function adoptServer(entry: PluginEntry, server: PluginObject): void {
+  const source = server as { apply?: unknown; inject?: unknown }
+  entry.apply ??= typeof source.apply === 'function'
+    ? source.apply as PluginEntry['apply']
+    : undefined
+  entry.inject ??= Array.isArray(source.inject) ? source.inject as string[] : undefined
 }
 
-/** 把插件的 Client 面打成单文件 ESM。 */
-async function bundleClient(file: string): Promise<string> {
-  const result = await build({
-    entryPoints: [file],
-    bundle: true,
-    write: false,
-    format: 'esm',
-    platform: 'browser',
-    target: 'es2022',
-    logLevel: 'silent',
-  })
-  return result.outputFiles[0]?.text ?? ''
+function collect(cleanups: Array<() => void>, activation: Activation): void {
+  const dispose = activation.dispose
+  if (typeof dispose === 'function') cleanups.push(() => void dispose())
+}
+
+/** 把适配器的 glob 形态（`/rt/.../*`）转成 RouterService 的前缀。 */
+function prefixOf(pattern: string): string {
+  return pattern.endsWith('*') ? pattern.slice(0, -1) : pattern
+}
+
+function createLogger(): Logger {
+  return {
+    info: (message) => console.info(message),
+    warn: (message) => console.warn(message),
+    error: (message) => console.error(message),
+  }
 }

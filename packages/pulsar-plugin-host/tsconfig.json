@@ -13,6 +13,9 @@
     "allowImportingTsExtensions": true,
     "esModuleInterop": true,
     "verbatimModuleSyntax": false,
+    // examples 中的 Solid 插件用 TSX；host 自身不用 JSX。
+    "jsx": "preserve",
+    "jsxImportSource": "solid-js",
     // 与 vendor 各包自身 tsconfig 保持一致，避免框架源码被过度约束。
     "noImplicitAny": false,
     "noImplicitThis": false,

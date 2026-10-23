@@ -1,0 +1,27 @@
+{
+  "name": "@pulsar/plugin-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "插件前端契约包：浏览器侧 API 与执行环境适配器接口，不含宿主业务",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./runtime": "./src/runtime/index.ts",
+    "./runtime/node": "./src/runtime/node.ts",
+    "./runtime/dom": "./src/runtime/dom.ts",
+    "./runtime/solid": "./src/runtime/solid.ts",
+    "./runtime/esbuild": "./src/runtime/compiler/esbuild.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "esbuild": "^0.28.0",
+    "esbuild-plugin-solid": "^0.6.0",
+    "solid-js": "^1.9.17"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

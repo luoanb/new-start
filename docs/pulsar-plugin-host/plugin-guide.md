@@ -8,8 +8,9 @@
 - 一个浏览器运行时（第二棵插件树 + Slots）
 - 插件通过 profile 安装；禁用即整体回滚
 - Host 与 Client 之间可用 RPC 调用、SSE 事件
+- Client 代码由**执行环境适配器**（`dom` / `solid`）编译、落盘并静态投递，宿主不打包
 
-当前**没有**：npm 仓库安装、客户端热更新、桌面壳。安装 = 把插件目录放进仓库 + 写 profile。
+当前**没有**：npm 仓库安装、桌面壳。安装 = 把插件目录放进仓库 + 写 profile。
 
 ---
 
@@ -122,13 +123,30 @@ plugins:
     client: ../plugins/my-plugin/client.ts
 ```
 
-`client` 可选；没有它就只是纯 Host 插件。
+`client` 可选；没有它就只是纯 Host 插件。字符串形态等价于 `runtime: dom`。
 
-### 2.4 打包规则
+需要框架时用对象形态，`runtime` 取执行环境适配器名：
 
-- Client 面由宿主用 esbuild 打成**单文件 ESM**，可以正常 `import` 已安装的浏览器端依赖。
+```yaml
+  - id: my-solid-plugin
+    module: ../plugins/my-solid-plugin/index.ts
+    client:
+      entry: ../plugins/my-solid-plugin/client.tsx
+      runtime: solid
+```
+
+| runtime | 适用 | 说明 |
+|---|---|---|
+| `dom`（默认） | 手写 DOM / `client.ts` | 旧 `(container, view)` 写法零改动 |
+| `solid` | Solid 组件 / `client.tsx` | 官方一等公民，`solid-js` 由页面 import map 共享 |
+
+### 2.4 编译与产物
+
+- Client 面由**执行环境适配器**编译成文件组产物（入口 + CSS + 其他资源），不再由宿主打包。
+- 产物落在 `<cwd>/.pulsar/artifacts/<runtime>/<pluginId>/<hash>/`，带 `manifest.json` 与 `latest.json`；**不随插件卸载删除**，每个插件保留最近 3 个版本。
+- 同一份源码再次启动会命中已有目录，不重新编译。
 - 不能用 Node API（`fs`、`process` 等）。
-- 修改 Client 源码后：重启宿主，或在宿主里禁用再启用该插件（会清掉打包缓存），然后刷新页面。
+- 修改 Client 源码后：开发模式（默认）会自动重新编译并通过 SSE 热替换该插件；生产模式需重启宿主。
 
 ---
 
@@ -313,10 +331,11 @@ await host.setEnabled('my-plugin', true)
 | 目标 | 方法 |
 |---|---|
 | 看插件是否装载 | `GET /api/state`，检查 `enabled`、`client`、`rpc` |
-| 看客户端启动图 | `GET /api/boot` |
-| 看打包后的 Client 代码 | `GET /plugins/<id>/client.js` |
+| 看客户端启动图 | `GET /api/boot`（含 `client.url`、`client.assets`、`runtimes`、`imports`） |
+| 看编译产物 | `GET /rt/<runtime>/<pluginId>/<hash>/client.js`，磁盘上同一路径 |
 | 手动调 RPC | `curl -X POST -H 'content-type: application/json' -d '{"method":"my.ping","args":{}}' http://127.0.0.1:<port>/api/rpc` |
 | 页面渲染问题 | 浏览器控制台 + 页面上的“插件加载失败”卡片 |
+| 产物为何重新编译 | 对比 `<hash>/manifest.json` 的 `inputs` 与源码内容 hash |
 
 自动化验收参考 `src/verify.ts`。
 
@@ -330,9 +349,11 @@ await host.setEnabled('my-plugin', true)
 | 插件一直不生效 | `inject` 写了不存在的服务 | 只用 `router` / `panels` / `rpc` / `clientEvents` / `logger` |
 | 往槽注册时报 `slot not declared` | 父组件没有在 `children` 里声明该槽 | 在父注册里补 `children` |
 | 槽注册成功但页面不显示 | 用了 `scope: 'scoped'` 但父级没传 `scopeId` | 改 `root`/`scoped-maybe`，或由父级传 `{ scopeId }` |
-| `/plugins/<id>/client.js` 404 | profile 没写 `client`，或插件被禁用 | 补 `client` 或重新启用 |
+| `/rt/<runtime>/<id>/<hash>/client.js` 404 | 插件被禁用，或 runtime 名写错 | 检查 `/api/boot` 与 `/api/state` |
+| `runtime not registered: xxx` | `client.runtime` 写了宿主没注册的适配器 | 用 `dom` 或 `solid` |
 | RPC 返回 500 `unknown rpc method` | 方法没注册，或插件被禁用 | 检查 `ctx.rpc.method` 与 `/api/state` 的 `rpc` 列表 |
-| 改了 Client 代码页面没变 | 打包结果有进程内缓存 | 重启宿主，或禁用再启用插件 |
+| 改了 Client 代码页面没变 | 生产模式没开热替换 | 用默认开发模式启动，或重启宿主 |
+| Solid 插件报重复实例 / hooks 失效 | 产物没有走 import map，自行打包了 `solid-js` | 不要把 `solid-js` 从 `external` 里去掉 |
 | `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH` | 改过 `pnpm-workspace.yaml` 的 overrides | `pnpm install --no-frozen-lockfile` |
 
 ---

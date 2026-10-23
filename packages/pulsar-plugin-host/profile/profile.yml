@@ -10,3 +10,10 @@ plugins:
     client: ../examples/hello-plugin/client.ts
     config:
       greeting: hello
+
+  # 官方框架适配器示例：显式声明 runtime，与旧的字符串写法共存于同一页面。
+  - id: solid
+    module: ../examples/solid-plugin/index.ts
+    client:
+      entry: ../examples/solid-plugin/client.tsx
+      runtime: solid
