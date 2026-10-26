@@ -1,0 +1,27 @@
+{
+  "name": "@physalis/code-metrics",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Repository facts collector for objective code metrics.",
+  "license": "ISC",
+  "type": "module",
+  "bin": {
+    "code-metrics": "./src/cli.ts"
+  },
+  "scripts": {
+    "baseline": "node --experimental-strip-types ./src/cli.ts baseline",
+    "evidence": "node --experimental-strip-types ./src/cli.ts evidence",
+    "all": "node --experimental-strip-types ./src/cli.ts all",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "dependency-cruiser": "^17.3.10",
+    "jscpd": "^4.0.8",
+    "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.5",
+    "vitest": "^4.1.10"
+  }
+}
