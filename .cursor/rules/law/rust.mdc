@@ -1,0 +1,53 @@
+---
+description: 立法·Rust 编码约定：API 表面清晰、trait 克制、错误与文档完整
+globs: "**/*.rs"
+alwaysApply: false
+---
+
+# 立法 · Rust 编码约定
+
+> **立法元数据**：owner — 仓库维护者 · 判定方式 — `cargo fmt --check`、`cargo check`、`cargo test`，质量收紧时加 `cargo clippy` · 命中记录 — `git log -p -- .cursor/rules/law/rust.mdc` · 退役条件 — 仓库不再包含 Rust 代码。
+
+参考 Rust API Guidelines、Rust Style Guide、rustfmt、clippy、rustdoc 及 Tokio 等社区实践。
+
+## 1. Public API Surface
+
+- 先明确模块对外暴露的 `pub struct`、`pub enum`、`pub fn` 与返回类型。
+- `pub` 保守使用；内部实现默认私有，避免把临时结构暴露成稳定 API。
+- 构造函数优先 `new`；转换优先实现 `From` / `TryFrom` / `AsRef` 等标准 trait。
+- 类型、trait、enum variant 用 `UpperCamelCase`；函数、方法、模块用 `snake_case`。
+
+## 2. Trait 使用
+
+- 不为「看起来像接口」抽 trait；只有多实现、测试替身、provider 插拔或泛型边界时才抽。
+- 单方法 trait 名称应表达能力或动作，贴近生态既有命名习惯。
+- 作为 trait object 使用时确认 object safety；否则优先泛型 trait bound。
+- 扩展 trait 遵循 `FooExt` 命名，且仅在确实扩展既有类型/trait 时使用。
+
+## 3. 错误与失败语义
+
+- 公共 API 使用明确错误类型和 `Result<T, E>`，不返回裸字符串错误。
+- 公共函数的错误条件要能从类型或文档中看出；可恢复错误不用 `panic!`。
+- `unwrap` / `expect` 只用于测试、不可达初始化或带明确上下文的内部断言。
+- 边界层可转换错误展示形式，但不得改变底层错误语义。
+
+## 4. 文档与示例
+
+- 公共类型、trait、函数与重要模块应有简洁 rustdoc。
+- 可能失败写 `# Errors`；可能 panic 写 `# Panics`；unsafe 写 `# Safety`。
+- 示例代码展示用户如何经公开 API 调用，不引用不必要的内部模块。
+- 库的稳定 API 优先补 doc test；关键业务行为至少补单元测试。
+
+## 5. 模块组织
+
+- 模块按职责划分，不按临时实现细节堆叠。
+- 对外模块暴露稳定 API；内部子模块可随实现调整。
+- 聚合导出放在 `mod.rs` 或上层模块，避免调用方依赖深层路径。
+- 避免循环依赖式设计；共享类型放在更稳定的上层或独立模块。
+
+## 6. 工具链与验证
+
+- 使用默认 `cargo fmt` / rustfmt 风格，不引入无必要的格式化个性化配置。
+- 提交前运行相关 `cargo check`、`cargo test`；质量收紧时加入 `cargo clippy`。
+- 纯函数、状态转换、错误分支优先写单元测试；跨模块或外部交互用集成/smoke 测试覆盖。
+- 测试中可用 `unwrap` / `expect`，但错误信息应帮助定位失败原因。

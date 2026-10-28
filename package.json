@@ -8,6 +8,16 @@
     "dev": "cd packages/mini-claw && pnpm exec tsx src/index.ts",
     "dev:watch": "cd packages/mini-claw && pnpm exec tsx watch --exclude '.mini-claw' src/index.ts",
     "build": "cd packages/mini-claw && pnpm exec tsc",
-    "start": "cd packages/mini-claw && pnpm exec node dist/index.js"
+    "start": "cd packages/mini-claw && pnpm exec node dist/index.js",
+    "contract:lint": "node scripts/contract-lint.mjs",
+    "contract:new": "node scripts/contract-new.mjs",
+    "contract:review": "node scripts/contract-review.mjs",
+    "contract:approve": "node scripts/contract-approve.mjs",
+    "contract:deliver": "node scripts/contract-deliver.mjs",
+    "contract:accept": "node scripts/contract-accept.mjs",
+    "contract:archive": "node scripts/contract-archive.mjs",
+    "contract:lock": "node scripts/contract-drift.mjs --lock-all",
+    "contract:drift": "node scripts/contract-drift.mjs",
+    "law:new": "node scripts/law-new.mjs"
   }
 }

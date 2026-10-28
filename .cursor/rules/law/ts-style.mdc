@@ -1,0 +1,72 @@
+---
+description: 立法·TypeScript/Svelte 编码约定：接口先行、类导向、静态侧契约校验、点分二级后缀命名
+globs: "packages/**/*.ts,packages/**/*.mts,packages/**/*.tsx,packages/**/*.svelte,packages/**/*.js,packages/**/*.mjs"
+alwaysApply: false
+---
+
+# 立法 · TypeScript / Svelte 编码约定
+
+> **立法元数据**：owner — 仓库维护者 · 判定方式 — `pnpm -C packages/<pkg> check`（`tsc --noEmit` / `svelte-check`）；`deepseek-harness` 另跑 `pnpm -C packages/deepseek-harness lint` · 命中记录 — `git log -p -- .cursor/rules/law/ts-style.mdc` · 退役条件 — 包内工具链不再提供对应检查，或约定被新法条取代。
+
+适用于 `packages/` 下的业务与库代码（配置包、纯 JSON 等可豁免）。
+
+## 1. 先约定接口，后实现内容
+
+- **契约先行**：写具体逻辑前，先明确对外边界——类型、函数签名、公开 API、错误形态与调用约定。
+- **推荐顺序**：类型/接口 → 最小可编译骨架（空实现或抛 `NotImplemented`）→ 再填充实现与测试。
+- **禁止**在契约未固化时大面积铺开实现，避免整条链路返工。
+- 契约声明应配明确简洁的注释。
+
+## 2. 可复用逻辑以类为主
+
+- 用 **class**（实例或带静态方法的类型）封装状态与行为，便于注入、测试与演进；避免用大量松散顶层函数拼成模块 API。
+- 例外：纯类型与类型守卫、常量、`interface` / `type` 声明、极薄的框架胶水（如单行 re-export）可不用类。
+
+## 3. 静态工具类：静态侧接口 + `staticImplements`
+
+对「仅暴露 `static` 方法、不打算实例化」的类：**先写描述其静态成员的接口**，再写 `class`，并用 `staticImplements<契约>()(类)` 做编译期校验——漏方法或签名不匹配即报错。
+
+```typescript
+interface MathUtilsStatic {
+  add(a: number, b: number): number;
+  sub(a: number, b: number): number;
+}
+
+class MathUtils {
+  static add(a: number, b: number) {
+    return a + b;
+  }
+  static sub(a: number, b: number) {
+    return a - b;
+  }
+}
+
+function staticImplements<T>() {
+  return <U extends T>(ctor: U) => ctor;
+}
+
+staticImplements<MathUtilsStatic>()(MathUtils);
+```
+
+- `staticImplements` 可在包内抽一处公共实现，避免每文件重复声明。
+- 静态侧接口与实例侧类型可一并放在 `*.interfaces.ts` 或包内统一的类型文件中。
+
+## 4. 文件命名：点分二级后缀
+
+保留最终扩展名，用 `.` + 二级后缀标明文件角色：`basename.<role>.<ext>`。
+
+- **契约/类型**：`*.interfaces.ts`（仅类型与对外契约）。
+- **实现**：`*.impl.ts`；按角色可写作 `*.service.ts`。
+- **测试**：`*.test.ts`、`*.spec.ts`。
+- **入口/聚合**：`index.ts`；需要区分时写作 `index.public.ts`。
+
+```text
+user.interfaces.ts     # 契约与类型
+user.impl.ts           # 实现类 / 模块主体
+user.service.ts        # 服务类
+api.types.ts
+api.impl.ts
+widget.ui.svelte       # UI 组件；二级后缀在 .svelte 之前
+```
+
+二级后缀是语义标签而非强制枚举表，新增后缀时包内保持一致；构建工具需识别双扩展名时以各包现有配置为准。

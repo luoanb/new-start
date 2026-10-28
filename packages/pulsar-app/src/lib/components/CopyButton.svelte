@@ -91,7 +91,7 @@
   }
   /* hover-reveal 仅适用于折叠块头部（.block-header 内）场景；
      独立场景（如 ChatMessage 错误卡片）按钮始终可见可点击。
-     见 .cursor/rules/ui-hover-reveal.mdc */
+     见 .cursor/rules/law/ui-interaction.mdc */
   @media (hover: hover) {
     :global(.block-header) .copy-btn {
       opacity: 0;

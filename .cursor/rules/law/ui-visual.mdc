@@ -1,0 +1,128 @@
+---
+description: 立法·UI 视觉词汇：布局三区面板、列表行、按钮、徽标、文字层级、消息区内联卡片
+globs: "**/*.svelte,**/*.css,**/app.html"
+alwaysApply: true
+---
+
+# 立法 · UI 视觉词汇
+
+> **立法元数据**：owner — 仓库维护者 · 判定方式 — 对照 `DESIGN.md` 与 token 源、`svelte-check`、硬编码色值/圆角检索 · 命中记录 — `git log -p -- .cursor/rules/law/ui-visual.mdc` · 退役条件 — 设计体系整体更换，本文件被新法条取代。
+
+设计来源：`DESIGN.md` 说明主题与色彩体系；design token 唯一来源 **`packages/pulsar-app/src/app.html`**，本规范不新增 token，也不在组件内重定义 token。
+
+总原则：工具类应用，克制。面板是「高密度信息容器」——通栏铺开、扁平行、hover 只 tint、状态只留文字色。无装饰性色块、无圆点脉冲、无大号标题、无 emoji。
+
+## 一、布局三区面板（左侧 / 底部 / 右侧）
+
+- **通栏无根 padding**：面板根容器 `height:100%`，`overflow` 由自身控制；内容直接铺满，不在根上套 `padding: var(--space-2)`。
+- **头部**：自带 `padding: var(--space-1) var(--space-2)` + `border-bottom`，与容器头的 32px 高度衔接。
+- **工具栏统一为 `panel-toolbar` 词汇**：`panel-title`（`--fs-sm` / 600）+ 右侧操作区（26px `icon-btn`）。无标题面板也要补齐同款头部，不得再发明新的工具栏形态。
+- 双工具条允许（如工作区条 + 树工具条），但每条都遵循上述头部规范。
+
+## 二、列表行（扁平范式）
+
+- **默认无边框、无卡片**：行 = `display:flex; align-items:center; gap: var(--space-2)`。
+- **行高统一 24px**：`padding: var(--space-1) var(--space-2)` + `font-size: var(--fs-sm)`（13px 行高 16px + 上下 4px）。多行/可展开内容例外处理，不突破单行密度。
+- **hover 仅 tint**：`background: var(--color-hover)`，无边框变化。
+- **选中/激活态**：`color-mix(in oklch, var(--color-primary) 14%, transparent)`，无边框、无竖条；激活信息由 tint + 文字色承担。
+- **缩进**：树形每级 `14px`，基础缩进 `10px`。
+- **图标**：行首 14px 线框 SVG（muted）；chevron 14px 容器 / 10-12px SVG / 展开旋转 90°。
+
+## 三、按钮与操作
+
+- **icon-btn 统一 26×26 方形**：`border-radius: var(--radius-sm)`，hover 用 `--color-hover` + 文字色，默认 `--color-text-muted`。
+- **行内操作按钮**：22px 一档（`--radius-sm`），配合 hover-reveal（见 `law/ui-interaction.mdc`）。
+- **按钮全部走全局 `.btn` / `.btn-sm` token**，禁止在组件内重定义 `.btn`。
+
+## 四、徽标
+
+- **状态徽标** = `--fs-xs` + 语义色文字色，无底色、无圆点、无动画。
+- **计数类徽标**（计数、数量）保留 `mono` + `--fs-xs` + tinted 底（`color-mix` 12–14%），这是唯一允许的底色徽标。
+
+## 五、文字层级
+
+- 列表主文本（名称 / 标题 / 实体名）：`--fs-sm`。
+- 次要信息（路径 / 时间 / 描述 / 计数）：`--fs-xs` + `--color-text-muted`。
+- 分组标题：`--fs-xs` / 600 / uppercase / `letter-spacing: 0.04em`（全仓库统一，不设变体）。
+
+## 六、硬约束
+
+- **禁止硬编码色值与圆角**：`#c0392b`、`radius: 8px`、`2px` 等一律换 `--color-error` / `--color-warning` / `--radius-md` 等 token。
+- **卡片式**（border + `--radius-md` + `--color-elevated`）只留给「需要展开的聚合单元」：裁决记录、课题卡片、轮询卡。普通列表一律扁平。
+- **错误提示条**统一柔和型：`--color-error-bg` 底 + `--color-error` 文字 + `--fs-sm`，不用实底红与纯文字两种变体。
+
+## 七、消息区内联卡片
+
+适用于消息区的内联折叠块（裁决 / 轮询简报 / 思考过程 / 工具执行 / 工具返回）；新增同类卡片同样遵循。
+
+原则：中性表面 + 淡边框 + 小号文字，语义色只用于小号状态文字。无 accent 竖条、无混合底色、无彩底徽标、无装饰动画。
+
+### 容器
+
+```css
+margin-top: var(--space-2);           /* 裁决卡额外左右 margin var(--space-4) 对齐消息正文 */
+border-radius: var(--radius-sm);
+background: var(--color-surface);
+border: var(--border-width) solid var(--color-border);
+overflow: hidden;
+```
+
+### 折叠行
+
+- **整行可点**：`div.summary[role=button][tabindex=0]` + `onclick` + `onkeydown`（Enter/Space 切换，`preventDefault`），配 `svelte-ignore a11y_*` 注释。
+- **统一布局**：`[图标?] 主体文字(flex:1 + truncate) → CopyButton → chevron`，`gap: 6px`。
+- **高度**：以 CopyButton 22px 定高为基准 + 上下 `var(--space-1)` padding → 折叠行总高 30px，全卡一致。
+- summary：`width:100%`、`padding: var(--space-1) var(--space-2)`、`font-size: var(--fs-xs)`、`border-radius: var(--radius-sm)`、hover `var(--color-hover)`。
+- **CopyButton**（行内唯一独立按钮，置于 chevron 左侧）：内嵌 12px SVG，`stopPropagation`；桌面 `@media (hover:hover)` 下 hover/focus-within 才显示，触屏始终可见。
+- **chevron 是纯装饰 span**（非按钮）：14px 容器 / 12px SVG / muted / `stroke-width="2.5"`，`.expanded` 时 `rotate(90deg)`。
+
+### 颜色层级
+
+- 折叠行**主体信息**（工具名 / 摘要 / hook 名）：`--color-text`。
+- **类型标签 / 元信息**（思考过程 label、call-id、section-label、耗时、exit-code 前缀）：`--color-text-muted`。
+- **语义色仅用于小号状态文字**：成功 `--color-success`；失败 `--color-error`；重试成功 `--color-primary`；降级 `--color-warning`。无底色、无圆点、无动画。
+
+### 图标
+
+- 去 emoji，用 lucide 风格 14px inline SVG（`fill=none`、`stroke=currentColor`、`stroke-width=2`、`stroke-linecap/join=round`、`aria-hidden`）。
+- 图标为装饰用 muted；主体文字保持正文色。工具执行 = `terminal`，工具返回 = `monitor`。
+
+### 展开详情
+
+```css
+border-top: var(--border-width) solid var(--color-border);
+padding: var(--space-2);
+max-height: 400px;
+overflow-y: auto;
+```
+
+### 详情折叠块（`details.field`）
+
+- **隐藏原生 marker**：`summary { list-style: none }` + `summary::-webkit-details-marker { display: none }`。
+- summary 为 flex 行 + 前置 `.field-chevron`（与折叠行 `toggle-icon` 同一词汇：14px 容器 / 12px SVG / muted / `[open]` 旋转 90°）。
+- 容器：`--color-elevated` 底 + 淡边框 + `--radius-sm`。
+
+### 代码输出块（JSON / stdout / stderr）
+
+功能性深色底，是唯一允许的异色块：
+
+```css
+background: oklch(0.20 0.005 75);
+color: oklch(0.88 0.004 75);      /* stderr: oklch(0.82 0.11 25) */
+font-family: var(--font-mono, monospace);
+font-size: var(--fs-xs);
+```
+
+### 复制内容
+
+- 简报 / 思考 / 工具输出：复制自身 `content` 全文。
+- 工具执行：完整工具调用负载 JSON（工具名 + 参数）。
+- 裁决：完整裁决记录 JSON（含决策 / 错误 / 明细）。
+
+### 交互模型
+
+整行可点展开/折叠 + 行内独立操作按钮；不把 chevron 做成按钮，不把复制做成行级操作。
+
+## 八、与交互规范的关系
+
+hover 显隐统一按 `law/ui-interaction.mdc` 执行（桌面隐藏、触屏常显）。

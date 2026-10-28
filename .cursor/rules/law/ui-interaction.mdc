@@ -1,0 +1,49 @@
+---
+description: 立法·交互行为：所有 hover 才显示的操作按钮必须触屏友好（hover-reveal）
+globs: "**/*.svelte,**/*.css"
+alwaysApply: true
+---
+
+# 立法 · Hover-Reveal 交互
+
+> **立法元数据**：owner — 仓库维护者 · 判定方式 — 触屏（`hover: none`）与键盘（Tab）路径人审；检索无条件 `opacity: 0` · 命中记录 — `git log -p -- .cursor/rules/law/ui-interaction.mdc` · 退役条件 — 交互模型改为常显操作，或平台不再支持 hover。
+
+## 原则
+
+凡是**平时隐藏、鼠标悬停（或键盘聚焦）时才显示**的操作按钮 / 入口（行操作、tab 关闭、消息操作栏、复制按钮等），必须让**触屏（`hover: none`）始终可见**。
+
+理由：触屏没有真实 `:hover`，无条件隐藏再依赖 `:hover` 显示，用户必须「点一下」触发浏览器模拟 hover，入口不可发现。
+
+## 标准实现
+
+```css
+/* 仅支持 hover 的设备隐藏操作按钮（hover/键盘聚焦时显示）；
+   触屏（hover: none）始终可见，保证可发现性 */
+@media (hover: hover) {
+  .row .actions {
+    opacity: 0;
+    visibility: hidden;
+  }
+  .row:hover .actions,
+  .row:focus-within .actions {
+    opacity: 1;
+    visibility: visible;
+  }
+}
+```
+
+## 要点
+
+1. **隐藏规则必须包在 `@media (hover: hover)` 内**，禁止写无条件的 `opacity: 0`。
+2. **隐藏用 `opacity: 0` + `visibility: hidden`**：`visibility` 保证隐藏时不可点击、不可聚焦；`opacity` 保留布局空间，避免显隐抖动。禁止 `display: none`。
+3. **显示条件同时包含 `:hover` 与 `:focus-within`**，保证键盘可达。
+4. **常显状态**（`.active`、`.copied`、激活 tab 的关闭按钮）需显式补 `visibility: visible`，避免被媒体查询内的 `visibility: hidden` 覆盖（注意特异性）。
+5. 按钮自身的 hover 强调样式可留在媒体查询外，不参与显隐。
+
+## 反面示例（禁止）
+
+```css
+/* ❌ 触屏上按钮初始不可见，点一下才靠模拟 hover 出现 */
+.actions { opacity: 0; }
+.row:hover .actions { opacity: 1; }
+```

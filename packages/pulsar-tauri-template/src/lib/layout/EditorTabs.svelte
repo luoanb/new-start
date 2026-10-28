@@ -531,7 +531,7 @@
   .close.disabled { cursor: not-allowed; }
 
   /* 仅支持 hover 的设备隐藏关闭按钮（hover/键盘聚焦时显示）；
-     触屏（hover: none）始终可见，保证可发现性。见 .cursor/rules/ui-hover-reveal.mdc */
+     触屏（hover: none）始终可见，保证可发现性。见 .cursor/rules/law/ui-interaction.mdc */
   @media (hover: hover) {
     .tab .close {
       opacity: 0;

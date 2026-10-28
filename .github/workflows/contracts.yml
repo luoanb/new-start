@@ -1,0 +1,22 @@
+name: contracts
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+      - new-paradigm
+
+jobs:
+  contract-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+      - name: lint semantic contracts
+        run: node scripts/contract-lint.mjs
+      - name: check contract drift
+        run: node scripts/contract-drift.mjs

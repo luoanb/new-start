@@ -1,16 +1,56 @@
 ---
-description: OpenClaw Web 仓库级约定；Agent 入口与工作流摘要
+description: 仓库总纲：立法/需求两区模型、法条台账、需求迭代授权与归档、用户盖章
 alwaysApply: true
 ---
 
-# OpenClaw Web — 项目规则（总览）
+# 仓库总纲
 
-## 必读入口
+本仓库按「立法（稳定区）+ 需求迭代（功能区）」两套互不依赖的机制运转。方法论文档：`docs/research/ai-native-development-paradigm.md`。本文件只做入口与路由，不复述法条细节。
 
-- 在本仓库做**实质性**编码、文档或协作前，先阅读仓库根目录的 **`AGENTS.md`**（任务打包、checkpoint、校验证据、反写、安全与卫生、技能地图）。
-- 日常 Agent 工作流优先使用项目技能 **`/.cursor/skills/sdd-riper-one-light/`**；高风险、跨模块审计类任务再考虑 **`/.cursor/skills/sdd-riper-one/`**。
+## 一、两区边界
 
-## 用户盖章（章节冻结标记）
+| | 立法（稳定区） | 需求迭代（功能区） |
+|---|---|---|
+| 回答 | 代码允许长成什么样 | 本次要交付什么 |
+| 对象 | 代码库本身 | 一次需求 |
+| 产出 | 概念、契约、规则、预算 | 语义契约 + 代码交付 + 守约证据 |
+| 生命周期 | 长期、跨需求 | 单次，交付即归档 |
+
+硬约束（违反即视为流程错误）：
+
+1. **立法不引用任何需求文档**。法条里出现具体需求，就会随需求漂移。
+2. **需求文档不承担立法职责**，交付后归档，不升级为法，也不作为下一个需求的模板。
+3. **迭代中不得顺手改法**。撞上立法边界时停下来，转入独立立法流程，而不是在迭代里就地修改。
+
+## 二、法条台账
+
+立法文件在 `.cursor/rules/law/`（Cursor 递归加载；其他 Agent 经 `AGENTS.md` → 本台账定位）。
+
+| 法条 | 管辖 | 判定方式 |
+|---|---|---|
+| `law/code-shape.mdc` | 概念与命名、依赖方向、禁止离散代码、契约三件套、预算与 ratchet | `pnpm -C packages/code-metrics evidence`（依赖环/重复密度/耦合）+ 类型检查 + 人审 |
+| `law/ts-style.mdc` | TypeScript / Svelte：接口先行、类导向、文件命名 | `pnpm -C packages/<pkg> check`；`deepseek-harness` 另跑 `lint` |
+| `law/rust.mdc` | Rust 公共 API、trait、错误、文档 | `cargo fmt --check` / `check` / `test`（收紧时加 `clippy`） |
+| `law/ui-visual.mdc` | 面板、列表、徽标、消息卡、颜色层级的视觉词汇 | 对照 `DESIGN.md` 与 `svelte-check`；禁止硬编码 token |
+| `law/ui-interaction.mdc` | hover 显隐（hover-reveal）交互 | 触屏/键盘可达性人审 |
+| `law/observability.mdc` | 日志与可观测性 | 失败分支与跨边界调用点抽查 |
+
+**立法的元规则**：每条法须有 owner、判定方式、命中的代码面、退役条件（见各文件首部「立法元数据」）。只立与具体需求无关、对全体代码生效的法；一条法若不能用一条规则或一个指标表达，它还不是法，只是愿望。法越少越稳。
+
+## 三、需求迭代（功能区）：语义契约对接
+
+操作流程分两段：立项与撰写见 `.cursor/skills/contract-author/SKILL.md`，交付与归档见 `.cursor/skills/contract-deliver/SKILL.md`；L2/L3 用 `pnpm law:new <slug>`，不设 skill。本文件只声明边界与闸门。
+
+- **三样对接物**：语义契约 `contract.md`、守约证据 `evidence.md`、L2/L3 的立法变更单 `docs/law-changes/`。叙事型需求文档不再作为对接资料。
+- **状态机**：`draft → contracted → delivered → accepted → archived`。两个人类闸门：`approve`（批准契约，记录 `approved_version` + `approved_commit`）与 `accept`（验收结果）；Agent 不得执行这两步。
+- **变更即重审**：契约一改必须升 `contract_version`；`approved_version != contract_version` 时，lint 与交付必然失败。
+- **交付闸门**：`contract:deliver` 校验「改动 ⊆ scope（自 `approved_commit` 起的 git diff）」+ 证据全覆盖 + lint；任一不过则回退状态、不写锁。
+- **持续守约**：`contract:drift` 比对 `contract.lock.json`，scope 内代码变了而版本没变即报错；CI 见 `.github/workflows/contracts.yml`。
+- **L2/L3**：不进入本流程，用 `pnpm law:new <slug>` 走独立审批；批准后只改 `law/*.mdc`，不回写契约。
+- **旧体系**：`docs/sdd-lab/**` 冻结为遗留只读，不再新增。
+- **互不引用**：契约不引用 `law/*.mdc` 原文，法条不引用任何契约。
+
+## 四、用户盖章（章节冻结标记）
 
 - **标记格式**（落在被章章节标题的正下方，独立一行引用块）：
 
@@ -26,50 +66,11 @@ alwaysApply: true
 - **冲突处理**：当任务与被章章节冲突时，停下来说明冲突点（哪一章、哪条约束、与什么冲突），由用户决定解章还是改方案；未获批前不得两头都动。
 - **自查**：实质性编码或文档改动前，先检查涉及文件是否含「用户盖章」（或 🔒）标记的章节；代码改动需对照被章文档定位其约束范围。
 
-## 页面与设计
+## 五、必读入口
 
-- **页面与组件**的视觉与交互以 **`docs/design/BitsUI.md`** 为准；实现或改版 UI 前应对照该文档中的 Figma 链接与说明。细则亦见 `AGENTS.md` 中的「页面与设计（项目约定）」。
+- 执行实质性任务前先读仓库根目录 `AGENTS.md`，再按任务匹配 `.cursor/skills/` 下的 `SKILL.md`：日常轻量 SDD 用 `sdd-riper-one-light`，需求迭代与 `docs/sdd-lab` 管理用 `sdd-lab`。
+- 设计基准：`DESIGN.md`（主题与色彩体系说明）；design token 唯一来源 `packages/pulsar-app/src/app.html`。UI 细则见 `law/ui-visual.mdc`、`law/ui-interaction.mdc`。
 
-## 语言
+## 六、语言
 
-- 当用户明确要求使用中文时，使用**简体中文**回复与编写面向用户的说明。
-
-## `src/lib` 目录约定（Svelte / Vite + `$lib`）
-
-目标：**UI 与逻辑分离**、**公共组件与业务组件分离**。`$lib` 指向 `src/lib`（与 SvelteKit 习惯一致，便于统一 import）。
-
-推荐布局：
-
-```text
-src/lib/
-  ui/                    # 公共展示与样式工具（无业务语义、可复用）
-    components/          # 设计系统 / Bits UI 封装（Button、PanelChrome…）
-    utils/               # 如 cn()、纯展示 helpers
-
-  core/                  # 与框架弱耦合的纯 TS（可选）
-    webcontainer/        # boot、mount tree、外部 API 适配等
-
-  features/              # 按业务能力分域
-    <domain>/
-      components/        # 该域 Svelte 组件（可引用 $lib/ui）
-      *.ts               # 该域逻辑（store、spawn、状态机）；尽量不直接操作 DOM
-
-  routes/                # 若使用 SvelteKit：页面入口保持极薄，只做拼装
-```
-
-依赖方向（避免循环）：
-
-- `features/*` → 允许引用 → `ui/*`、`core/*`
-- `ui/*` → **禁止**引用 → `features/*`
-- `core/*` → **禁止**引用 → `features/*`（必要时通过注入或回调由上层连接）
-
-**`core` / `utils` 编码风格**：
-
-- 在 **`core/**`** 与 **`ui/utils/**`**（以及各应用包中与之对应的 `core`、`utils` 目录）编写可复用逻辑时，**以类（class）为主**：用实例或带静态方法的类型封装状态与行为，**避免**用大量顶层函数拼出模块 API。
-- 类型定义、类型守卫、常量导出等与「组织方式」无关的声明可保持现有写法；**业务无关的可复用过程**应归入命名清晰的类（或服务对象），便于测试、注入与演进。
-
-**示例**：`demos/webcontainer-openclaw` 采用 `features/shell`、`features/terminal`、`features/preview` 与 `core/webcontainer`、`ui/utils`。
-
-## `packages/` 库包（workspace）
-
-编辑 **`packages/**`** 时：**先约定对外接口与类型，再写实现**；可复用逻辑**优先用类**封装；多能力包按 **标准目录结构（方案 3）** 分域组织。细则见 **`.cursor/rules/packages-lib.mdc`\*\*（按 glob 在编辑 packages 时自动附加）。
+- 默认使用**简体中文**回复与编写面向用户的说明。

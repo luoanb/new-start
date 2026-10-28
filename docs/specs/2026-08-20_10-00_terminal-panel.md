@@ -42,7 +42,7 @@
 - 布局系统：`ViewContainerId = "sidebar" | "info" | "panel"`（`src/lib/layout/layoutTypes.ts`）；panel 容器默认挂 `poller`、`logs`；新增视图 = `viewRegistry` 注册一条记录（`src/lib/layout/views.ts:52-113`），`+page.svelte` 无需改动。
 - 前端依赖现状：`@tauri-apps/api@2`、Svelte 5、CodeMirror；**无 xterm**。
 - 后端 Cargo：tokio 已含 `process`；**无 PTY 依赖**；`portable-pty` 为同步阻塞 API，需线程 + mpsc 桥接 tokio/tauri event loop。
-- 日志规则（`.cursor/rules/logging-observability.mdc`）：shell 命令调用属关键节点，禁止记录命令原文与输出正文。
+- 日志规则（`.cursor/rules/law/observability.mdc`）：shell 命令调用属关键节点，禁止记录命令原文与输出正文。
 
 ## Restated Understanding（已决决策）
 

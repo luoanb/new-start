@@ -1089,7 +1089,7 @@
     background: var(--color-hover);
   }
   .cf-open:disabled { opacity: 0.3; cursor: default; }
-  /* 行操作按钮 hover-reveal：桌面 hover/聚焦显示，触屏常显（见 .cursor/rules/ui-hover-reveal.mdc） */
+  /* 行操作按钮 hover-reveal：桌面 hover/聚焦显示，触屏常显（见 .cursor/rules/law/ui-interaction.mdc） */
   @media (hover: hover) {
     .op,
     .cf-open {

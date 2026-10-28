@@ -299,7 +299,7 @@
     transition: opacity var(--duration-fast) var(--ease-out);
   }
   /* 仅支持 hover 的设备隐藏行操作按钮（hover/键盘聚焦时显示）；
-     触屏（hover: none）始终可见，保证可发现性。见 .cursor/rules/ui-hover-reveal.mdc */
+     触屏（hover: none）始终可见，保证可发现性。见 .cursor/rules/law/ui-interaction.mdc */
   @media (hover: hover) {
     .row-actions {
       opacity: 0;
