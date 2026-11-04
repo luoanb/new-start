@@ -1,5 +1,7 @@
 packages:
   - packages/*
+  # Cordis 框架层：vendor 包之间用 workspace: 协议互相引用，必须与宿主同属一个 workspace。
+  - packages/pulsar-kernel/vendor/*
 
 allowBuilds:
   esbuild: true

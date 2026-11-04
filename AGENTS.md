@@ -11,26 +11,8 @@
 
 如果本文件与 `.cursor/rules/project.mdc` 冲突，以 `.cursor/rules/project.mdc` 为准。
 
-## Project Skills
-
-当任务命中某项能力时，先读取对应 `SKILL.md`，再进入计划或执行：
-
-- 日常(轻量sdd) checkpoint-driven coding / 文档协作：`.cursor/skills/sdd-riper-one-light/SKILL.md`
-- SDD 需求迭代与 `docs/sdd-lab` 管理：`.cursor/skills/sdd-lab/SKILL.md`
-- 技术方案落盘与最小实现桥接：`.cursor/skills/sdd-exec-scheme/SKILL.md`
-- 轻量 PRD / 交互需求文档：`.cursor/skills/prd-generator-light/SKILL.md`
-- 前端界面设计、审美、可用性与视觉优化：`.cursor/skills/impeccable/SKILL.md`
-
-## Baseline Rules
-
-- 默认使用简体中文回复与编写面向用户的说明。
-- `No Spec, No Code`：没有文档或最小 spec，不进入代码实现。
-- `No Plan Approved, No Execute`：计划未获用户确认，不进入开发执行。
-- `Spec is Truth`：文档和代码冲突时，优先认为代码需要修正。
-- `用户盖章冻结`：文档中带「🔒 用户盖章」标记的章节视为用户冻结——未经用户明确确认，不得修改该章节文档，也不得调整其约束的代码；Agent 不得自行盖章或解章（标记格式与细则见 `.cursor/rules/project.mdc` 的「用户盖章（章节冻结标记）」）。
-- `Reverse Sync`：发现 Bug 或实现偏差时，先同步文档，再修代码。
-- 不擅自覆盖用户改动，不执行破坏性 Git 操作，不提交密钥或本地私密配置。
-
 <!-- new-paradigm:begin -->
+
 本项目使用人机协同编程机制。Agent 开始任务前必须阅读 [.new-paradigm/AGENTS.md](.new-paradigm/AGENTS.md)。
+
 <!-- new-paradigm:end -->
