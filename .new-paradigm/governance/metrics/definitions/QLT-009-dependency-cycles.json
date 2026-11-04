@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "1.0",
+  "documentStatus": "active",
+  "id": "QLT-009",
+  "name": "模块循环依赖数",
+  "upperBasis": ["指标治理规则", "代码交付规则"],
+  "purpose": "阻止新增或保留会破坏模块边界的循环依赖",
+  "risk": "循环依赖会造成初始化顺序问题、强耦合和难以独立测试的模块",
+  "applicability": {
+    "assetType": "module-graph",
+    "conditions": ["目标项目包含至少两个可解析的源码模块"]
+  },
+  "measurement": {
+    "unit": "count",
+    "direction": "max",
+    "calculation": "构建适用源码模块依赖图，统计互不重复的有向循环路径组数",
+    "dataRequirements": ["源码范围", "模块解析与别名配置", "排除范围"]
+  },
+  "defaultPolicy": {
+    "operator": "lte",
+    "threshold": 0,
+    "severity": "block"
+  },
+  "overridePolicy": {
+    "threshold": true,
+    "scope": true,
+    "requiredFields": ["reason", "approvedBy", "scope", "expiresWhen"]
+  },
+  "downstreamProducts": ["依赖图采集器", "检测结果", "交付处置"]
+}

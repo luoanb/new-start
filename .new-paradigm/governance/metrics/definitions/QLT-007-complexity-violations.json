@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "1.0",
+  "documentStatus": "active",
+  "id": "QLT-007",
+  "name": "复杂度超限函数数",
+  "upperBasis": ["指标治理规则", "代码交付规则"],
+  "purpose": "阻止认知负担过高的函数无说明进入交付",
+  "risk": "高认知复杂度会提高理解、修改、测试和缺陷定位成本",
+  "applicability": {
+    "assetType": "source-code",
+    "conditions": ["目标项目包含适配器能够解析的函数或等价可执行单元"]
+  },
+  "measurement": {
+    "unit": "count",
+    "direction": "max",
+    "calculation": "统计认知复杂度严格大于 complexityLimit 的唯一函数总数",
+    "dataRequirements": ["源码范围", "支持认知复杂度的语法分析结果"],
+    "parameters": {
+      "complexityLimit": 15
+    }
+  },
+  "defaultPolicy": {
+    "operator": "lte",
+    "threshold": 0,
+    "severity": "block"
+  },
+  "overridePolicy": {
+    "threshold": true,
+    "scope": true,
+    "requiredFields": ["reason", "approvedBy", "scope", "expiresWhen"]
+  },
+  "downstreamProducts": ["复杂度采集器", "检测结果", "交付处置"]
+}

@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "1.0",
+  "documentStatus": "active",
+  "id": "QLT-010",
+  "name": "高危和严重依赖漏洞数",
+  "upperBasis": ["指标治理规则", "代码交付规则"],
+  "purpose": "阻止已知高风险依赖漏洞在无说明情况下进入交付",
+  "risk": "高危或严重依赖漏洞可能导致数据泄露、权限绕过或远程执行",
+  "applicability": {
+    "assetType": "dependency-graph",
+    "conditions": ["目标项目存在受支持包管理器的依赖清单和锁文件"]
+  },
+  "measurement": {
+    "unit": "count",
+    "direction": "max",
+    "calculation": "统计包管理器安全审计结果中严重度为 high 或 critical 的唯一漏洞总数",
+    "dataRequirements": ["依赖清单", "锁文件", "包管理器审计能力", "可用漏洞数据源"]
+  },
+  "defaultPolicy": {
+    "operator": "lte",
+    "threshold": 0,
+    "severity": "block"
+  },
+  "overridePolicy": {
+    "threshold": true,
+    "scope": true,
+    "requiredFields": ["reason", "approvedBy", "scope", "expiresWhen"]
+  },
+  "downstreamProducts": ["依赖审计采集器", "检测结果", "交付处置"]
+}

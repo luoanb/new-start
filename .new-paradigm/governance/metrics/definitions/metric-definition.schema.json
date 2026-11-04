@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://new-paradigm.local/schemas/metric-definition.schema.json",
+  "title": "New Paradigm metric definition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "documentStatus",
+    "id",
+    "name",
+    "upperBasis",
+    "purpose",
+    "risk",
+    "applicability",
+    "measurement",
+    "defaultPolicy",
+    "overridePolicy",
+    "downstreamProducts"
+  ],
+  "properties": {
+    "schemaVersion": { "type": "string", "const": "1.0" },
+    "documentStatus": {
+      "type": "string",
+      "enum": ["draft", "pending_confirmation", "active", "deprecated"]
+    },
+    "id": { "type": "string", "pattern": "^QLT-[0-9]{3}$" },
+    "name": { "type": "string", "minLength": 1 },
+    "upperBasis": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "purpose": { "type": "string", "minLength": 1 },
+    "risk": { "type": "string", "minLength": 1 },
+    "applicability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assetType", "conditions"],
+      "properties": {
+        "assetType": { "type": "string", "minLength": 1 },
+        "conditions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unit", "direction", "calculation", "dataRequirements"],
+      "properties": {
+        "unit": { "type": "string", "enum": ["count", "percent"] },
+        "direction": { "type": "string", "enum": ["min", "max"] },
+        "calculation": { "type": "string", "minLength": 1 },
+        "dataRequirements": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "parameters": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "type": "number" }
+        }
+      }
+    },
+    "defaultPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operator", "threshold", "severity"],
+      "properties": {
+        "operator": { "type": "string", "enum": ["lte", "gte"] },
+        "threshold": { "type": "number" },
+        "severity": { "type": "string", "minLength": 1 }
+      }
+    },
+    "overridePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["threshold", "scope", "requiredFields"],
+      "properties": {
+        "threshold": { "type": "boolean" },
+        "scope": { "type": "boolean" },
+        "requiredFields": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "downstreamProducts": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

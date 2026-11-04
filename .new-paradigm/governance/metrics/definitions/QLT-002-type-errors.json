@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "1.0",
+  "documentStatus": "active",
+  "id": "QLT-002",
+  "name": "类型检查错误数",
+  "upperBasis": ["指标治理规则", "代码交付规则"],
+  "purpose": "阻止存在静态类型矛盾的源码交付",
+  "risk": "类型错误可能隐藏无效调用、错误数据形状和不可达实现",
+  "applicability": {
+    "assetType": "source-code",
+    "conditions": ["目标 workspace 使用 TypeScript 或提供可执行静态类型检查器"]
+  },
+  "measurement": {
+    "unit": "count",
+    "direction": "max",
+    "calculation": "统计适用 workspace 类型检查器报告的唯一错误总数",
+    "dataRequirements": ["类型配置路径", "源码范围", "类型检查器版本"]
+  },
+  "defaultPolicy": {
+    "operator": "lte",
+    "threshold": 0,
+    "severity": "block"
+  },
+  "overridePolicy": {
+    "threshold": true,
+    "scope": true,
+    "requiredFields": ["reason", "approvedBy", "scope", "expiresWhen"]
+  },
+  "downstreamProducts": ["语言适配器", "检测结果", "交付处置"]
+}

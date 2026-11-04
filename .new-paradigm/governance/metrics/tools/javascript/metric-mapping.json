@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "1.0",
+  "adapter": "@new-paradigm/javascript-metrics-adapter",
+  "mappings": {
+    "QLT-001": ["ESLint core and framework recommended rules"],
+    "QLT-002": ["TypeScript Compiler API"],
+    "QLT-003": ["project test command structured output"],
+    "QLT-004": ["c8 JSON summary lines"],
+    "QLT-005": ["c8 JSON summary branches"],
+    "QLT-006": ["c8 JSON summary functions"],
+    "QLT-007": ["eslint-plugin-sonarjs cognitive-complexity"],
+    "QLT-008": ["jscpd JSON report"],
+    "QLT-009": ["dependency-cruiser JSON module graph"],
+    "QLT-010": ["npm/pnpm/yarn audit JSON"],
+    "QLT-011": [
+      "eslint-plugin-jsx-a11y",
+      "eslint-plugin-vuejs-accessibility",
+      "@angular-eslint/eslint-plugin-template",
+      "eslint-plugin-svelte"
+    ]
+  }
+}

@@ -1,0 +1,40 @@
+# Agent 项目工作指引
+
+本文件告诉 Agent 在本项目中如何开始工作，以及不同任务需要读取哪些规则、使用哪些 Skill。
+
+具体约束以 `governance/` 中状态为“生效”的规则为准。本文件只提供工作指引，不重复定义规则。
+
+## 开始工作
+
+1. 判断当前任务属于需求立约、代码契约、代码交付还是治理规则维护。
+2. 阅读 [目录结构规范](governance/rules/目录结构规范.md)，确定相关资产的位置。
+3. 阅读 [文档治理规则](governance/rules/文档治理规则.md)，确认文档状态、效力和冲突处理方式。
+4. 按下方任务指引读取适用规则和 Skill，不必读取与当前任务无关的全部文件。
+5. 只依据状态为“生效”的规则工作；草案、待确认和废弃文档不参与当前裁决。
+
+## 按任务选择指引
+
+### 编写或修改治理规则
+
+- 阅读 [治理规则编写规则](governance/rules/治理规则编写规则.md)。
+
+### 梳理或修改产品需求
+
+- 阅读 [需求契约追溯规则](governance/rules/需求契约追溯规则.md)。
+- 使用 [需求立约 Skill](governance/skills/requirement-authoring/SKILL.md)。
+
+### 编写或修改代码契约
+
+- 阅读 [需求契约追溯规则](governance/rules/需求契约追溯规则.md)。
+- 阅读 [代码契约规则](governance/rules/代码契约规则.md)。
+- 按需使用 [代码契约模板](governance/templates/代码契约模板.md)。
+
+### 开发、修复或验证代码
+
+- 阅读 [代码交付规则](governance/rules/代码交付规则.md)。
+- 阅读 [指标治理规则](governance/rules/指标治理规则.md)。
+- 使用 [代码交付 Skill](governance/skills/code-delivery/SKILL.md)。
+
+## 人工操作说明
+
+面向人的使用教程见 [README.md](README.md)。

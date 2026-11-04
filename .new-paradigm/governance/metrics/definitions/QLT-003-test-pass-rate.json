@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "1.0",
+  "documentStatus": "active",
+  "id": "QLT-003",
+  "name": "测试通过率",
+  "upperBasis": ["指标治理规则", "代码交付规则"],
+  "purpose": "确保项目已定义测试全部通过后才进入交付",
+  "risk": "失败或未执行的测试意味着已知行为没有得到满足或验证",
+  "applicability": {
+    "assetType": "test-result",
+    "conditions": ["目标项目包含可执行源码并提供明确测试命令"]
+  },
+  "measurement": {
+    "unit": "percent",
+    "direction": "min",
+    "calculation": "通过测试数除以已执行测试总数再乘以 100；测试命令缺失或执行错误不得形成有效值",
+    "dataRequirements": ["测试命令", "结构化测试结果或可确定通过数与总数的输出"]
+  },
+  "defaultPolicy": {
+    "operator": "gte",
+    "threshold": 100,
+    "severity": "block"
+  },
+  "overridePolicy": {
+    "threshold": true,
+    "scope": true,
+    "requiredFields": ["reason", "approvedBy", "scope", "expiresWhen"]
+  },
+  "downstreamProducts": ["测试采集器", "检测结果", "交付处置"]
+}

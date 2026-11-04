@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "1.0",
+  "documentStatus": "active",
+  "id": "QLT-005",
+  "name": "分支覆盖率",
+  "upperBasis": ["指标治理规则", "代码交付规则"],
+  "purpose": "确保条件分支的主要结果路径得到测试执行",
+  "risk": "未覆盖分支容易隐藏边界条件和错误处理缺陷",
+  "applicability": {
+    "assetType": "coverage-result",
+    "conditions": ["目标项目提供可采集分支覆盖率的测试命令"]
+  },
+  "measurement": {
+    "unit": "percent",
+    "direction": "min",
+    "calculation": "被测试执行的分支结果数除以可识别分支结果总数再乘以 100",
+    "dataRequirements": ["统一源码范围", "结构化覆盖率结果"]
+  },
+  "defaultPolicy": {
+    "operator": "gte",
+    "threshold": 70,
+    "severity": "block"
+  },
+  "overridePolicy": {
+    "threshold": true,
+    "scope": true,
+    "requiredFields": ["reason", "approvedBy", "scope", "expiresWhen"]
+  },
+  "downstreamProducts": ["覆盖率采集器", "检测结果", "交付处置"]
+}

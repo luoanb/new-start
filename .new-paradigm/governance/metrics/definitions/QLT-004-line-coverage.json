@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "1.0",
+  "documentStatus": "active",
+  "id": "QLT-004",
+  "name": "行覆盖率",
+  "upperBasis": ["指标治理规则", "代码交付规则"],
+  "purpose": "限制大面积未被测试执行的源码进入交付",
+  "risk": "低行覆盖率会增加未验证实现和回归缺陷风险",
+  "applicability": {
+    "assetType": "coverage-result",
+    "conditions": ["目标项目提供可采集覆盖率的测试命令"]
+  },
+  "measurement": {
+    "unit": "percent",
+    "direction": "min",
+    "calculation": "被测试执行的可执行源码行数除以可执行源码总行数再乘以 100",
+    "dataRequirements": ["统一源码范围", "结构化覆盖率结果"]
+  },
+  "defaultPolicy": {
+    "operator": "gte",
+    "threshold": 80,
+    "severity": "block"
+  },
+  "overridePolicy": {
+    "threshold": true,
+    "scope": true,
+    "requiredFields": ["reason", "approvedBy", "scope", "expiresWhen"]
+  },
+  "downstreamProducts": ["覆盖率采集器", "检测结果", "交付处置"]
+}

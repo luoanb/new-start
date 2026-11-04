@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "1.0",
+  "documentStatus": "active",
+  "id": "QLT-001",
+  "name": "静态分析错误数",
+  "upperBasis": ["指标治理规则", "代码交付规则"],
+  "purpose": "阻止存在确定性语法、正确性或框架规则错误的源码交付",
+  "risk": "静态错误可能导致运行故障、框架误用或不可维护行为",
+  "applicability": {
+    "assetType": "source-code",
+    "conditions": ["目标项目包含适配器支持的 JavaScript、TypeScript 或前端框架源码"]
+  },
+  "measurement": {
+    "unit": "count",
+    "direction": "max",
+    "calculation": "统计适用源码经语言与框架静态分析后严重度为 error 的唯一违规总数；已归入复杂度超限或前端无障碍指标的违规不重复计入",
+    "dataRequirements": ["源码范围", "排除范围", "语言与框架识别结果"]
+  },
+  "defaultPolicy": {
+    "operator": "lte",
+    "threshold": 0,
+    "severity": "block"
+  },
+  "overridePolicy": {
+    "threshold": true,
+    "scope": true,
+    "requiredFields": ["reason", "approvedBy", "scope", "expiresWhen"]
+  },
+  "downstreamProducts": ["JavaScript/TypeScript 适配器", "检测结果", "交付处置"]
+}

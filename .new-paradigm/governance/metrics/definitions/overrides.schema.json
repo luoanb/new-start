@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://new-paradigm.local/schemas/overrides.schema.json",
+  "title": "New Paradigm metric overrides",
+  "$defs": {
+    "override": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "approvedBy", "scope", "expiresWhen"],
+      "allOf": [
+        {
+          "anyOf": [
+            { "required": ["metricId"], "properties": { "metricId": true } },
+            { "required": ["id"], "properties": { "id": true } }
+          ]
+        },
+        {
+          "anyOf": [
+            { "required": ["threshold"], "properties": { "threshold": true } },
+            { "required": ["applicable"], "properties": { "applicable": true } }
+          ]
+        }
+      ],
+      "properties": {
+        "metricId": { "type": "string", "pattern": "^QLT-[0-9]{3}$" },
+        "id": { "type": "string", "pattern": "^QLT-[0-9]{3}$" },
+        "threshold": { "type": "number" },
+        "applicable": { "type": "boolean" },
+        "reason": { "type": "string", "minLength": 1 },
+        "approvedBy": { "type": "string", "minLength": 1 },
+        "scope": { "type": "string", "minLength": 1 },
+        "expiresWhen": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "type": "array",
+      "items": { "$ref": "#/$defs/override" }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["overrides"],
+      "properties": {
+        "schemaVersion": { "type": "string" },
+        "overrides": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/override" }
+        }
+      }
+    }
+  ]
+}

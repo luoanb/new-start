@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "1.0",
+  "documentStatus": "active",
+  "id": "QLT-011",
+  "name": "前端无障碍源码违规数",
+  "upperBasis": ["指标治理规则", "代码交付规则"],
+  "purpose": "阻止可在源码或模板阶段确定的无障碍问题进入交付",
+  "risk": "无障碍违规会使键盘、屏幕阅读器或其他辅助技术用户无法完成操作",
+  "applicability": {
+    "assetType": "frontend-source",
+    "conditions": ["目标 workspace 包含 React、Next.js、Vue、Nuxt、Angular、Svelte 或 SvelteKit 源码或模板"]
+  },
+  "measurement": {
+    "unit": "count",
+    "direction": "max",
+    "calculation": "统计框架适配器无障碍规则报告的唯一 error 级源码或模板违规总数",
+    "dataRequirements": ["框架识别结果", "组件与模板源码", "对应无障碍解析器和规则集"]
+  },
+  "defaultPolicy": {
+    "operator": "lte",
+    "threshold": 0,
+    "severity": "block"
+  },
+  "overridePolicy": {
+    "threshold": true,
+    "scope": true,
+    "requiredFields": ["reason", "approvedBy", "scope", "expiresWhen"]
+  },
+  "downstreamProducts": ["前端框架适配器", "检测结果", "交付处置"]
+}

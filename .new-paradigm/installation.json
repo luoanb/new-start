@@ -1,0 +1,255 @@
+{
+  "schemaVersion": "1.0",
+  "mechanismVersion": "0.1.0",
+  "source": {
+    "type": "local"
+  },
+  "installedAt": "2026-11-04T12:11:49.246Z",
+  "discovery": {
+    "rootFile": "AGENTS.md",
+    "mode": "appended",
+    "blockHash": "1c9264e1e2261cd7a8fc5a18b00235d79328a1feaeb0a99240df03d4563eac4b"
+  },
+  "managedFiles": [
+    {
+      "path": ".new-paradigm/README.md",
+      "source": ".new-paradigm/README.md",
+      "category": "managed",
+      "installedHash": "7778497217c91e1047cf8f58260b6ffcabd8b6ade9d9041c8e81014c39ad9b54"
+    },
+    {
+      "path": ".new-paradigm/init.js",
+      "source": ".new-paradigm/init.js",
+      "category": "managed",
+      "installedHash": "f065c03a3df97773b8cfddf42ce2d928e7f842db2a9b08c9498010fea2a9f882"
+    },
+    {
+      "path": ".new-paradigm/AGENTS.md",
+      "source": ".new-paradigm/AGENTS.md",
+      "category": "managed",
+      "installedHash": "4d2f0f174c2c4942acecc5c5d4e28efbc1d8ff3ad6c3d59342608e1121797a61"
+    },
+    {
+      "path": ".new-paradigm/governance/principles/编程新范式.md",
+      "source": ".new-paradigm/governance/principles/编程新范式.md",
+      "category": "managed",
+      "installedHash": "d5da7faee72929e5226454d21522d48675a04a464410a6b27d7b891d3808792f"
+    },
+    {
+      "path": ".new-paradigm/governance/principles/落地策略.md",
+      "source": ".new-paradigm/governance/principles/落地策略.md",
+      "category": "managed",
+      "installedHash": "a246221fe560cc5e119fb98fa0b3445137472fdc861c3cdbfb56469739da2d33"
+    },
+    {
+      "path": ".new-paradigm/governance/principles/术语表.md",
+      "source": ".new-paradigm/governance/principles/术语表.md",
+      "category": "managed",
+      "installedHash": "ee180b8586255f5e30ea1125492137510942931c433b86f4dc2c651dcc1e99c6"
+    },
+    {
+      "path": ".new-paradigm/governance/rules/代码交付规则.md",
+      "source": ".new-paradigm/governance/rules/代码交付规则.md",
+      "category": "managed",
+      "installedHash": "7bffabd5ff9a42df0ddb94a0652aba49abaf13095461939eee31dc4be8b005d3"
+    },
+    {
+      "path": ".new-paradigm/governance/rules/代码契约规则.md",
+      "source": ".new-paradigm/governance/rules/代码契约规则.md",
+      "category": "managed",
+      "installedHash": "2959ae8f84147e027a4a198a23c7844aa303cf1a6317273d02b621ecd42b81ca"
+    },
+    {
+      "path": ".new-paradigm/governance/rules/目录结构规范.md",
+      "source": ".new-paradigm/governance/rules/目录结构规范.md",
+      "category": "managed",
+      "installedHash": "f3fc698298c3e50256f76a5068ad47936234c67d72fe27c027da5df9ecc36c23"
+    },
+    {
+      "path": ".new-paradigm/governance/rules/文档治理规则.md",
+      "source": ".new-paradigm/governance/rules/文档治理规则.md",
+      "category": "managed",
+      "installedHash": "249e89fea707830343c80e0c8e45f36332ec5fab1c43acb1a2a04984ad32d949"
+    },
+    {
+      "path": ".new-paradigm/governance/rules/需求契约追溯规则.md",
+      "source": ".new-paradigm/governance/rules/需求契约追溯规则.md",
+      "category": "managed",
+      "installedHash": "9c74cb4fbbf6ecdfd864787afa4a2636f5635eb71f4263d7deceef16d6939371"
+    },
+    {
+      "path": ".new-paradigm/governance/rules/指标治理规则.md",
+      "source": ".new-paradigm/governance/rules/指标治理规则.md",
+      "category": "managed",
+      "installedHash": "3eb0d53422dfd92c2921365be74599d29ddae44ce5984eb0ccfb06f763a6679c"
+    },
+    {
+      "path": ".new-paradigm/governance/rules/治理规则编写规则.md",
+      "source": ".new-paradigm/governance/rules/治理规则编写规则.md",
+      "category": "managed",
+      "installedHash": "01a65fb205397b5c4b560463675afd499152d9f565114388b4437684cccd06b6"
+    },
+    {
+      "path": ".new-paradigm/governance/skills/code-delivery/SKILL.md",
+      "source": ".new-paradigm/governance/skills/code-delivery/SKILL.md",
+      "category": "managed",
+      "installedHash": "c66f226c1eb4ed920a48e81d5eaa1cee30ffff8cbc40fcfb17d2c2da2f3f6be0"
+    },
+    {
+      "path": ".new-paradigm/governance/skills/requirement-authoring/references/视觉设计文档格式.md",
+      "source": ".new-paradigm/governance/skills/requirement-authoring/references/视觉设计文档格式.md",
+      "category": "managed",
+      "installedHash": "33d91c31046dccc62c94e6beeda55c6a7d7062d197dbb4e94b3463f276af3d7c"
+    },
+    {
+      "path": ".new-paradigm/governance/skills/requirement-authoring/references/需求文档格式.md",
+      "source": ".new-paradigm/governance/skills/requirement-authoring/references/需求文档格式.md",
+      "category": "managed",
+      "installedHash": "497aef7839464a260ba55bb19084da1dbb297d388d480d62d426e40d8e712d5e"
+    },
+    {
+      "path": ".new-paradigm/governance/skills/requirement-authoring/SKILL.md",
+      "source": ".new-paradigm/governance/skills/requirement-authoring/SKILL.md",
+      "category": "managed",
+      "installedHash": "badbafe1951baa7b0b171ffa8042e7c74db32a13f4946c85a057ea56fc4d1bfc"
+    },
+    {
+      "path": ".new-paradigm/governance/templates/代码契约模板.md",
+      "source": ".new-paradigm/governance/templates/代码契约模板.md",
+      "category": "managed",
+      "installedHash": "71081947fa1bb26762ec852396e1f57e66623e9335fb5f0ebdb97501dafe2d57"
+    },
+    {
+      "path": ".new-paradigm/governance/metrics/definitions/metric-definition.schema.json",
+      "source": ".new-paradigm/governance/metrics/definitions/metric-definition.schema.json",
+      "category": "managed",
+      "installedHash": "1860f5ddeb4a14c1611f746c415189c0966c227f2ae9b070ac4b466c324b0c38"
+    },
+    {
+      "path": ".new-paradigm/governance/metrics/definitions/overrides.schema.json",
+      "source": ".new-paradigm/governance/metrics/definitions/overrides.schema.json",
+      "category": "managed",
+      "installedHash": "71481bc9af8e74dc3cf51176d283c2efadac91a14c9ad87789d36d16b7812571"
+    },
+    {
+      "path": ".new-paradigm/governance/metrics/definitions/QLT-001-static-analysis-errors.json",
+      "source": ".new-paradigm/governance/metrics/definitions/QLT-001-static-analysis-errors.json",
+      "category": "managed",
+      "installedHash": "8b0d53cdffb7efa5f844d6600c714773cefcaf2725edd8643af066de8335b1f6"
+    },
+    {
+      "path": ".new-paradigm/governance/metrics/definitions/QLT-002-type-errors.json",
+      "source": ".new-paradigm/governance/metrics/definitions/QLT-002-type-errors.json",
+      "category": "managed",
+      "installedHash": "20b053123d72326713241906cced665150c55bc969658ad1aed8de193ac17eaf"
+    },
+    {
+      "path": ".new-paradigm/governance/metrics/definitions/QLT-003-test-pass-rate.json",
+      "source": ".new-paradigm/governance/metrics/definitions/QLT-003-test-pass-rate.json",
+      "category": "managed",
+      "installedHash": "213e935fdc7cd4485830938a22abe0fdd0ed3b7c52028d8221d759e62d52f0ee"
+    },
+    {
+      "path": ".new-paradigm/governance/metrics/definitions/QLT-004-line-coverage.json",
+      "source": ".new-paradigm/governance/metrics/definitions/QLT-004-line-coverage.json",
+      "category": "managed",
+      "installedHash": "781df4a9571fcf0e5ccc778f9a7b770b44dc77f2491a72f34cb85fcccb64fc03"
+    },
+    {
+      "path": ".new-paradigm/governance/metrics/definitions/QLT-005-branch-coverage.json",
+      "source": ".new-paradigm/governance/metrics/definitions/QLT-005-branch-coverage.json",
+      "category": "managed",
+      "installedHash": "7f5a9041014272395e1c42aebbe02746eabdb026be30a8376fb851fe8e556b38"
+    },
+    {
+      "path": ".new-paradigm/governance/metrics/definitions/QLT-006-function-coverage.json",
+      "source": ".new-paradigm/governance/metrics/definitions/QLT-006-function-coverage.json",
+      "category": "managed",
+      "installedHash": "8b8eac4503469afdec82c15bee4f25baaa27952702da196c8e05ee47ae269499"
+    },
+    {
+      "path": ".new-paradigm/governance/metrics/definitions/QLT-007-complexity-violations.json",
+      "source": ".new-paradigm/governance/metrics/definitions/QLT-007-complexity-violations.json",
+      "category": "managed",
+      "installedHash": "9027e2fedda85b5c6f093f8c6ca1dd6806bb590e10a2c841eea94e7af137742f"
+    },
+    {
+      "path": ".new-paradigm/governance/metrics/definitions/QLT-008-duplication-rate.json",
+      "source": ".new-paradigm/governance/metrics/definitions/QLT-008-duplication-rate.json",
+      "category": "managed",
+      "installedHash": "b5fa6a70ad47d969f126237869a987fe4d58c6dbdbae6115c7a493db0358d088"
+    },
+    {
+      "path": ".new-paradigm/governance/metrics/definitions/QLT-009-dependency-cycles.json",
+      "source": ".new-paradigm/governance/metrics/definitions/QLT-009-dependency-cycles.json",
+      "category": "managed",
+      "installedHash": "739e3d2fa173c1bfe358e59bdc8864b5f0cdf7b18d7b188a04ca94fe77739be4"
+    },
+    {
+      "path": ".new-paradigm/governance/metrics/definitions/QLT-010-high-severity-vulnerabilities.json",
+      "source": ".new-paradigm/governance/metrics/definitions/QLT-010-high-severity-vulnerabilities.json",
+      "category": "managed",
+      "installedHash": "bb238ad9def25324a51c8533ff8cbe07f9920296130e5d7f0bbdfab9a52c6441"
+    },
+    {
+      "path": ".new-paradigm/governance/metrics/definitions/QLT-011-accessibility-violations.json",
+      "source": ".new-paradigm/governance/metrics/definitions/QLT-011-accessibility-violations.json",
+      "category": "managed",
+      "installedHash": "1115325ff865fbb7acf13d38dbb23bfaa834800ea4516122fc678201fe3d5dc6"
+    },
+    {
+      "path": ".new-paradigm/governance/metrics/tools/javascript/package.json",
+      "source": ".new-paradigm/governance/metrics/tools/javascript/package.json",
+      "category": "managed",
+      "installedHash": "f315627e8bb90ca885839532e31ff5ea2046563e798563f9815242ebd6255766"
+    },
+    {
+      "path": ".new-paradigm/governance/metrics/tools/javascript/pnpm-workspace.yaml",
+      "source": ".new-paradigm/governance/metrics/tools/javascript/pnpm-workspace.yaml",
+      "category": "managed",
+      "installedHash": "caca73c0f507c0fbe0ee9d27e929a0de295c6b24a93b7e088eac3d75c9d6f49b"
+    },
+    {
+      "path": ".new-paradigm/governance/metrics/tools/javascript/pnpm-lock.yaml",
+      "source": ".new-paradigm/governance/metrics/tools/javascript/pnpm-lock.yaml",
+      "category": "managed",
+      "installedHash": "34606a1955a78d2e921a9a672aad490127a147c4460c3df5c7432322441708ea"
+    },
+    {
+      "path": ".new-paradigm/governance/metrics/tools/javascript/metric-mapping.json",
+      "source": ".new-paradigm/governance/metrics/tools/javascript/metric-mapping.json",
+      "category": "managed",
+      "installedHash": "e3d899decc2ec9ef6ce3c663a8b6533858480732f489f93fc11feef32baf4ba7"
+    },
+    {
+      "path": ".new-paradigm/governance/metrics/tools/javascript/src/adapter.js",
+      "source": ".new-paradigm/governance/metrics/tools/javascript/src/adapter.js",
+      "category": "managed",
+      "installedHash": "aea1178d9913871fb47979c5cfe0f215ceaf5c54c5e21de150ad7683d34aef0f"
+    },
+    {
+      "path": ".new-paradigm/governance/metrics/tools/javascript/src/cli.js",
+      "source": ".new-paradigm/governance/metrics/tools/javascript/src/cli.js",
+      "category": "managed",
+      "installedHash": "fe8ded47c39415b8d2ae6767ff7e3c412bdf26962857e358b8f6092c6f7eb8cb"
+    },
+    {
+      "path": ".new-paradigm/governance/metrics/tools/javascript/src/collectors.js",
+      "source": ".new-paradigm/governance/metrics/tools/javascript/src/collectors.js",
+      "category": "managed",
+      "installedHash": "08eacb7d418e1ea82ee5aef422ac0246e054d42e750eba72e3a820e48fd1f0ac"
+    },
+    {
+      "path": ".new-paradigm/governance/metrics/tools/javascript/src/definitions.js",
+      "source": ".new-paradigm/governance/metrics/tools/javascript/src/definitions.js",
+      "category": "managed",
+      "installedHash": "157f5cb18250dde1de7e947957078e8a6cc439ce63bcfe522a29011d26f68ea3"
+    },
+    {
+      "path": ".new-paradigm/governance/metrics/tools/javascript/src/project.js",
+      "source": ".new-paradigm/governance/metrics/tools/javascript/src/project.js",
+      "category": "managed",
+      "installedHash": "f46b0c0e1c153c04290ca522cd0edccc42ef88849fb9c378a4f2a8dd5a25468e"
+    }
+  ]
+}

@@ -30,3 +30,7 @@
 - `用户盖章冻结`：文档中带「🔒 用户盖章」标记的章节视为用户冻结——未经用户明确确认，不得修改该章节文档，也不得调整其约束的代码；Agent 不得自行盖章或解章（标记格式与细则见 `.cursor/rules/project.mdc` 的「用户盖章（章节冻结标记）」）。
 - `Reverse Sync`：发现 Bug 或实现偏差时，先同步文档，再修代码。
 - 不擅自覆盖用户改动，不执行破坏性 Git 操作，不提交密钥或本地私密配置。
+
+<!-- new-paradigm:begin -->
+本项目使用人机协同编程机制。Agent 开始任务前必须阅读 [.new-paradigm/AGENTS.md](.new-paradigm/AGENTS.md)。
+<!-- new-paradigm:end -->
