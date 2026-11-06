@@ -62,7 +62,16 @@ node src/cli.js --project <项目路径> --test-command "<项目测试命令>"
 
 5. **Review contract consistency**
    - Apply DEL-006 after metrics.
-   - Check responsibility boundaries, operation signatures, shared types, errors, guarantees, and applicable extensions.
+   - Check capability boundaries, operation signatures, shared types, errors, capability relationships, collaboration dependencies, failure handling, consistency boundaries, guarantees, and applicable extensions.
+   - When the change adds or edits a code contract, regenerate the overview from `.new-paradigm/governance/tools/contract-overview/`:
+
+```bash
+node src/cli.js --project <项目根目录>
+```
+
+   - Before the delivery summary, run `node src/cli.js --project <项目根目录> --check` in that directory.
+   - Exit code `1` means the overview is stale or a collaboration relation is invalid. Exit code `2` means the check could not run.
+   - Regenerate a stale overview, then continue the contract-body review. A consistent overview does not replace that review.
    - A passing metric does not prove contract consistency.
 
 6. **Route and repair deviations**

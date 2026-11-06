@@ -4,7 +4,7 @@
   "source": {
     "type": "local"
   },
-  "installedAt": "2026-11-04T12:11:49.246Z",
+  "installedAt": "2026-11-06T06:18:28.590Z",
   "discovery": {
     "rootFile": "AGENTS.md",
     "mode": "appended",
@@ -15,19 +15,19 @@
       "path": ".new-paradigm/README.md",
       "source": ".new-paradigm/README.md",
       "category": "managed",
-      "installedHash": "7778497217c91e1047cf8f58260b6ffcabd8b6ade9d9041c8e81014c39ad9b54"
+      "installedHash": "6656705cddb5e56696b1e8e3e89f9a2ff0ae7a973c42b779f5e82e404ff98dc8"
     },
     {
       "path": ".new-paradigm/init.js",
       "source": ".new-paradigm/init.js",
       "category": "managed",
-      "installedHash": "f065c03a3df97773b8cfddf42ce2d928e7f842db2a9b08c9498010fea2a9f882"
+      "installedHash": "b8760374cd83a02b541960af0353dd52d95f614376f4173569141c1f7266e7a9"
     },
     {
       "path": ".new-paradigm/AGENTS.md",
       "source": ".new-paradigm/AGENTS.md",
       "category": "managed",
-      "installedHash": "4d2f0f174c2c4942acecc5c5d4e28efbc1d8ff3ad6c3d59342608e1121797a61"
+      "installedHash": "c093ebc0c28412e19873c56bbbd9d3cdf0d26f91d08a0b04a40948d56bb4d6dc"
     },
     {
       "path": ".new-paradigm/governance/principles/编程新范式.md",
@@ -51,19 +51,19 @@
       "path": ".new-paradigm/governance/rules/代码交付规则.md",
       "source": ".new-paradigm/governance/rules/代码交付规则.md",
       "category": "managed",
-      "installedHash": "7bffabd5ff9a42df0ddb94a0652aba49abaf13095461939eee31dc4be8b005d3"
+      "installedHash": "3d28dd59341c3ba738e287f514e8b23e3adb05b2c2bf4d427f6701f1afec4134"
     },
     {
       "path": ".new-paradigm/governance/rules/代码契约规则.md",
       "source": ".new-paradigm/governance/rules/代码契约规则.md",
       "category": "managed",
-      "installedHash": "2959ae8f84147e027a4a198a23c7844aa303cf1a6317273d02b621ecd42b81ca"
+      "installedHash": "d5d2aa1cdf34c9f8e86abd9c831f3d3366f811e63ee611dc0eeaff3d8eba01d6"
     },
     {
       "path": ".new-paradigm/governance/rules/目录结构规范.md",
       "source": ".new-paradigm/governance/rules/目录结构规范.md",
       "category": "managed",
-      "installedHash": "f3fc698298c3e50256f76a5068ad47936234c67d72fe27c027da5df9ecc36c23"
+      "installedHash": "6517b1724c4162b11e9e2b87dab86c1cb93b65d4c85bc95702586440b2b1e487"
     },
     {
       "path": ".new-paradigm/governance/rules/文档治理规则.md",
@@ -75,7 +75,7 @@
       "path": ".new-paradigm/governance/rules/需求契约追溯规则.md",
       "source": ".new-paradigm/governance/rules/需求契约追溯规则.md",
       "category": "managed",
-      "installedHash": "9c74cb4fbbf6ecdfd864787afa4a2636f5635eb71f4263d7deceef16d6939371"
+      "installedHash": "37be5c8286611cc01a361c1ea7060e810ee2f5b53f444b71aecf52f566e1c5c0"
     },
     {
       "path": ".new-paradigm/governance/rules/指标治理规则.md",
@@ -93,7 +93,7 @@
       "path": ".new-paradigm/governance/skills/code-delivery/SKILL.md",
       "source": ".new-paradigm/governance/skills/code-delivery/SKILL.md",
       "category": "managed",
-      "installedHash": "c66f226c1eb4ed920a48e81d5eaa1cee30ffff8cbc40fcfb17d2c2da2f3f6be0"
+      "installedHash": "beca835a21a28b5bfca057ccccc4849f8b9a0fc350c1141694fbaa23218adda3"
     },
     {
       "path": ".new-paradigm/governance/skills/requirement-authoring/references/视觉设计文档格式.md",
@@ -105,19 +105,19 @@
       "path": ".new-paradigm/governance/skills/requirement-authoring/references/需求文档格式.md",
       "source": ".new-paradigm/governance/skills/requirement-authoring/references/需求文档格式.md",
       "category": "managed",
-      "installedHash": "497aef7839464a260ba55bb19084da1dbb297d388d480d62d426e40d8e712d5e"
+      "installedHash": "a41fb45fb4ab6372377cfcca5a9fd37e98b66a57cbe91f21577e65c4b634c598"
     },
     {
       "path": ".new-paradigm/governance/skills/requirement-authoring/SKILL.md",
       "source": ".new-paradigm/governance/skills/requirement-authoring/SKILL.md",
       "category": "managed",
-      "installedHash": "badbafe1951baa7b0b171ffa8042e7c74db32a13f4946c85a057ea56fc4d1bfc"
+      "installedHash": "6935f1d48524e9146b5dd7584f9583c7a9f777a5e280575915fe0f362275ceda"
     },
     {
       "path": ".new-paradigm/governance/templates/代码契约模板.md",
       "source": ".new-paradigm/governance/templates/代码契约模板.md",
       "category": "managed",
-      "installedHash": "71081947fa1bb26762ec852396e1f57e66623e9335fb5f0ebdb97501dafe2d57"
+      "installedHash": "3fe2014bb78ed21dd292e8c04a7212e17b93463d797820ce85e001ebe99c0a01"
     },
     {
       "path": ".new-paradigm/governance/metrics/definitions/metric-definition.schema.json",
@@ -213,7 +213,7 @@
       "path": ".new-paradigm/governance/metrics/tools/javascript/pnpm-lock.yaml",
       "source": ".new-paradigm/governance/metrics/tools/javascript/pnpm-lock.yaml",
       "category": "managed",
-      "installedHash": "34606a1955a78d2e921a9a672aad490127a147c4460c3df5c7432322441708ea"
+      "installedHash": "ee882d3450507fe0e61fa9cb4a1190f6229eb6bf09c2830d25c5a2e2ce5aa2a2"
     },
     {
       "path": ".new-paradigm/governance/metrics/tools/javascript/metric-mapping.json",
@@ -250,6 +250,48 @@
       "source": ".new-paradigm/governance/metrics/tools/javascript/src/project.js",
       "category": "managed",
       "installedHash": "f46b0c0e1c153c04290ca522cd0edccc42ef88849fb9c378a4f2a8dd5a25468e"
+    },
+    {
+      "path": ".new-paradigm/governance/templates/契约总览模板.md",
+      "source": ".new-paradigm/governance/templates/契约总览模板.md",
+      "category": "managed",
+      "installedHash": "f065090e719aa4e55c441d109230432034ce745ecd9e97449cbd8bfbd4fdd87a"
+    },
+    {
+      "path": ".new-paradigm/governance/templates/协作契约模板.md",
+      "source": ".new-paradigm/governance/templates/协作契约模板.md",
+      "category": "managed",
+      "installedHash": "165049ca2066bfe0ca35872b0bf90a6c59fca78b91ebeae53e7c2209373fc985"
+    },
+    {
+      "path": ".new-paradigm/governance/tools/contract-overview/package.json",
+      "source": ".new-paradigm/governance/tools/contract-overview/package.json",
+      "category": "managed",
+      "installedHash": "1083cf182be96b0c8d1bafc2c0f9ea6e28185796d418afa75f678739097b47aa"
+    },
+    {
+      "path": ".new-paradigm/governance/tools/contract-overview/pnpm-lock.yaml",
+      "source": ".new-paradigm/governance/tools/contract-overview/pnpm-lock.yaml",
+      "category": "managed",
+      "installedHash": "ad6df934d19e9182a268909acc9acae57298606820d97589f7bff10e8b950f0b"
+    },
+    {
+      "path": ".new-paradigm/governance/tools/contract-overview/src/cli.js",
+      "source": ".new-paradigm/governance/tools/contract-overview/src/cli.js",
+      "category": "managed",
+      "installedHash": "b6e4a183b3694ae2469614e9b2716c87af0dcf6c032ac426f018bee4cce452c9"
+    },
+    {
+      "path": ".new-paradigm/governance/tools/contract-overview/src/overview.js",
+      "source": ".new-paradigm/governance/tools/contract-overview/src/overview.js",
+      "category": "managed",
+      "installedHash": "52dd1afbd6ae2fae22b0844075c35111c58b44336f2a60c718ecd54c15e66051"
+    },
+    {
+      "path": ".new-paradigm/governance/tools/contract-overview/src/relation.schema.json",
+      "source": ".new-paradigm/governance/tools/contract-overview/src/relation.schema.json",
+      "category": "managed",
+      "installedHash": "7b2061f22c808a183d4f9625949db37217aa534b9f483c0eadbe3c3e8be88a2e"
     }
   ]
 }

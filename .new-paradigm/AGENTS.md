@@ -27,13 +27,17 @@
 
 - 阅读 [需求契约追溯规则](governance/rules/需求契约追溯规则.md)。
 - 阅读 [代码契约规则](governance/rules/代码契约规则.md)。
-- 按需使用 [代码契约模板](governance/templates/代码契约模板.md)。
+- 能力契约使用 [代码契约模板](governance/templates/代码契约模板.md)。
+- 跨能力关系使用 [协作契约模板](governance/templates/协作契约模板.md)。
+- 代码契约变更后，在 `.new-paradigm/governance/tools/contract-overview/` 执行 `node src/cli.js --project <项目根目录>`，更新 `functional/contracts/overview.md`。
+- 总览只用于导航。它不参与裁决，也不能代替契约正文。
 
 ### 开发、修复或验证代码
 
 - 阅读 [代码交付规则](governance/rules/代码交付规则.md)。
 - 阅读 [指标治理规则](governance/rules/指标治理规则.md)。
 - 使用 [代码交付 Skill](governance/skills/code-delivery/SKILL.md)。
+- 交付前在 `.new-paradigm/governance/tools/contract-overview/` 执行 `node src/cli.js --project <项目根目录> --check`。总览过期时先重新生成，再继续核对契约正文。
 
 ## 人工操作说明
 

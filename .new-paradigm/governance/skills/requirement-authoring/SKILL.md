@@ -51,8 +51,8 @@ Do not silently turn assumptions into decisions.
    - Move every behavior or acceptance statement back into `需求.md`.
 
 5. **Identify affected contracts**
-   - List every existing contract affected by the requirement using a relative path.
-   - For a contract not yet created, use a clear planned-contract marker.
+   - List every affected capability contract and collaboration contract using a relative path.
+   - For a contract not yet created, identify whether it is a planned capability contract or collaboration contract.
    - Do not add requirement references to contract documents.
 
 6. **Draft the documents**

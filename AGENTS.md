@@ -12,7 +12,5 @@
 如果本文件与 `.cursor/rules/project.mdc` 冲突，以 `.cursor/rules/project.mdc` 为准。
 
 <!-- new-paradigm:begin -->
-
 本项目使用人机协同编程机制。Agent 开始任务前必须阅读 [.new-paradigm/AGENTS.md](.new-paradigm/AGENTS.md)。
-
 <!-- new-paradigm:end -->
