@@ -4,7 +4,7 @@
   "source": {
     "type": "local"
   },
-  "installedAt": "2026-11-06T06:18:28.590Z",
+  "installedAt": "2026-11-09T13:48:34.930Z",
   "discovery": {
     "rootFile": "AGENTS.md",
     "mode": "appended",
@@ -15,7 +15,7 @@
       "path": ".new-paradigm/README.md",
       "source": ".new-paradigm/README.md",
       "category": "managed",
-      "installedHash": "6656705cddb5e56696b1e8e3e89f9a2ff0ae7a973c42b779f5e82e404ff98dc8"
+      "installedHash": "8e29d56938e23f4893749ca3b4e5b3f15ac7d0bad216ed8ae900b1d97e7312c7"
     },
     {
       "path": ".new-paradigm/init.js",
@@ -27,7 +27,7 @@
       "path": ".new-paradigm/AGENTS.md",
       "source": ".new-paradigm/AGENTS.md",
       "category": "managed",
-      "installedHash": "c093ebc0c28412e19873c56bbbd9d3cdf0d26f91d08a0b04a40948d56bb4d6dc"
+      "installedHash": "d26ee7b911131ab0aaae301fadc3f35187dfe7b0b9ca97aaf4077a479ab685d1"
     },
     {
       "path": ".new-paradigm/governance/principles/编程新范式.md",
@@ -63,7 +63,7 @@
       "path": ".new-paradigm/governance/rules/目录结构规范.md",
       "source": ".new-paradigm/governance/rules/目录结构规范.md",
       "category": "managed",
-      "installedHash": "6517b1724c4162b11e9e2b87dab86c1cb93b65d4c85bc95702586440b2b1e487"
+      "installedHash": "db283db1555e45264fd9fceb05111f84673d2f371ffbb41f91420ec8633c9c0c"
     },
     {
       "path": ".new-paradigm/governance/rules/文档治理规则.md",
@@ -213,7 +213,7 @@
       "path": ".new-paradigm/governance/metrics/tools/javascript/pnpm-lock.yaml",
       "source": ".new-paradigm/governance/metrics/tools/javascript/pnpm-lock.yaml",
       "category": "managed",
-      "installedHash": "ee882d3450507fe0e61fa9cb4a1190f6229eb6bf09c2830d25c5a2e2ce5aa2a2"
+      "installedHash": "34606a1955a78d2e921a9a672aad490127a147c4460c3df5c7432322441708ea"
     },
     {
       "path": ".new-paradigm/governance/metrics/tools/javascript/metric-mapping.json",
@@ -273,7 +273,7 @@
       "path": ".new-paradigm/governance/tools/contract-overview/pnpm-lock.yaml",
       "source": ".new-paradigm/governance/tools/contract-overview/pnpm-lock.yaml",
       "category": "managed",
-      "installedHash": "ad6df934d19e9182a268909acc9acae57298606820d97589f7bff10e8b950f0b"
+      "installedHash": "99054764ba08cc89857e67f13cbfabcfa56a0b20bef3156b5d18b5c5ecbc3715"
     },
     {
       "path": ".new-paradigm/governance/tools/contract-overview/src/cli.js",
@@ -292,6 +292,36 @@
       "source": ".new-paradigm/governance/tools/contract-overview/src/relation.schema.json",
       "category": "managed",
       "installedHash": "7b2061f22c808a183d4f9625949db37217aa534b9f483c0eadbe3c3e8be88a2e"
+    },
+    {
+      "path": ".new-paradigm/governance/rules/需求探索规则.md",
+      "source": ".new-paradigm/governance/rules/需求探索规则.md",
+      "category": "managed",
+      "installedHash": "4a4b0357c1bbb1b5acd456e5b14364f735ca8e5a682bcb394f6298da4f2dc9ec"
+    },
+    {
+      "path": ".new-paradigm/governance/skills/requirement-exploration/references/决策日志格式.md",
+      "source": ".new-paradigm/governance/skills/requirement-exploration/references/决策日志格式.md",
+      "category": "managed",
+      "installedHash": "6a5b96885f48e6a889a0e8b9d0ce0383287f12bcc35c1accf043f760aa2c7e7a"
+    },
+    {
+      "path": ".new-paradigm/governance/skills/requirement-exploration/references/探索文档格式.md",
+      "source": ".new-paradigm/governance/skills/requirement-exploration/references/探索文档格式.md",
+      "category": "managed",
+      "installedHash": "6529f99058c38467436749e63af7fe6fa322ab6ecbd5c4d35c23770bf5c02fb5"
+    },
+    {
+      "path": ".new-paradigm/governance/skills/requirement-exploration/references/愿景文档格式.md",
+      "source": ".new-paradigm/governance/skills/requirement-exploration/references/愿景文档格式.md",
+      "category": "managed",
+      "installedHash": "328d515d3fbc63f552d0c3e4b32edef7a6386a8a5cc6aeceeaf46c3595197e1d"
+    },
+    {
+      "path": ".new-paradigm/governance/skills/requirement-exploration/SKILL.md",
+      "source": ".new-paradigm/governance/skills/requirement-exploration/SKILL.md",
+      "category": "managed",
+      "installedHash": "2a818ca3ebacf7cc183d9951e4e2fa79eac7fb773f18433cb4c64e33e4d7d554"
     }
   ]
 }
