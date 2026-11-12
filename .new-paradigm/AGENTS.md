@@ -46,6 +46,14 @@
 - 使用 [代码交付 Skill](governance/skills/code-delivery/SKILL.md)。
 - 交付前在 `.new-paradigm/governance/tools/contract-overview/` 执行 `node src/cli.js --project <项目根目录> --check`。总览过期时先重新生成，再继续核对契约正文。
 
+## 篇幅约束
+
+Agent 面向人的输出须保持精简，便于人快速阅读和审阅：
+
+- 与人对话的回复控制在 1000 字以内，章节不超过 5 个。
+- 交由人审阅的文档控制在 5000 字以内，章节不超过 7 个。
+- 内容超出限制时，优先压缩或拆分，不得突破限制；拆分后的每份文档仍须各自满足上述约束。
+
 ## 人工操作说明
 
 面向人的使用教程见 [README.md](README.md)。
