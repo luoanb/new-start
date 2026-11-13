@@ -4,7 +4,7 @@
   "source": {
     "type": "local"
   },
-  "installedAt": "2026-11-13T01:47:05.004Z",
+  "installedAt": "2026-11-13T16:35:08.103Z",
   "discovery": {
     "rootFile": "AGENTS.md",
     "mode": "appended",
@@ -27,7 +27,7 @@
       "path": ".new-paradigm/AGENTS.md",
       "source": ".new-paradigm/AGENTS.md",
       "category": "managed",
-      "installedHash": "b2517d7938b91836af7ce42ad780a99e7fb6ab2ce0f1ff8c93dd71cea2ee1652"
+      "installedHash": "c2aee03d97176835c24fe2c5d65e30ab374430cbdf0b6eb4e2bc5bc62be60342"
     },
     {
       "path": ".new-paradigm/governance/principles/编程新范式.md",
@@ -63,7 +63,7 @@
       "path": ".new-paradigm/governance/rules/目录结构规范.md",
       "source": ".new-paradigm/governance/rules/目录结构规范.md",
       "category": "managed",
-      "installedHash": "961aa46e74a67a80a641d5197a9f09bed9c5888e3baf09719da0360959675758"
+      "installedHash": "68818865cef1bd304e93b80b1bc903764348ee94018d231b26f6ca7e84514e1f"
     },
     {
       "path": ".new-paradigm/governance/rules/文档治理规则.md",
@@ -105,7 +105,7 @@
       "path": ".new-paradigm/governance/skills/requirement-authoring/references/需求文档格式.md",
       "source": ".new-paradigm/governance/skills/requirement-authoring/references/需求文档格式.md",
       "category": "managed",
-      "installedHash": "14c03d7c04a2ed4f920ddb81946e647b5fb26b3cd9b6c8d705191d4a5b34debe"
+      "installedHash": "72339f10efbbf2a96e5b5e5392e24301d1fddfe3f6044c006d2200fa845f4d22"
     },
     {
       "path": ".new-paradigm/governance/skills/requirement-authoring/SKILL.md",
@@ -297,19 +297,19 @@
       "path": ".new-paradigm/governance/rules/需求探索规则.md",
       "source": ".new-paradigm/governance/rules/需求探索规则.md",
       "category": "managed",
-      "installedHash": "db66d621bc3a87787938a7374e7fb4306bd38d3bec6426d95ac44773e9411cca"
+      "installedHash": "96429d790a803f2d44bad8e8ad297ad8a5201c8636e7e991cb9b2161abeb5276"
     },
     {
       "path": ".new-paradigm/governance/skills/requirement-exploration/references/决策日志格式.md",
       "source": ".new-paradigm/governance/skills/requirement-exploration/references/决策日志格式.md",
       "category": "managed",
-      "installedHash": "0e45ec2e9dfd3c0c50cf10e8075038b1653a4679677af36f48c7797a2b3ba7fb"
+      "installedHash": "0000d6bcbca5331a0427319c31dc1a33dffd2c1c191a253a358e27179e74a0c1"
     },
     {
       "path": ".new-paradigm/governance/skills/requirement-exploration/references/探索文档格式.md",
       "source": ".new-paradigm/governance/skills/requirement-exploration/references/探索文档格式.md",
       "category": "managed",
-      "installedHash": "8d7a210c18dcb41a2b169c016c9faf5926f20cc66b0e5ddfdb2b7e160b77ad72"
+      "installedHash": "835205a47c0c66790fb189a216a4bbe3fc36f095aeca66897dddeb9e0effedda"
     },
     {
       "path": ".new-paradigm/governance/skills/requirement-exploration/references/愿景文档格式.md",
@@ -321,13 +321,25 @@
       "path": ".new-paradigm/governance/skills/requirement-exploration/SKILL.md",
       "source": ".new-paradigm/governance/skills/requirement-exploration/SKILL.md",
       "category": "managed",
-      "installedHash": "30aea5fbfec9506411b603255c429c2b0829260d9703466446aec18a7c6a8979"
+      "installedHash": "02f77f39e7451f2d8f899e9a2307d10589ad2b59471848a112bd94874715c498"
     },
     {
       "path": ".new-paradigm/governance/skills/requirement-authoring/references/产品术语表格式.md",
       "source": ".new-paradigm/governance/skills/requirement-authoring/references/产品术语表格式.md",
       "category": "managed",
       "installedHash": "d40591e6e3a08b6e1b59b3945c38ff75f6af92655f031399a4c2af798a34630d"
+    },
+    {
+      "path": ".new-paradigm/governance/rules/产品定义规则.md",
+      "source": ".new-paradigm/governance/rules/产品定义规则.md",
+      "category": "managed",
+      "installedHash": "c1c91544fe7f2286ff0dbceff56d8ac4bc5b4553c2e6c152f1045388ad45edf9"
+    },
+    {
+      "path": ".new-paradigm/governance/templates/产品定义模板.md",
+      "source": ".new-paradigm/governance/templates/产品定义模板.md",
+      "category": "managed",
+      "installedHash": "7de467492c91a69c909c4623c2791c7fd2a6abf4adea4519ebd563a9a2d377a3"
     }
   ]
 }

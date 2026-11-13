@@ -1,6 +1,6 @@
 ---
 name: requirement-exploration
-description: Explores a vague or project-level product need before any requirement exists, producing a vision document when missing and a tightly bounded exploration folder with a human-owned decision log. Use when the user brings a goal, direction, or problem that cannot yet be stated as one identifiable functional change, or asks to brainstorm, scope, or converge such a need.
+description: Explores a vague or project-level product need before any requirement exists, producing a vision document when missing and a tightly bounded answer to the original uncertain proposition with a human-owned decision log. Use when the user brings a goal, direction, or problem that cannot yet be stated as one identifiable functional change, or asks to brainstorm, scope, or converge such a need.
 ---
 
 # Requirement Exploration
@@ -44,31 +44,32 @@ The human audits; the AI drafts, challenges, and compresses. Every line costs th
    - Otherwise propose `EXP-YYYYMMDD-NNN-<名称>` and create `探索.md`, `决策日志.md`, and `材料/` if raw input exists.
    - Store raw user input verbatim under `材料/`; it is not audited.
 
-3. **Diverge: problems before solutions**
-   - Write 第一章 only: who hurts, when, how, with evidence. Tag every statement.
+3. **Frame the exploration proposition**
+   - Write 第一章 only: one answerable uncertain proposition, the current facts, inferences, assumptions, and open questions. Tag every assertion.
    - Use canonical names from the effective product glossary. When a business term is undefined, ambiguous, or used inconsistently by the user and the materials, add it to 开放问题 as `术语：<名词>` and ask the human for its meaning. Do not define it yourself.
-   - Produce questions and evidence gaps before any candidate solution.
+   - Identify evidence gaps before proposing any candidate direction.
    - Stop and present. Do not fill 第二章 in the same round.
 
-4. **Diverge: candidates with objections**
-   - Propose at most 3 mutually exclusive candidates. Each must carry its strongest objection; a candidate with no objection has not been analyzed.
-   - Run a premortem: assume the direction failed six months later and name the most likely cause.
-   - Check the decision log; do not reintroduce a rejected candidate unless its 重审条件 has triggered.
-   - Record each candidate in `决策日志.md` with AI 建议 filled and 人的决策 empty.
+4. **Compare candidate directions**
+   - Propose at most 3 mutually exclusive candidate directions. Each must carry its strongest objection; a direction with no objection has not been analyzed.
+   - Check the decision log; do not reintroduce a rejected direction unless its 重审条件 has triggered.
+   - Keep current directions in 第二章 and append each direction to `决策日志.md` with AI 建议 filled and 人的决策 empty.
 
-5. **Converge**
-   - After the human fills 人的决策, update 第三章: the smallest slice that can start now, or state 尚不具备 with the evidence that is missing.
-   - Write 收敛条件 as observable evidence, not intent.
+5. **Form the exploration result**
+   - Update 第三章 with one core conclusion that directly answers the original proposition: what was learned, based on which evidence, and within what boundary.
+   - A selected direction is not itself a result. State the new understanding produced by the exploration.
+   - When evidence is insufficient, write `尚未形成：缺 <证据>` instead of inventing a conclusion.
+   - Ask the human to confirm the result. Only a confirmed result may set the exploration to 已收敛.
 
 6. **Each update round**
-   - Rewrite `探索.md` as a snapshot; move replaced content into the decision log.
+   - Rewrite `探索.md` as the current snapshot. Append candidate-direction decisions to the decision log; never rewrite existing log entries.
    - Fill 本轮变更 (≤ 3 lines) first. The human reads that and the open questions, not the whole file.
    - Refresh 下次检视.
-   - Verify: 3 chapters, ≤ 60 body lines, ≤ 5 assertions, ≤ 3 candidates, ≤ 3 open questions, every assertion tagged, no 验收 / 非目标 / contract paths.
+   - Verify: 3 chapters in 命题—方向—结果 order, ≤ 60 body lines, ≤ 5 current-understanding assertions, ≤ 3 candidate directions, ≤ 3 open questions, every assertion tagged, one direct result, and no 验收 / 非目标 / requirement or contract paths / future-action instructions.
 
 7. **Exit**
-   - When the human confirms the minimal slice, set 已收敛, list the planned requirement path, and stop. Writing the requirement belongs to the requirement-authoring Skill and needs separate authorization.
-   - As soon as the human clarifies a cross-requirement term, list it under 最小可验证切片 as `待入术语表：<名词>` and propose an independent product glossary update. The glossary update needs separate confirmation and does not wait for exploration convergence or a derived requirement.
+   - When the human confirms the exploration result, set 已收敛, freeze the body, and stop. Do not decide whether or how to turn the result into a requirement.
+   - As soon as the human clarifies a cross-requirement term, propose an independent product glossary update. The glossary update needs separate confirmation and does not wait for exploration convergence.
    - After the glossary entry becomes effective, use it as the upstream definition in subsequent exploration and requirement work. The exploration only records where the term was discovered; it never becomes the glossary's authority.
    - When 下次检视 passes without progress, ask the human to continue or 搁置; a 搁置 needs 放弃理由 and 重开条件.
 
@@ -77,5 +78,4 @@ The human audits; the AI drafts, challenges, and compresses. Every line costs th
 - `functional/product/愿景.md` when it did not exist;
 - `functional/explorations/EXP-YYYYMMDD-NNN-<名称>/探索.md`;
 - `functional/explorations/EXP-YYYYMMDD-NNN-<名称>/决策日志.md`;
-- optional `材料/` with verbatim raw input;
-- on convergence, the planned requirement path for the next Skill.
+- optional `材料/` with verbatim raw input.
