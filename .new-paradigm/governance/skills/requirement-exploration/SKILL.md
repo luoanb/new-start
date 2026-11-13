@@ -29,7 +29,7 @@ The human audits; the AI drafts, challenges, and compresses. Every line costs th
 ## Inputs
 
 - the effective vision at `functional/product/愿景.md`, or the material to write one;
-- the product glossary at `functional/product/术语表.md`, when it exists;
+- the effective product glossary at `functional/product/术语表.md`, when it exists;
 - the user's statement of the need, in their own words;
 - any evidence provided: data, user quotes, competitor notes, existing code constraints;
 - existing explorations that may overlap.
@@ -46,7 +46,7 @@ The human audits; the AI drafts, challenges, and compresses. Every line costs th
 
 3. **Diverge: problems before solutions**
    - Write 第一章 only: who hurts, when, how, with evidence. Tag every statement.
-   - Use canonical names from the product glossary. When a business term is undefined, ambiguous, or used inconsistently by the user and the materials, add it to 开放问题 as `术语：<名词>` and ask the human for its meaning. Do not define it yourself.
+   - Use canonical names from the effective product glossary. When a business term is undefined, ambiguous, or used inconsistently by the user and the materials, add it to 开放问题 as `术语：<名词>` and ask the human for its meaning. Do not define it yourself.
    - Produce questions and evidence gaps before any candidate solution.
    - Stop and present. Do not fill 第二章 in the same round.
 
@@ -68,7 +68,8 @@ The human audits; the AI drafts, challenges, and compresses. Every line costs th
 
 7. **Exit**
    - When the human confirms the minimal slice, set 已收敛, list the planned requirement path, and stop. Writing the requirement belongs to the requirement-authoring Skill and needs separate authorization.
-   - Hand over the terms the human clarified during exploration: list them under 最小可验证切片 as `待入术语表：<名词>`. The requirement-authoring Skill writes them into the product glossary; the exploration never becomes the glossary's source.
+   - As soon as the human clarifies a cross-requirement term, list it under 最小可验证切片 as `待入术语表：<名词>` and propose an independent product glossary update. The glossary update needs separate confirmation and does not wait for exploration convergence or a derived requirement.
+   - After the glossary entry becomes effective, use it as the upstream definition in subsequent exploration and requirement work. The exploration only records where the term was discovered; it never becomes the glossary's authority.
    - When 下次检视 passes without progress, ask the human to continue or 搁置; a 搁置 needs 放弃理由 and 重开条件.
 
 ## Outputs
