@@ -4,7 +4,7 @@
   "source": {
     "type": "local"
   },
-  "installedAt": "2026-11-14T02:47:38.106Z",
+  "installedAt": "2026-11-14T03:11:29.089Z",
   "discovery": {
     "rootFile": "AGENTS.md",
     "mode": "appended",
@@ -27,7 +27,7 @@
       "path": ".new-paradigm/AGENTS.md",
       "source": ".new-paradigm/AGENTS.md",
       "category": "managed",
-      "installedHash": "a924a86d4b38e637311c79b9b3af40ac16aac1e7a978c0832ddd682250a618c0"
+      "installedHash": "dee4c0d8cf7c9b46c293ec412a92da567b86be34a7e67e6354670ef60835c8b3"
     },
     {
       "path": ".new-paradigm/governance/principles/编程新范式.md",
@@ -63,7 +63,7 @@
       "path": ".new-paradigm/governance/rules/目录结构规范.md",
       "source": ".new-paradigm/governance/rules/目录结构规范.md",
       "category": "managed",
-      "installedHash": "43b9c144646cf521f15c09dc75021740fa1341ec4745ebafca2bb46243475446"
+      "installedHash": "56394f27438ca2173dc2e57384d3be7d57396bf3cc922440e02293b11a8e4a03"
     },
     {
       "path": ".new-paradigm/governance/rules/文档治理规则.md",
@@ -297,7 +297,7 @@
       "path": ".new-paradigm/governance/rules/需求探索规则.md",
       "source": ".new-paradigm/governance/rules/需求探索规则.md",
       "category": "managed",
-      "installedHash": "96429d790a803f2d44bad8e8ad297ad8a5201c8636e7e991cb9b2161abeb5276"
+      "installedHash": "5d92b292cba5edf52d0e988882d2c23ae40513b1cfcb27a3663c80b2fe3b5cc5"
     },
     {
       "path": ".new-paradigm/governance/skills/requirement-exploration/references/决策日志格式.md",
@@ -309,7 +309,7 @@
       "path": ".new-paradigm/governance/skills/requirement-exploration/references/探索文档格式.md",
       "source": ".new-paradigm/governance/skills/requirement-exploration/references/探索文档格式.md",
       "category": "managed",
-      "installedHash": "835205a47c0c66790fb189a216a4bbe3fc36f095aeca66897dddeb9e0effedda"
+      "installedHash": "e3d276b0a81662b1e18e305a1167a4fa5330e4b31043bb8357ecaeb66a0a6136"
     },
     {
       "path": ".new-paradigm/governance/skills/requirement-exploration/references/愿景文档格式.md",
@@ -321,7 +321,7 @@
       "path": ".new-paradigm/governance/skills/requirement-exploration/SKILL.md",
       "source": ".new-paradigm/governance/skills/requirement-exploration/SKILL.md",
       "category": "managed",
-      "installedHash": "02f77f39e7451f2d8f899e9a2307d10589ad2b59471848a112bd94874715c498"
+      "installedHash": "d466f3b8298c0a6651c5b9d993467e8e24f763172219e9d9c4d302df87f3f890"
     },
     {
       "path": ".new-paradigm/governance/skills/requirement-authoring/references/产品术语表格式.md",
@@ -333,7 +333,7 @@
       "path": ".new-paradigm/governance/rules/产品定义规则.md",
       "source": ".new-paradigm/governance/rules/产品定义规则.md",
       "category": "managed",
-      "installedHash": "710db39b63a38ee7237c9377ee903c8c8e3fa9bfb3f0b023786741ab25f71ca2"
+      "installedHash": "4a64cbfa1da882259cc156882d2aca00e64ebd701aeb4c171ebe049b860f91de"
     },
     {
       "path": ".new-paradigm/governance/templates/产品定义模板.md",

@@ -23,6 +23,7 @@ The human audits; the AI drafts, challenges, and compresses. Every line costs th
 
 - never state a conclusion the human has not reached — mark it `[推断]` or `[假设]`;
 - never fill the 人的决策 column;
+- never write into 第四章 探索成果 without an explicit human confirmation;
 - never restate background the human already knows;
 - when over any count or line limit, delete rather than compress wording.
 
@@ -55,20 +56,26 @@ The human audits; the AI drafts, challenges, and compresses. Every line costs th
    - Check the decision log; do not reintroduce a rejected direction unless its 重审条件 has triggered.
    - Keep current directions in 第二章 and append each direction to `决策日志.md` with AI 建议 filled and 人的决策 empty.
 
-5. **Form the exploration result**
+5. **Form the exploration conclusion**
    - Update 第三章 with one core conclusion that directly answers the original proposition: what was learned, based on which evidence, and within what boundary.
-   - A selected direction is not itself a result. State the new understanding produced by the exploration.
+   - A selected direction is not itself a conclusion. State the new understanding produced by the exploration.
    - When evidence is insufficient, write `尚未形成：缺 <证据>` instead of inventing a conclusion.
-   - Ask the human to confirm the result. Only a confirmed result may set the exploration to 已收敛.
+   - Ask the human to confirm the conclusion. Only a confirmed conclusion may be moved into 第四章 and set the exploration to 已收敛.
 
-6. **Each update round**
-   - Rewrite `探索.md` as the current snapshot. Append candidate-direction decisions to the decision log; never rewrite existing log entries.
+6. **Record confirmed outcomes**
+   - 第四章 探索成果 holds only what the human has explicitly confirmed: a confirmed 第三章 conclusion, or a confirmed answer to an open question.
+   - Move an item in verbatim with its confirmation date; never add, reword, or delete items on your own. When the human withdraws or changes a confirmed item, append a new item and keep the old one.
+   - Remove the confirmed item from 现有认知 or 开放问题 so it is not stated twice. For a business term, write `术语 X 已确认，见术语表` and propose the glossary update separately.
+   - Keep ≤ 5 items. Reaching the cap signals the exploration should converge, not grow.
+
+7. **Each update round**
+   - Rewrite `探索.md` as the current snapshot, except 第四章, which is append-only. Append candidate-direction decisions to the decision log; never rewrite existing log entries.
    - Fill 本轮变更 (≤ 3 lines) first. The human reads that and the open questions, not the whole file.
    - Refresh 下次检视.
-   - Verify: 3 chapters in 命题—方向—结果 order, ≤ 60 body lines, ≤ 5 current-understanding assertions, ≤ 3 candidate directions, ≤ 3 open questions, every assertion tagged, one direct result, and no 验收 / 非目标 / requirement or contract paths / future-action instructions.
+   - Verify: 4 chapters in 命题—方向—结论—成果 order, ≤ 60 body lines, ≤ 5 current-understanding assertions, ≤ 3 candidate directions, ≤ 3 open questions, ≤ 5 confirmed outcomes each with a date, every assertion tagged, one direct conclusion, and no 验收 / 非目标 / requirement or contract paths / future-action instructions.
 
-7. **Exit**
-   - When the human confirms the exploration result, set 已收敛, freeze the body, and stop. Do not decide whether or how to turn the result into a requirement.
+8. **Exit**
+   - When the human confirms the exploration conclusion, move it into 第四章, set 已收敛, freeze the body, and stop. Do not decide whether or how to turn the conclusion into a requirement.
    - As soon as the human clarifies a cross-requirement term, propose an independent product glossary update. The glossary update needs separate confirmation and does not wait for exploration convergence.
    - After the glossary entry becomes effective, use it as the upstream definition in subsequent exploration and requirement work. The exploration only records where the term was discovered; it never becomes the glossary's authority.
    - When 下次检视 passes without progress, ask the human to continue or 搁置; a 搁置 needs 放弃理由 and 重开条件.
