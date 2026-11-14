@@ -29,7 +29,7 @@
 
 - 阅读 [产品定义规则](governance/rules/产品定义规则.md)。
 - 使用 [产品定义模板](governance/templates/产品定义模板.md)。
-- 产品定义位于 `functional/product/产品定义.md`，是愿景与需求之间的可裁决语义层。
+- 产品定义由 `functional/product/` 下的 `产品边界.md`、`产品形态.md`、`能力构成.md` 三份正文组成，是愿景与需求之间的可裁决语义层；三份各自确认。
 
 ### 梳理或修改产品需求
 

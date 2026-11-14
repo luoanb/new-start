@@ -4,7 +4,7 @@
   "source": {
     "type": "local"
   },
-  "installedAt": "2026-11-13T16:35:08.103Z",
+  "installedAt": "2026-11-14T02:47:38.106Z",
   "discovery": {
     "rootFile": "AGENTS.md",
     "mode": "appended",
@@ -27,7 +27,7 @@
       "path": ".new-paradigm/AGENTS.md",
       "source": ".new-paradigm/AGENTS.md",
       "category": "managed",
-      "installedHash": "c2aee03d97176835c24fe2c5d65e30ab374430cbdf0b6eb4e2bc5bc62be60342"
+      "installedHash": "a924a86d4b38e637311c79b9b3af40ac16aac1e7a978c0832ddd682250a618c0"
     },
     {
       "path": ".new-paradigm/governance/principles/编程新范式.md",
@@ -63,7 +63,7 @@
       "path": ".new-paradigm/governance/rules/目录结构规范.md",
       "source": ".new-paradigm/governance/rules/目录结构规范.md",
       "category": "managed",
-      "installedHash": "68818865cef1bd304e93b80b1bc903764348ee94018d231b26f6ca7e84514e1f"
+      "installedHash": "43b9c144646cf521f15c09dc75021740fa1341ec4745ebafca2bb46243475446"
     },
     {
       "path": ".new-paradigm/governance/rules/文档治理规则.md",
@@ -105,7 +105,7 @@
       "path": ".new-paradigm/governance/skills/requirement-authoring/references/需求文档格式.md",
       "source": ".new-paradigm/governance/skills/requirement-authoring/references/需求文档格式.md",
       "category": "managed",
-      "installedHash": "72339f10efbbf2a96e5b5e5392e24301d1fddfe3f6044c006d2200fa845f4d22"
+      "installedHash": "3987e4949f2db4e811fa604e0c9e3097342d72dda1292f8633b6b58ff4236523"
     },
     {
       "path": ".new-paradigm/governance/skills/requirement-authoring/SKILL.md",
@@ -333,13 +333,13 @@
       "path": ".new-paradigm/governance/rules/产品定义规则.md",
       "source": ".new-paradigm/governance/rules/产品定义规则.md",
       "category": "managed",
-      "installedHash": "c1c91544fe7f2286ff0dbceff56d8ac4bc5b4553c2e6c152f1045388ad45edf9"
+      "installedHash": "710db39b63a38ee7237c9377ee903c8c8e3fa9bfb3f0b023786741ab25f71ca2"
     },
     {
       "path": ".new-paradigm/governance/templates/产品定义模板.md",
       "source": ".new-paradigm/governance/templates/产品定义模板.md",
       "category": "managed",
-      "installedHash": "7de467492c91a69c909c4623c2791c7fd2a6abf4adea4519ebd563a9a2d377a3"
+      "installedHash": "b3e3b4ff155d7284693f5e125a663dc51a70cab3081192938fbe36c2eeaeb41a"
     }
   ]
 }
