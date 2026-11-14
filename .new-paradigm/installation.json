@@ -4,7 +4,7 @@
   "source": {
     "type": "local"
   },
-  "installedAt": "2026-11-14T13:16:47.990Z",
+  "installedAt": "2026-11-14T14:02:33.331Z",
   "discovery": {
     "rootFile": "AGENTS.md",
     "mode": "appended",
@@ -297,7 +297,7 @@
       "path": ".new-paradigm/governance/rules/需求探索规则.md",
       "source": ".new-paradigm/governance/rules/需求探索规则.md",
       "category": "managed",
-      "installedHash": "f55bb1d92d29fa4777c876d4eada94a74ae95f612f205e209e8306a6d436dbc0"
+      "installedHash": "6e6089a2097c7f3449f0b8dac59c4e86580172558d5cdfd24b1d34644b447adc"
     },
     {
       "path": ".new-paradigm/governance/skills/requirement-exploration/references/决策日志格式.md",
@@ -309,7 +309,7 @@
       "path": ".new-paradigm/governance/skills/requirement-exploration/references/探索文档格式.md",
       "source": ".new-paradigm/governance/skills/requirement-exploration/references/探索文档格式.md",
       "category": "managed",
-      "installedHash": "c481c825244402b13f4401ae9e12b56a172251edea7cd9beca8f3c3983e31f16"
+      "installedHash": "d412aa9227daecac84b8a21c7efc90204ad95768037e80cafcf202fb1c46cc2e"
     },
     {
       "path": ".new-paradigm/governance/skills/requirement-exploration/references/愿景文档格式.md",
@@ -321,7 +321,7 @@
       "path": ".new-paradigm/governance/skills/requirement-exploration/SKILL.md",
       "source": ".new-paradigm/governance/skills/requirement-exploration/SKILL.md",
       "category": "managed",
-      "installedHash": "eb4fd0c586a2fdcab84372c12a6ff4006655bc11c8d3552ccadd66c5cc027755"
+      "installedHash": "46a7205756275068d9f22feade099d3b75dba190ee291aa16b0be292e4e7dd55"
     },
     {
       "path": ".new-paradigm/governance/skills/requirement-authoring/references/产品术语表格式.md",
