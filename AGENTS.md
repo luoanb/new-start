@@ -11,6 +11,15 @@
 
 如果本文件与 `.cursor/rules/project.mdc` 冲突，以 `.cursor/rules/project.mdc` 为准。
 
+## 新范式调整
+
+新范式的规则、模板、Skill、指标和工具调整，一律先在机制源仓库 `F:\work\new-paradigm\` 修改并验证，再升级到本项目同步，不得直接在本项目 `.new-paradigm/` 就地改动。
+
+- 源仓库：`F:\work\new-paradigm\.new-paradigm\`
+- 同步：在 `F:\work\new-paradigm\.new-paradigm\governance\tools\project-lifecycle` 执行
+  `node src/cli.js upgrade --target f:\work\new-start`
+- 执行前先加 `--dry-run` 预演；退出码 `1` 表示存在本地修改冲突，需人工处理后重跑。
+
 <!-- new-paradigm:begin -->
 本项目使用人机协同编程机制。Agent 开始任务前必须阅读 [.new-paradigm/AGENTS.md](.new-paradigm/AGENTS.md)。
 <!-- new-paradigm:end -->
