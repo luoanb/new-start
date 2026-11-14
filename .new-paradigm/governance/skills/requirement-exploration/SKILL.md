@@ -1,6 +1,6 @@
 ---
 name: requirement-exploration
-description: Explores a vague or project-level product need before any requirement exists, producing a vision document when missing and a tightly bounded answer to the original uncertain proposition with a human-owned decision log. Use when the user brings a goal, direction, or problem that cannot yet be stated as one identifiable functional change, or asks to brainstorm, scope, or converge such a need.
+description: Explores a vague or project-level product need before any requirement exists, clarifying the user's fuzzy input and appending it to upstream documents (vision, glossary, product definition) to provide clear input for the main chain. Use when the user brings a goal, direction, or problem that cannot yet be stated as one identifiable functional change, or asks to brainstorm, scope, or converge such a need.
 ---
 
 # Requirement Exploration
@@ -19,11 +19,11 @@ The rules are authoritative. The reference files only define this Skill's output
 
 ## Stance
 
-The human audits; the AI drafts, challenges, and compresses. Every line costs the human attention, so:
+The human audits and decides; the AI clarifies fuzzy input and proposes how to append it to upstream documents. Every line costs the human attention, so:
 
 - never state a conclusion the human has not reached — mark it `[推断]` or `[假设]`;
 - never fill the 人的决策 column;
-- never write into 第四章 探索成果 without an explicit human confirmation;
+- never write into 第四章 确认的补充 without executing the append/replace and receiving confirmation;
 - never restate background the human already knows;
 - when over any count or line limit, delete rather than compress wording.
 
@@ -46,43 +46,47 @@ The human audits; the AI drafts, challenges, and compresses. Every line costs th
    - Store raw user input verbatim under `材料/`; it is not audited.
 
 3. **Frame the exploration proposition**
-   - Write 第一章 only: one answerable uncertain proposition, the current facts, inferences, assumptions, and open questions. Tag every assertion.
+   - Write 第一章 only: state the user's fuzzy need and how the current upstream documents (vision, glossary, product definition) express it — whether insufficient or unclear. Tag every assertion.
    - Use canonical names from the effective product glossary. When a business term is undefined, ambiguous, or used inconsistently by the user and the materials, add it to 开放问题 as `术语：<名词>` and ask the human for its meaning. Do not define it yourself.
-   - Identify evidence gaps before proposing any candidate direction.
+   - Identify evidence gaps before proposing any append plan.
    - Stop and present. Do not fill 第二章 in the same round.
 
-4. **Compare candidate directions**
-   - Propose at most 3 mutually exclusive candidate directions. Each must carry its strongest objection; a direction with no objection has not been analyzed.
-   - Check the decision log; do not reintroduce a rejected direction unless its 重审条件 has triggered.
-   - Keep current directions in 第二章 and append each direction to `决策日志.md` with AI 建议 filled and 人的决策 empty.
+4. **Propose append plans**
+   - Propose at most 3 mutually exclusive plans to clarify and append the user's need to upstream documents. Each plan must specify 补充位置 (document § chapter), 补充内容 (one-line summary), and its strongest objection; a plan with no objection has not been analyzed.
+   - Plans are usually append (adding new content); only when existing content is demonstrably wrong, propose replace.
+   - Check the decision log; do not reintroduce a rejected plan unless its 重审条件 has triggered.
+   - Keep current plans in 第二章 and append each to `决策日志.md` with AI 建议 filled and 人的决策 empty.
 
-5. **Form the exploration conclusion**
-   - Update 第三章 with one core conclusion that directly answers the original proposition: what was learned, based on which evidence, and within what boundary.
-   - A selected direction is not itself a conclusion. State the new understanding produced by the exploration.
-   - When evidence is insufficient, write `尚未形成：缺 <证据>` instead of inventing a conclusion.
-   - Ask the human to confirm the conclusion. Only a confirmed conclusion may be moved into 第四章 and set the exploration to 已收敛.
+5. **Form the append recommendation**
+   - Update 第三章 with your recommended append plan: which one, why, based on which evidence, and within what risk boundary.
+   - A selected plan is not itself a recommendation. State why this plan best clarifies the user's fuzzy need.
+   - When evidence is insufficient, write `尚未形成：缺 <证据>` instead of inventing a recommendation.
+   - Ask the human to confirm the plan. Only a confirmed plan may be executed.
 
-6. **Record confirmed outcomes**
-   - 第四章 探索成果 holds only what the human has explicitly confirmed: a confirmed 第三章 conclusion, or a confirmed answer to an open question.
-   - Move an item in verbatim with its confirmation date; never add, reword, or delete items on your own. When the human withdraws or changes a confirmed item, append a new item and keep the old one.
-   - Remove the confirmed item from 现有认知 or 开放问题 so it is not stated twice. For a business term, write `术语 X 已确认，见术语表` and propose the glossary update separately.
-   - Keep ≤ 5 items. Reaching the cap signals the exploration should converge, not grow.
+6. **Execute the append**
+   - After the human confirms an append plan, execute the append on the target upstream document (vision, glossary, or product definition).
+   - The append itself needs independent confirmation as a change to that upstream document.
+   - After the upstream document append is confirmed, record in 第四章: `[补充] <文档名>已补充<内容要点>，见[路径]（YYYY-MM-DD 确认）` or `[修正] <文档名>已修正<内容要点>，见[路径]（YYYY-MM-DD 确认）`. Write a one-line summary of what was appended/corrected; reference the path.
+   - Remove the resolved gap from 现有认知 or 开放问题. For a business term, the glossary append is recorded separately.
+   - Keep ≤ 5 append/correction records in 第四章. Reaching the cap signals the exploration should converge.
 
 7. **Each update round**
-   - Rewrite `探索.md` as the current snapshot, except 第四章, which is append-only. Append candidate-direction decisions to the decision log; never rewrite existing log entries.
+   - Rewrite `探索.md` as the current snapshot, except 第四章, which is append-only. Append plan decisions to the decision log; never rewrite existing log entries.
    - Fill 本轮变更 (≤ 3 lines) first. The human reads that and the open questions, not the whole file.
    - Refresh 下次检视.
-   - Verify: 4 chapters in 命题—方向—结论—成果 order, ≤ 60 body lines, ≤ 5 current-understanding assertions, ≤ 3 candidate directions, ≤ 3 open questions, ≤ 5 confirmed outcomes each with a date, every assertion tagged, one direct conclusion, and no 验收 / 非目标 / requirement or contract paths / future-action instructions.
+   - Verify: 4 chapters in 命题—方案—建议—补充 order, ≤ 60 body lines, ≤ 5 current-understanding assertions, ≤ 3 append plans, ≤ 3 open questions, ≤ 5 confirmed appends/corrections each with a date and one-line summary, every assertion tagged, one direct recommendation, and no 验收 / 非目标 / requirement or contract paths / future-action instructions.
 
 8. **Exit**
-   - When the human confirms the exploration conclusion, move it into 第四章, set 已收敛, freeze the body, and stop. Do not decide whether or how to turn the conclusion into a requirement.
-   - As soon as the human clarifies a cross-requirement term, propose an independent product glossary update. The glossary update needs separate confirmation and does not wait for exploration convergence.
+   - When the human confirms an append plan and the append is executed and confirmed, record it in 第四章 and stop. Do not decide whether or how to turn the appended upstream documents into a requirement.
+   - As soon as the human clarifies a cross-requirement term, propose an independent product glossary append. The glossary append needs separate confirmation and does not wait for exploration convergence.
    - After the glossary entry becomes effective, use it as the upstream definition in subsequent exploration and requirement work. The exploration only records where the term was discovered; it never becomes the glossary's authority.
    - When 下次检视 passes without progress, ask the human to continue or 搁置; a 搁置 needs 放弃理由 and 重开条件.
+   - When enough appends are confirmed (typically 1-2 core appends), set 已收敛 and freeze the body. The appended upstream documents now provide clear input for the main chain.
 
 ## Outputs
 
 - `functional/product/愿景.md` when it did not exist;
+- appended upstream documents (vision, glossary, product definition) with independent confirmations;
 - `functional/explorations/EXP-YYYYMMDD-NNN-<名称>/探索.md`;
 - `functional/explorations/EXP-YYYYMMDD-NNN-<名称>/决策日志.md`;
 - optional `材料/` with verbatim raw input.
