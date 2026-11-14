@@ -4,7 +4,7 @@
   "source": {
     "type": "local"
   },
-  "installedAt": "2026-11-14T14:02:33.331Z",
+  "installedAt": "2026-11-14T14:12:12.402Z",
   "discovery": {
     "rootFile": "AGENTS.md",
     "mode": "appended",
@@ -333,13 +333,13 @@
       "path": ".new-paradigm/governance/rules/产品定义规则.md",
       "source": ".new-paradigm/governance/rules/产品定义规则.md",
       "category": "managed",
-      "installedHash": "4a64cbfa1da882259cc156882d2aca00e64ebd701aeb4c171ebe049b860f91de"
+      "installedHash": "b49fb00dc6b65f0fae5198ddf6c0c1e9a3a98d67c3848d2c473900882bc53128"
     },
     {
       "path": ".new-paradigm/governance/templates/产品定义模板.md",
       "source": ".new-paradigm/governance/templates/产品定义模板.md",
       "category": "managed",
-      "installedHash": "b3e3b4ff155d7284693f5e125a663dc51a70cab3081192938fbe36c2eeaeb41a"
+      "installedHash": "d64db2acf98b0f9e9775ece645a00782006ba7ea4714df614dbc792b1bbb5220"
     }
   ]
 }

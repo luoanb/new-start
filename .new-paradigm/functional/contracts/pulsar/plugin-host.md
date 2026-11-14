@@ -80,7 +80,7 @@
 `PluginEntry`
 
 - `name`：条目唯一名。
-- `inject`：需要的 Cordis 服务名，缺失时 fiber 保持 PENDING。
+- `inject`：需要的 Cordis 服务名；可逐项声明必需或可选，缺省为必需。必需依赖缺失时 fiber 保持 PENDING；可选依赖缺失不影响 fiber 激活，插件带缺口启动。
 - `module`：后端入口绝对路径。
 - `apply`：插件主体，程序化装载时直接提供。
 - `config`：传给 Cordis 的配置。
@@ -137,7 +137,7 @@
 
 已知现状：
 
-- PENDING 与已投递并存。当 `inject` 未满足时 fiber 处于 PENDING，包装后的 `apply` 不执行；但适配器在激活阶段已完成编译、路由注册与 Client 描述产出，`bootGraph()` 仍会下发该条目。
+- PENDING 与已投递并存。当必需 `inject` 未满足时 fiber 处于 PENDING，包装后的 `apply` 不执行；但适配器在激活阶段已完成编译、路由注册与 Client 描述产出，`bootGraph()` 仍会下发该条目。可选依赖缺失不进入 PENDING。
 - `state().enabled` 把 PENDING 报为 `true`。调用方无法从该字段区分「已就绪」与「等待依赖」。
 - PENDING 条目的适配器清理项没有挂到 fiber，因此 `unload` 或 `setEnabled(false)` 不会回收这些清理项对应的路由。
 - 重新启用会再次执行适配器激活。若前一次的路由未被回收，同名路由会触发路由重复注册。
@@ -150,5 +150,6 @@
 待决策项：
 
 - 是否引入「已就绪」状态，或让 `enabled` 只表示 ACTIVE。
+- 可选依赖缺失是否需要可观测的降级状态（当前仅在必需缺失时进入 PENDING，可选缺失不体现在状态快照中）。
 - PENDING 条目的适配器清理项应由哪一方托管。
 - 重新启用时如何处理可能残留的路由与产物路由。
